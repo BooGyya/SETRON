@@ -1,0 +1,19 @@
+[project]
+name = "setron"
+version = "0.1.0"
+description = "설비 소프트웨어 버전 및 Release Item 관리 프로그램"
+readme = "README.md"
+dependencies = [
+    "PySide6",
+    "SQLAlchemy",
+    "PyMySQL",
+    "pandas",
+    "openpyxl",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
