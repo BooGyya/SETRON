@@ -9,6 +9,7 @@ dependencies = [
     "PyMySQL",
     "pandas",
     "openpyxl",
+    "xlwings",
 ]
 
 [build-system]
