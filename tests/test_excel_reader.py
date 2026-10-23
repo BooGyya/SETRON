@@ -1,8 +1,71 @@
 """Excel이 없어도 검증할 수 있는 excel_reader의 순수 로직 테스트."""
 
+from types import SimpleNamespace
+
 import pytest
 
-from setron.infrastructure.excel_reader import MergedRange, SheetData, cell_address, fill_merged
+from setron.infrastructure import excel_reader
+from setron.infrastructure.excel_reader import (
+    ExcelConnectionError,
+    ExcelNotRunningError,
+    MergedRange,
+    SheetData,
+    WorkbookNotFoundError,
+    cell_address,
+    fill_merged,
+    list_open_workbooks,
+    read_sheet,
+)
+
+
+def fake_book(name, sheets=("Sheet1",)):
+    return SimpleNamespace(
+        name=name,
+        fullname=f"C:/data/{name}",
+        sheets=[SimpleNamespace(name=s) for s in sheets],
+    )
+
+
+def use_fake_excel(monkeypatch, apps):
+    """xlwings 대신 가짜 Excel 창 목록을 쓰게 한다. ``apps``는 창마다 열린 통합문서 목록이다."""
+    monkeypatch.setattr(excel_reader, "xw", SimpleNamespace(apps=[SimpleNamespace(books=b) for b in apps]))
+
+
+class BrokenApps:
+    def __iter__(self):
+        raise OSError("RPC 서버를 사용할 수 없습니다.")
+
+
+def test_list_open_workbooks_returns_books_of_all_excel_windows(monkeypatch):
+    use_fake_excel(monkeypatch, [[fake_book("화성.xlsx", ("Memory", "Foundry"))], [fake_book("C4.xlsx")]])
+
+    books = list_open_workbooks()
+
+    assert [(b.name, b.sheet_names) for b in books] == [("화성.xlsx", ["Memory", "Foundry"]), ("C4.xlsx", ["Sheet1"])]
+
+
+@pytest.mark.parametrize("apps", [[], [[]]], ids=["Excel 미실행", "Excel만 실행, 파일 없음"])
+def test_no_open_workbook_raises_not_running(monkeypatch, apps):
+    use_fake_excel(monkeypatch, apps)
+
+    with pytest.raises(ExcelNotRunningError, match="열려 있는 Excel 파일이 없습니다"):
+        list_open_workbooks()
+    with pytest.raises(ExcelNotRunningError):
+        read_sheet("화성.xlsx", "Memory")
+
+
+def test_connection_failure_raises_connection_error(monkeypatch):
+    monkeypatch.setattr(excel_reader, "xw", SimpleNamespace(apps=BrokenApps()))
+
+    with pytest.raises(ExcelConnectionError, match="Excel에 연결하지 못했습니다"):
+        list_open_workbooks()
+
+
+def test_unknown_workbook_raises_not_found_when_other_books_are_open(monkeypatch):
+    use_fake_excel(monkeypatch, [[fake_book("C4.xlsx")]])
+
+    with pytest.raises(WorkbookNotFoundError):
+        read_sheet("화성.xlsx", "Memory")
 
 
 @pytest.mark.parametrize(
