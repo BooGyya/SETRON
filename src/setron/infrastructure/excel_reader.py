@@ -16,6 +16,14 @@ class ExcelReadError(Exception):
     """열린 Excel에서 데이터를 읽지 못했을 때 발생한다."""
 
 
+class ExcelNotRunningError(ExcelReadError):
+    """Excel이 실행 중이 아니거나 열린 통합문서가 하나도 없다."""
+
+
+class ExcelConnectionError(ExcelReadError):
+    """실행 중인 Excel에 연결하지 못했다 (Excel 미설치, 응답 없음 등)."""
+
+
 class WorkbookNotFoundError(ExcelReadError):
     """지정한 이름의 통합문서가 열려 있지 않다."""
 
@@ -118,22 +126,28 @@ def fill_merged(
     return filled
 
 
+NOT_RUNNING_MESSAGE = "열려 있는 Excel 파일이 없습니다. 가져올 파일을 Excel로 연 뒤 다시 시도하세요."
+
+
 def list_open_workbooks() -> list[WorkbookInfo]:
     """실행 중인 모든 Excel 창의 열린 통합문서 목록을 돌려준다.
 
-    Excel이 실행 중이 아니면 빈 목록을 돌려준다.
+    Excel이 실행 중이 아니거나 열린 통합문서가 없으면 :class:`ExcelNotRunningError`를,
+    Excel에 연결하지 못하면 :class:`ExcelConnectionError`를 낸다.
     """
-    workbooks: list[WorkbookInfo] = []
-    for app in xw.apps:
-        for book in app.books:
-            workbooks.append(
-                WorkbookInfo(
-                    name=book.name,
-                    full_name=book.fullname,
-                    sheet_names=[sheet.name for sheet in book.sheets],
-                )
+    try:
+        return [
+            WorkbookInfo(
+                name=book.name,
+                full_name=book.fullname,
+                sheet_names=[sheet.name for sheet in book.sheets],
             )
-    return workbooks
+            for book in _open_books()
+        ]
+    except ExcelReadError:
+        raise
+    except Exception as exc:  # COM 호출 중 Excel이 닫히는 경우 등
+        raise ExcelConnectionError(f"Excel에서 통합문서 정보를 읽지 못했습니다: {exc}") from exc
 
 
 def read_sheet(workbook_name: str, sheet_name: str) -> SheetData:
@@ -160,11 +174,23 @@ def read_sheet(workbook_name: str, sheet_name: str) -> SheetData:
     )
 
 
+def _open_books() -> list[xw.Book]:
+    """실행 중인 모든 Excel 창의 열린 통합문서. 하나도 없으면 오류를 낸다."""
+    try:
+        books = [book for app in xw.apps for book in app.books]
+    except Exception as exc:  # pywin32·COM 오류는 종류가 다양해서 넓게 받는다.
+        raise ExcelConnectionError(
+            "Excel에 연결하지 못했습니다. Excel이 설치되어 있고 응답하는지 확인하세요."
+        ) from exc
+    if not books:
+        raise ExcelNotRunningError(NOT_RUNNING_MESSAGE)
+    return books
+
+
 def _find_open_book(workbook_name: str) -> xw.Book:
-    for app in xw.apps:
-        for book in app.books:
-            if book.name == workbook_name:
-                return book
+    for book in _open_books():
+        if book.name == workbook_name:
+            return book
     raise WorkbookNotFoundError(f"열려 있는 통합문서 중 '{workbook_name}'이(가) 없습니다.")
 
 
