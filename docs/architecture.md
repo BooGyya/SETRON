@@ -2,7 +2,7 @@
 
 setron은 Python 기반 Windows 데스크톱 애플리케이션입니다. 단일 저장소와 실행 패키지 `src/setron/` 안에서 역할별 모듈을 분리합니다.
 
-현재는 화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조만 갖춘 상태입니다. 세부 기능과 연동 코드는 구현을 시작할 때 추가합니다.
+화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조를 사용합니다. 현재는 열린 Excel에서 값을 읽는 모듈과 해당 테스트가 구현되어 있으며, 화면과 DB·AI 연동 코드는 기능 구현 시 추가합니다.
 
 ## 현재 구조
 
@@ -17,21 +17,24 @@ S15P31B106/
 │       ├── features/
 │       │   └── __init__.py
 │       └── infrastructure/
-│           └── __init__.py
+│           ├── __init__.py
+│           └── excel_reader.py
 ├── tests/
-│   └── .gitkeep
+│   └── test_excel_reader.py
 ├── docs/
 │   ├── architecture.md
 │   ├── git-conventions.md
 │   └── mermaid-diagram.png
 ├── .gitignore
+├── .python-version
 ├── pyproject.toml
+├── uv.lock
 └── README.md
 ```
 
 각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 실행 진입점이며, 구현 시 DB 연결 설정, 서비스와 화면의 연결, 애플리케이션 시작을 담당합니다. 현재는 설명문만 있어 실행해도 화면이 뜨지 않고 종료됩니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
 
-`tests/`는 `.gitkeep`으로 빈 폴더를 유지하며, 첫 테스트를 추가하면 이 파일은 제거할 수 있습니다. 데이터 관계는 [ERD](mermaid-diagram.png)에 정리합니다.
+`tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다. 데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
 
 ## 폴더별 책임
 
