@@ -2,7 +2,7 @@
 
 setron은 Python 기반 Windows 데스크톱 애플리케이션입니다. 단일 저장소와 실행 패키지 `src/setron/` 안에서 역할별 모듈을 분리합니다.
 
-화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조를 사용합니다. 현재는 열린 Excel에서 값을 읽는 모듈과 해당 테스트가 구현되어 있으며, 화면과 DB·AI 연동 코드는 기능 구현 시 추가합니다.
+화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조를 사용합니다. 현재는 열린 Excel에서 값을 읽는 모듈, 예제 응답으로 동작하는 AI 호출 흐름과 해당 테스트가 구현되어 있으며, 화면과 DB 연동 코드는 기능 구현 시 추가합니다.
 
 ## 현재 구조
 
@@ -15,11 +15,18 @@ S15P31B106/
 │       ├── ui/
 │       │   └── __init__.py
 │       ├── features/
-│       │   └── __init__.py
+│       │   ├── __init__.py
+│       │   └── ai/
+│       │       ├── __init__.py
+│       │       ├── examples.py
+│       │       ├── schemas.py
+│       │       └── service.py
 │       └── infrastructure/
 │           ├── __init__.py
+│           ├── ai_client.py
 │           └── excel_reader.py
 ├── tests/
+│   ├── test_ai_service.py
 │   └── test_excel_reader.py
 ├── docs/
 │   ├── architecture.md
@@ -34,7 +41,11 @@ S15P31B106/
 
 각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 실행 진입점이며, 구현 시 DB 연결 설정, 서비스와 화면의 연결, 애플리케이션 시작을 담당합니다. 현재는 설명문만 있어 실행해도 화면이 뜨지 않고 종료됩니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
 
-`tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다. 데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
+`tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다.
+
+회사 AI API 정보(주소·모델·인증·호출 제한)를 받기 전까지는 `infrastructure/ai_client.py`의 `ExampleChatClient`가 미리 정한 정상·실패 응답을 돌려줍니다. `features/ai/`는 Excel 추출·질문 해석·분석 작업의 요청과 응답 형식을 정하고, 호출 실패와 형식 오류를 결과 상태로 바꿉니다. 실제 클라이언트는 같은 `ChatClient` 형식으로 추가하며, 결과의 `source`로 예제 응답과 실제 API 결과를 구분합니다. `tests/test_ai_service.py`가 이 흐름을 예제 응답으로 검증합니다.
+
+데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
 
 ## 폴더별 책임
 
