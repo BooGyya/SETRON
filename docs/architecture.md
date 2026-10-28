@@ -31,6 +31,7 @@ S15P31B106/
 ├── docs/
 │   ├── architecture.md
 │   ├── git-conventions.md
+│   ├── testing.md
 │   └── mermaid-diagram.png
 ├── .gitignore
 ├── .python-version
@@ -55,7 +56,7 @@ S15P31B106/
 | `src/setron/features/` | 설비·버전·Item·Excel·통계 업무 로직 |
 | `src/setron/infrastructure/` | DB 엔진·세션·ORM 모델과 외부 기술 연동 |
 | `tests/` | 업무 로직 및 외부 연동 검증 |
-| `docs/` | 아키텍처, ERD와 협업 규칙 |
+| `docs/` | 아키텍처, ERD, 협업 규칙과 테스트 전략 |
 
 ## 모듈 간 관계
 
