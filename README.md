@@ -38,7 +38,7 @@ uv run --locked python -m setron
 uv run --locked pytest
 ```
 
-`tests/test_excel_reader.py`는 셀 주소 변환, 병합 셀 보정, 열린 통합문서 목록과 Excel 미실행·연결 실패 처리를 검증합니다. 실제 Excel을 실행하지 않고 테스트할 수 있으며, 실제 Excel·DB 연동 검증은 별도로 진행합니다.
+`tests/test_excel_reader.py`는 셀 주소 변환, 병합 셀 보정, 열린 통합문서 목록과 Excel 미실행·연결 실패 처리를 검증합니다. 실제 Excel을 실행하지 않고 테스트할 수 있으며, 실제 Excel·DB 연동 검증은 별도로 진행합니다. 테스트 종류별 범위, 기능별 체크리스트와 결과 기록 방식은 [테스트 전략](docs/testing.md)을 따릅니다.
 
 ## 폴더 구조
 
@@ -57,6 +57,7 @@ S15P31B106/
 ├── docs/
 │   ├── architecture.md
 │   ├── git-conventions.md
+│   ├── testing.md
 │   └── mermaid-diagram.png
 ├── .gitignore
 ├── .python-version
@@ -73,4 +74,5 @@ S15P31B106/
 
 - [폴더 아키텍처](docs/architecture.md): 모듈별 책임과 기능 추가 원칙
 - [Git 협업 규칙](docs/git-conventions.md): 브랜치, 커밋, 리뷰 및 병합 규칙
+- [테스트 전략](docs/testing.md): 테스트 종류별 범위, 기능별 체크리스트, 실행·결과 기록 방법
 - [ERD 초안](docs/mermaid-diagram.png): 작성 중인 데이터 관계도. DB 스키마는 아직 확정되지 않았습니다.
