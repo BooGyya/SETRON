@@ -16,9 +16,13 @@ S15P31B106/
 │       │   └── __init__.py
 │       ├── features/
 │       │   ├── __init__.py
-│       │   └── ai/
+│       │   ├── ai/
+│       │   │   ├── __init__.py
+│       │   │   ├── examples.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
+│       │   └── version/
 │       │       ├── __init__.py
-│       │       ├── examples.py
 │       │       ├── schemas.py
 │       │       └── service.py
 │       └── infrastructure/
@@ -27,7 +31,8 @@ S15P31B106/
 │           └── excel_reader.py
 ├── tests/
 │   ├── test_ai_service.py
-│   └── test_excel_reader.py
+│   ├── test_excel_reader.py
+│   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
 │   ├── git-conventions.md
@@ -45,6 +50,8 @@ S15P31B106/
 `tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다.
 
 회사 AI API 정보(주소·모델·인증·호출 제한)를 받기 전까지는 `infrastructure/ai_client.py`의 `ExampleChatClient`가 미리 정한 정상·실패 응답을 돌려줍니다. `features/ai/`는 Excel 추출·질문 해석·분석 작업의 요청과 응답 형식을 정하고, 호출 실패와 형식 오류를 결과 상태로 바꿉니다. 실제 클라이언트는 같은 `ChatClient` 형식으로 추가하며, 결과의 `source`로 예제 응답과 실제 API 결과를 구분합니다. `tests/test_ai_service.py`가 이 흐름을 예제 응답으로 검증합니다.
+
+`features/version/`은 같은 버전 계열 안에서 설비 버전을 목표 N과 비교해 'N 이상', 'N-k', '판단 불가'를 계산합니다. 순서는 릴리즈 자료에서 확인한 `version_order`만 사용하고 버전 문자열이나 접미사로 추정하지 않습니다. DB 없이 동작하는 순수 계산이며, Repository가 `release_version` 행을 `ReleaseVersion`으로 바꿔 전달합니다. `tests/test_version_service.py`가 검증합니다.
 
 데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
 
