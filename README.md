@@ -14,6 +14,8 @@ setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 
 
 Windows와 Python 3.13.x를 기준으로 개발합니다. Python 버전은 `.python-version`과 `pyproject.toml`에 지정하고, 패키지는 [uv](https://docs.astral.sh/uv/getting-started/installation/)로 관리합니다.
 
+처음 저장소를 받은 팀원은 Git, Python 3.13, uv와 Docker Desktop을 설치한 뒤 아래 [팀원 최초 설정 순서](#팀원-최초-설정-순서)를 따릅니다.
+
 uv를 설치한 뒤 저장소 루트에서 PowerShell로 다음 명령을 실행합니다.
 
 ```powershell
@@ -49,30 +51,104 @@ SQL과 스키마는 MySQL 5.6.19에서 지원하는 기능을 기준으로 작�
 
 실사용 접속 설정은 개발·테스트용 `.env`와 구분해 보관하고 실행 시 앱의 환경변수로 불러옵니다. 실사용 전에는 Windows에 설치된 MySQL에서도 조회·저장, 저장 실패 시 전체 취소와 삭제 전 위험 근거 보존을 확인합니다.
 
-### 최초 준비와 실행
+### 팀원 최초 설정 순서
 
-```powershell
-# 기존 .env가 없을 때만 예시를 복사합니다.
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-```
+Windows PowerShell에서 저장소 최상위 폴더를 기준으로 실행합니다. Docker Desktop은 Linux 엔진이 실행 중이어야 합니다. 아래 접속 명령은 위 표의 기본 DB·계정을 기준으로 하므로 `.env`에서 바꿨다면 명령도 같은 값으로 맞춥니다.
 
-`.env`를 열어 개발·테스트 일반 계정과 root 계정의 비밀번호 네 개를 서로 다른 값으로 바꿉니다. `$` 등이 문자 그대로 전달되도록 작은따옴표를 유지합니다. 접속 포트·DB 이름·계정은 예시 파일에서 변경할 수 있습니다. MySQL 5.6의 계정명은 16자 이내로 지정하며, 초기화 스크립트는 DB·계정 이름에 영문·숫자·밑줄을 허용합니다.
+1. **최신 develop과 Python 의존성 받기**
 
-```powershell
-# 설정 구문 확인. 비밀번호가 출력되지 않습니다.
-docker compose --profile test config --quiet
+   작업 중인 변경이 있다면 먼저 커밋하거나 보관한 뒤 진행합니다.
 
-# 개발·테스트가 공유하는 5.6.19 이미지를 한 번 빌드합니다.
-docker compose build mysql-dev
+   ```powershell
+   git fetch origin
+   git switch develop
+   git pull --ff-only origin develop
+   uv sync --locked
+   ```
 
-# 개발 DB 실행
-docker compose up -d --wait mysql-dev
+2. **.env 만들기**
 
-# 테스트 DB 실행. 기본 실행에서는 제외되는 test 프로필입니다.
-docker compose --profile test up -d --wait mysql-test
-```
+   기존 파일이 없을 때만 예시를 복사합니다.
 
-`--wait`는 DB가 쿼리를 받을 수 있을 때까지 기다립니다. 처음 실행하면 빈 DB와 일반 계정을 만들며, 업무 테이블은 아래 공통 스키마로 생성합니다. 초기화된 볼륨이 있으면 `.env`의 DB 이름·계정·비밀번호를 바꿔도 기존 DB와 계정에 자동 반영되지 않으므로 DB에서 별도로 변경해야 합니다.
+   ```powershell
+   if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+   notepad .env
+   ```
+
+   복사한 `.env`에서 비밀번호 네 개를 수정합니다. 다음은 로컬 개발용 예시이며, 나머지 접속 항목은 예시 파일의 기본값을 사용합니다.
+
+   ```dotenv
+   SETRON_DB_PASSWORD='dev_demo1234'
+   SETRON_DB_ROOT_PASSWORD='devroot_demo1234'
+   SETRON_TEST_DB_PASSWORD='test_demo1234'
+   SETRON_TEST_DB_ROOT_PASSWORD='testroot_demo1234'
+   ```
+
+   앱과 HeidiSQL은 일반 계정으로 접속하고 root 계정은 컨테이너 내부 관리에 사용합니다. 실제 `.env`는 Git에서 제외되므로 팀원마다 직접 만들고, 공유할 설정 항목은 `.env.example`에 반영합니다. 비밀번호의 `$` 등이 문자 그대로 전달되도록 작은따옴표를 유지합니다. MySQL 5.6의 계정명은 16자 이내이며 초기화 스크립트는 DB·계정 이름에 영문·숫자·밑줄을 허용합니다.
+
+   초기화된 볼륨이 있으면 `.env`의 비밀번호·계정·DB 이름을 바꿔도 기존 DB에 자동 반영되지 않습니다. 이 경우 DB의 계정·DB 설정도 별도로 변경해야 합니다.
+
+3. **Docker 이미지 빌드와 DB 실행**
+
+   ```powershell
+   # 설정 구문 확인. 비밀번호는 출력되지 않습니다.
+   docker compose --profile test config --quiet
+
+   # 개발·테스트가 공유하는 이미지를 한 번 빌드합니다.
+   docker compose build mysql-dev
+
+   docker compose up -d --wait mysql-dev
+   docker compose --profile test up -d --wait mysql-test
+   docker compose --profile test ps
+   ```
+
+   `--wait`는 DB가 쿼리를 받을 수 있을 때까지 기다립니다. 두 서비스가 `healthy`인지 확인합니다. 최초 실행에서는 빈 DB와 계정만 생성하며, 업무 테이블은 다음 단계에서 만듭니다.
+
+4. **빈 개발 DB에 스키마 최초 적용**
+
+   **개발 DB에 한 번만 적용합니다. 테스트 DB에는 직접 적용하지 않습니다.** 먼저 스키마를 개발 컨테이너로 복사하고 MySQL에 접속합니다.
+
+   ```powershell
+   docker compose cp ./database/schema_mysql5619.sql mysql-dev:/tmp/schema_mysql5619.sql
+   docker compose exec mysql-dev mysql --default-character-set=utf8mb4 --user=setron_app --password setron_dev
+   ```
+
+   비밀번호 입력 요청이 나오면 `.env`의 `SETRON_DB_PASSWORD` 값을 입력합니다. 접속 후 `mysql>` 프롬프트에서 다음을 실행합니다.
+
+   ```sql
+   SOURCE /tmp/schema_mysql5619.sql;
+   SHOW TABLES;
+   SELECT VERSION(), DATABASE();
+   exit;
+   ```
+
+   테이블 13개, 서버 버전 `5.6.19`, DB 이름 `setron_dev`를 확인합니다. 이미 스키마를 적용한 개발 DB에서는 이 단계를 생략합니다.
+
+5. **앱 연결 확인과 전체 테스트**
+
+   PowerShell로 돌아와 다음 명령을 실행합니다.
+
+   ```powershell
+   uv run --locked --env-file .env python -m setron.infrastructure.database
+   uv run --locked --env-file .env python -m pytest -q
+   ```
+
+   첫 명령에서 DB 연결 확인 메시지가 나오고, 전체 테스트가 통과하는지 확인합니다. 테스트는 `setron_test`에 스키마를 자동 적용하고 검증 후 생성한 테이블을 삭제합니다. 테스트 DB는 관리 테이블이 없는 상태로 두며, 개발 데이터를 저장하지 않습니다. 스키마는 프로젝트의 `database/schema_mysql5619.sql`을 자동으로 찾으므로 별도 스키마 경로 환경변수가 필요하지 않습니다.
+
+6. **작업 종료와 다음 실행**
+
+   ```powershell
+   # 두 DB 중지. 데이터는 유지합니다.
+   docker compose --profile test stop
+
+   # 다음 개발 시작
+   docker compose up -d --wait mysql-dev
+
+   # 테스트할 때 추가 실행
+   docker compose --profile test up -d --wait mysql-test
+   ```
+
+   다음부터는 이미지 빌드와 스키마 최초 적용을 생략하고 필요한 DB를 실행하면 됩니다. Dockerfile이나 초기화 스크립트를 수정했다면 아래 재빌드 안내를 따릅니다.
 
 ### 공통 스키마
 
