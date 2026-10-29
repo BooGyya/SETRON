@@ -2,11 +2,11 @@
 
 setron은 Python 기반 Windows 데스크톱 애플리케이션입니다. 단일 저장소와 실행 패키지 `src/setron/` 안에서 역할별 모듈을 분리합니다.
 
-화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조를 사용합니다. 현재는 열린 Excel에서 값을 읽는 모듈, 예제 응답으로 동작하는 AI 호출 흐름과 해당 테스트가 구현되어 있으며, 화면과 DB 연동 코드는 기능 구현 시 추가합니다.
+화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조를 사용합니다. 현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답으로 동작하는 AI 호출 흐름, DB 연결·공통 저장 서비스와 해당 테스트가 구현되어 있습니다. 화면과 각 업무 흐름을 DB에 연결하는 코드는 후속 작업입니다.
 
 개발·테스트용 MySQL 5.6.19는 Docker Compose로 분리해 실행합니다. Python 앱과 Excel은 Windows에서 실행하며, 실제 사용 PC의 앱은 Windows에 설치된 MySQL에 접속합니다.
 
-DB 연동은 두 환경에서 같은 코드를 사용하고, `SETRON_DB_*` 환경변수로 접속 대상을 바꾸도록 구현합니다. SQL과 스키마는 MySQL 5.6.19를 기준으로 작성하며, 앱이 Docker 실행 명령이나 컨테이너 내부 경로에 의존하지 않도록 합니다. Windows 서버에는 같은 업무 스키마와 필요한 계정 권한을 준비하고, 실사용 전 해당 서버에서 저장·전체 취소·삭제 전 위험 근거 보존을 검증합니다. 환경별 접속 설정과 개발 기준은 [README](../README.md#db-연동-개발-기준)를 참고합니다.
+DB 연동은 두 환경에서 같은 코드를 사용하고, `SETRON_DB_*` 환경변수로 접속 대상을 바꿉니다. SQL과 스키마는 MySQL 5.6.19를 기준으로 작성하며, 앱이 Docker 실행 명령이나 컨테이너 내부 경로에 의존하지 않도록 합니다. Windows 서버에는 같은 업무 스키마와 필요한 계정 권한을 준비하고, 실사용 전 해당 서버에서 저장·전체 취소·삭제 전 위험 근거 보존을 검증합니다. 환경별 접속 설정과 개발 기준은 [README](../README.md#db-연동-개발-기준)를 참고합니다.
 
 ## 현재 구조
 
@@ -37,6 +37,11 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── storage/
+│       │   │   ├── __init__.py
+│       │   │   ├── repository.py
+│       │   │   ├── service.py
+│       │   │   └── validation.py
 │       │   └── version/
 │       │       ├── __init__.py
 │       │       ├── schemas.py
@@ -44,13 +49,22 @@ S15P31B106/
 │       └── infrastructure/
 │           ├── __init__.py
 │           ├── ai_client.py
+│           ├── database.py
 │           └── excel_reader.py
+├── database/
+│   └── schema_mysql5619.sql
 ├── tests/
 │   ├── test_aggregation_service.py
 │   ├── test_ai_service.py
+│   ├── test_database.py
+│   ├── test_database_environment.py
+│   ├── test_database_mysql.py
 │   ├── test_excel_reader.py
 │   ├── test_item_service.py
 │   ├── test_risk_service.py
+│   ├── test_schema_mysql.py
+│   ├── test_storage_service.py
+│   ├── test_storage_validation.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -59,6 +73,7 @@ S15P31B106/
 │   └── mermaid-diagram.png
 ├── .gitignore
 ├── .env.example
+├── .env.windows.example
 ├── .python-version
 ├── compose.yaml
 ├── docker/mysql5619/
@@ -89,8 +104,10 @@ S15P31B106/
 | --- | --- |
 | `src/setron/ui/` | PySide6 화면, 사용자 입력, 화면용 테이블 모델, 백그라운드 작업 실행과 결과 표시 |
 | `src/setron/features/` | 설비·버전·Item·Excel·통계 업무 로직 |
-| `src/setron/infrastructure/` | DB 엔진·세션·ORM 모델과 외부 기술 연동 |
+| `src/setron/features/storage/` | 공통 Repository, 저장값 변환·입력 검증·삭제 전 위험 근거 보존 |
+| `src/setron/infrastructure/` | DB 엔진·세션과 외부 기술 연동 |
 | `compose.yaml`, `docker/mysql5619/` | 개발·테스트용 MySQL 5.6.19 이미지, 초기 DB·계정 생성과 실행 설정 |
+| `database/schema_mysql5619.sql` | 개발·테스트·Windows MySQL 최초 설치에 공통으로 사용하는 5.6.19 스키마 |
 | `tests/` | 업무 로직 및 외부 연동 검증 |
 | `docs/` | 아키텍처, ERD, 협업 규칙과 테스트 전략 |
 
@@ -99,7 +116,7 @@ S15P31B106/
 기능을 구현할 때 다음 원칙을 따릅니다.
 
 - UI는 서비스에 작업을 요청하고 결과를 화면에 표시합니다. DB에 직접 접근하지 않습니다.
-- 업무 서비스는 같은 기능의 Repository를 통해 데이터를 조회하거나 저장합니다. Repository는 `infrastructure/`의 DB 세션과 ORM 모델을 사용합니다.
+- 업무 서비스는 Repository를 통해 조회하고 관리 데이터 변경은 공통 `StorageService`를 사용합니다. 공통 Repository는 같은 DB 세션과 SQLAlchemy로 조회한 테이블 정의를 사용합니다.
 - `features/`는 `ui/`와 PySide6를 import하지 않습니다. 업무 로직은 화면 없이 검증할 수 있도록 작성합니다.
 - DB 접속과 세션 관리 등 기술적인 연동은 `infrastructure/`에 둡니다.
 - `infrastructure/`는 `ui/`와 `features/`를 import하지 않습니다. 초기 의존 방향은 `ui → features → infrastructure`로 유지합니다.
@@ -112,12 +129,24 @@ DB 작업을 실행하는 스레드에서 세션을 열고 작업이 끝나면 �
 
 개발·테스트 DB는 각각 다른 컨테이너·계정·포트·볼륨을 사용하며, `mysql-test`는 `test` 프로필에서만 실행합니다. 두 서비스는 Oracle 공식 배포 파일의 체크섬과 버전을 확인해 빌드한 5.6.19 이미지를 공유합니다. InnoDB, utf8mb4, `lower_case_table_names=1`을 사용하고 접속 포트는 `127.0.0.1`에만 공개합니다. Compose는 처음 실행할 때 빈 DB와 일반 계정을 만들며 업무 스키마는 별도로 적용합니다. 환경변수 예시는 `.env.example`, 실행·중지 명령은 [README](../README.md#docker로-개발테스트-db-실행)에 정리합니다.
 
+업무 스키마는 프로젝트의 `database/schema_mysql5619.sql`로 관리합니다. 개발·테스트·Windows MySQL에서 같은 파일을 사용하며, 처음 준비한 빈 DB에 적용합니다. 개발 DB는 작업 데이터를 보관하고 테스트 DB는 테이블 생성·삭제와 실패 상황을 검증하므로 데이터를 분리합니다. 적용 방법은 [README의 공통 스키마 설명](../README.md#공통-스키마)을 참고합니다.
+
+### DB 연결과 공통 저장
+
+`infrastructure/database.py`의 `DatabaseConfig`가 접속 환경변수를 검사하고 `Database`가 연결과 업무별 트랜잭션을 관리합니다. 접속마다 `STRICT_TRANS_TABLES`를 활성화합니다. 업무 실행 전 접속 실패, 저장 실패와 최종 commit 중 연결 중단으로 결과를 모르는 경우를 구분합니다. 세션은 작업마다 열고 닫으며 결과를 모르는 저장은 자동 재시도하지 않습니다.
+
+`features/storage/`의 서비스는 공통 스키마를 조회해 만든 Repository를 사용합니다. 서비스 초기화의 테이블 조회도 공통 트랜잭션과 접속 오류 처리를 거칩니다. 입력 검증·JSON과 원문 변환·DB 변경을 같은 업무 트랜잭션으로 묶습니다. 여러 단계의 저장이 필요한 경우 모든 단계에 같은 세션을 전달하며 Repository는 별도로 commit하지 않습니다.
+
+릴리즈 버전 삭제와 릴리즈 교체 내부의 Item 삭제는 대상과 위험 규칙을 잠근 뒤 기존 근거에 삭제 대상의 원문을 추가하고 `UNRESOLVED`로 바꿉니다. 근거 보존과 삭제는 함께 저장되거나 취소됩니다. 앱에서 수정·삭제하는 경로를 지원하며, 계열 일치·원본 불변·모델 적용 범위 등 기능별 추가 규칙은 후속 업무 서비스에서 구현합니다.
+
+MySQL 회귀 테스트는 테스트 파일 위치를 기준으로 프로젝트 내 스키마를 찾습니다. 별도 스키마 경로 설정 없이 전용 테스트 DB에서 생성·검증·정리하며, 동시 삭제와 저장 도중·COMMIT 전송 직전의 실제 연결 중단도 검증합니다. Windows MySQL은 `.env.windows.example`을 기반으로 별도 접속 설정을 준비하고 실제 서버에서 추가 검증합니다.
+
 ## 기능을 추가할 때
 
 업무 기능은 필요해지는 시점에 `features/` 아래에 분리합니다. 예를 들어 설비 기능은 `features/equipment/`에 추가합니다.
 
 - `service.py`: 업무 흐름과 규칙
-- `repository.py`: 해당 기능의 데이터 조회 및 저장. DB 연결과 ORM 모델 정의는 `infrastructure/`에 유지
+- `repository.py`: 해당 기능의 데이터 조회. 관리 데이터 변경은 공통 저장 서비스를 사용하고 DB 엔진·세션 관리는 `infrastructure/`에 유지
 - `schemas.py`: 화면과 서비스가 주고받는 데이터 구조
 
 파일은 실제로 맡을 책임이 생길 때 만듭니다. 초기부터 모든 기능에 동일한 파일을 만들 필요는 없습니다.
