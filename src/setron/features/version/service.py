@@ -7,12 +7,15 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 
 from setron.features.version.schemas import (
     CompareReason,
     CompareStatus,
+    NotationDifference,
+    ReleaseCandidate,
     ReleaseVersion,
     SortedReleases,
     VersionComparison,
@@ -77,6 +80,52 @@ class FamilyReleases:
         if not key:
             return None
         return self._by_raw.get(key) or self._aliases.get(key)
+
+    def candidates(self, version_raw: str | None) -> tuple[ReleaseCandidate, ...]:
+        """원문과 표기만 다른 것으로 보이는 릴리즈 후보를 찾는다. 자동으로 연결하지 않는다.
+
+        공백·대소문자·앞의 v·(H) 표식·점과 밑줄의 차이만 무시하고 비교한다. 원문이 바로 연결되면
+        (:meth:`match`) 후보를 내지 않는다. 차이가 적은 후보부터, 점·밑줄 차이가 있는 후보는 뒤에 둔다.
+        """
+        if not (version_raw or "").strip() or self.match(version_raw) is not None:
+            return ()
+        key = _notation_key(version_raw)
+        found = []
+        for release in self.releases:
+            if _notation_key(release.version_raw) != key:
+                continue
+            differences = tuple(
+                d for d in NotationDifference
+                if _notation_key(version_raw, skip=d) != _notation_key(release.version_raw, skip=d)
+            )
+            found.append(ReleaseCandidate(release, differences))
+        return tuple(sorted(found, key=lambda c: (
+            NotationDifference.SEPARATOR in c.differences,
+            len(c.differences),
+            c.release.version_order is None,
+            c.release.version_order or 0,
+        )))
+
+
+_SITE_MARK = re.compile(r"\s*\(\s*h\s*\)\s*", re.IGNORECASE)
+_WHITESPACE = re.compile(r"\s+")
+_SEPARATORS = str.maketrans({"_": ".", "-": "."})
+
+
+def _notation_key(text: str, skip: NotationDifference | None = None) -> str:
+    """표기 차이를 지운 비교용 문자열. ``skip``에 준 차이는 지우지 않는다 (어떤 차이가 있었는지 찾을 때 쓴다)."""
+    D = NotationDifference
+    if skip is not D.SITE_MARK:
+        text = _SITE_MARK.sub("", text)
+    if skip is not D.WHITESPACE:
+        text = _WHITESPACE.sub("", text)
+    if skip is not D.CASE:
+        text = text.casefold()
+    if skip is not D.PREFIX and text[:1] == "v":
+        text = text[1:]
+    if skip is not D.SEPARATOR:
+        text = text.translate(_SEPARATORS)
+    return text
 
 
 def compare_version(
