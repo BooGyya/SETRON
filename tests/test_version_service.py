@@ -2,7 +2,7 @@
 
 import pytest
 
-from setron.features.version.schemas import CompareReason, CompareStatus, ReleaseVersion
+from setron.features.version.schemas import CompareReason, CompareStatus, NotationDifference, ReleaseVersion
 from setron.features.version.service import FamilyReleases, compare_version, sort_releases
 
 C4 = 1
@@ -180,3 +180,81 @@ def test_family_rejects_releases_from_other_family():
 def test_family_rejects_alias_to_unknown_release():
     with pytest.raises(ValueError, match="없습니다"):
         FamilyReleases(C4, c4_releases(), aliases={"v4.56.6.45x": "v4.56.6.45"})
+
+
+# --- 표기만 다른 릴리즈 후보 ------------------------------------------------
+
+C3_LEGACY_RELEASES = [
+    ReleaseVersion(40, C3_LEGACY, "v1.1.1.6B_6", 1),
+    ReleaseVersion(41, C3_LEGACY, "v1.1.1.6B_6+Hotfix", 2),
+]
+
+
+def candidate_view(result):
+    return [(c.release.version_raw, c.differences) for c in result]
+
+
+def test_hotfix_with_spaces_is_suggested_but_not_linked():
+    """멘토 답변(10-29): 릴리즈 노트는 'v1.1.1.6B_6+Hotfix', 화성 현황표는 'v1.1.1.6B_6 + Hotfix'."""
+    family = FamilyReleases(C3_LEGACY, C3_LEGACY_RELEASES)
+
+    assert family.match("v1.1.1.6B_6 + Hotfix") is None
+    assert candidate_view(family.candidates("v1.1.1.6B_6 + Hotfix")) == [
+        ("v1.1.1.6B_6+Hotfix", (NotationDifference.WHITESPACE,)),
+    ]
+    assert compare_version(family, "v1.1.1.6B_6 + Hotfix", target_id=41).reason is CompareReason.NOT_REGISTERED
+
+
+def test_chosen_candidate_is_used_through_release_id():
+    """사용자가 후보를 고르면 그 릴리즈 ID를 저장하고, 비교는 저장된 ID로 한다."""
+    family = FamilyReleases(C3_LEGACY, C3_LEGACY_RELEASES)
+    chosen = family.candidates("v1.1.1.6B_6 + Hotfix")[0].release
+
+    result = compare_version(family, "v1.1.1.6B_6 + Hotfix", target_id=41,
+                             release_version_id=chosen.release_version_id)
+
+    assert result.status is CompareStatus.AT_OR_ABOVE
+    assert result.version_raw == "v1.1.1.6B_6 + Hotfix"
+
+
+@pytest.mark.parametrize(
+    ("raw", "release_raw", "differences"),
+    [
+        ("v3.52_13 (H)", "v3.52_13", (NotationDifference.SITE_MARK,)),
+        ("V4.56.6.42", "v4.56.6.42", (NotationDifference.CASE,)),
+        ("4.56.6.42", "v4.56.6.42", (NotationDifference.PREFIX,)),
+        ("v999.3_7", "v999.3.7", (NotationDifference.SEPARATOR,)),
+        ("V999.3_7 (H)", "v999.3.7", (NotationDifference.SITE_MARK, NotationDifference.CASE,
+                                      NotationDifference.SEPARATOR)),
+    ],
+    ids=["(H) 표식", "대소문자", "앞의 v", "점·밑줄", "여러 차이"],
+)
+def test_candidate_reports_notation_differences(raw, release_raw, differences):
+    family = FamilyReleases(C4, [ReleaseVersion(1, C4, release_raw, 1)])
+
+    result = family.candidates(raw)
+
+    assert candidate_view(result) == [(release_raw, differences)]
+    assert result[0].description.endswith("차이")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["v1.1.1.6B_6_c", "v1.1.1.6B_6", "", None],
+    ids=["릴리즈 노트에 없는 실제 버전", "원문이 바로 연결됨", "빈 문자열", "None"],
+)
+def test_no_candidates(raw):
+    family = FamilyReleases(C3_LEGACY, C3_LEGACY_RELEASES)
+
+    assert family.candidates(raw) == ()
+
+
+def test_candidates_put_separator_difference_last():
+    family = FamilyReleases(C4, [
+        ReleaseVersion(1, C4, "v4.56.6_42", 1),
+        ReleaseVersion(2, C4, "v4.56.6.42 ", 2),
+    ])
+
+    result = family.candidates("V4.56.6.42")
+
+    assert [c.release.release_version_id for c in result] == [2, 1]

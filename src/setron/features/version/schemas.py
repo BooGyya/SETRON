@@ -36,6 +36,37 @@ class SortedReleases:
     duplicated_orders: tuple[int, ...]
 
 
+class NotationDifference(str, Enum):
+    """현황표 원문과 릴리즈 원문의 표기 차이. 후보를 보여줄 때만 쓰며 자동으로 연결하지 않는다."""
+
+    SITE_MARK = "SITE_MARK"      # (H) 같은 사업장 표식
+    WHITESPACE = "WHITESPACE"    # 공백 (예: "+ Hotfix" ↔ "+Hotfix")
+    CASE = "CASE"                # 대소문자
+    PREFIX = "PREFIX"            # 앞의 v 유무
+    SEPARATOR = "SEPARATOR"      # 점·밑줄·대시 (예: v999.3.7 ↔ v999.3_7)
+
+
+DIFFERENCE_LABELS = {
+    NotationDifference.SITE_MARK: "사업장 표식",
+    NotationDifference.WHITESPACE: "공백",
+    NotationDifference.CASE: "대소문자",
+    NotationDifference.PREFIX: "앞의 v",
+    NotationDifference.SEPARATOR: "점·밑줄·대시",
+}
+
+
+@dataclass(frozen=True)
+class ReleaseCandidate:
+    """표기만 다른 것으로 보이는 릴리즈 후보. 사용자가 고르면 그 릴리즈 ID를 대응 릴리즈로 저장한다."""
+
+    release: ReleaseVersion
+    differences: tuple[NotationDifference, ...]
+
+    @property
+    def description(self) -> str:
+        return ", ".join(DIFFERENCE_LABELS[d] for d in self.differences) + " 차이"
+
+
 class CompareStatus(str, Enum):
     AT_OR_ABOVE = "AT_OR_ABOVE"
     BELOW = "BELOW"
