@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 
 
@@ -15,12 +16,14 @@ class ReleaseVersion:
     """같은 계열의 릴리즈 버전 하나 (ERD `release_version`).
 
     ``version_order``는 계열 안에서 확인된 순서이며 클수록 나중 버전이다. 모르면 None이다.
+    ``released_at``은 출시일이며 노후도 계산(BE-016)에 쓴다. 모르면 None이다.
     """
 
     release_version_id: int
     family_id: int
     version_raw: str
     version_order: int | None = None
+    released_at: date | None = None
 
 
 @dataclass(frozen=True)

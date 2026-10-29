@@ -24,6 +24,11 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── aging/
+│       │   │   ├── __init__.py
+│       │   │   ├── repository.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   ├── ai/
 │       │   │   ├── __init__.py
 │       │   │   ├── examples.py
@@ -55,6 +60,8 @@ S15P31B106/
 │   └── schema_mysql5619.sql
 ├── tests/
 │   ├── test_aggregation_service.py
+│   ├── test_aging_mysql.py
+│   ├── test_aging_service.py
 │   ├── test_ai_service.py
 │   ├── test_database.py
 │   ├── test_database_environment.py
@@ -93,6 +100,8 @@ S15P31B106/
 `features/aggregation/`은 대시보드·히트맵·AI가 함께 쓰는 공통 집계입니다. 한 기준 날짜의 설비 현황을 받아 PM별로 `features/version/`의 비교를 거친 뒤, 설비·계열 상태와 실제 호기 수, 모델별 대수, 업그레이드 필요 수, N 이상 적용률을 계산합니다. 조회 범위 필터는 호출하는 쪽에서 적용하고, Repository는 `equipment_snapshot`·`equipment_pm`·`equipment_version` 행을 `EquipmentRecord`로 묶어 전달합니다. `tests/test_aggregation_service.py`가 검증합니다.
 
 `features/item/`은 Item이 포함된 버전과 적용 설비를 판정합니다. 버전별로 저장된 Item 상태(`release_version_item`)만 사용하고, 행이 없는 버전은 '미확인'으로 둡니다. 공통 스키마 규칙 H에 따라 `version_order`만으로 이전 버전의 상태를 이어받지 않으며, 누적 포함과 제외 조건은 릴리즈를 저장할 때 버전마다 행으로 반영합니다. 모델 적용 범위로 '대상 외'를 구분하고, 범위를 모르면 '미확인'으로 두어 미적용으로 단정하지 않습니다. 릴리즈 순서는 `features/version/`, 설비 현황 형식은 `features/aggregation/`의 것을 씁니다. `tests/test_item_service.py`가 검증합니다.
+
+`features/aging/`은 버전 출시일(`release_version.released_at`)부터 조회 기준 날짜까지의 경과 기간으로 노후도(안전·주의·위험)를 계산합니다. 경계는 달력 기준이며, 출시일 누락·조회 날짜보다 늦은 출시일·잘못된 기간 기준을 서로 다른 상태로 구분합니다. 혼합 설비는 계열별 기간을 모두 남기고 가장 오래된 버전을 대표로 씁니다. 기간 기준은 `app_setting`의 `version_age_thresholds`에 저장하며, Repository가 `features/storage/`의 트랜잭션으로 읽고 저장하고 음수·역전 등 잘못된 기준은 저장하지 않습니다. 노후도는 위험 판정과 따로 표시합니다. `tests/test_aging_service.py`와 MySQL 통합 테스트 `tests/test_aging_mysql.py`가 검증합니다.
 
 `features/risk/`는 등록된 위험 지정(`risk_rule`)으로 설비와 버전의 위험 여부를 판정합니다. 환경·안전 필수 Item 미적용, 결함 Item의 위험 범위([시작, 해제) 버전) 포함, 직접 지정한 위험 버전 중 하나라도 확인되면 위험이고, 자료가 부족하면 '미확인'으로 둡니다. Item 포함 여부는 `features/item/`의 판정을 그대로 쓰며, 위험은 N 대비 격차·노후도와 따로 판단합니다. `tests/test_risk_service.py`가 검증합니다.
 
