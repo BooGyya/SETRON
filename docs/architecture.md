@@ -33,6 +33,10 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── risk/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   └── version/
 │       │       ├── __init__.py
 │       │       ├── schemas.py
@@ -46,6 +50,7 @@ S15P31B106/
 │   ├── test_ai_service.py
 │   ├── test_excel_reader.py
 │   ├── test_item_service.py
+│   ├── test_risk_service.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -73,6 +78,8 @@ S15P31B106/
 `features/aggregation/`은 대시보드·히트맵·AI가 함께 쓰는 공통 집계입니다. 한 기준 날짜의 설비 현황을 받아 PM별로 `features/version/`의 비교를 거친 뒤, 설비·계열 상태와 실제 호기 수, 모델별 대수, 업그레이드 필요 수, N 이상 적용률을 계산합니다. 조회 범위 필터는 호출하는 쪽에서 적용하고, Repository는 `equipment_snapshot`·`equipment_pm`·`equipment_version` 행을 `EquipmentRecord`로 묶어 전달합니다. `tests/test_aggregation_service.py`가 검증합니다.
 
 `features/item/`은 Item이 포함된 버전과 적용 설비를 판정합니다. 버전별로 저장된 Item 상태(`release_version_item`)가 없으면 같은 계열에서 순서가 확인된 가장 가까운 이전 버전의 상태를 이어받고, 모델 적용 범위로 '대상 외'를 구분합니다. 순서나 범위를 모르면 '미확인'으로 두고 미적용으로 단정하지 않습니다. 릴리즈 순서는 `features/version/`, 설비 현황 형식은 `features/aggregation/`의 것을 씁니다. `tests/test_item_service.py`가 검증합니다.
+
+`features/risk/`는 등록된 위험 지정(`risk_rule`)으로 설비와 버전의 위험 여부를 판정합니다. 환경·안전 필수 Item 미적용, 결함 Item의 위험 범위([시작, 해제) 버전) 포함, 직접 지정한 위험 버전 중 하나라도 확인되면 위험이고, 자료가 부족하면 '미확인'으로 둡니다. Item 포함 여부는 `features/item/`의 판정을 그대로 쓰며, 위험은 N 대비 격차·노후도와 따로 판단합니다. `tests/test_risk_service.py`가 검증합니다.
 
 데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
 
