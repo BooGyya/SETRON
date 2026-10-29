@@ -15,7 +15,7 @@
 - 업무 규칙은 단위 테스트로 먼저 확인합니다. 통합 테스트는 실제 연동에서만 확인할 수 있는 동작으로 범위를 좁힙니다.
 - 단위 테스트는 Excel, MySQL, 회사 AI가 없는 PC에서도 통과해야 합니다.
 - AI 추출의 합격 기준(필드별 일치율 등)은 Jira S15P31B106-71에서 정한 기준을 따릅니다.
-- 통합 테스트 환경(로컬 MySQL 설치·접속·스키마 적용)은 DB 연결 구성(S15P31B106-30, 31)이 끝나면 이 문서와 README에 추가합니다.
+- MySQL 통합 테스트는 Docker의 전용 MySQL 5.6.19에서 자동 실행합니다. 실제 사용 PC의 Windows MySQL 접속·저장 검증은 해당 환경이 준비된 뒤 별도로 진행합니다.
 
 ## 2. 단위 테스트 작성 규칙
 
@@ -27,6 +27,8 @@
   | Excel (xlwings) | `monkeypatch`로 모듈의 `xw`를 가짜 객체로 교체 | `tests/test_excel_reader.py`의 `use_fake_excel` |
   | 회사 AI | `ExampleChatClient`에 정상·실패 응답을 넣어 서비스에 전달 | `tests/test_ai_service.py` |
   | DB | 서비스가 받는 Repository 형식을 따르는 메모리 저장소를 테스트에서 만들어 전달 | Repository 구현 시 추가 |
+
+DB 연결·트랜잭션의 단위 테스트는 SQLite 메모리 DB에서 실제 SQL을 실행합니다. MySQL 5.6.19의 SQL·자료형·잠금 동작은 아래 통합 테스트에서 확인합니다.
 
 - 테스트 하나는 한 가지 상황을 확인합니다. 함수 이름은 상황과 기대 결과를 영어로, 테스트 설명(docstring, `ids`)은 한국어로 씁니다.
 - 명세의 예시 수치는 그대로 테스트 값으로 씁니다. 예: 혼합 설비 O2는 N 미만·O3는 N 이상 → 실제 1대, 적용률 50%
@@ -125,6 +127,19 @@ uv run --locked pytest -k rate_limit
 # 실패한 테스트의 자세한 내용 보기
 uv run --locked pytest -vv
 ```
+
+### MySQL 통합 테스트
+
+MySQL 통합 테스트까지 실행할 때는 개발 DB와 분리된 `mysql-test`를 준비합니다. 접속 정보는 `.env.example`의 `SETRON_TEST_DB_*` 항목에 맞춰 설정합니다.
+
+```powershell
+docker compose --profile test up -d --wait mysql-test
+uv run --locked --env-file .env python -m pytest -q
+```
+
+스키마는 프로젝트의 `database/schema_mysql5619.sql`을 테스트 파일 위치를 기준으로 찾으므로 별도 경로 설정이 필요하지 않습니다. 기존 관리 테이블이 없는 테스트 DB에 스키마를 적용하고 이번 검증에서 만든 테이블만 삭제합니다. 접속 설정이 없으면 실제 MySQL 테스트를 건너뛰며, 설정했는데 연결이나 권한에 문제가 있으면 실패로 보고합니다.
+
+DB 회귀 테스트는 저장 성공·전체 취소, JSON·원문 보존, 삭제 전 위험 근거 보존과 동시 삭제를 검증합니다. 실제 연결 중단은 저장 도중과 COMMIT 전송 직전에 테스트 연결만 종료해 검증하며, 성공한 commit의 응답만 유실되는 경우는 포함하지 않습니다. 자세한 접속·오류 처리 기준은 [README](../README.md#db-연결과-저장-처리-be-001)를 참고합니다.
 
 ## 5. 결과 기록 방식
 
