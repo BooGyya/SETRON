@@ -4,6 +4,10 @@ setron은 Python 기반 Windows 데스크톱 애플리케이션입니다. 단일
 
 화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조를 사용합니다. 현재는 열린 Excel에서 값을 읽는 모듈, 예제 응답으로 동작하는 AI 호출 흐름과 해당 테스트가 구현되어 있으며, 화면과 DB 연동 코드는 기능 구현 시 추가합니다.
 
+개발·테스트용 MySQL 5.6.19는 Docker Compose로 분리해 실행합니다. Python 앱과 Excel은 Windows에서 실행하며, 실제 사용 PC의 앱은 Windows에 설치된 MySQL에 접속합니다.
+
+DB 연동은 두 환경에서 같은 코드를 사용하고, `SETRON_DB_*` 환경변수로 접속 대상을 바꾸도록 구현합니다. SQL과 스키마는 MySQL 5.6.19를 기준으로 작성하며, 앱이 Docker 실행 명령이나 컨테이너 내부 경로에 의존하지 않도록 합니다. Windows 서버에는 같은 업무 스키마와 필요한 계정 권한을 준비하고, 실사용 전 해당 서버에서 저장·전체 취소·삭제 전 위험 근거 보존을 검증합니다. 환경별 접속 설정과 개발 기준은 [README](../README.md#db-연동-개발-기준)를 참고합니다.
+
 ## 현재 구조
 
 ```text
@@ -49,7 +53,10 @@ S15P31B106/
 │   ├── testing.md
 │   └── mermaid-diagram.png
 ├── .gitignore
+├── .env.example
 ├── .python-version
+├── compose.yaml
+├── docker/mysql5619/
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
@@ -76,6 +83,7 @@ S15P31B106/
 | `src/setron/ui/` | PySide6 화면, 사용자 입력, 화면용 테이블 모델, 백그라운드 작업 실행과 결과 표시 |
 | `src/setron/features/` | 설비·버전·Item·Excel·통계 업무 로직 |
 | `src/setron/infrastructure/` | DB 엔진·세션·ORM 모델과 외부 기술 연동 |
+| `compose.yaml`, `docker/mysql5619/` | 개발·테스트용 MySQL 5.6.19 이미지, 초기 DB·계정 생성과 실행 설정 |
 | `tests/` | 업무 로직 및 외부 연동 검증 |
 | `docs/` | 아키텍처, ERD, 협업 규칙과 테스트 전략 |
 
@@ -94,6 +102,8 @@ S15P31B106/
 Excel 대량 처리처럼 오래 걸리는 작업은 `ui/`의 워커에서 서비스를 호출해 실행합니다. 위젯 생성과 화면 갱신은 UI 스레드에서 처리하고, 워커의 결과나 오류는 Qt 시그널로 전달합니다. 스레드 간 객체 호출은 [Qt의 스레드 규칙](https://doc.qt.io/qtforpython-6/overviews/qtdoc-threads-qobject.html)을 따릅니다.
 
 DB 작업을 실행하는 스레드에서 세션을 열고 작업이 끝나면 닫습니다. UI 스레드와 워커가 같은 `Session`을 공유하지 않습니다. 여러 저장을 하나의 업무로 처리해야 한다면 서비스가 트랜잭션 범위를 정하고, Repository가 호출마다 별도로 commit하지 않도록 합니다. 세션과 트랜잭션의 수명은 [SQLAlchemy의 세션 지침](https://docs.sqlalchemy.org/en/20/orm/session_basics.html)을 따릅니다.
+
+개발·테스트 DB는 각각 다른 컨테이너·계정·포트·볼륨을 사용하며, `mysql-test`는 `test` 프로필에서만 실행합니다. 두 서비스는 Oracle 공식 배포 파일의 체크섬과 버전을 확인해 빌드한 5.6.19 이미지를 공유합니다. InnoDB, utf8mb4, `lower_case_table_names=1`을 사용하고 접속 포트는 `127.0.0.1`에만 공개합니다. Compose는 처음 실행할 때 빈 DB와 일반 계정을 만들며 업무 스키마는 별도로 적용합니다. 환경변수 예시는 `.env.example`, 실행·중지 명령은 [README](../README.md#docker로-개발테스트-db-실행)에 정리합니다.
 
 ## 기능을 추가할 때
 
