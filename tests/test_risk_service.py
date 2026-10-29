@@ -39,11 +39,20 @@ def make_families(*extra_c4):
     }
 
 
+def stored(item_id, states, scope=TargetScope.ALL, groups=()):
+    """버전마다 저장된 Item 상태 행. ``states``는 v1~v4 순서의 A(적용)/N(미적용)."""
+    codes = {"A": ItemState.APPLIED, "N": ItemState.NOT_APPLIED}
+    return [
+        VersionItem(release_id, item_id, codes[code], scope, tuple(groups))
+        for release_id, code in zip((V1, V2, V3, V4), states)
+    ]
+
+
 ROWS = [
-    VersionItem(V1, ITEM_DEFECT, ItemState.APPLIED, TargetScope.ALL),        # 결함 Item: v1부터 포함
-    VersionItem(V3, ITEM_SAFETY, ItemState.APPLIED, TargetScope.ALL),        # 안전 Item: v3에서 추가
-    VersionItem(V3, ITEM_PLUS_SAFETY, ItemState.APPLIED, TargetScope.LISTED, (M_C4_PLUS,)),
-    VersionItem(V3, ITEM_SCOPE_UNKNOWN, ItemState.APPLIED, TargetScope.UNKNOWN),
+    *stored(ITEM_DEFECT, "AAAA"),                                  # 결함 Item: v1부터 포함
+    *stored(ITEM_SAFETY, "NNAA"),                                  # 안전 Item: v3에서 추가
+    *stored(ITEM_PLUS_SAFETY, "NNAA", TargetScope.LISTED, [M_C4_PLUS]),
+    *stored(ITEM_SCOPE_UNKNOWN, "NNAA", TargetScope.UNKNOWN),
     VersionItem(O2_V1, ITEM_O2, ItemState.APPLIED, TargetScope.ALL),
 ]
 

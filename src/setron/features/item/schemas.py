@@ -50,16 +50,13 @@ APPLICATION_LABELS = {
 class Basis(str, Enum):
     """판정 근거."""
 
-    EXPLICIT = "EXPLICIT"          # 이 버전의 Item 상태가 저장되어 있음
-    INHERITED = "INHERITED"        # 같은 계열의 이전 버전 상태를 이어받음 (누적 포함)
-    NOT_YET_ADDED = "NOT_YET_ADDED"  # 처음 포함된 버전보다 앞선 버전
+    STORED = "STORED"              # 이 버전의 Item 상태가 저장되어 있음
+    NOT_STORED = "NOT_STORED"      # 이 계열에 Item이 있지만 이 버전의 상태는 저장되지 않음
     NOT_IN_FAMILY = "NOT_IN_FAMILY"  # 이 계열의 릴리즈에 없는 Item
     NOT_LISTED = "NOT_LISTED"      # 적용 모델 목록에 없음
     NO_RELEASE_DATA = "NO_RELEASE_DATA"
     MISSING_VERSION = "MISSING_VERSION"
     NOT_REGISTERED = "NOT_REGISTERED"
-    ORDER_UNKNOWN = "ORDER_UNKNOWN"
-    ORDER_CONFLICT = "ORDER_CONFLICT"
     SCOPE_UNKNOWN = "SCOPE_UNKNOWN"
 
 
@@ -90,7 +87,7 @@ class VersionItem:
 class VersionItemState:
     """릴리즈 버전 하나에 Item이 포함되는지 (모델 범위 적용 전).
 
-    ``source``는 판정에 쓴 저장 행이다. 누적 포함이면 처음 포함된(또는 가장 가까운 이전) 버전의 행이다.
+    ``source``는 판정에 쓴 이 버전의 저장 행이며, 저장 행이 없으면 None이다.
     """
 
     release: ReleaseVersion

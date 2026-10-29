@@ -46,13 +46,21 @@ def row(release_id, item_id, state=ItemState.APPLIED, scope=TargetScope.ALL, gro
     return VersionItem(release_id, item_id, state, scope, tuple(groups))
 
 
+def stored(item_id, states, scope=TargetScope.ALL, groups=()):
+    """릴리즈 저장 단계에서 누적 포함을 확인해 버전마다 넣은 행. ``states``는 v41~v44 순서의 A(적용)/N(미적용)/-(행 없음)."""
+    codes = {"A": ItemState.APPLIED, "N": ItemState.NOT_APPLIED}
+    return [
+        row(release_id, item_id, codes[code], scope, groups)
+        for release_id, code in zip((V41, V42, V43, V44), states) if code != "-"
+    ]
+
+
 ROWS = [
-    row(V42, ITEM_A),                                   # A: v42에서 추가
-    row(V43, ITEM_B),                                   # B: v43에서 추가
-    row(V42, ITEM_C),                                   # C: v42에서 추가, v44에서 제거
-    row(V44, ITEM_C, ItemState.NOT_APPLIED),
-    row(V43, ITEM_D, scope=TargetScope.LISTED, groups=[M_C4_PLUS]),  # D: C4 Plus 전용
-    row(V42, ITEM_E, scope=TargetScope.UNKNOWN),        # E: 적용 모델 미확인
+    *stored(ITEM_A, "NAAA"),     # A: v42에서 추가, 이후 버전에도 포함
+    *stored(ITEM_B, "NNAA"),     # B: v43에서 추가
+    *stored(ITEM_C, "NAAN"),     # C: v42에서 추가, v44에서 제거
+    *stored(ITEM_D, "NNAA", TargetScope.LISTED, [M_C4_PLUS]),  # D: C4 Plus 전용
+    *stored(ITEM_E, "-AAA", TargetScope.UNKNOWN),               # E: 적용 모델 미확인
 ]
 
 
@@ -78,21 +86,35 @@ def equipment(eid, *pms, site="화성", hpa=False):
 
 
 def test_later_version_includes_earlier_items(catalog):
-    """명세 예시: v2(42)에서 A, v3(43)에서 B가 추가되면 v3 설비에는 A와 B가 모두 적용된다."""
+    """명세 예시: v2(42)에서 A, v3(43)에서 B가 추가되면 v3 설비에는 A와 B가 모두 적용된다.
+
+    누적 포함은 릴리즈를 저장할 때 v43에 A·B 행을 모두 넣는 것으로 반영한다.
+    """
     a = catalog.pm_application(ITEM_A, pm("v4.56.6.43"))
     b = catalog.pm_application(ITEM_B, pm("v4.56.6.43"))
 
-    assert (a.application, a.basis) == (Application.APPLIED, Basis.INHERITED)
-    assert (b.application, b.basis) == (Application.APPLIED, Basis.EXPLICIT)
+    assert (a.application, a.basis) == (Application.APPLIED, Basis.STORED)
+    assert (b.application, b.basis) == (Application.APPLIED, Basis.STORED)
 
 
 def test_version_before_item_was_added_is_not_applied(catalog):
     result = catalog.pm_application(ITEM_A, pm("v4.56.6.41"))
 
-    assert (result.application, result.basis) == (Application.NOT_APPLIED, Basis.NOT_YET_ADDED)
+    assert (result.application, result.basis) == (Application.NOT_APPLIED, Basis.STORED)
 
 
-def test_explicit_removal_stops_inheritance(catalog):
+def test_missing_row_is_unknown_not_inherited_from_version_order():
+    """공통 스키마 규칙 H: version_order만으로 이전 버전의 Item 상태를 이어받지 않는다."""
+    catalog = ItemCatalog(families(), [row(V42, ITEM_A)])
+
+    later = catalog.pm_application(ITEM_A, pm("v4.56.6.43"))
+    earlier = catalog.pm_application(ITEM_A, pm("v4.56.6.41"))
+
+    assert (later.application, later.basis) == (Application.UNKNOWN, Basis.NOT_STORED)
+    assert (earlier.application, earlier.basis) == (Application.UNKNOWN, Basis.NOT_STORED)
+
+
+def test_removed_item_is_not_applied(catalog):
     assert catalog.pm_application(ITEM_C, pm("v4.56.6.43")).application is Application.APPLIED
     assert catalog.pm_application(ITEM_C, pm("v4.56.6.44")).application is Application.NOT_APPLIED
 
@@ -139,21 +161,16 @@ def test_unmatched_version_is_unknown(catalog, version, basis):
     assert (result.application, result.basis) == (Application.UNKNOWN, basis)
 
 
-def test_version_with_unknown_order_is_unknown():
-    catalog = ItemCatalog(families(ReleaseVersion(305, F_C4, "v4.56.6.43a1", None)), ROWS)
+def test_version_with_unknown_order_uses_its_stored_row():
+    """순서를 모르는 핫픽스도 그 버전의 행이 저장되어 있으면 그대로 판정한다."""
+    hotfix = ReleaseVersion(305, F_C4, "v4.56.6.43a1", None)
+    catalog = ItemCatalog(families(hotfix), [*ROWS, row(305, ITEM_A)])
 
-    result = catalog.pm_application(ITEM_A, pm("v4.56.6.43a1"))
+    stored_hotfix = catalog.pm_application(ITEM_A, pm("v4.56.6.43a1"))
+    missing_hotfix = ItemCatalog(families(hotfix), ROWS).pm_application(ITEM_A, pm("v4.56.6.43a1"))
 
-    assert (result.application, result.basis) == (Application.UNKNOWN, Basis.ORDER_UNKNOWN)
-
-
-def test_item_added_in_version_with_unknown_order_is_unknown():
-    hotfix = ReleaseVersion(305, F_C4, "v4.56.6.42_d2", None)
-    catalog = ItemCatalog(families(hotfix), [row(305, ITEM_A)])
-
-    result = catalog.pm_application(ITEM_A, pm("v4.56.6.44"))
-
-    assert result.application is Application.UNKNOWN
+    assert (stored_hotfix.application, stored_hotfix.basis) == (Application.APPLIED, Basis.STORED)
+    assert (missing_hotfix.application, missing_hotfix.basis) == (Application.UNKNOWN, Basis.NOT_STORED)
 
 
 def test_item_versions_lists_inclusion_in_release_order(catalog):

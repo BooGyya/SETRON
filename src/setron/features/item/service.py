@@ -1,11 +1,11 @@
 """Item이 포함된 버전과 적용 설비를 찾는다 (명세 BE-014).
 
 포함 판정 규칙 (REQ-026, FUN-034):
-1. 그 버전의 Item 상태가 저장되어 있으면 그대로 쓴다.
-2. 없으면 같은 계열에서 순서가 확인된 가장 가까운 이전 버전의 상태를 이어받는다 (누적 포함).
-   v2에서 A, v3에서 B가 추가되면 v3에는 A·B가 모두 포함된다. 이전 버전에서 명시적으로 빠졌으면 미적용이다.
-3. 처음 저장된 버전보다 앞선 버전은 아직 추가되지 않은 것이므로 미적용이다.
-4. 순서를 모르거나 겹쳐서 선후를 알 수 없으면 미확인이다. 다른 계열의 Item은 이어받지 않는다.
+1. 버전별 Item 상태는 저장된 `release_version_item` 행만 쓴다.
+2. 행이 없는 버전은 미확인이다. ``version_order``만으로 이전 버전의 상태를 이어받지 않는다
+   (공통 스키마 규칙 H). 누적 포함·제외 조건·별도 버전 흐름은 릴리즈를 저장할 때 확인해 버전마다
+   행으로 넣는다. 예: v2에서 A, v3에서 B가 추가되면 v3에는 A·B 행이 모두 저장된다.
+3. 이 계열의 릴리즈에 행이 하나도 없는 Item은 이 계열의 대상이 아니다. 다른 계열의 Item은 가져오지 않는다.
 
 모델 범위는 판정에 쓴 저장 행의 ``target_scope``로 정한다. LISTED 목록에 없는 모델은 대상 외,
 범위를 모르면 미확인이다. Item 적용 여부는 결함 위험 해제(BE-015)와 따로 판단한다.
@@ -52,7 +52,7 @@ def search_items(items: Iterable[Item], query: str) -> tuple[Item, ...]:
 
 
 class ItemCatalog:
-    """릴리즈 순서와 버전별 Item 상태를 묶어 Item 포함·적용 여부를 판정한다.
+    """릴리즈 목록과 저장된 버전별 Item 상태를 묶어 Item 포함·적용 여부를 판정한다.
 
     ``families``는 계열 ID별 릴리즈 목록(BE-003), ``version_items``는 저장된 버전별 Item 상태다.
     """
@@ -90,25 +90,10 @@ class ItemCatalog:
         if family is None or not rows:
             return VersionItemState(release, ItemState.NOT_APPLIED, Basis.NOT_IN_FAMILY)
 
-        explicit = rows.get(release.release_version_id)
-        if explicit is not None:
-            return VersionItemState(release, explicit.state, Basis.EXPLICIT, explicit)
-
-        if release.version_order is None:
-            return VersionItemState(release, ItemState.UNKNOWN, Basis.ORDER_UNKNOWN)
-        anchors = [(family.get(rid), row) for rid, row in rows.items()]
-        if any(r.version_order is None for r, _ in anchors):
-            return VersionItemState(release, ItemState.UNKNOWN, Basis.ORDER_UNKNOWN)
-        duplicated = set(family.sorted.duplicated_orders)
-        if release.version_order in duplicated or any(r.version_order in duplicated for r, _ in anchors):
-            return VersionItemState(release, ItemState.UNKNOWN, Basis.ORDER_CONFLICT)
-
-        earlier = [(r, row) for r, row in anchors if r.version_order < release.version_order]
-        if not earlier:
-            first = min(anchors, key=lambda pair: pair[0].version_order)[1]
-            return VersionItemState(release, ItemState.NOT_APPLIED, Basis.NOT_YET_ADDED, first)
-        _, nearest = max(earlier, key=lambda pair: pair[0].version_order)
-        return VersionItemState(release, nearest.state, Basis.INHERITED, nearest)
+        stored = rows.get(release.release_version_id)
+        if stored is None:
+            return VersionItemState(release, ItemState.UNKNOWN, Basis.NOT_STORED)
+        return VersionItemState(release, stored.state, Basis.STORED, stored)
 
     def pm_application(self, item_id: int, pm: PmVersion) -> PmApplication:
         """PM 하나에 Item이 적용됐는지 판정한다. 모델 범위까지 반영한다."""
