@@ -53,6 +53,17 @@ def install_theme(app: QApplication) -> None:
         QScrollArea { border: none; background: transparent; }
         QScrollArea > QWidget { background: transparent; }
         QFrame#card { background: white; border: 1px solid #e9eef6; border-radius: 16px; }
+        QFrame#card[metricTone="achievement"] { border-color: #d8defb;
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #edf0fd,stop:0.72 white); }
+        QFrame#card[metricTone="risk"] { border-color: #e58a9b;
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #fce2e7,stop:0.72 white); }
+        QWidget#dashboardMatrix { background: white; }
+        QTabBar::tab { background: #f7f9fc; color: #5b6880; padding: 9px 20px;
+                       border: 1px solid #e5eaf3; border-radius: 8px; margin-right: 8px; }
+        QTabBar::tab:selected { background: #edf0fd; color: #3c5ce9; border-color: #3c5ce9; }
+        QPushButton[dashboardRisk="true"] { background: #fce2e7; color: #ad344d; }
+        QPushButton[dashboardRiskBadge="true"] { background: #c9485e; color: white; border: 1px solid #c9485e;
+                                                border-radius: 4px; padding: 0 6px; min-height: 18px; }
         QLabel { background: transparent; }
         QPushButton { background: #f7f9fc; border: 1px solid #e5eaf3; border-radius: 10px;
                       padding: 8px 18px; min-height: 20px; }
