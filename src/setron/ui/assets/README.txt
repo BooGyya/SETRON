@@ -19,6 +19,10 @@ Task 5 heatmap reuses the same original KPI assets and 7880d.svg from
 VER3 panel heading 357:6382. Tiles and family segments are native widgets
 driven by the shared snapshot, not screenshots or modified SVG artwork.
 
+Task 6 equipment list 419:14163 and detail 499:24803 reuse existing KPI,
+brand and navigation assets with original geometry. Tables are native Qt
+model/views; no screenshot background or altered icon is used.
+
 Fonts from Google Fonts' official repository:
 https://github.com/google/fonts/tree/main/ofl/ibmplexsanskr
 https://github.com/google/fonts/tree/main/ofl/inter

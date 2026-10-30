@@ -166,7 +166,7 @@ def test_candidate_filter_empty_message_does_not_hide_unknown_as_safe(window):
     assert tuple(page.tile_buttons) == (3, 4)
 
 
-def test_keyboard_selection_emits_identity_and_does_not_build_detail(window):
+def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     query = window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     spy = QSignalSpy(page.equipment_selected)
@@ -175,8 +175,9 @@ def test_keyboard_selection_emits_identity_and_does_not_build_detail(window):
     QTest.keyClick(tile, Qt.Key.Key_Space)
     request = spy.at(0)[0]
     assert request.query is query and request.base_date == DAY and request.equipment_id == 1
-    assert tile.isChecked() and "6번 작업" in page.selection_notice.text()
-    assert window.pages.keys() == {"dashboard", "heatmap"}
+    assert tile.isChecked() and "설비 상세" in page.selection_notice.text()
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment"}
+    assert window.route == "equipment" and window.pages["equipment"].mode == "detail"
     page.view_buttons.button(1).click()
     assert page.tile_buttons[1].isChecked()
     page.tile_buttons[2].click()

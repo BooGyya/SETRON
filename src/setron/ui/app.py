@@ -1,4 +1,4 @@
-"""UI 시작점. 대시보드·히트맵은 같은 합성 예시 결과를 쓰며 DB·Excel을 시작하지 않는다."""
+"""UI 시작점. 대시보드·히트맵·목록/상세는 같은 합성 관측을 쓰며 DB·Excel을 시작하지 않는다."""
 
 import argparse
 import sys
@@ -11,31 +11,82 @@ from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.heatmap import HeatmapPage
+from setron.ui.equipment import EquipmentPage
 from setron.ui.theme import install_theme
 
 
 def create_window(source: DashboardSource | None = None) -> MainWindow:
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
-    window.setWindowTitle("SETRON · 대시보드·히트맵 미리보기")
-    window.notice.setText("작업 단위 5 · 히트맵 · 합성 예시 데이터 · DB 미연결")
-    dashboard = DashboardPage(window.query_state, source)
-    heatmap = HeatmapPage(window.query_state, source)
+    window.setWindowTitle("SETRON · 설비 현황 미리보기")
+    window.notice.setText("작업 단위 6 · 설비 목록·상세 · 합성 예시 데이터 · DB 미연결")
+    dashboard = DashboardPage(window.query_state, source, drilldown_connected=True)
+    heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
+    equipment = EquipmentPage(window.query_state, source)
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
+    window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
+    list_action = window.header.actions["equipment_list"]
+    list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
+    origin_scroll = {}
+
+    def sync_mode(*_):
+        if window.route == "equipment":
+            window.header.title.setText("설비 상세" if equipment.mode == "detail" else "설비 목록")
+            window.query_panel.setVisible(equipment.mode == "list")
+
+    def remember_origin():
+        if window.route in ("dashboard", "heatmap"):
+            origin_scroll[window.route] = window.scroll.verticalScrollBar().value()
+
+    def open_scope(request):
+        remember_origin()
+        if equipment.open_scope(request, origin="dashboard"):
+            window.navigate("equipment")
+
+    def open_detail(request):
+        remember_origin()
+        if equipment.open_detail(request, origin="heatmap"):
+            window.navigate("equipment")
+
+    def open_all(action):
+        if action == "equipment_list":
+            remember_origin()
+            if equipment.open_all(window.route):
+                window.navigate("equipment")
+
+    def go_back(origin):
+        if window.navigate(origin):
+            def restore_scroll():
+                if window.route == origin:
+                    window.scroll.verticalScrollBar().setValue(origin_scroll.get(origin, 0))
+            QTimer.singleShot(0, restore_scroll)
+
+    dashboard.drilldown_requested.connect(open_scope)
+    heatmap.equipment_selected.connect(open_detail)
+    equipment.back_requested.connect(go_back)
+    equipment.mode_changed.connect(sync_mode)
+    window.page_changed.connect(sync_mode)
+    window.header.action_requested.connect(open_all)
 
     def apply_query(query):
         if not heatmap.begin_query(query):
             return
+        equipment.clear("예시 결과 계산 중")
+        list_action.setEnabled(False)
         if dashboard.apply_query(query):
             # 한 번 계산한 같은 불변 결과를 두 화면에서 공유한다.
             heatmap.accept_result(query, dashboard.snapshot)
+            list_action.setEnabled(equipment.accept_result(query, dashboard.snapshot))
         else:
             heatmap.fail_query(query)
+            equipment.clear("설비 결과 표시 실패 · 다시 적용해 주세요")
 
     window.query_applied.connect(apply_query)
     window.query_panel.catalog_changed.connect(dashboard.invalidate)
     window.query_panel.catalog_changed.connect(heatmap.invalidate)
+    window.query_panel.catalog_changed.connect(equipment.clear)
+    window.query_panel.catalog_changed.connect(lambda *_: list_action.setEnabled(False))
     return window
 
 

@@ -71,12 +71,17 @@ class EquipmentTile:
 
 def equipment_tiles(snapshot: DashboardSnapshot, source: DashboardSource) -> tuple[EquipmentTile, ...]:
     """PM 수/계열 수로 설비를 늘리지 않으며, 선택된 PM의 기존 비교 결과를 모두 남긴다."""
-    analyzed = {item.record.equipment_id: item for item in snapshot.summary.equipment}
+    return record_tiles(snapshot.selected_records, snapshot.summary, source)
+
+
+def record_tiles(records, summary, source: DashboardSource) -> tuple[EquipmentTile, ...]:
+    """선택 SW와 설비 전체의 표시 규칙을 공유한다. summary는 기존 집계 서비스 결과다."""
+    analyzed = {item.record.equipment_id: item for item in summary.equipment}
     sites, fabs, lines = ({o.key: o.label for o in options}
                          for options in (source.catalog.sites, source.catalog.fabs, source.catalog.lines))
     models = {mid: group.label for group in source.catalog.groups for mid in source.bindings[group.key]}
     result = []
-    for record in snapshot.selected_records:
+    for record in records:
         loc = source.locations[record.equipment_id]
         status = analyzed.get(record.equipment_id)
         families = () if status is None else status.families
