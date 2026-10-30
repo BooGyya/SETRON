@@ -18,6 +18,11 @@ S15P31B106/
 │       ├── __main__.py
 │       ├── ui/
 │       │   ├── __init__.py
+│       │   ├── app.py
+│       │   ├── main_window.py
+│       │   ├── components.py
+│       │   ├── theme.py
+│       │   ├── assets/
 │       │   └── check_environment.py
 │       ├── features/
 │       │   ├── __init__.py
@@ -73,6 +78,7 @@ S15P31B106/
 │   ├── test_schema_mysql.py
 │   ├── test_storage_service.py
 │   ├── test_storage_validation.py
+│   ├── test_ui_common.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -90,9 +96,38 @@ S15P31B106/
 └── README.md
 ```
 
-각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 실행 진입점이며, 구현 시 DB 연결 설정, 서비스와 화면의 연결, 애플리케이션 시작을 담당합니다. 현재는 설명문만 있어 실행해도 화면이 뜨지 않고 종료됩니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
+각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 `ui/app.py`를 통해 공통 UI 창을 엽니다. DB·Excel·업무 서비스를 시작하거나 조회하지 않습니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
 
 `ui/check_environment.py`는 화면 개발 전 Python·PySide6·Qt 버전과 창 표시·종료를 확인하는 진단용 실행 모듈입니다. 업무 서비스나 DB를 호출하지 않습니다.
+
+### 공통 UI (작업 단위 2)
+
+이번 변경은 공통 UI 기반 한 작업으로 제한합니다. 조회 조건, 대시보드 지표·그래프, 히트맵, 설비 목록·상세, 목표 N 선택 및 저장은 별도 작업입니다.
+
+| 모듈 | 책임 |
+| --- | --- |
+| `ui/app.py` | QApplication·테마·공통 창 시작, 실행 확인용 자동 종료 옵션 |
+| `ui/main_window.py` | 사이드바와 활성 메뉴, 담당 페이지 등록·이동, 공통 도움말 |
+| `ui/components.py` | `Card`, `StatusBadge`, `EmptyState`, `PageHeader`, `label`, `button` |
+| `ui/theme.py`, `ui/assets/` | VER3 Light 공통 스타일·원본 로고·아이콘·폰트와 폰트 라이선스 |
+| `tests/test_ui_common.py` | 외부 연결 없는 Qt 위젯·키보드·라우팅·레이아웃 테스트 |
+
+시작 화면의 대시보드는 업무 화면이 아닌 안내용 자리입니다. 실제 화면은 QWidget을 등록해 교체합니다. 등록한 위젯의 소유권은 공통 창으로 넘어갑니다.
+
+```python
+window = MainWindow()
+window.register_page("dashboard", dashboard_page)
+window.register_page("import", import_page)
+window.navigate("import")
+```
+
+메뉴 key는 `dashboard`, `heatmap`, `items`, `ai`, `import`, `replay`, `versions`, `history`, `reports`, `settings`입니다. 등록 전에는 시작 안내용 `dashboard` 외의 메뉴를 비활성화합니다. 같은 key 또는 같은 QWidget의 중복 등록과 알 수 없는 key는 거부합니다. 알 수 없는 메뉴로 이동하면 `ValueError`, 알려진 미등록 메뉴로 이동하면 `False`를 반환하고 현재 화면은 유지합니다.
+
+공통 창은 페이지 인스턴스를 보존하며 현재 페이지만 레이아웃에 배치합니다. 화면 이동 후에도 담당 위젯의 입력 상태는 유지되고, 숨긴 긴 페이지의 최소 높이가 다른 화면을 늘리지 않습니다. 페이지 이동 때 공통 콘텐츠 스크롤은 맨 위로 이동합니다. `page_changed(str)` 시그널로 이동 결과를 받을 수 있습니다.
+
+헤더의 조회·내보내기·설정 액션은 연결 전까지 비활성화합니다. 후속 담당자가 `window.header.actions[key]`의 클릭 처리를 연결하고 활성화해야 합니다. 액션 key는 `equipment_list`, `export`, `settings`, `help`이며, 공통 창은 `help`만 처리합니다. 등록 자체로 DB 조회·저장·내보내기가 발생하지 않습니다.
+
+공통 UI 모듈은 `features/`나 `infrastructure/`에 의존하지 않습니다. 후속 업무 페이지가 서비스와 연결하고 오래 걸리는 조회·저장은 아래 스레드 규칙에 따라 워커에서 실행해야 합니다.
 
 `tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다.
 

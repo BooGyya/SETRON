@@ -1,8 +1,8 @@
 # S15P31B106
 
-setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성할 예정이며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에 사용할 의존성입니다.
+setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성하며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에 사용할 의존성입니다.
 
-현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답을 사용하는 AI 호출 흐름, DB 연결과 공통 저장 서비스가 구현되어 있습니다. 화면, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 연동은 후속 작업입니다.
+현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답을 사용하는 AI 호출 흐름, DB 연결과 공통 저장 서비스가 구현되어 있습니다. 공통 UI 창·사이드바·페이지 연결 틀은 실행할 수 있으며, 업무 화면과 DB의 연결, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 연동은 후속 작업입니다.
 
 ## Excel 가져오기 현황
 
@@ -250,7 +250,29 @@ finally:
 uv run --locked python -m setron
 ```
 
-실행 진입점은 `src/setron/__main__.py`입니다. 현재는 설명문만 있어 위 명령을 실행해도 화면이 뜨지 않고 종료됩니다. 화면 초기화 코드는 UI 구현 시 추가합니다.
+실행 진입점은 `src/setron/__main__.py`입니다. 현재는 **작업 단위 2: 공통 UI**만 실행합니다. VER3 Light 기반 창·사이드바·헤더와 안내 카드가 보이며, 실제 DB·Excel·업무 서비스는 연결하지 않습니다.
+
+이미 설치된 가상환경으로 직접 실행할 때는 터미널에 맞는 명령을 사용합니다.
+
+```bash
+# Git Bash · 저장소 최상위 폴더에서 실행
+./.venv/Scripts/python.exe -m setron
+```
+
+```powershell
+# PowerShell
+.\.venv\Scripts\python.exe -m setron
+```
+
+### 작업 단위 2 확인 범위
+
+- 224px 사이드바, 원본 SEMES 로고·메뉴 아이콘·폰트, 공통 헤더·카드·버튼·배지를 제공합니다.
+- 처음 보이는 ‘대시보드’는 **업무 화면이 아니라 공통 UI 안내 자리**입니다. 지표·그래프·설비 데이터는 아직 표시하지 않습니다.
+- 담당 화면을 등록하기 전까지 나머지 메뉴와 조회·내보내기·화면 설정 버튼은 비활성화합니다. 도움말은 사용할 수 있습니다.
+- 창이 좁아지면 헤더 액션을 다음 줄에 배치하고, 창 높이가 낮으면 사이드바도 스크롤합니다.
+- 페이지 등록·이동 연결과 위젯 상태 보존을 제공합니다. 담당자는 `MainWindow.register_page(key, widget)`와 `navigate(key)`로 연결합니다. [공통 UI 구조](docs/architecture.md#공통-ui-작업-단위-2)를 참고합니다.
+
+조회 조건·상태 관리(3번), 대시보드(4번), 히트맵(5번), 설비 목록·상세(6번), 목표 N 설정(7번)은 이번 변경에 포함하지 않습니다. 설치 확인 도구는 아래 명령으로 계속 별도 실행할 수 있습니다.
 
 ### UI 개발 전 설치와 실행 확인
 
@@ -301,6 +323,11 @@ S15P31B106/
 │       ├── __main__.py
 │       ├── ui/
 │       │   ├── __init__.py
+│       │   ├── app.py
+│       │   ├── main_window.py
+│       │   ├── components.py
+│       │   ├── theme.py
+│       │   ├── assets/
 │       │   └── check_environment.py
 │       ├── features/
 │       └── infrastructure/
@@ -320,6 +347,7 @@ S15P31B106/
 │   ├── test_schema_mysql.py
 │   ├── test_storage_service.py
 │   ├── test_storage_validation.py
+│   ├── test_ui_common.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md

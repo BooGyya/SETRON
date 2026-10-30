@@ -17,6 +17,17 @@
 - AI 추출의 합격 기준(필드별 일치율 등)은 Jira S15P31B106-71에서 정한 기준을 따릅니다.
 - MySQL 통합 테스트는 Docker의 전용 MySQL 5.6.19에서 자동 실행합니다. 실제 사용 PC의 Windows MySQL 접속·저장 검증은 해당 환경이 준비된 뒤 별도로 진행합니다.
 
+### 공통 UI 검증 (작업 단위 2)
+
+`tests/test_ui_common.py`는 Qt offscreen 플랫폼에서 실제 위젯과 QTest 이벤트로 시작 안내, 준비 중 메뉴, 담당 페이지 등록·이동, 단일 활성 메뉴, 원본 아이콘·폰트 로딩, 키보드 조작과 페이지 입력 상태 보존을 확인합니다. 1600×960·1100×800·960×600 창에서 헤더 줄바꿈·사이드바 스크롤과, 긴 페이지를 숨겼을 때 다른 화면이 늘어나지 않는지도 검증합니다. 업무 화면이나 DB·Excel은 실행하지 않습니다.
+
+```powershell
+uv run --locked python -m pytest tests/test_ui_common.py -q
+uv run --locked python -m setron --auto-close-ms 1500
+```
+
+별도로 Windows 네이티브 실행과 VER3 Light 대비 실제 Qt 렌더링을 확인합니다. 로컬 Qt 테스트는 GitLab 파이프라인 실행이나 실데이터 통합 테스트를 의미하지 않습니다.
+
 ## 2. 단위 테스트 작성 규칙
 
 - 테스트 파일은 `tests/test_<대상 모듈>.py`로 만듭니다. 예: `tests/test_excel_reader.py`, `tests/test_ai_service.py`
