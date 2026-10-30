@@ -21,6 +21,8 @@ S15P31B106/
 │       │   ├── app.py
 │       │   ├── main_window.py
 │       │   ├── components.py
+│       │   ├── query_state.py
+│       │   ├── query_panel.py
 │       │   ├── theme.py
 │       │   ├── assets/
 │       │   └── check_environment.py
@@ -79,6 +81,7 @@ S15P31B106/
 │   ├── test_storage_service.py
 │   ├── test_storage_validation.py
 │   ├── test_ui_common.py
+│   ├── test_ui_query.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -102,7 +105,7 @@ S15P31B106/
 
 ### 공통 UI (작업 단위 2)
 
-이번 변경은 공통 UI 기반 한 작업으로 제한합니다. 조회 조건, 대시보드 지표·그래프, 히트맵, 설비 목록·상세, 목표 N 선택 및 저장은 별도 작업입니다.
+작업 단위 2는 공통 UI 기반입니다. 작업 단위 3의 공통 조회 조건은 아래 계약으로 연결하며, 대시보드 지표·그래프, 히트맵, 설비 목록·상세, 목표 N 선택 및 저장은 별도 작업입니다.
 
 | 모듈 | 책임 |
 | --- | --- |
@@ -128,6 +131,45 @@ window.navigate("import")
 헤더의 조회·내보내기·설정 액션은 연결 전까지 비활성화합니다. 후속 담당자가 `window.header.actions[key]`의 클릭 처리를 연결하고 활성화해야 합니다. 액션 key는 `equipment_list`, `export`, `settings`, `help`이며, 공통 창은 `help`만 처리합니다. 등록 자체로 DB 조회·저장·내보내기가 발생하지 않습니다.
 
 공통 UI 모듈은 `features/`나 `infrastructure/`에 의존하지 않습니다. 후속 업무 페이지가 서비스와 연결하고 오래 걸리는 조회·저장은 아래 스레드 규칙에 따라 워커에서 실행해야 합니다.
+
+### 공통 조회 조건 (작업 단위 3)
+
+`ui/query_state.py`는 Qt·DB에 의존하지 않는 조회 조건 계약이고, `ui/query_panel.py`는 VER3의 필드·빠른 선택 버튼·적용/초기화·상태 표시를 담당합니다. `MainWindow`가 상태와 패널을 하나씩 소유하므로 페이지를 이동해도 선택과 적용 조건을 유지합니다. 파일·DB에 저장하지 않으며 앱 재시작 시 초기 상태로 돌아갑니다.
+
+| 값 | 의미 |
+| --- | --- |
+| `QuerySelection.site_key` | Site 선택지 키 또는 `None`(전체) |
+| `fab_key`, `line_key` | 서로 독립된 항목. 선택지 키, `None`(전체), `UNASSIGNED` Enum(미지정) |
+| `group_key` | UI 설비군 키 또는 `None`(전체). DB의 `version_family.family_id`가 아님 |
+| `QueryState.draft` | 현재 선택 중인 불변 조건. 선택 변경은 자동 조회하지 않음 |
+| `QueryState.applied` | 마지막 `AppliedQuery` 또는 적용 전 `None` |
+| `AppliedQuery` | 불변 조건·적용 요청 번호·선택지 세대·적용 시점의 표시 문구 |
+
+Site 변경은 Fab·Line 초안을, Fab 변경은 Line 초안을 전체로 되돌립니다. 같은 값을 다시 고르면 하위 선택을 유지합니다. 설비군은 위치 조건과 독립적입니다. 등록된 부모 관계와 맞지 않는 조건은 변경 전에 거부합니다. Fab을 모르는 Line도 `LineOption(..., fab_key=None)`으로 명시적으로 등록할 수 있습니다. 이 경우 Fab ‘미지정’과 해당 Line을 함께 고를 수 있으며 Fab과 Line을 합치지 않습니다.
+
+최초에는 적용 조건이 없습니다. `조회 적용`을 누를 때마다 요청 번호가 증가하고 `query_applied(AppliedQuery)`가 발생합니다. 같은 조건을 재적용해도 새 요청입니다. 초안 변경·초기화만으로 이 신호가 발생하지는 않습니다. 현재는 조건 확정만 구현하며 DB 조회 완료·데이터 수신·화면 결과를 가장하지 않습니다.
+
+```python
+from setron.ui.main_window import MainWindow
+from setron.ui.query_state import QuerySelection
+
+window = MainWindow(query_catalog=validated_catalog)
+window.register_page("dashboard", dashboard_page)
+window.register_page("heatmap", heatmap_page)
+window.register_page("import", import_page)  # 기본적으로 공통 조회 패널을 숨김
+window.register_page("items", items_page, uses_query=True)  # 필요할 때 명시적으로 공유
+window.query_applied.connect(on_query_requested)  # 워커/서비스 연결은 담당 업무 화면에서 구현
+window.query_panel.set_draft(QuerySelection(site_key=registered_site_key))
+# 위 코드는 초안만 변경. 명시적으로 적용하려면 window.query_panel.apply_draft()
+```
+
+기본 패널 표시 메뉴는 `dashboard`, `heatmap`이며 `uses_query=False`로 끌 수도 있습니다. 패널 API인 `select`, `set_draft`, `reset_draft`, `apply_draft`로 변경해야 위젯과 신호도 일치합니다. `query_state` 속성을 직접 덮어쓰지 않습니다. 비동기 결과를 받는 화면은 전달받은 `AppliedQuery`를 보관하고 `window.query_state.is_current(query)`가 참일 때만 결과를 표시합니다. 초안 편집만으로 기존 적용 요청을 무효화하지는 않습니다.
+
+선택지 교체는 `window.set_query_catalog(validated_catalog)`로 합니다. 없어진 선택지와 하위 초안은 초기화하지만 이전 적용 스냅샷은 보존하고 ‘선택지 변경 · 재적용 필요’를 표시합니다. 이전 세대의 비동기 결과는 `is_current()`에서 거부하며, 조건을 자동으로 넓혀 조회하지 않습니다. 적용 전 재확인이 필요합니다.
+
+기본 `preview_catalog()`는 VER3의 Site·설비군 표시 선택지만 제공합니다. 실제 설비나 가짜 Fab·Line 데이터를 만들지 않습니다. 현재 DB 스키마에는 Fab이 없으므로 DB 연동 시 별도 매핑 계약이 필요합니다. P1·15L 등의 원본 구역을 이름으로 추론하지 말고 검증된 `QueryCatalog`를 주입해야 합니다. 전체는 해당 항목으로 제한하지 않는 의미이며, 미지정은 값이 없는 자료만 고르는 의미입니다. 추후 Repository의 필터 변환은 이 의미를 유지해야 합니다.
+
+이 작업에는 목표 N·기준일·개인 설정 저장·DB/Excel 조회·대시보드 집계가 포함되지 않습니다. `tests/test_ui_query.py`가 순수 상태, 테스트 전용 부모 관계, Qt 조작·신호·상태 보존·반응형 배치를 검증합니다.
 
 `tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다.
 

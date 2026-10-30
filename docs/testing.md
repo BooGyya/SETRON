@@ -28,6 +28,18 @@ uv run --locked python -m setron --auto-close-ms 1500
 
 별도로 Windows 네이티브 실행과 VER3 Light 대비 실제 Qt 렌더링을 확인합니다. 로컬 Qt 테스트는 GitLab 파이프라인 실행이나 실데이터 통합 테스트를 의미하지 않습니다.
 
+### 공통 조회 조건 검증 (작업 단위 3)
+
+`tests/test_ui_query.py`는 초안/적용 분리, 전체와 미지정 구분, Site→Fab→Line 종속 선택, 잘못된 부모 관계 거부, 적용 스냅샷 불변성, 선택지 교체와 이전 요청 무효화를 검증합니다. Fab·Line 관계는 테스트 전용이며 회사 데이터로 간주하지 않습니다.
+
+실제 Qt 위젯으로 콤보박스와 빠른 선택 버튼 동기화, 적용 시에만 발생하는 신호, 초기화 후 기존 적용 조건 보존, 메뉴 이동 후 상태 보존, 페이지별 패널 표시 여부, 키보드 적용과 1600×960·1100×800·960×600 배치를 확인합니다. 기본 VER3 미리보기 선택지와 테스트용 선택지를 모두 검사하며 DB·Excel은 호출하지 않습니다.
+
+```powershell
+uv run --locked python -m pytest tests/test_ui_common.py tests/test_ui_query.py -q
+```
+
+수동 확인: Site/설비군 선택 → 조회 적용 → 선택 변경 → 기존 적용 문구 유지 및 재적용 필요 표시 → 전체 조건으로 → 다시 적용 순서로 확인합니다. 선택지 미리보기와 DB 미연결 안내가 표시되어야 하며, 조건 적용을 데이터 조회 완료로 표시하지 않아야 합니다. 목표 기준 편집과 개인 기본 선택지 설정은 비활성화 상태입니다.
+
 ## 2. 단위 테스트 작성 규칙
 
 - 테스트 파일은 `tests/test_<대상 모듈>.py`로 만듭니다. 예: `tests/test_excel_reader.py`, `tests/test_ai_service.py`
