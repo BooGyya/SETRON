@@ -23,6 +23,10 @@ S15P31B106/
 │       │   ├── components.py
 │       │   ├── query_state.py
 │       │   ├── query_panel.py
+│       │   ├── dashboard.py
+│       │   ├── dashboard_charts.py
+│       │   ├── dashboard_data.py
+│       │   ├── dashboard_demo.py
 │       │   ├── theme.py
 │       │   ├── assets/
 │       │   └── check_environment.py
@@ -82,6 +86,7 @@ S15P31B106/
 │   ├── test_storage_validation.py
 │   ├── test_ui_common.py
 │   ├── test_ui_query.py
+│   ├── test_ui_dashboard.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -99,7 +104,7 @@ S15P31B106/
 └── README.md
 ```
 
-각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 `ui/app.py`를 통해 공통 UI 창을 엽니다. DB·Excel·업무 서비스를 시작하거나 조회하지 않습니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
+각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 `ui/app.py`의 `create_window()`를 통해 공통 UI에 예시 대시보드만 등록합니다. 조회 적용 시 기존 순수 집계 서비스를 사용하지만 DB·Excel에는 연결하지 않습니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
 
 `ui/check_environment.py`는 화면 개발 전 Python·PySide6·Qt 버전과 창 표시·종료를 확인하는 진단용 실행 모듈입니다. 업무 서비스나 DB를 호출하지 않습니다.
 
@@ -115,7 +120,7 @@ S15P31B106/
 | `ui/theme.py`, `ui/assets/` | VER3 Light 공통 스타일·원본 로고·아이콘·폰트와 폰트 라이선스 |
 | `tests/test_ui_common.py` | 외부 연결 없는 Qt 위젯·키보드·라우팅·레이아웃 테스트 |
 
-시작 화면의 대시보드는 업무 화면이 아닌 안내용 자리입니다. 실제 화면은 QWidget을 등록해 교체합니다. 등록한 위젯의 소유권은 공통 창으로 넘어갑니다.
+`MainWindow` 자체의 대시보드는 안내용 자리입니다. 앱 시작점이 작업 단위 4의 `DashboardPage`를 등록해 교체합니다. 등록한 위젯의 소유권은 공통 창으로 넘어갑니다.
 
 ```python
 window = MainWindow()
@@ -130,7 +135,7 @@ window.navigate("import")
 
 헤더의 조회·내보내기·설정 액션은 연결 전까지 비활성화합니다. 후속 담당자가 `window.header.actions[key]`의 클릭 처리를 연결하고 활성화해야 합니다. 액션 key는 `equipment_list`, `export`, `settings`, `help`이며, 공통 창은 `help`만 처리합니다. 등록 자체로 DB 조회·저장·내보내기가 발생하지 않습니다.
 
-공통 UI 모듈은 `features/`나 `infrastructure/`에 의존하지 않습니다. 후속 업무 페이지가 서비스와 연결하고 오래 걸리는 조회·저장은 아래 스레드 규칙에 따라 워커에서 실행해야 합니다.
+공통 창·표시 컴포넌트·조회 조건 모듈 자체는 `features/`나 `infrastructure/`에 의존하지 않습니다. 업무 페이지의 데이터 어댑터가 서비스와 연결하며, 오래 걸리는 실제 조회·저장은 아래 스레드 규칙에 따라 워커에서 실행해야 합니다.
 
 ### 공통 조회 조건 (작업 단위 3)
 
@@ -147,7 +152,7 @@ window.navigate("import")
 
 Site 변경은 Fab·Line 초안을, Fab 변경은 Line 초안을 전체로 되돌립니다. 같은 값을 다시 고르면 하위 선택을 유지합니다. 설비군은 위치 조건과 독립적입니다. 등록된 부모 관계와 맞지 않는 조건은 변경 전에 거부합니다. Fab을 모르는 Line도 `LineOption(..., fab_key=None)`으로 명시적으로 등록할 수 있습니다. 이 경우 Fab ‘미지정’과 해당 Line을 함께 고를 수 있으며 Fab과 Line을 합치지 않습니다.
 
-최초에는 적용 조건이 없습니다. `조회 적용`을 누를 때마다 요청 번호가 증가하고 `query_applied(AppliedQuery)`가 발생합니다. 같은 조건을 재적용해도 새 요청입니다. 초안 변경·초기화만으로 이 신호가 발생하지는 않습니다. 현재는 조건 확정만 구현하며 DB 조회 완료·데이터 수신·화면 결과를 가장하지 않습니다.
+최초에는 적용 조건이 없습니다. `조회 적용`을 누를 때마다 요청 번호가 증가하고 `query_applied(AppliedQuery)`가 발생합니다. 같은 조건을 재적용해도 새 요청입니다. 초안 변경·초기화만으로 이 신호가 발생하지는 않습니다. 공통 패널은 조건 확정만 처리하며 등록된 업무 페이지가 결과를 계산합니다. 조건 적용을 DB 조회 완료로 표시하지 않습니다.
 
 ```python
 from setron.ui.main_window import MainWindow
@@ -170,6 +175,35 @@ window.query_panel.set_draft(QuerySelection(site_key=registered_site_key))
 기본 `preview_catalog()`는 VER3의 Site·설비군 표시 선택지만 제공합니다. 실제 설비나 가짜 Fab·Line 데이터를 만들지 않습니다. 현재 DB 스키마에는 Fab이 없으므로 DB 연동 시 별도 매핑 계약이 필요합니다. P1·15L 등의 원본 구역을 이름으로 추론하지 말고 검증된 `QueryCatalog`를 주입해야 합니다. 전체는 해당 항목으로 제한하지 않는 의미이며, 미지정은 값이 없는 자료만 고르는 의미입니다. 추후 Repository의 필터 변환은 이 의미를 유지해야 합니다.
 
 이 작업에는 목표 N·기준일·개인 설정 저장·DB/Excel 조회·대시보드 집계가 포함되지 않습니다. `tests/test_ui_query.py`가 순수 상태, 테스트 전용 부모 관계, Qt 조작·신호·상태 보존·반응형 배치를 검증합니다.
+
+### 대시보드 (작업 단위 4)
+
+| 모듈 | 책임 |
+| --- | --- |
+| `ui/app.py:create_window` | 명시적으로 예시 자료 공급자와 대시보드만 조립. 다른 업무 메뉴는 활성화하지 않음 |
+| `ui/dashboard_data.py` | 위치·모델 매핑과 기존 `summarize()`를 이용한 읽기 스냅샷. DB·Qt에 의존하지 않음 |
+| `ui/dashboard_demo.py` | 합성 설비·관측·고정 목표·위험 판정. 실제 회사 자료와 분리 |
+| `ui/dashboard.py` | 지표·현황표·보기 전환·수치표·정확한 후속 조회 범위 신호 |
+| `ui/dashboard_charts.py` | 설치된 PySide6의 QtCharts로 동적 도넛·그룹 막대·꺾은선 표시 |
+
+`DashboardSource`에는 검증된 `QueryCatalog`, UI 설비군 키와 모델 ID의 `GroupBinding`, `EquipmentRecord` 관측 목록, 설비별 `EquipmentLocation`, 릴리즈/고정 목표 N, 기준일 위험 판정 결과를 주입합니다. UI 설비군 키를 버전 계열 ID로 취급하지 않습니다. 위치의 원본 구역(`raw_area`)과 정규 Fab·Line은 별개입니다. 누락·중복 모델/위치 매핑과 날짜별 중복 설비는 거부합니다. 위험 판정이 누락되면 안전으로 추정하지 않고 미확인으로 표시합니다.
+
+앱 기본 공급자는 `demo_dashboard_source()`입니다. 예시 Fab·Line은 모두 미지정이고 원본 구역에서 추론하지 않습니다. 자료의 마지막 관측일을 기준일로 사용하며 기준일 선택 UI와 목표 N 편집·저장은 아직 구현하지 않습니다. 합성 예시라는 사실을 앱 안내·결과·출처 문구에 표시합니다. DB/Excel 파일 읽기·저장·회사 AI를 호출하지 않습니다.
+
+`query_applied` → `DashboardPage.apply_query()` → `DashboardSource.snapshot()` → `accept_result()` 순으로 처리합니다. 공통 초안 편집/초기화만으로는 결과를 바꾸지 않습니다. 선택지 교체 시 결과를 지우고 재조회를 요청하며 공급자의 선택지와도 같아야 합니다. 결과를 받는 시점에 `QueryState.is_current()`와 결과의 요청 객체를 검사하여 이전 요청이 화면을 덮어쓰지 못하게 합니다. 현재 작은 합성 자료만 동기로 계산합니다. 실제 DB/대량 자료 연결 시 조회는 워커로 옮기고 `accept_result()`는 UI 스레드에서 호출해야 합니다.
+
+동일한 `DashboardSnapshot`을 지표·현황표·차트·수치표가 공유합니다.
+
+- 물리 대수는 호기 ID 기준이며 HPA를 포함합니다. 분석 대수·업그레이드 필요 수는 기존 집계 서비스의 결과를 사용합니다.
+- KPI/현황표의 달성률은 `N 이상 / (N 이상 + N 미만)`이며 단위는 설비·계열 건입니다. 판단 불가는 별도 표시하며 남아 있으면 100%를 전체 완료로 표시하지 않습니다. 계열 자체가 미등록인 설비도 별도 표시합니다.
+- 도넛 구성비는 판단 불가를 포함한 전체 설비·계열 건수가 분모입니다. 중앙에는 전체 건수를 표시해 KPI 비율과 혼동하지 않도록 합니다.
+- 막대는 원본 구역·설비군별 물리 대수입니다. KCTC 하위 4종을 분리하며 복수 SW 설비가 여러 설비군에 나타날 수 있으므로 막대를 더해 물리 총대수를 만들지 않습니다.
+- 과거 관측은 기준일에 선택한 설비 집합·목표를 고정해 계산합니다. 없는 날짜/관측을 이전 값이나 0%로 채우지 않습니다. 미관측 설비가 있거나 판단 가능한 건이 없으면 추이 선을 끊고 수치표에 부족 수를 표시합니다.
+- 비교 범례 체크는 표시할 시리즈만 바꿉니다. 적용 조건·지표·원본 스냅샷을 바꾸지 않습니다.
+
+일반 셀/막대 클릭과 위험 후보 버튼은 `drilldown_requested(DashboardDrilldown)`를 보냅니다. 이 객체에는 적용 요청·기준일·표시 범위·정확한 호기 ID와 `risk_only`가 들어 있습니다. 일반 셀은 해당 범위 전체, 후보 버튼은 해당 범위 후보만 전달합니다. 현재는 선택 안내를 표시하며 6번 설비 목록을 만들거나 다른 화면으로 이동하지 않습니다. 후속 목록 담당자가 이 신호를 연결해야 합니다.
+
+Figma의 그래프 SVG는 고정 예시 데이터이므로 실행 이미지로 사용하지 않습니다. QtCharts를 데이터로 갱신하며 원본 KPI/위험 아이콘 6개는 `ui/assets/`에 그대로 포함합니다. 새로운 의존성은 추가하지 않습니다. 히트맵·설비 목록/상세·목표 설정·실데이터 연동은 이 작업에서 제외합니다.
 
 `tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다.
 
