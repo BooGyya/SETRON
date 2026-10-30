@@ -27,6 +27,8 @@ S15P31B106/
 │       │   ├── dashboard_charts.py
 │       │   ├── dashboard_data.py
 │       │   ├── dashboard_demo.py
+│       │   ├── heatmap.py
+│       │   ├── heatmap_data.py
 │       │   ├── theme.py
 │       │   ├── assets/
 │       │   └── check_environment.py
@@ -87,6 +89,7 @@ S15P31B106/
 │   ├── test_ui_common.py
 │   ├── test_ui_query.py
 │   ├── test_ui_dashboard.py
+│   ├── test_ui_heatmap.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -104,7 +107,7 @@ S15P31B106/
 └── README.md
 ```
 
-각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 `ui/app.py`의 `create_window()`를 통해 공통 UI에 예시 대시보드만 등록합니다. 조회 적용 시 기존 순수 집계 서비스를 사용하지만 DB·Excel에는 연결하지 않습니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
+각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 `ui/app.py`의 `create_window()`를 통해 공통 UI에 예시 대시보드·히트맵을 등록합니다. 조회 적용 시 기존 순수 집계 서비스를 사용하지만 DB·Excel에는 연결하지 않습니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
 
 `ui/check_environment.py`는 화면 개발 전 Python·PySide6·Qt 버전과 창 표시·종료를 확인하는 진단용 실행 모듈입니다. 업무 서비스나 DB를 호출하지 않습니다.
 
@@ -180,7 +183,7 @@ window.query_panel.set_draft(QuerySelection(site_key=registered_site_key))
 
 | 모듈 | 책임 |
 | --- | --- |
-| `ui/app.py:create_window` | 명시적으로 예시 자료 공급자와 대시보드만 조립. 다른 업무 메뉴는 활성화하지 않음 |
+| `ui/app.py:create_window` | 예시 자료 공급자와 대시보드·히트맵 조립. 한 번 계산한 결과 공유. 다른 업무 메뉴는 활성화하지 않음 |
 | `ui/dashboard_data.py` | 위치·모델 매핑과 기존 `summarize()`를 이용한 읽기 스냅샷. DB·Qt에 의존하지 않음 |
 | `ui/dashboard_demo.py` | 합성 설비·관측·고정 목표·위험 판정. 실제 회사 자료와 분리 |
 | `ui/dashboard.py` | 지표·현황표·보기 전환·수치표·정확한 후속 조회 범위 신호 |
@@ -204,6 +207,25 @@ window.query_panel.set_draft(QuerySelection(site_key=registered_site_key))
 일반 셀/막대 클릭과 위험 후보 버튼은 `drilldown_requested(DashboardDrilldown)`를 보냅니다. 이 객체에는 적용 요청·기준일·표시 범위·정확한 호기 ID와 `risk_only`가 들어 있습니다. 일반 셀은 해당 범위 전체, 후보 버튼은 해당 범위 후보만 전달합니다. 현재는 선택 안내를 표시하며 6번 설비 목록을 만들거나 다른 화면으로 이동하지 않습니다. 후속 목록 담당자가 이 신호를 연결해야 합니다.
 
 Figma의 그래프 SVG는 고정 예시 데이터이므로 실행 이미지로 사용하지 않습니다. QtCharts를 데이터로 갱신하며 원본 KPI/위험 아이콘 6개는 `ui/assets/`에 그대로 포함합니다. 새로운 의존성은 추가하지 않습니다. 히트맵·설비 목록/상세·목표 설정·실데이터 연동은 이 작업에서 제외합니다.
+
+### 버전 히트맵 (작업 단위 5)
+
+`ui/heatmap_data.py`는 공통 `DashboardSnapshot`을 설비별 `EquipmentTile`로 변환하는 순수 표시 어댑터입니다. 스냅샷의 `selected_records`는 대시보드가 집계한 것과 동일한 기준일·정규 위치·설비군으로 걸러진 관측 목록이며, HPA와 선택된 PM도 보존합니다. 별도 조회나 버전 순서·위험 판정을 실행하지 않습니다. PM/계열별 비교는 `summary.equipment`의 기존 `FamilyStatus`·`VersionComparison`을 사용합니다.
+
+`ui/app.py`에서 조회 적용 → 히트맵 이전 결과 제거 → `DashboardPage.apply_query()` 한 번 실행 → 같은 결과 객체를 `HeatmapPage.accept_result()`에 전달합니다. 실패하면 두 화면 모두 이전 값을 지웁니다. 공통 선택지 교체도 두 화면을 무효화하며 이전 요청·선택지 세대의 결과는 거부합니다. 초안 변경만으로는 기존 적용 결과를 바꾸지 않습니다.
+
+`ui/heatmap.py`는 Site별 물리 타일과 요약, 밀집/버전 함께 보기, 위험 후보만 표시를 담당합니다.
+
+- 한 호기는 한 타일입니다. 복수 SW는 타일 안의 계열별 영역으로 표시하며 모든 선택된 PM의 원문·N 비교를 남깁니다. 같은 계열 PM 버전 불일치도 표시합니다. 문자열 비교나 암묵적 릴리즈 대응은 하지 않습니다.
+- 한 계열이라도 미달이면 타일은 미달, 미달 없이 미확인 계열이 있거나 SW 미등록이면 정보 부족, 모든 계열이 N 이상일 때만 목표 달성입니다. HPA는 별도 분석 제외 상태입니다.
+- 채움색은 목표 상태, 빨간 테두리/`!`는 위험 후보, `?`는 위험 미확인입니다. VER3 타일 형태·색상 토큰을 사용하되 위험이 목표 채움색을 덮지 않게 분리합니다. ‘후보 아님’을 안전 보장으로 표현하지 않습니다.
+- 후보 필터와 밀집/버전 전환은 표시만 바꿉니다. 적용 조건·물리 집합·요약 집계는 그대로입니다. 달성률 단위는 설비·계열 건이며 판단 불가는 분모에서 제외합니다.
+- 원본 구역은 Fab/Line으로 추론하지 않습니다. 타일 도움말에는 정규 Fab·Line과 원본 구역을 별도 표시합니다. 버전 원문도 정규화하지 않습니다.
+- 타일은 native 버튼으로 Tab/Space 조작·접근성 설명·목표/위험/비교 사유 도움말을 제공합니다. 좁은 창에서는 열 수와 요약 위치를 바꾸며 메인 가로 넘침을 만들지 않습니다. 타일은 이미지가 아닌 실제 위젯입니다.
+
+`equipment_selected(EquipmentSelection)`은 적용 요청 객체·관측 기준일·호기 ID를 전달합니다. 현재 선택 안내만 표시하며 후속 6번 설비 목록/상세 담당자가 연결합니다. 메뉴 왕복 시 보기/결과/선택을 보존하고 재적용/무효화 시 선택은 지웁니다. `create_window(source=...)`로 검증된 테스트 공급자를 주입할 수 있습니다. 로그인·DB/Excel·목표 편집·저장·목록/상세는 포함하지 않습니다.
+
+Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디자인을 PySide6 레이아웃으로 구현했습니다. 기존 원본 `7880d.svg`와 KPI 아이콘을 재사용하고 변형하거나 새 의존성을 추가하지 않습니다.
 
 `tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다.
 

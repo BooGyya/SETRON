@@ -68,6 +68,7 @@ class DashboardSnapshot:
     trends: tuple[GroupTrend, ...]
     observations: tuple[TrendPoint, ...]
     source_label: str
+    selected_records: tuple[EquipmentRecord, ...]  # 히트맵도 같은 기준일·필터 결과를 사용
 
 
 @dataclass(frozen=True)
@@ -193,7 +194,7 @@ class DashboardSource:
                                  sum(not r.is_hpa and self.risks.get(r.equipment_id, RiskStatus.UNKNOWN)
                                      is RiskStatus.UNKNOWN for r in selected),
                                  total.summary, tuple(rows), groups, trends,
-                                 self._observations(query, selected), self.source_label)
+                                 self._observations(query, selected), self.source_label, selected)
 
     def _observations(self, query, baseline, group_keys=None):
         active = {query.selection.group_key} if query.selection.group_key else set(self.bindings)
