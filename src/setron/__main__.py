@@ -1,1 +1,7 @@
-"""프로그램 진입점. UI 초기화 코드는 화면 구현 시 추가합니다."""
+"""python -m setron 실행 진입점."""
+
+from setron.ui.app import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
