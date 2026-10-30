@@ -14,6 +14,7 @@ from setron.ui.dashboard import MetricCard
 from setron.ui.dashboard_data import missing_sw_count
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
 from setron.ui.heatmap_data import EquipmentSelection, GoalState
+from setron.ui.target_data import target_map
 from setron.ui.theme import PRIMARY, SECONDARY, TONES, font
 
 
@@ -354,7 +355,7 @@ class EquipmentPage(QWidget):
                              f"현재 목록: {self.scope_label} · {len(self.scope_ids)}대 · 검색/후보 필터는 표시만 변경\n{self.snapshot.source_label}")
         ids = set(self.scope_ids)
         records = tuple(r for r in self.snapshot.selected_records if r.equipment_id in ids)
-        summary = summarize(records, self.source.families, self.source.targets)
+        summary = summarize(records, self.source.families, target_map(self.snapshot.target_values))
         tiles = tuple(d.selected for d in self.data.details if d.selected.equipment_id in ids)
         candidates = sum(t.risk is RiskStatus.RISK for t in tiles)
         unknown = sum(t.risk is RiskStatus.UNKNOWN and t.goal is not GoalState.EXCLUDED for t in tiles)

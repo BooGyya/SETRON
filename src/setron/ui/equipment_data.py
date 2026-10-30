@@ -7,6 +7,7 @@ from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource
 from setron.ui.heatmap_data import EquipmentTile, equipment_tiles, record_tiles
+from setron.ui.target_data import target_map
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ def equipment_data(snapshot: DashboardSnapshot, source: DashboardSource) -> Equi
         raise ValueError("같은 기준일의 전체 SW 관측이 없습니다.")
     records = tuple(current[eid] for eid in snapshot.equipment_ids)
     # 전체 판정은 같은 기준일/같은 호기의 모든 SW로 따로 계산한다. 선택 판정을 덮지 않는다.
-    summary = summarize(records, source.families, source.targets)
+    summary = summarize(records, source.families, target_map(snapshot.target_values))
     whole = {t.equipment_id: t for t in record_tiles(records, summary, source)}
     statuses = {e.record.equipment_id: e for e in summary.equipment}
     return EquipmentData(snapshot, tuple(EquipmentDetail(tile, whole[tile.equipment_id], current[tile.equipment_id],

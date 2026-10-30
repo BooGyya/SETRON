@@ -385,6 +385,6 @@ def test_real_entrypoint_registers_dashboard_and_heatmap_and_does_not_auto_apply
     assert window.query_state.applied is None
     assert "합성 예시" in window.notice.text()
     assert window.nav["heatmap"].isEnabled()
-    assert not window.query_panel.goal_button.isEnabled()
+    assert window.query_panel.goal_button.isEnabled()
     window.close()
     window.deleteLater()

@@ -12,6 +12,8 @@ from setron.ui.dashboard_data import DashboardSource
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
+from setron.ui.target_data import describe_targets, initial_targets
+from setron.ui.target_dialog import TargetDialog
 from setron.ui.theme import install_theme
 
 
@@ -19,7 +21,37 @@ def create_window(source: DashboardSource | None = None) -> MainWindow:
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
     window.setWindowTitle("SETRON · 설비 현황 미리보기")
-    window.notice.setText("작업 단위 6 · 설비 목록·상세 · 합성 예시 데이터 · DB 미연결")
+    window.notice.setText("작업 단위 7 · 목표 N 편집 · 합성 예시 데이터 · DB 미연결 · 임시 선택")
+    window.query_panel.set_target_describer(lambda targets: describe_targets(source, targets))
+    window.query_panel.set_target_draft(initial_targets(source))
+    window.query_panel.goal_button.setEnabled(True)
+    window.query_panel.goal_button.setToolTip("모델·계열별 목표 N 임시 선택 · 새 계산은 조회 적용 후 · DB 저장 없음")
+    window.query_panel.apply_button.setToolTip("선택한 위치·설비군·목표 N으로 합성 예시 결과를 함께 다시 계산합니다. DB 미연결.")
+    window.target_dialog = None
+
+    def open_targets():
+        if window.target_dialog is not None and window.target_dialog.isVisible():
+            window.target_dialog.raise_()
+            window.target_dialog.activateWindow()
+            return
+        state = window.query_state
+        generation = state.catalog_revision
+        current = lambda: state.catalog_revision == generation and state.catalog == source.catalog
+        dialog = TargetDialog(source, state.target_draft, group_key=state.draft.group_key, is_current=current, parent=window)
+        window.target_dialog = dialog
+
+        def finish(result):
+            if result == TargetDialog.DialogCode.Accepted and current() and dialog.result_targets is not None:
+                window.query_panel.set_target_draft(dialog.result_targets)
+            if window.target_dialog is dialog:
+                window.target_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(finish)
+        dialog.open()
+
+    window.query_panel.goal_button.clicked.connect(open_targets)
+    window.query_panel.catalog_changed.connect(lambda *_: window.query_panel.goal_button.setEnabled(window.query_state.catalog == source.catalog))
     dashboard = DashboardPage(window.query_state, source, drilldown_connected=True)
     heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
     equipment = EquipmentPage(window.query_state, source)
