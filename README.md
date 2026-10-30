@@ -252,6 +252,24 @@ uv run --locked python -m setron
 
 실행 진입점은 `src/setron/__main__.py`입니다. 현재는 설명문만 있어 위 명령을 실행해도 화면이 뜨지 않고 종료됩니다. 화면 초기화 코드는 UI 구현 시 추가합니다.
 
+### UI 개발 전 설치와 실행 확인
+
+저장소 최상위 폴더에서 `uv sync --locked`를 실행해 Python 3.13 전용 `.venv`와 잠금 파일에 지정된 패키지를 준비합니다. 기존 Python 환경은 그대로 유지합니다.
+
+다음 명령은 DB·Excel·AI 연결 없이 설치 확인 창을 엽니다. Python·PySide6·Qt 버전과 화면 플랫폼을 확인하고 `닫기` 버튼으로 종료합니다.
+
+```powershell
+uv run --locked python -m setron.ui.check_environment
+```
+
+이미 설치된 가상환경의 Python으로 직접 실행할 수도 있습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m setron.ui.check_environment
+```
+
+설치 확인 창은 업무 화면과 별개입니다. 이후 화면 개발 결과는 위의 앱 실행 명령(`python -m setron`)으로 확인합니다.
+
 ## 테스트
 
 ```powershell
@@ -282,6 +300,8 @@ S15P31B106/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── ui/
+│       │   ├── __init__.py
+│       │   └── check_environment.py
 │       ├── features/
 │       └── infrastructure/
 │           ├── database.py

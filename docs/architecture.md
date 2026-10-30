@@ -17,7 +17,8 @@ S15P31B106/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── ui/
-│       │   └── __init__.py
+│       │   ├── __init__.py
+│       │   └── check_environment.py
 │       ├── features/
 │       │   ├── __init__.py
 │       │   ├── aggregation/
@@ -90,6 +91,8 @@ S15P31B106/
 ```
 
 각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 실행 진입점이며, 구현 시 DB 연결 설정, 서비스와 화면의 연결, 애플리케이션 시작을 담당합니다. 현재는 설명문만 있어 실행해도 화면이 뜨지 않고 종료됩니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
+
+`ui/check_environment.py`는 화면 개발 전 Python·PySide6·Qt 버전과 창 표시·종료를 확인하는 진단용 실행 모듈입니다. 업무 서비스나 DB를 호출하지 않습니다.
 
 `tests/test_excel_reader.py`는 실제 Excel 대신 가짜 통합문서를 사용해 읽기 모듈의 순수 로직과 오류 처리를 검증합니다.
 
