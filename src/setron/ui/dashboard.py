@@ -74,10 +74,11 @@ class MetricCard(Card):
 class DashboardPage(QWidget):
     drilldown_requested = Signal(object)
 
-    def __init__(self, state, source: DashboardSource):
+    def __init__(self, state, source: DashboardSource, *, drilldown_connected=False):
         super().__init__()
         self.setObjectName("canvas")
         self.state, self.source, self.snapshot = state, source, None
+        self.drilldown_connected = drilldown_connected
         self.visible_groups = {o.key for o in source.catalog.groups}
         self.metrics = {}
         self.matrix_buttons, self.risk_buttons = {}, {}
@@ -242,7 +243,8 @@ class DashboardPage(QWidget):
             return
         request = DashboardDrilldown(self.snapshot.query, self.snapshot.base_date, title, tuple(ids), risk_only)
         self.selection_notice.setText(f"선택: {title} · {'위험 후보만' if risk_only else '해당 범위 전체'} {len(ids)}대\n"
-                                      "설비 목록 화면은 6번 작업에서 연결합니다. 현재는 조회 범위 전달까지만 구현했습니다.")
+                                      + ("선택 범위의 설비 목록으로 이동합니다." if self.drilldown_connected else
+                                         "설비 목록 화면은 6번 작업에서 연결합니다. 현재는 조회 범위 전달까지만 구현했습니다."))
         self.drilldown_requested.emit(request)
 
     def _risk_selection(self):

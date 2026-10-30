@@ -129,6 +129,8 @@ class MainWindow(QMainWindow):
         self.route = "dashboard"
         self.nav: dict[str, NavButton] = {}
         self._menus = {menu.key: menu for menu in MENUS}
+        self._page_parents: dict[str, str] = {}
+        self._page_titles: dict[str, str] = {}
         self._query_routes = {"dashboard", "heatmap"}
         self.query_state = QueryState(query_catalog if query_catalog is not None else preview_catalog())
         root = QWidget()
@@ -255,8 +257,24 @@ class MainWindow(QMainWindow):
         if key == self.route:
             self.navigate(key)
 
+    def register_auxiliary_page(self, key: str, widget: QWidget, *, parent_key: str, title: str, uses_query: bool = True) -> None:
+        """목록/상세 같은 하위 화면은 새 사이드바 메뉴 없이 기존 메뉴 아래에 등록한다."""
+        if not isinstance(key, str) or not key or key in self._menus or key in self.pages:
+            raise ValueError("중복되지 않는 하위 화면 key가 필요합니다.")
+        if parent_key not in self._menus or parent_key not in self.pages:
+            raise ValueError("등록된 상위 메뉴가 필요합니다.")
+        if not isinstance(title, str) or not title.strip() or not isinstance(uses_query, bool):
+            raise ValueError("하위 화면 제목과 조회 패널 여부가 올바르지 않습니다.")
+        if not isinstance(widget, QWidget) or widget in (self, self.placeholder) or widget in self.pages.values():
+            raise ValueError("각 화면에 별도의 QWidget을 등록해 주세요.")
+        self._page_parents[key], self._page_titles[key] = parent_key, title
+        self.pages[key] = widget
+        self.stack.addWidget(widget)
+        if uses_query:
+            self._query_routes.add(key)
+
     def navigate(self, key: str) -> bool:
-        if key not in self._menus:
+        if key not in self._menus and key not in self._page_parents:
             raise ValueError(f"알 수 없는 메뉴입니다: {key}")
         if key not in self.pages and key != "dashboard":
             return False
@@ -269,9 +287,10 @@ class MainWindow(QMainWindow):
         self.stack.updateGeometry()
         self.route = key
         self.query_panel.setVisible(key in self._query_routes)
-        self.header.title.setText(self._menus[key].title)
+        menu_key = self._page_parents.get(key, key)
+        self.header.title.setText(self._page_titles.get(key, self._menus[menu_key].title))
         for menu_key, nav in self.nav.items():
-            nav.setChecked(menu_key == key)
+            nav.setChecked(menu_key == self._page_parents.get(key, key))
         self.scroll.verticalScrollBar().setValue(0)
         self.page_changed.emit(key)
         return True

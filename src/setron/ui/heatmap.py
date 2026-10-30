@@ -115,9 +115,12 @@ class TileGrid(QWidget):
 class HeatmapPage(QWidget):
     equipment_selected = Signal(object)
 
-    def __init__(self, state, source):
+    def __init__(self, state, source, *, detail_connected=False):
         super().__init__()
         self.state, self.source, self.snapshot = state, source, None
+        self.detail_connected = detail_connected
+        self.selection_hint = ("타일 선택 → 설비 상세 · 이전 조회로 돌아오면 보기와 선택을 유지합니다." if detail_connected else
+                               "타일 선택 시 설비 ID를 전달합니다. 설비 목록·상세는 6번 작업에서 연결합니다.")
         self.tiles, self.tile_buttons, self.tile_grids = (), {}, []
         self.selected_id = None
         body = QVBoxLayout(self)
@@ -164,7 +167,7 @@ class HeatmapPage(QWidget):
         self.content.body.addWidget(self.tile_host)
         self.message = label("조회 적용 전입니다.", color=SECONDARY, wrap=True)
         self.content.body.addWidget(self.message)
-        self.selection_notice = label("타일 선택 시 설비 ID를 전달합니다. 설비 목록·상세는 6번 작업에서 연결합니다.",
+        self.selection_notice = label(self.selection_hint,
                                       13, color=SECONDARY, wrap=True)
         self.content.body.addWidget(self.selection_notice)
         self.summary = QWidget()
@@ -216,7 +219,7 @@ class HeatmapPage(QWidget):
         for card in self.metrics.values():
             card.value.setText("—")
             card.caption.setText("결과 없음")
-        self.selection_notice.setText("타일 선택 시 설비 ID를 전달합니다. 설비 목록·상세는 6번 작업에서 연결합니다.")
+        self.selection_notice.setText(self.selection_hint)
         self._render_tiles()
 
     def begin_query(self, query):
@@ -249,7 +252,7 @@ class HeatmapPage(QWidget):
             return False
         self.tiles = equipment_tiles(result, self.source)
         self.snapshot, self.selected_id = result, None
-        self.selection_notice.setText("타일 선택 시 설비 ID를 전달합니다. 설비 목록·상세는 6번 작업에서 연결합니다.")
+        self.selection_notice.setText(self.selection_hint)
         self.result_status.setText("예시 결과 · " + ("조회 적용됨" if result.equipment_ids else "조건에 맞는 설비 없음"))
         self.result_status.set_tone("info")
         self.context.setText(f"적용 #{query.revision} · 기준 관측일 {result.base_date} · {query.description}\n{result.source_label}")
@@ -317,5 +320,6 @@ class HeatmapPage(QWidget):
             tile.setChecked(eid == equipment_id)
         tile = self.tile_buttons[equipment_id].data
         self.selection_notice.setText(f"선택: {tile.code} · {tile.goal.value} · {tile.risk_label}\n"
-                                      "설비 ID 전달 완료 · 목록·상세는 6번 작업에서 연결합니다.")
+                                      + ("설비 상세로 이동합니다." if self.detail_connected else
+                                         "설비 ID 전달 완료 · 목록·상세는 6번 작업에서 연결합니다."))
         self.equipment_selected.emit(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id))
