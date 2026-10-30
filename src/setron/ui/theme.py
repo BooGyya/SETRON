@@ -68,6 +68,17 @@ def install_theme(app: QApplication) -> None:
         QPushButton[nav="true"]:checked { background: #3c5ce9; }
         QPushButton[nav="true"]:focus { border-color: #a8b4fa; }
         QPushButton[nav="true"]:hover:!checked { background: #edf0fd; }
+        QPushButton[queryChoice="true"] { padding: 0 8px; min-height: 38px; max-height: 38px; }
+        QPushButton[queryChoice="true"][compactChoice="true"] { min-height: 34px; max-height: 34px; }
+        QPushButton[queryChoice="true"]:checked { background: #edf0fd; border-color: #3c5ce9; color: #3c5ce9; }
+        QPushButton[queryChoice="true"]:focus { border: 2px solid #3c5ce9; min-height: 36px; max-height: 36px; }
+        QPushButton[queryChoice="true"][compactChoice="true"]:focus { min-height: 32px; max-height: 32px; }
+        QComboBox[queryField="true"] { background: #f7f9fc; border: 1px solid #e5eaf3;
+                                      border-radius: 10px; padding: 0 12px; }
+        QComboBox[queryField="true"]:focus { border: 2px solid #3c5ce9; }
+        QComboBox[queryField="true"] QAbstractItemView { background: white; color: #18243c;
+                                                       selection-background-color: #edf0fd;
+                                                       selection-color: #3c5ce9; padding: 4px; }
         QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
         QScrollBar::handle:vertical { background: #cbd3e1; border-radius: 5px; min-height: 32px; }
         QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }

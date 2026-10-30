@@ -1,4 +1,4 @@
-"""작업 단위 2: 공통 창·사이드바·페이지 등록/이동만 제공한다."""
+"""공통 창·사이드바·페이지 등록/이동과 공유 조회 조건을 제공한다."""
 
 from dataclasses import dataclass
 
@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
 )
 
 from setron.ui.components import EmptyState, PageHeader, StatusBadge, label
+from setron.ui.query_panel import QueryPanel
+from setron.ui.query_state import QueryCatalog, QueryState, preview_catalog
 from setron.ui.theme import ASSETS, SECONDARY, font, icon, svg_size
 
 
@@ -116,8 +118,9 @@ class PageStack(QWidget):
 
 class MainWindow(QMainWindow):
     page_changed = Signal(str)
+    query_applied = Signal(object)
 
-    def __init__(self):
+    def __init__(self, *, query_catalog: QueryCatalog | None = None):
         super().__init__()
         self.setWindowTitle("SETRON · 공통 UI 미리보기")
         self.setMinimumSize(960, 600)
@@ -126,6 +129,8 @@ class MainWindow(QMainWindow):
         self.route = "dashboard"
         self.nav: dict[str, NavButton] = {}
         self._menus = {menu.key: menu for menu in MENUS}
+        self._query_routes = {"dashboard", "heatmap"}
+        self.query_state = QueryState(query_catalog if query_catalog is not None else preview_catalog())
         root = QWidget()
         root.setObjectName("canvas")
         self.setCentralWidget(root)
@@ -144,14 +149,17 @@ class MainWindow(QMainWindow):
         self.header = PageHeader()
         self.header.action_requested.connect(self._header_action)
         self.body.addWidget(self.header)
-        self.notice = StatusBadge("작업 단위 2 · 공통 UI만 구현 · 업무 데이터 미연결", "info")
+        self.notice = StatusBadge("작업 단위 3 · 공통 조회 조건 · 업무 데이터 미연결", "info")
         self.body.addWidget(self.notice)
+        self.query_panel = QueryPanel(self.query_state)
+        self.query_panel.applied.connect(self.query_applied.emit)
+        self.body.addWidget(self.query_panel)
         self.stack = PageStack()
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.placeholder = EmptyState(
             "공통 화면 준비가 완료되었습니다",
-            "현재는 앱 창·사이드바·페이지 연결 틀을 확인하는 화면입니다.\n"
-            "대시보드의 지표·그래프, 조회 필터, 히트맵, 설비 목록·상세는 각각 별도 작업으로 추가합니다.\n\n"
+            "Site·Fab·Line·설비군을 선택하고 조회 적용으로 조건을 확정할 수 있습니다.\n"
+            "대시보드의 지표·그래프, 히트맵, 설비 목록·상세는 아직 연결하지 않았습니다.\n\n"
             "회색 메뉴는 아직 업무 화면이 연결되지 않아 사용할 수 없습니다.",
         )
         self.stack.addWidget(self.placeholder)
@@ -226,7 +234,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.sidebar_scroll)
         return sidebar
 
-    def register_page(self, key: str, widget: QWidget) -> None:
+    def register_page(self, key: str, widget: QWidget, *, uses_query: bool | None = None) -> None:
         """담당 QWidget을 알려진 메뉴에 한 번 등록한다. 등록한 위젯의 소유자는 이 창이다."""
         if key not in self._menus:
             raise ValueError(f"알 수 없는 메뉴입니다: {key}")
@@ -234,6 +242,12 @@ class MainWindow(QMainWindow):
             raise ValueError(f"이미 등록된 메뉴입니다: {key}")
         if not isinstance(widget, QWidget) or widget in (self, self.placeholder) or widget in self.pages.values():
             raise ValueError("각 메뉴에 별도의 QWidget을 등록해 주세요.")
+        if uses_query is not None and not isinstance(uses_query, bool):
+            raise ValueError("uses_query는 bool 또는 None이어야 합니다.")
+        if uses_query is True:
+            self._query_routes.add(key)
+        elif uses_query is False:
+            self._query_routes.discard(key)
         self.pages[key] = widget
         self.stack.addWidget(widget)
         self.nav[key].setEnabled(True)
@@ -254,6 +268,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(current)
         self.stack.updateGeometry()
         self.route = key
+        self.query_panel.setVisible(key in self._query_routes)
         self.header.title.setText(self._menus[key].title)
         for menu_key, nav in self.nav.items():
             nav.setChecked(menu_key == key)
@@ -261,12 +276,19 @@ class MainWindow(QMainWindow):
         self.page_changed.emit(key)
         return True
 
+    def set_query_catalog(self, catalog: QueryCatalog) -> None:
+        """검증된 선택지만 주입한다. 원본 구역명을 Fab/Line으로 추론하지 않는다."""
+        self.query_panel.set_catalog(catalog)
+
     def _header_action(self, key: str) -> None:
         if key == "help":
             QMessageBox.information(
                 self, "공통 UI 미리보기 안내",
-                "현재 브랜치는 공통 창·사이드바·공통 표시 컴포넌트만 제공합니다.\n\n"
+                "공통 창·사이드바와 Site·Fab·Line·설비군 조회 조건을 제공합니다.\n\n"
                 "• 업무 화면을 등록하면 해당 메뉴가 활성화됩니다.\n"
-                "• 지표·조회 필터·목표 N·설비 데이터는 아직 연결하지 않았습니다.\n"
+                "• 선택 변경·전체 조건으로 버튼은 선택 중인 조건만 바꿉니다.\n"
+                "• 조회 적용을 눌러야 적용 조건과 요청 번호가 갱신됩니다.\n"
+                "• 조건 적용은 데이터 조회 완료를 의미하지 않습니다.\n"
+                "• 지표·목표 N·설비 데이터는 아직 연결하지 않았습니다.\n"
                 "• 로그인이나 DB·Excel 연결을 시작하지 않습니다.",
             )

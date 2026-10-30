@@ -1,0 +1,247 @@
+"""VER3 공통 조회 패널. 모든 조작은 초안만 바꾸며 조회 적용 시에만 신호를 보낸다."""
+
+from PySide6.QtCore import QSize, Signal
+from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
+
+from setron.ui.components import Card, StatusBadge, button, label
+from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState
+from setron.ui.theme import SECONDARY
+
+
+class _WrapRow(QWidget):
+    """좁은 창에서 필드/버튼을 줄바꿈한다. 숨겨진 복제 화면을 만들지 않는다."""
+
+    def __init__(self, widgets, minimum_width, *, fields=False):
+        super().__init__()
+        self.widgets = widgets
+        self.minimum_width = minimum_width
+        self.fields = fields
+        self.columns = 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(12)
+        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._arrange(4 if fields else len(widgets))
+
+    def minimumSizeHint(self):
+        # 현재 한 줄의 너비를 부모 최소 너비로 강제하면, 좁아져야 발생하는 줄바꿈이 막힌다.
+        return QSize(0, self.grid.minimumSize().height())
+
+    def _arrange(self, columns):
+        if self.columns == columns:
+            return
+        for index in range(max(self.columns, columns) + 1):
+            self.grid.setColumnStretch(index, 0)
+        for widget in self.widgets:
+            self.grid.removeWidget(widget)
+        for index, widget in enumerate(self.widgets):
+            self.grid.addWidget(widget, index // columns, index % columns)
+        if self.fields:
+            for index in range(columns):
+                self.grid.setColumnStretch(index, 1)
+        else:
+            self.grid.setColumnStretch(columns, 1)
+        self.columns = columns
+        self.updateGeometry()
+
+    def resizeEvent(self, event):
+        columns = max(1, min(len(self.widgets), (event.size().width() + 12) // (self.minimum_width + 12)))
+        if self.fields:
+            columns = 4 if columns >= 4 else 2 if columns >= 2 else 1
+        self._arrange(columns)
+        super().resizeEvent(event)
+
+
+class QueryPanel(QWidget):
+    applied = Signal(object)  # AppliedQuery: 공통 조건 계약, 데이터 조회 완료 신호가 아님
+    draft_changed = Signal(object)  # QuerySelection
+    catalog_changed = Signal(object)  # QueryCatalog
+
+    def __init__(self, state: QueryState):
+        super().__init__()
+        self.state = state
+        self.combos: dict[str, QComboBox] = {}
+        self.quick_buttons = {}
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(12)
+        self.card = Card()
+        self.card.body.setSpacing(12)
+        outer.addWidget(self.card)
+        heading = QHBoxLayout()
+        heading.setSpacing(12)
+        process_label = label("Etch", 14, medium=True)
+        process_label.setFixedWidth(110)
+        heading.addWidget(process_label)
+        self.preferences_button = button("라인 · 설비군 설정")
+        self.preferences_button.setEnabled(False)
+        self.preferences_button.setFixedSize(200, 36)
+        self.preferences_button.setToolTip("개인별 기본 선택지 설정은 별도 작업입니다.")
+        heading.addWidget(self.preferences_button)
+        heading.addStretch()
+        self.card.body.addLayout(heading)
+        self.draft_summary = label("", 13, color=SECONDARY, wrap=True)
+        self.card.body.addWidget(self.draft_summary)
+        self.source_label = label("", 13, color=SECONDARY, wrap=True)
+        self.card.body.addWidget(self.source_label)
+        fields = []
+        for key, caption in (("site_key", "Site"), ("fab_key", "Fab"),
+                             ("line_key", "Line"), ("group_key", "설비군")):
+            field = QWidget()
+            layout = QVBoxLayout(field)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
+            title = label(caption, medium=True)
+            combo = QComboBox()
+            combo.setObjectName("query_" + key)
+            combo.setProperty("queryField", True)
+            combo.setAccessibleName(caption)
+            combo.setFixedHeight(38)
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            title.setBuddy(combo)
+            combo.currentIndexChanged.connect(lambda index, name=key: self._choose(name, index))
+            self.combos[key] = combo
+            layout.addWidget(title)
+            layout.addWidget(combo)
+            fields.append(field)
+        self.fields_row = _WrapRow(fields, 240, fields=True)
+        self.card.body.addWidget(self.fields_row)
+        self.quick_rows = []
+        self._rebuild_quick_rows()
+        self.apply_button = button("조회 적용", primary=True)
+        self.apply_button.setFixedWidth(230)
+        self.apply_button.setFixedHeight(40)
+        self.apply_button.setToolTip("선택한 조건을 확정합니다. 업무 데이터 조회는 아직 연결되지 않았습니다.")
+        self.reset_button = button("전체 조건으로")
+        self.reset_button.setFixedWidth(180)
+        self.reset_button.setFixedHeight(40)
+        self.reset_button.setToolTip("선택만 전체로 초기화합니다. 적용하려면 조회 적용을 눌러 주세요.")
+        self.goal_button = button("목표 기준 편집")
+        self.goal_button.setFixedWidth(170)
+        self.goal_button.setFixedHeight(40)
+        self.goal_button.setEnabled(False)
+        self.goal_button.setToolTip("목표 N 편집은 별도 작업입니다.")
+        self.actions_row = _WrapRow([self.apply_button, self.reset_button, self.goal_button], 190)
+        self.card.body.addWidget(self.actions_row)
+        self.card.body.addWidget(label("선택 변경·초기화는 자동 적용되지 않습니다. ‘조회 적용’을 눌러 확정하세요.",
+                                       12, color=SECONDARY, wrap=True))
+        self.status = StatusBadge("미적용", "info")
+        outer.addWidget(self.status)
+        self.applied_summary = label("", 13, color=SECONDARY, wrap=True)
+        self.applied_summary.setAccessibleName("실제 적용 조건")
+        outer.addWidget(self.applied_summary)
+        self.apply_button.clicked.connect(self.apply_draft)
+        self.reset_button.clicked.connect(self.reset_draft)
+        self._render()
+
+    def _rebuild_quick_rows(self):
+        for row in self.quick_rows:
+            self.card.body.removeWidget(row)
+            row.hide()
+            row.deleteLater()
+        self.quick_rows.clear()
+        self.quick_buttons.clear()
+        catalog = self.state.catalog
+        groups = [
+            ([("site_key", None, "Site 전체")] + [("site_key", o.key, o.label) for o in catalog.sites], 145),
+            ([("fab_key", None, "Fab 전체"), ("fab_key", UNASSIGNED, "Fab 미지정"),
+              ("line_key", None, "Line 전체"), ("line_key", UNASSIGNED, "Line 미지정")], 145),
+            ([("group_key", None, "설비군 전체")] + [("group_key", o.key, o.label)
+                                                    for o in catalog.groups if o.category != "KCTC"], 135),
+            ([("group_key", o.key, o.label) for o in catalog.groups if o.category == "KCTC"], 160),
+        ]
+        for entries, width in groups:
+            if not entries:
+                continue
+            widgets = []
+            for field, value, caption in entries:
+                item = button(caption)
+                item.setProperty("queryChoice", True)
+                item.setProperty("compactChoice", width == 160)
+                item.setCheckable(True)
+                item.setFixedSize(width, 36 if width == 160 else 40)
+                dimension = dict(site_key="Site", fab_key="Fab", line_key="Line", group_key="설비군")[field]
+                item.setAccessibleName((caption if value is None or value is UNASSIGNED else f"{dimension} {caption}") + " 선택")
+                item.clicked.connect(lambda checked=False, name=field, key=value: self.select(name, key))
+                self.quick_buttons[field, value] = item
+                widgets.append(item)
+            row = _WrapRow(widgets, width)
+            self.quick_rows.append(row)
+            self.card.body.insertWidget(4 + len(self.quick_rows) - 1, row)
+
+    def _choose(self, field, index):
+        if index >= 0:
+            self.select(field, self.combos[field].itemData(index))
+
+    def select(self, field, value):
+        previous = self.state.draft
+        self.state.select(field, value)
+        self._render()
+        if previous != self.state.draft:
+            self.draft_changed.emit(self.state.draft)
+
+    def set_draft(self, selection: QuerySelection):
+        previous = self.state.draft
+        self.state.set_draft(selection)
+        self._render()
+        if previous != selection:
+            self.draft_changed.emit(selection)
+
+    def reset_draft(self):
+        self.set_draft(QuerySelection())
+
+    def apply_draft(self):
+        query = self.state.apply()
+        self._render()
+        self.applied.emit(query)
+        return query
+
+    def set_catalog(self, catalog: QueryCatalog):
+        previous = self.state.draft
+        self.state.replace_catalog(catalog)
+        self._rebuild_quick_rows()
+        self._render()
+        self.catalog_changed.emit(catalog)
+        if previous != self.state.draft:
+            self.draft_changed.emit(self.state.draft)
+
+    def _render(self):
+        for field, options, caption in (
+            ("site_key", self.state.catalog.sites, "Site"),
+            ("fab_key", self.state.available_fabs(), "Fab"),
+            ("line_key", self.state.available_lines(), "Line"),
+            ("group_key", self.state.catalog.groups, "설비군"),
+        ):
+            combo = self.combos[field]
+            previous_block = combo.blockSignals(True)
+            combo.clear()
+            combo.addItem(caption + " 전체", None)
+            if field in ("fab_key", "line_key"):
+                combo.addItem(caption + " 미지정", UNASSIGNED)
+            for option in options:
+                combo.addItem(option.label, option.key)
+            value = getattr(self.state.draft, field)
+            combo.setCurrentIndex(next(i for i in range(combo.count()) if combo.itemData(i) == value))
+            combo.blockSignals(previous_block)
+        for (field, value), item in self.quick_buttons.items():
+            item.setChecked(getattr(self.state.draft, field) == value)
+        self.draft_summary.setText("선택 중 · " + self.state.describe(self.state.draft))
+        self.source_label.setText(self.state.catalog.source_label)
+        applied = self.state.applied
+        if applied is None:
+            status, tone = "미적용", "info"
+            summary = "아직 적용된 조건이 없습니다. 선택 후 조회 적용을 눌러 주세요."
+        else:
+            if not self.state.applied_is_current:
+                status, tone = "선택지 변경 · 재적용 필요", "warning"
+            elif self.state.has_pending_changes:
+                status, tone = "선택 변경 · 재적용 필요", "warning"
+            else:
+                status, tone = "조건 적용됨", "info"
+            summary = f"적용 #{applied.revision} · {applied.description}"
+        self.status.setText(status)
+        self.status.set_tone(tone)
+        self.applied_summary.setText(summary)

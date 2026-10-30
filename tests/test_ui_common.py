@@ -45,7 +45,7 @@ def test_shell_starts_without_business_pages(window):
     assert window.nav["dashboard"].isChecked()
     assert window.nav["dashboard"].isEnabled()
     assert all(not nav.isEnabled() for key, nav in window.nav.items() if key != "dashboard")
-    assert "공통 UI만 구현" in window.notice.text()
+    assert "공통 조회 조건" in window.notice.text()
     assert not hasattr(window, "overview")
     assert not hasattr(window, "filters")
 
@@ -136,6 +136,7 @@ def test_keyboard_navigation_and_page_state_are_preserved(window, app):
 
 
 def test_tall_hidden_page_does_not_stretch_short_page(window, app):
+    baseline = window.scroll.verticalScrollBar().maximum()
     tall = QWidget()
     tall.setMinimumHeight(2200)
     window.register_page("heatmap", tall)
@@ -145,7 +146,7 @@ def test_tall_hidden_page_does_not_stretch_short_page(window, app):
     window.navigate("dashboard")
     QTest.qWait(20)
     assert window.placeholder.height() < 500
-    assert window.scroll.verticalScrollBar().maximum() == 0
+    assert window.scroll.verticalScrollBar().maximum() == baseline
 
 
 @pytest.mark.parametrize("size", [(1600, 960), (1100, 800), (960, 600)])
@@ -191,7 +192,7 @@ def test_negative_auto_close_is_rejected_before_startup():
 
 def test_common_shell_does_not_import_business_or_infrastructure():
     ui_dir = Path(__file__).parents[1] / "src" / "setron" / "ui"
-    for filename in ("app.py", "main_window.py", "components.py", "theme.py"):
+    for filename in ("app.py", "main_window.py", "components.py", "theme.py", "query_state.py", "query_panel.py"):
         tree = ast.parse((ui_dir / filename).read_text(encoding="utf-8"))
         modules = []
         for node in ast.walk(tree):
