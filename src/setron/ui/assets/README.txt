@@ -15,6 +15,10 @@ Matrix risk signal 357:5551: 5ced8.svg.
 Charts are rendered dynamically from data with QtCharts; prototype chart SVGs
 and screenshot backgrounds are not runtime assets.
 
+Task 5 heatmap reuses the same original KPI assets and 7880d.svg from
+VER3 panel heading 357:6382. Tiles and family segments are native widgets
+driven by the shared snapshot, not screenshots or modified SVG artwork.
+
 Fonts from Google Fonts' official repository:
 https://github.com/google/fonts/tree/main/ofl/ibmplexsanskr
 https://github.com/google/fonts/tree/main/ofl/inter
