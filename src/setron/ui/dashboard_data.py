@@ -8,7 +8,7 @@ from setron.features.aggregation.schemas import EquipmentRecord, Summary
 from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.service import FamilyReleases
-from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog
+from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,7 @@ class DashboardSnapshot:
     observations: tuple[TrendPoint, ...]
     source_label: str
     selected_records: tuple[EquipmentRecord, ...]  # 히트맵도 같은 기준일·필터 결과를 사용
+    target_values: tuple[TargetN, ...]  # 실제 계산에 사용한 N. 이후 초안과 분리
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,17 @@ class DashboardSource:
                                    and self.risks.get(r.equipment_id) is RiskStatus.RISK), self._summary(records))
 
     def snapshot(self, query: AppliedQuery) -> DashboardSnapshot:
+        if query.targets is not None:
+            from setron.ui.target_data import target_map, validate_targets
+
+            targets = target_map(validate_targets(self, query.targets))
+            scoped = DashboardSource(catalog=self.catalog, bindings=tuple(GroupBinding(k, v) for k, v in self.bindings.items()),
+                                     records=self.records, locations=self.locations, families=self.families, targets=targets,
+                                     risks=self.risks, source_label=self.source_label)
+            return scoped._snapshot(query)
+        return self._snapshot(query)
+
+    def _snapshot(self, query: AppliedQuery) -> DashboardSnapshot:
         from setron.ui.query_state import QueryState
 
         QueryState(self.catalog).validate(query.selection)
@@ -194,7 +206,8 @@ class DashboardSource:
                                  sum(not r.is_hpa and self.risks.get(r.equipment_id, RiskStatus.UNKNOWN)
                                      is RiskStatus.UNKNOWN for r in selected),
                                  total.summary, tuple(rows), groups, trends,
-                                 self._observations(query, selected), self.source_label, selected)
+                                 self._observations(query, selected), self.source_label, selected,
+                                 tuple(TargetN(mid, fid, rid) for (mid, fid), rid in sorted(self.targets.items())))
 
     def _observations(self, query, baseline, group_keys=None):
         active = {query.selection.group_key} if query.selection.group_key else set(self.bindings)

@@ -57,10 +57,12 @@ class QueryPanel(QWidget):
     applied = Signal(object)  # AppliedQuery: 공통 조건 계약, 데이터 조회 완료 신호가 아님
     draft_changed = Signal(object)  # QuerySelection
     catalog_changed = Signal(object)  # QueryCatalog
+    targets_changed = Signal(object)  # 목표 초안 변경. 조회 적용과 별개
 
     def __init__(self, state: QueryState):
         super().__init__()
         self.state = state
+        self.target_describer = None
         self.combos: dict[str, QComboBox] = {}
         self.quick_buttons = {}
         outer = QVBoxLayout(self)
@@ -193,6 +195,17 @@ class QueryPanel(QWidget):
     def reset_draft(self):
         self.set_draft(QuerySelection())
 
+    def set_target_describer(self, describer):
+        self.target_describer = describer
+        self._render()
+
+    def set_target_draft(self, targets):
+        previous = self.state.target_draft
+        self.state.set_target_draft(targets)
+        self._render()
+        if previous != self.state.target_draft:
+            self.targets_changed.emit(self.state.target_draft)
+
     def apply_draft(self):
         query = self.state.apply()
         self._render()
@@ -229,6 +242,8 @@ class QueryPanel(QWidget):
         for (field, value), item in self.quick_buttons.items():
             item.setChecked(getattr(self.state.draft, field) == value)
         self.draft_summary.setText("선택 중 · " + self.state.describe(self.state.draft))
+        if self.target_describer is not None:
+            self.draft_summary.setText(self.draft_summary.text() + "\n선택 중 목표 N · " + self.target_describer(self.state.target_draft))
         self.source_label.setText(self.state.catalog.source_label)
         applied = self.state.applied
         if applied is None:
@@ -239,9 +254,13 @@ class QueryPanel(QWidget):
                 status, tone = "선택지 변경 · 재적용 필요", "warning"
             elif self.state.has_pending_changes:
                 status, tone = "선택 변경 · 재적용 필요", "warning"
+                if self.state.target_draft != applied.targets:
+                    status = "선택·목표 변경 · 재적용 필요" if self.state.draft != applied.selection else "목표 변경 · 재적용 필요"
             else:
                 status, tone = "조건 적용됨", "info"
             summary = f"적용 #{applied.revision} · {applied.description}"
+            if self.target_describer is not None:
+                summary += "\n적용 목표 N · " + self.target_describer(applied.targets)
         self.status.setText(status)
         self.status.set_tone(tone)
         self.applied_summary.setText(summary)

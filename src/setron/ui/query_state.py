@@ -83,11 +83,25 @@ class QueryCatalog:
 
 
 @dataclass(frozen=True)
+class TargetN:
+    model_id: int
+    family_id: int
+    release_id: int | None  # None은 명시적 목표 미지정, 판단 불가
+
+    def __post_init__(self):
+        if any(type(value) is not int or value <= 0 for value in (self.model_id, self.family_id)):
+            raise ValueError("모델·계열 ID가 올바르지 않습니다.")
+        if self.release_id is not None and (type(self.release_id) is not int or self.release_id <= 0):
+            raise ValueError("목표 릴리즈 ID가 올바르지 않습니다.")
+
+
+@dataclass(frozen=True)
 class AppliedQuery:
     selection: QuerySelection
     revision: int
     catalog_revision: int
     description: str
+    targets: tuple[TargetN, ...] | None = None  # None은 기존 공급자 기본 N 사용
 
 
 class QueryState:
@@ -97,6 +111,7 @@ class QueryState:
         self.catalog = catalog
         self.draft = QuerySelection()
         self.applied: AppliedQuery | None = None
+        self.target_draft: tuple[TargetN, ...] | None = None
         self._revision = 0
         self._catalog_revision = 0
 
@@ -106,7 +121,23 @@ class QueryState:
 
     @property
     def has_pending_changes(self) -> bool:
-        return not self.applied_is_current or self.draft != self.applied.selection
+        return (not self.applied_is_current or self.draft != self.applied.selection
+                or self.target_draft != self.applied.targets)
+
+    @property
+    def catalog_revision(self) -> int:
+        return self._catalog_revision
+
+    def set_target_draft(self, targets: tuple[TargetN, ...] | None) -> None:
+        if targets is None:
+            self.target_draft = None
+            return
+        values = tuple(targets)
+        if any(not isinstance(value, TargetN) for value in values):
+            raise ValueError("목표 N 계약이 올바르지 않습니다.")
+        if len({(t.model_id, t.family_id) for t in values}) != len(values):
+            raise ValueError("모델·계열 목표가 중복되었습니다.")
+        self.target_draft = tuple(sorted(values, key=lambda t: (t.model_id, t.family_id)))
 
     def available_fabs(self, selection: QuerySelection | None = None) -> tuple[FabOption, ...]:
         selection = selection or self.draft
@@ -163,7 +194,7 @@ class QueryState:
         self.validate(self.draft)
         self._revision += 1
         self.applied = AppliedQuery(self.draft, self._revision, self._catalog_revision,
-                                    self.describe(self.draft))
+                                    self.describe(self.draft), self.target_draft)
         return self.applied
 
     def is_current(self, query: AppliedQuery) -> bool:
