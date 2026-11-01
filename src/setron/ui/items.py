@@ -3,10 +3,12 @@
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QSizePolicy, QVBoxLayout, QWidget
 
-from setron.features.item.schemas import APPLICATION_LABELS, ItemState
+from setron.features.item.schemas import APPLICATION_LABELS, Application, ItemState
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
-from setron.ui.item_data import BASIS_LABELS, ItemManagerData
+from setron.ui.item_data import BASIS_LABELS, ItemEquipmentSelection, ItemManagerData, selected_application
+from setron.ui.item_distribution import ItemDistribution
+from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import SECONDARY
 from setron.ui.versions import VersionsPage, _fit
 
@@ -22,6 +24,8 @@ class ItemsPage(QWidget):
     """loader는 I/O가 완료된 ItemManagerData를 반환한다. DB 연결은 외부 워커의 책임이다."""
 
     mode_changed = Signal(str)
+    equipment_selected = Signal(object)
+    selection_invalidated = Signal()
     page_size = 12
 
     def __init__(self, loader):
@@ -29,6 +33,7 @@ class ItemsPage(QWidget):
         self.loader, self.data = loader, None
         self.mode, self.page_index, self.selected_id = "list", 0, None
         self.visible_entries, self.equipment = (), ()
+        self.revision, self.selected_equipment_id = 0, None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
@@ -99,18 +104,39 @@ class ItemsPage(QWidget):
         self.state_filter.addItem("전체 상태", None)
         for state, name in APPLICATION_LABELS.items():
             self.state_filter.addItem(name, state)
-        card.body.addWidget(self.state_filter)
+        self.site_filter, self.distribution_view = QComboBox(), QComboBox()
+        for widget, name in ((self.site_filter, "Item 적용 Site"), (self.distribution_view, "Item 적용 보기")):
+            widget.setAccessibleName(name)
+            widget.setProperty("queryField", True)
+            widget.setFixedHeight(38)
+            widget.setMinimumWidth(0)
+            widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.site_filter.addItem("전체 Site", None)
+        self.distribution_view.addItem("설비 목록", "list")
+        self.distribution_view.addItem("Site · 설비 히트맵", "heatmap")
+        card.body.addWidget(_WrapRow([self.site_filter, self.state_filter, self.distribution_view], 200, fields=True))
+        self.distribution = ItemDistribution()
+        card.body.addWidget(self.distribution)
+        self.distribution.scope_selected.connect(self.select_distribution_scope)
+        self.distribution.equipment_selected.connect(self.open_equipment)
         self.equipment_model = ReadTableModel(("설비 / ID", "Site", "모델", "적용 상태", "PM별 버전 · 판정 근거"))
         self.equipment_table = read_table(self.equipment_model, "Item 설비별 적용 현황", (200, 120, 180, 120, 470))
+        self.equipment_table.clicked.connect(lambda index: self.open_equipment_row(index.row()))
+        self.equipment_table.activated.connect(lambda index: self.open_equipment_row(index.row()))
         card.body.addWidget(self.equipment_table)
         self.equipment_empty = _text()
+        self.scope_count = _text()
+        card.body.addWidget(self.scope_count)
         card.body.addWidget(self.equipment_empty)
         detail.addWidget(card)
-        detail.addWidget(_text("읽기 전용 · 원본 셀 열기, Item 배포 히트맵과 설비 상세 이동은 아직 연결되지 않았습니다."))
+        detail.addWidget(_text("설비 행 또는 타일 선택 → 기존 설비 상세와 Item 근거 · 복귀 시 선택 범위 유지\n"
+                               "읽기 전용 · 원본 문서/셀 열기와 위험 규칙 근거는 미연결입니다."))
         body.addWidget(self.list_view)
         body.addWidget(self.detail_view)
         self.search.textChanged.connect(self._filter_changed)
-        self.state_filter.currentIndexChanged.connect(self.render_equipment)
+        self.state_filter.currentIndexChanged.connect(self._scope_changed)
+        self.site_filter.currentIndexChanged.connect(self._scope_changed)
+        self.distribution_view.currentIndexChanged.connect(self.render_equipment)
         self.reload()
 
     def _section(self, layout, title, headings, widths):
@@ -132,6 +158,7 @@ class ItemsPage(QWidget):
         self.mode_changed.emit(mode)
 
     def reload(self):
+        self._invalidate_selection()
         self.selected_id, self.equipment = None, ()
         self.title.clear()
         self.content.clear()
@@ -155,6 +182,7 @@ class ItemsPage(QWidget):
         self._filter_changed()
 
     def _filter_changed(self, *_):
+        self._invalidate_selection()
         self.page_index, self.selected_id = 0, None
         self._set_mode("list")
         self.render_list()
@@ -191,6 +219,7 @@ class ItemsPage(QWidget):
         if self.mode != "list" or not 0 <= row < len(self.visible_entries):
             return False
         entry = self.visible_entries[row]
+        self._invalidate_selection()
         item = entry.item
         self.selected_id = item.item_id
         self.title.setText(f"Item {item.item_no if item.item_no is not None else '번호 미확인'} · ID {item.item_id}")
@@ -220,7 +249,13 @@ class ItemsPage(QWidget):
                              + f" · HPA 제외 {summary.hpa_excluded}대" if summary else "적용 현황 미확인 · 릴리즈 연결 또는 설비 관측 자료가 필요합니다.")
         with QSignalBlocker(self.state_filter):
             self.state_filter.setCurrentIndex(0)
+        with QSignalBlocker(self.site_filter):
+            self.site_filter.clear()
+            self.site_filter.addItem("전체 Site", None)
+            for site in sorted({e.record.site for e in self.equipment}):
+                self.site_filter.addItem(site, site)
         self.state_filter.setEnabled(summary is not None)
+        self.site_filter.setEnabled(summary is not None)
         self.render_equipment()
         self._set_mode("detail")
         for table in (self.release_table, self.source_table, self.equipment_table):
@@ -229,19 +264,78 @@ class ItemsPage(QWidget):
         return True
 
     def render_equipment(self, *_):
-        state = self.state_filter.currentData()
-        rows = [e for e in self.equipment if state is None or e.application == state]
+        state = self._application_filter()
+        site = self.site_filter.currentData()
+        rows = [e for e in self.equipment if (state is None or e.application == state)
+                and (site is None or e.record.site == site)]
+        heatmap = self.distribution_view.currentData() == "heatmap"
+        self.distribution.set_results(self.equipment if heatmap else (), rows if heatmap else (), self.selected_equipment_id)
+        self.distribution.set_scope(site, state)
+        self.distribution.setVisible(heatmap)
         self.equipment_model.set_rows(tuple((f"{e.record.equipment_code} · ID {e.record.equipment_id}",
             e.record.site, e.record.model_name, e.label,
             "\n".join(f"{p.pm.pm_name or '일반 SW'} · 계열 {p.pm.family_id} · {p.pm.version_raw or '버전 미확인'} · "
                       f"{APPLICATION_LABELS[p.application]} ({BASIS_LABELS[p.basis]})" for p in e.pms)
             or "PM/SW 관측 없음 · 업무 규칙상 대상 외") for e in rows), tuple(e.record.equipment_id for e in rows))
-        self.equipment_table.setVisible(bool(rows))
+        self.scope_count.setText(f"표시 범위: {site if site is not None else '전체 Site'} · "
+                                 f"{APPLICATION_LABELS[state] if state else '전체 상태'} · {len(rows)}대 / 전체 {len(self.equipment)}대")
+        if self.selected_equipment_id in self.equipment_model.ids:
+            self.equipment_table.setCurrentIndex(self.equipment_model.index(self.equipment_model.ids.index(self.selected_equipment_id), 0))
+        self.equipment_table.setVisible(bool(rows) and not heatmap)
         self.equipment_empty.setVisible(not rows)
         self.equipment_empty.setText("표시할 설비가 없습니다. 관측 자료 연결 여부와 선택 상태를 확인해 주세요.")
         _fit(self.equipment_table)
 
+    def _invalidate_selection(self):
+        self.revision += 1
+        self.selected_equipment_id = None
+        self.selection_invalidated.emit()
+
+    def _application_filter(self):
+        value = self.state_filter.currentData()
+        return Application(value) if value is not None else None
+
+    def _scope_changed(self, *_):
+        self._invalidate_selection()
+        self.render_equipment()
+
+    def select_distribution_scope(self, site, state):
+        with QSignalBlocker(self.site_filter), QSignalBlocker(self.state_filter):
+            self.site_filter.setCurrentIndex(self.site_filter.findData(site))
+            self.state_filter.setCurrentIndex(self.state_filter.findData(state))
+        self._scope_changed()
+
+    def is_current_selection(self, request):
+        return (isinstance(request, ItemEquipmentSelection) and self.mode == "detail"
+                and request.data is self.data and request.revision == self.revision
+                and request.item_id == self.selected_id and request.site == self.site_filter.currentData()
+                and request.equipment_id == self.selected_equipment_id
+                and request.state == self._application_filter() and selected_application(request) is not None)
+
+    def open_equipment_row(self, row):
+        if 0 <= row < len(self.equipment_model.ids):
+            return self.open_equipment(self.equipment_model.ids[row])
+        return False
+
+    def open_equipment(self, equipment_id):
+        if self.mode != "detail" or self.data is None:
+            return False
+        request = ItemEquipmentSelection(self.data, self.revision, self.selected_id, equipment_id,
+                                         self.site_filter.currentData(), self._application_filter())
+        if selected_application(request) is None:
+            return False
+        self.revision += 1
+        self.selected_equipment_id = equipment_id
+        request = ItemEquipmentSelection(self.data, self.revision, self.selected_id, equipment_id,
+                                         self.site_filter.currentData(), self._application_filter())
+        self.distribution.select_equipment(equipment_id)
+        if equipment_id in self.equipment_model.ids:
+            self.equipment_table.setCurrentIndex(self.equipment_model.index(self.equipment_model.ids.index(equipment_id), 0))
+        self.equipment_selected.emit(request)
+        return True
+
     def back_to_list(self):
+        self._invalidate_selection()
         self._set_mode("list")
         if self.selected_id in self.list_model.ids:
             self.table.setCurrentIndex(self.list_model.index(self.list_model.ids.index(self.selected_id), 0))

@@ -260,3 +260,13 @@ MR 본문의 `검증` 절에 결과를 남깁니다.
 ```powershell
 uv run pytest tests/test_ui_items.py tests/test_ui_versions.py -q
 ```
+
+### Item 배포 시각화·근거 연결 B-4 검증
+
+`tests/test_ui_item_distribution.py`는 Site별 네 상태 대수와 목록/타일 일치, 빈 상태 셀, 적용 범위 선택, Enter/Space 이동, 같은 설비 상세 위젯 재사용, 문서·셀 근거와 저장 행 누락 표시를 검사한다. 복귀 시 Site·상태·보기·선택 설비·스크롤 보존 및 A 조회 스냅샷·초안·목표 N·기존 상세 복원을 확인한다.
+
+자료 재조회/실패·Item/범위/선택 변경 후 오래된 요청, 다른 자료 객체, 범위 밖 설비, 미등록 ID와 HPA 요청을 거부한다. 1600×960·1100×800·960×600의 히트맵/상세에서 메인 가로 넘침을 확인한다. 기본 자료는 합성이며 실제 DB와 원본 파일 열기·위험 규칙 근거 조회 검증은 아니다.
+
+```powershell
+uv run pytest tests/test_ui_item_distribution.py tests/test_ui_items.py tests/test_ui_equipment.py -q
+```
