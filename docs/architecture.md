@@ -33,6 +33,9 @@ S15P31B106/
 │       │   ├── equipment_data.py
 │       │   ├── target_data.py
 │       │   ├── target_dialog.py
+│       │   ├── versions.py
+│       │   ├── version_data.py
+│       │   ├── version_demo.py
 │       │   ├── theme.py
 │       │   ├── assets/
 │       │   └── check_environment.py
@@ -334,6 +337,49 @@ MySQL 회귀 테스트는 테스트 파일 위치를 기준으로 프로젝트 �
 파일은 실제로 맡을 책임이 생길 때 만듭니다. 초기부터 모든 기능에 동일한 파일을 만들 필요는 없습니다.
 
 화면은 `ui/`, 업무 처리는 `features/`에 두고 화면과 서비스 사이의 입력·반환 형식은 함께 합의합니다. 공통 코드도 먼저 해당 기능 안에서 관리하고, 여러 곳에서 필요해질 때 별도 패키지로 분리합니다. AI 연동 등 추가 기능을 위한 폴더도 실제 구현이 필요해질 때 만듭니다.
+
+## B-1 릴리즈 목록과 상세
+
+`ui/versions.py`의 `VersionsPage`를 `versions` 메뉴에 `uses_query=False`로 등록한다. 목록·상세는 같은 위젯에서 전환하며 다른 메뉴로 이동해도 상태를 보존한다. 릴리즈 목록의 모델·계열 필터는 설비 관측의 공통 조회 및 목표 N과 분리한다. 기존 `Card`, `StatusBadge`, `button`, `label`, 표 모델/뷰, 줄바꿈 필드 배치와 테마·자산을 재사용한다.
+
+| 모듈 | 책임 |
+| --- | --- |
+| `ui/version_data.py` | `VersionCatalog`, `ModelFamily`, `ReleaseEntry`, `ItemEntry`, `SourceReference` 읽기 계약 및 기존 버전/Item 서비스 호출. Qt·SQL·저장 없음 |
+| `ui/version_demo.py` | 기본 앱에만 공급하는 합성 Item·출처. A의 릴리즈 객체/ID/원문/순서를 재사용하며 출시일 등 기존 누락값을 추정하지 않음 |
+| `ui/versions.py` | 모델/계열 선택, 검색, 확인된 순서 정렬, 페이지 이동, 상세·출처 표시, 실패/재시도 |
+| `ui/app.py` | 페이지 등록, 상세 제목 및 공통 헤더 상태 연결. `version_loader` 주입 지점 |
+| `tests/test_ui_versions.py` | 읽기 규칙, 실패·재시도, 상태 보존, A 상태 분리, Qt 키보드 및 화면 크기별 검증 |
+
+`VersionCatalog`는 불변 dataclass와 tuple로 한 번 읽은 자료를 전달한다. 모델·계열 이름/연결, 릴리즈·Item ID, 버전별 Item 행 중복 및 미등록 대상·모델 범위 오류를 거부한다. 순서 중복은 오류로 버리지 않고 `sort_releases` 결과로 선후 미확인 표시한다. 원문 중복 등 계열 검증은 `FamilyReleases`를 사용한다. 읽기 입력 오류가 나면 이전 상세를 지우고 재시도 상태로 전환한다.
+
+릴리즈별 모델 연결은 `ReleaseEntry.model_ids`로 명시하며 UI 설비군·계열 ID에서 추정하지 않는다. `catalog_from_dashboard`는 기존 공급자에서 이미 등록한 목표/관측의 모델·계열 연결만 읽는다. 이 경로는 실제 릴리즈 문서의 모델 범위 계약을 대체하지 않는다. 실제 공급자는 확인된 문서/모델 연결을 `VersionCatalog`로 직접 전달해야 한다.
+
+포함 Item 수는 해당 릴리즈에 저장된 APPLIED 행 수다. `items_verified=False`이면 0건도 전체 Item이 없다는 뜻으로 쓰지 않고 매핑 미완료를 표시한다. 상세는 같은 계열에서 알려진 Item을 보여주며 해당 릴리즈에 행이 없으면 미확인으로 남긴다. `ItemCatalog.version_state`와 `pm_application`으로 릴리즈 포함 상태와 선택 모델 판정을 분리한다. 후자는 실제 설비/PM 관측을 조회한 결과가 아니며 B-4 적용 현황과 구분한다.
+
+출처는 릴리즈와 Item 각각에 필드·문서·리비전·시트·셀·입력 작업 ID를 묶는다. 없는 정보는 미확인으로 표시하고 문서나 셀을 자동으로 열지 않는다. B-2의 원본값/관리값 편집 계약이나 O5 추가 추출 필드는 이번에 확정하지 않는다.
+
+`create_window(source=..., version_loader=...)`의 공급자는 **메모리에서 즉시 반환하는** `VersionCatalog`를 제공한다. 실제 DB·Excel I/O를 이 콜백 안에서 실행하면 UI가 멈추므로, 실데이터 통합 때는 워커에서 읽기·오류 처리를 완료하고 자료 갱신을 UI 스레드로 전달해야 한다. 현재 앱은 시작/재읽기 때 DB를 호출하지 않는다.
+
+## B 담당 화면 개발 연결 기준
+
+`ae584c5`의 공통 화면을 기준으로 버전·Item 화면을 `src/setron/ui/`에 추가한다. 별도 웹 frontend나 새로운 공통 창을 만들지 않는다. B-1 읽기 전용 화면은 위 계약으로 구현했으며, 아래의 저장·실데이터·B-2~4 연결은 후속 구현 기준이다.
+
+| 작업 | 재사용 지점 | 후속 연결 사항 |
+| --- | --- | --- |
+| B-1 버전 목록·상세 | `features/version/service.py`의 `sort_releases`, `FamilyReleases` | 모델·계열별 목록, 출시일, 포함 Item과 출처를 전달할 읽기 데이터 계약 |
+| B-2 버전 관리·수정 | `features/storage/service.py`의 `StorageService` | 편집 가능 필드 합의, 원본/관리값 분리, 검증·저장·취소·오류 및 저장 후 재조회 |
+| B-3 Item 매니저 | `features/item/service.py`의 `search_items`, `ItemCatalog` | 검색·상세·포함 릴리즈·모델 범위 표시. 빈 검색어의 `search_items` 반환은 빈 튜플이므로 전체 목록 표시와 구분 |
+| B-4 Item 적용 현황 | `ItemCatalog.summarize`, 기존 `EquipmentPage` | Site별 네 상태 표시, 동일 설비 ID·관측일·적용 요청으로 상세 이동 및 복귀 |
+
+`MainWindow.register_page("versions", ...)`, `register_page("items", ...)`로 페이지를 연결하고 공통 컴포넌트·테마·자산을 재사용한다. 공통 조회 패널 사용 여부는 `uses_query`로 명시한다. 목표 N 선택은 기존 `TargetDialog`와 초안/적용 상태를 재사용하며 릴리즈 수정과 분리한다.
+
+현재 `EquipmentPage.open_detail()`은 복귀 대상으로 `dashboard`, `heatmap`, `list`만 처리한다. Item 화면에서 `origin="items"`만 전달하면 원하는 복귀가 보장되지 않는다. B-4에서 기존 상세와 앱의 이동 연결을 확장하고 Item 검색·필터·선택·스크롤 유지 및 오래된 조회 요청 거부를 함께 검증한다. 현재 적용 집합 밖의 설비를 열기 위해 조회 범위를 조용히 넓히지 않는다.
+
+버전 순서는 확인된 `version_order`만 사용한다. 순서 미확인·중복을 구분하고 원문·접미사를 보존한다. Item은 `Application`의 적용/미적용/미확인/대상 외를 사용한다. 더 최신 버전이라는 이유로 Item을 상속하지 않는다. 버전별 저장 행과 모델 적용 범위가 근거이며, 위험 판정과 목표 달성도 별개다.
+
+현재 `ReleaseVersion`과 `Item`의 순수 업무 형식에는 전체 출처 정보가 없다. DB의 `batch_id`, `source_reference`, 릴리즈 문서와 원본을 연결하는 읽기 계약은 C 및 데이터 담당자와 맞춘다. O5의 JIRA·접수라인·비고는 현재 `RELEASE_NOTE_FIELDS`에 없으므로 임의 필드로 저장하지 않는다. Fab·Line 및 UI 설비군/모델/계열 매핑, 목표 N 영속화, 저장 후 선택지·결과 갱신은 A와 함께 확인할 통합 사항이다.
+
+화면 위젯에서 SQL을 실행하지 않는다. 실제 데이터 공급자와 편집 정책이 확정되기 전에는 합성 자료·미연결 상태를 명시하고 위험 규칙 편집 정책을 임의로 구현하지 않는다. 기존 설비 상세·목표 편집 화면을 복제하지 않는다.
 
 ## 문서 갱신
 
