@@ -229,6 +229,27 @@ uv run --locked --env-file .env python -m pytest -q
 
 DB 회귀 테스트는 저장 성공·전체 취소, JSON·원문 보존, 삭제 전 위험 근거 보존과 동시 삭제를 검증합니다. 실제 연결 중단은 저장 도중과 COMMIT 전송 직전에 테스트 연결만 종료해 검증하며, 성공한 commit의 응답만 유실되는 경우는 포함하지 않습니다. 자세한 접속·오류 처리 기준은 [README](../README.md#db-연결과-저장-처리-be-001)를 참고합니다.
 
+### 설비·PM·버전 계열 저장 검증 (BE-002)
+
+`tests/test_equipment_validation.py`는 DB 없이 필수값, 선택 속성의 `None`, 원문 불변, 같은 SW/PM 중복과 여러 시트의 출처 병합, 같은 PM 위치의 충돌 및 다른 PM의 정상 버전 차이를 확인합니다.
+
+`tests/test_equipment_mysql.py`는 공통 스키마를 적용한 전용 DB에서 다음을 검증합니다.
+
+- O2/O3 혼합 한 호기의 SW 두 행·PM 네 위치 저장과 재조회, 원본 입력 작업 불변.
+- 같은 호기의 두 날짜·사업장·라인·개조 상태와 PM1의 v1→v3 연결, 기록이 없는 날짜의 `None`.
+- 같은 계열의 서로 다른 PM 버전 보존·비차단 불일치 표시, 미등록 버전 원문 및 NULL 릴리즈 연결.
+- 중복 SW/PM의 공유 저장과 여러 시트의 모든 출처 보존.
+- 뒤쪽 현황의 잘못된 릴리즈 계열·모델 설비군·출처·없는 모델로 앞쪽 현황까지 전체 취소.
+- 기존 호기·날짜의 덮어쓰기 거부, 전역 고유 호기 코드와 현황 간 PM 연결을 막는 실제 DB 제약.
+- M5/M-O5 대응과 M-O5 Prime 부모 관계, KCTC/Oxide 분리, C3 같은 UI의 형상 무관 계열 공유 및 구UI/통합UI 분리.
+
+```powershell
+uv run --locked python -m pytest tests/test_equipment_validation.py -q
+uv run --locked --env-file .env python -m pytest tests/test_equipment_mysql.py -q
+```
+
+MySQL 설정이 없으면 실제 DB 테스트를 건너뜁니다. 새 테스트는 기존 스키마 fixture의 빈 DB 확인·생성·정리를 재사용합니다. Docker 또는 별도의 임시 Windows MySQL 5.6.19에서 실행할 수 있으며, 실제 사용 PC의 업무 데이터나 Excel/AI/UI 연동 검증을 대신하지 않습니다.
+
 ## 5. 결과 기록 방식
 
 MR 본문의 `검증` 절에 결과를 남깁니다.

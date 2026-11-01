@@ -244,6 +244,28 @@ finally:
 
 관리 데이터의 수정·삭제는 앱의 저장 서비스를 통해 수행합니다. HeidiSQL에서 직접 바꾸면 앱의 검증과 삭제 전 근거 보존을 거치지 않습니다. 스키마 주석에 정리한 계열 일치·원본 불변·모델 적용 범위 등 기능별 규칙은 후속 업무 서비스에서 구현해야 합니다.
 
+## 설비·PM·버전 계열 저장 (BE-002)
+
+`features/equipment/`의 `EquipmentService`는 검토가 끝난 현황을 기존 공통 스키마에 저장하고 정확한 기준일로 다시 조회합니다. UI·AI 추출과는 독립적으로 사용할 수 있습니다.
+
+- `save_snapshots(tuple[SnapshotInput, ...])`: 같은 저장 요청 전체를 하나의 트랜잭션으로 처리합니다. 호기 코드는 전체 사업장에서 재사용하고, 기준일별 소속·원본 모델명·형상·개조 정보와 PM 구성을 따로 보존합니다.
+- `get_snapshot(equipment_code, base_date)`: 해당 날짜의 `StoredSnapshot`을 반환합니다. 기록이 없으면 `None`이며 이전 날짜나 현재값으로 채우지 않습니다. 날짜 간 동일 PM의 식별은 `equipment_id + pm_name`입니다.
+- `resolve_model(model_name, category)`: 등록 모델 중 확인된 이름을 찾습니다. 확정 별칭 `M5 → M-O5`만 허용하며 `M-O5 Prime`과 KCTC/Oxide의 O2를 임의로 합치지 않습니다. 대응이 없거나 여러 개면 확인을 요청하는 검증 오류를 반환합니다.
+
+`SnapshotInput`의 `software`는 `SoftwareInput` 목록이고, 각 SW의 `pms`에는 고정 위치와 확인된 모델 ID를 담은 `PmInput`을 지정합니다. 일반 설비는 PM 목록을 비우고 현황의 `group_id`를 지정합니다. 같은 현황·계열·버전 원문의 정확한 중복은 SW 한 행을 공유하며 PM 연결과 모든 원본 위치를 유지합니다. 같은 PM의 상충 값은 저장을 막고, 같은 계열의 다른 PM에 서로 다른 버전이 있는 경우에는 모두 저장한 뒤 `pm_mismatch_families`로 알려줍니다.
+
+모델·계열·릴리즈 ID는 원본 검토로 확인한 기존 등록값을 전달합니다. 릴리즈의 계열 일치와 모델/계열의 최상위 설비군을 검사하지만, 같은 설비군이라는 이유로 모델별 릴리즈 적용 가능성을 확정하지 않습니다. 미등록 SW는 원문과 계열을 보존하고 `release_version_id=None`으로 저장합니다. C3 형상은 원문 속성이며 계열을 자동 생성하거나 나누지 않습니다. 구UI/통합UI에는 각각 확인된 다른 계열 ID를 전달합니다. Memory/Foundry는 `None`을 허용하며 표시값은 `미확인`입니다.
+
+입력 작업은 먼저 공통 저장 서비스에 등록합니다. `EXCEL`이면 현황·SW·PM의 출처에 지정한 시트·셀이 `import_batch.raw_data`에 실제로 있어야 합니다. 출처는 필드별 `{sheet, cells}`이며 여러 시트에서 중복 추출한 필드는 이 객체들의 목록으로 보존합니다. 저장 중 입력 자료와 보관 원본은 바꾸지 않습니다. `MANUAL` 입력은 출처를 생략할 수 있습니다.
+
+이미 저장된 같은 호기·날짜의 현황은 덮어쓰지 않고 재가져오기 검토가 필요하다는 오류를 반환합니다. 재가져오기 충돌 선택·수정과 UI 연결은 후속 BE-009/025에서 구현합니다.
+
+```powershell
+uv run --locked python -m pytest tests/test_equipment_validation.py -q
+# 기존 관리 테이블이 없는 전용 MySQL 5.6.19 테스트 DB 사용
+uv run --locked --env-file .env python -m pytest tests/test_equipment_mysql.py -q
+```
+
 ## 실행
 
 ```powershell
