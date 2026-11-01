@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
 from setron.ui.main_window import MainWindow
@@ -95,6 +95,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if window.route == "equipment":
             window.header.title.setText("설비 상세" if equipment.mode == "detail" else "설비 목록")
             window.query_panel.setVisible(equipment.mode == "list")
+            if equipment.item_request is not None:
+                window.notice.setText("Item 적용 근거 · 같은 관측 기준일 · 공통 조회 조건 유지")
+                list_action.setEnabled(False)
+                window.nav["heatmap"].setChecked(False)
+                window.nav["items"].setChecked(True)
 
     def remember_origin():
         if window.route in ("dashboard", "heatmap"):
@@ -117,11 +122,42 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 window.navigate("equipment")
 
     def go_back(origin):
+        item_revision = items.revision
         if window.navigate(origin):
+            if origin == "items":
+                focus = items.distribution.tiles.get(items.selected_equipment_id) if items.distribution_view.currentData() == "heatmap" else items.equipment_table
+                if focus is not None:
+                    focus.setFocus(Qt.FocusReason.OtherFocusReason)
             def restore_scroll():
-                if window.route == origin:
+                if window.route == origin and (origin != "items" or items.revision == item_revision):
                     window.scroll.verticalScrollBar().setValue(origin_scroll.get(origin, 0))
-            QTimer.singleShot(0, restore_scroll)
+            # Item 타일의 반응형 재배치와 포커스 스크롤 이후 복원한다.
+            if origin == "items":
+                QTimer.singleShot(0, lambda: QTimer.singleShot(0, restore_scroll))
+            else:
+                QTimer.singleShot(0, restore_scroll)
+
+    def open_item_equipment(request):
+        if window.route != "items" or not items.is_current_selection(request):
+            return
+        origin_scroll["items"] = window.scroll.verticalScrollBar().value()
+        if equipment.open_item_detail(request, is_current=items.is_current_selection):
+            window.navigate("equipment")
+            window.scroll.verticalScrollBar().setValue(0)
+
+    def invalidate_item_detail():
+        if equipment.item_request is not None:
+            equipment.close_item_detail()
+            if window.route == "equipment":
+                window.navigate("items")
+
+    def leave_item_detail(*_):
+        if window.route != "equipment" and equipment.item_request is not None:
+            equipment.close_item_detail()
+
+    items.equipment_selected.connect(open_item_equipment)
+    items.selection_invalidated.connect(invalidate_item_detail)
+    window.page_changed.connect(leave_item_detail)
 
     dashboard.drilldown_requested.connect(open_scope)
     heatmap.equipment_selected.connect(open_detail)

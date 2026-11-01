@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from setron.features.aggregation.schemas import EquipmentRecord
-from setron.features.item.schemas import Basis, TargetScope
+from setron.features.item.schemas import Application, Basis, TargetScope
 from setron.features.item.service import ItemCatalog, search_items
 from setron.ui.version_data import VersionCatalog
 
@@ -67,3 +67,59 @@ def item_data_from_source(versions, source):
     day = source.dates[-1]
     return ItemManagerData(versions, tuple(r for r in source.records if r.base_date == day),
                            day, True, source.source_label)
+
+
+@dataclass(frozen=True)
+class ItemEquipmentSelection:
+    """Item 화면의 자료 세대·표시 범위를 고정한 설비 이동 요청. A 조회를 대체하지 않는다."""
+
+    data: ItemManagerData
+    revision: int
+    item_id: int
+    equipment_id: int
+    site: str | None
+    state: Application | None
+
+
+def selected_application(request):
+    """요청의 날짜·설비·Item 연결과 표시 범위를 검증한다. UI 세대 검증은 호출자가 한다."""
+    data = request.data
+    if not data.observations_connected:
+        return None
+    catalog = data.catalog()
+    if not any(e.item.item_id == request.item_id for e in data.versions.items) or not catalog.item_versions(request.item_id):
+        return None
+    record = next((r for r in data.records if r.equipment_id == request.equipment_id and not r.is_hpa), None)
+    if record is None or (request.site is not None and record.site != request.site):
+        return None
+    result = catalog.equipment_application(request.item_id, record)
+    return result if request.state is None or result.application == request.state else None
+
+
+def item_evidence_rows(request, application):
+    """선택 Item과 PM이 실제로 참조하는 행·출처만 반환한다."""
+    data = request.data
+    entry = next(e for e in data.versions.items if e.item.item_id == request.item_id)
+    rows = [(f"Item {request.item_id}", entry.item.content, "Item 원문", "")]
+
+    def sources(target, references):
+        if not references:
+            rows.append((target, "출처 미확인", "문서 미확인", "원본 위치 미확인"))
+        for ref in references:
+            rows.append((f"{target} / {ref.field}", f"입력 작업 {ref.batch_id if ref.batch_id is not None else '미확인'}",
+                         f"{ref.document or '문서 미확인'} · 리비전 {ref.revision or '미확인'}",
+                         f"{ref.sheet or '시트 미확인'} · {ref.cells or '셀 미확인'}"))
+
+    sources(f"Item {request.item_id}", entry.sources)
+    catalog, seen = data.catalog(), set()
+    for pm in application.pms:
+        release = pm.release
+        if release is None or release.release_version_id in seen:
+            continue
+        seen.add(release.release_version_id)
+        state = catalog.version_state(request.item_id, release)
+        rows.append((f"릴리즈 ID {release.release_version_id}", release.version_raw,
+                     "버전별 Item 저장 행" if state.source else "이 버전의 저장 행 없음",
+                     "모델 범위: " + data.scope_label(state.source)))
+        sources(f"릴리즈 {release.release_version_id}", data.versions.entry(release.release_version_id).sources)
+    return tuple(rows)

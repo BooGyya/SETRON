@@ -4,7 +4,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox, QGridLayout, QHBoxLayout, QHeaderView, QLineEdit,
-    QTableView, QVBoxLayout, QWidget,
+    QTableView, QVBoxLayout, QWidget, QSizePolicy,
 )
 
 from setron.features.aggregation.service import summarize
@@ -15,6 +15,8 @@ from setron.ui.dashboard_data import missing_sw_count
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
 from setron.ui.heatmap_data import EquipmentSelection, GoalState
 from setron.ui.target_data import target_map
+from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
+from setron.features.item.schemas import APPLICATION_LABELS
 from setron.ui.theme import PRIMARY, SECONDARY, TONES, font
 
 
@@ -122,6 +124,7 @@ class EquipmentPage(QWidget):
         self.scope_label, self.origin, self.detail_back = "적용 범위 전체", "heatmap", "list"
         self.page_index, self.page_size, self.selected_id = 0, 12, None
         self.mode = "list"
+        self.item_request, self._item_restore = None, None
         self._wide = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
@@ -232,6 +235,12 @@ class EquipmentPage(QWidget):
         self.detail_card.body.addWidget(self.detail_table)
         self.evidence = label("", 13, color=SECONDARY, wrap=True)
         self.detail_card.body.addWidget(self.evidence)
+        for widget in (self.detail_title, self.detail_location, self.detail_summary, self.scope_note, self.evidence, self.context):
+            widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.item_evidence_model = ReadTableModel(("근거 대상", "확인된 내용", "출처 / 저장 상태", "원본 위치 / 모델 범위"))
+        self.item_evidence_table = read_table(self.item_evidence_model, "선택 Item 근거와 원본 출처", (180, 330, 340, 300))
+        self.item_evidence_table.hide()
+        self.detail_card.body.addWidget(self.item_evidence_table)
         self.detail_card.body.addWidget(label("모듈 수·필수 SW 목록은 미확정입니다. PM 관측 개수나 목표 달성만으로 설비 전체 구성이 완전하다고 단정하지 않습니다.",
                                             13, color=SECONDARY, wrap=True))
         actions = QHBoxLayout()
@@ -279,6 +288,7 @@ class EquipmentPage(QWidget):
         self.updateGeometry()
 
     def clear(self, text="선택지 변경 · 재조회 필요", *_):
+        self.close_item_detail()
         self.snapshot, self.data, self.scope_ids, self.selected_id = None, None, (), None
         self.detail_model.set_rows(())
         self.detail_title.setText("설비 상세")
@@ -327,6 +337,7 @@ class EquipmentPage(QWidget):
     def open_all(self, origin="heatmap"):
         if not self._current():
             return False
+        self.close_item_detail()
         self.origin = origin if origin in ("dashboard", "heatmap") else self.origin
         self.scope_ids, self.scope_label = self.snapshot.equipment_ids, "적용 범위 전체"
         self._reset_filters()
@@ -424,6 +435,7 @@ class EquipmentPage(QWidget):
         detail = next((d for d in self.data.details if d.record.equipment_id == request.equipment_id), None)
         if detail is None:
             return False
+        self.close_item_detail()
         self.detail_back = origin if origin in ("dashboard", "heatmap", "list") else "list"
         if origin != "list":
             self.origin = origin if origin in ("dashboard", "heatmap") else self.origin
@@ -457,6 +469,68 @@ class EquipmentPage(QWidget):
                                f"관측 출처: {self.snapshot.source_label} · 기준일 {self.snapshot.base_date} · 원본 셀 연결은 확인 필요")
         self._set_mode("detail")
         return True
+
+    def open_item_detail(self, request, *, is_current):
+        """같은 상세 위젯으로 Item 관측을 표시한다. A 스냅샷·조회 조건은 변경하지 않는다."""
+        if not is_current(request):
+            return False
+        application = selected_application(request)
+        if application is None:
+            return False
+        self.close_item_detail()
+        self._item_restore = (self.result_status.text(), self.result_status.tone, self.context.text(),
+                              self.detail_model.headings, self.selected_id, self.detail_back, self.mode)
+        self.item_request = request
+        self.selected_id, self.detail_back = request.equipment_id, "items"
+        self.result_status.setText("Item 관측 자료 · 읽기 전용")
+        self.result_status.set_tone("info")
+        self.context.setText(request.data.observation_label)
+        record = application.record
+        self.detail_title.setText(record.equipment_code + " · 설비 상세")
+        self.detail_location.setText(f"{record.site} · {record.model_name} · 설비 ID {record.equipment_id} · 기준일 {record.base_date}")
+        self.detail_summary.setText(f"선택 Item ID {request.item_id} · {application.label} · 전체 SW 관측 {len(record.pms)}건")
+        self.scope_note.setText(f"Item 표시 범위: {request.site if request.site is not None else '전체 Site'} · "
+                               f"{APPLICATION_LABELS[request.state] if request.state else '전체 상태'}\n"
+                               "Item 화면의 같은 기준일 관측입니다. 공통 조회 범위·목표 N은 변경하지 않으며 이 보기에서는 N 비교를 수행하지 않습니다.")
+        self.detail_model.headings = ("모듈 / SW 관측", "모델 ID · 계열", "설치 버전 원문", "대응 릴리즈", "Item 적용", "적용 근거")
+        self.detail_model.set_rows(tuple((p.pm.pm_name or "공통 SW", f"모델 {p.pm.group_id} · 계열 {p.pm.family_id}",
+            p.pm.version_raw if p.pm.version_raw is not None else "미입력",
+            f"{p.release.version_raw} · ID {p.release.release_version_id}" if p.release else "대응 미확인 / 대상 외",
+            APPLICATION_LABELS[p.application], BASIS_LABELS[p.basis]) for p in application.pms))
+        fit_rows(self.detail_table)
+        self.detail_table.setVisible(bool(application.pms))
+        self.evidence.setText("Item 적용 근거는 아래 저장 행·원본 출처를 확인해 주세요. 저장 행이 없는 버전은 미확인입니다.\n"
+                              "위험 규칙·필수 Item·위험 해제 판정은 미연결이며 Item 적용만으로 안전 여부를 추정하지 않습니다.\n"
+                              "원본 문서/셀 열기는 미연결입니다." + ("\nPM/SW 관측 없음 · 업무 규칙상 대상 외" if not application.pms else ""))
+        self.item_evidence_model.set_rows(item_evidence_rows(request, application))
+        fit_rows(self.item_evidence_table)
+        self.item_evidence_table.show()
+        self.list_button.setEnabled(False)
+        self.back_button.setText("Item 적용 현황으로 돌아가기")
+        self._set_mode("detail")
+        return True
+
+    def close_item_detail(self):
+        if self.item_request is None:
+            return
+        text, tone, context, headings, selected, detail_back, previous_mode = self._item_restore
+        self.item_request, self._item_restore = None, None
+        self.selected_id, self.detail_back = selected, detail_back
+        self.result_status.setText(text)
+        self.result_status.set_tone(tone)
+        self.context.setText(context)
+        self.detail_model.headings = headings
+        self.detail_model.set_rows(())
+        self.item_evidence_model.set_rows(())
+        self.item_evidence_table.hide()
+        for widget in (self.detail_title, self.detail_location, self.detail_summary, self.scope_note, self.evidence):
+            widget.clear()
+        self.list_button.setEnabled(True)
+        self.back_button.setText("이전 조회로 돌아가기")
+        if previous_mode == "detail" and self._current() and selected is not None:
+            self.open_detail(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, selected), origin=detail_back)
+        else:
+            self._set_mode("list")
 
     def _back(self):
         if self.detail_back == "list":
