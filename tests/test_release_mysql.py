@@ -384,3 +384,24 @@ def test_concurrent_item_edits_keep_both_changes_and_edited_fields(release_data)
     assert item.current["content"] == "동시 수정" and item.current["item_no"] == 9
     assert set(item.current["edited_fields"]) == {"content", "item_no"}
     assert item.original_cells == detail.items[0].item.original_cells
+
+
+@pytest.mark.parametrize("field", ["content", "version_suffix"])
+def test_unencodable_edits_are_validation_errors_and_preserve_saved_values(release_data, field):
+    """저장할 수 없는 문자열 수정은 검증 오류로 알리고 기존 관리값·원본을 유지하는지 확인한다.
+
+    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    :param field: 잘못된 문자열을 입력할 Item 내용 또는 릴리즈 접미사 항목.
+    """
+    service = release_data["service"]
+    detail = service.register_release(excel_release(release_data), (excel_item(release_data),))
+    release_id = detail.release.current["release_version_id"]
+    item_id = detail.items[0].item.current["item_id"]
+    before = counts(release_data["storage"])
+    with pytest.raises(StorageValidationError, match=field + ": UTF-8"):
+        if field == "content":
+            service.update_item(item_id, {field: "잘못된 문자\ud800"})
+        else:
+            service.update_release(release_id, {field: "\udfff"})
+    assert service.get_release(release_id) == detail
+    assert counts(release_data["storage"]) == before

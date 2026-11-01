@@ -266,6 +266,7 @@ MySQL 설정이 없으면 실제 DB 테스트를 건너뜁니다. 새 테스트�
 - 대소문자·공백을 구분하는 버전 원문, 중복 등록·수정 실패 후 기존값 유지.
 - 관리 모델·계열 선택지, C3 구UI·통합UI 분리, 미확인·중복 순서 및 원본 없음의 명시적 조회.
 - 여러 시트의 None·False 원본값 보존, 다른 설비군 노트 연결 차단, 동시 Item 수정 시 값·수정 항목 유실 방지.
+- UTF-8로 표현할 수 없는 버전·접미사·Item 내용의 입력 검증과 수정 실패 후 기존 관리값·원본 보존.
 
 ```powershell
 uv run --locked python -m pytest tests/test_release_validation.py tests/test_equipment_validation.py -q

@@ -6,6 +6,7 @@ from datetime import date
 
 from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.storage.inputs import identifier, merge_sources, require, required_text
+from setron.features.storage.validation import StorageValidationError
 
 from .schemas import ItemInput, ItemLinkInput, ReleaseInput
 
@@ -18,7 +19,7 @@ def optional_integer(value, field):
 
     :param value: 검사할 정수 또는 None.
     :param field: 오류 메시지에 표시할 항목 이름.
-    :raises StorageValidationError: None 또는 32비트 부호 있는 정수가 아닌 경우.
+    :raises StorageValidationError: 값이 None이 아니면서 32비트 부호 있는 정수도 아닌 경우.
     """
     require(value is None or type(value) is int and -2147483648 <= value <= 2147483647,
             f"{field}: 정수 또는 None이 필요합니다.")
@@ -29,7 +30,7 @@ def validate_values(table, values):
 
     :param table: release_version 또는 item.
     :param values: 등록하거나 수정할 관리값 객체.
-    :raises StorageValidationError: 필수값·자료형·길이·상태값이 잘못된 경우.
+    :raises StorageValidationError: 필수값·자료형·길이·상태값이 잘못됐거나 UTF-8로 저장할 수 없는 경우.
     """
     if table == "release_version":
         required_text(values["version_raw"], "version_raw", 100)
@@ -44,6 +45,13 @@ def validate_values(table, values):
     else:
         required_text(values["content"], "content", 65535)
         optional_integer(values.get("item_no"), "item_no")
+    text_fields = ("version_raw", "version_suffix") if table == "release_version" else ("content",)
+    for field in text_fields:
+        if values.get(field) is not None:
+            try:
+                values[field].encode("utf-8")
+            except UnicodeError:
+                raise StorageValidationError(f"{field}: UTF-8로 저장할 수 없는 문자열입니다.") from None
 
 
 def prepare_record(value):

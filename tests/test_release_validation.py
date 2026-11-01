@@ -130,3 +130,17 @@ def test_confirmed_dates_and_duplicate_orders_are_not_reinterpreted():
     assert first["released_at"] == date(2026, 10, 27)
     assert first["version_order"] == second["version_order"] == 3
     assert second["released_at"] is None
+
+
+@pytest.mark.parametrize("value", [
+    ItemInput(content="잘못된 문자\ud800"),
+    ReleaseInput(family_id=1, version_raw="v1\ud800"),
+    ReleaseInput(family_id=1, version_raw="v1", version_suffix="\udfff"),
+])
+def test_text_that_cannot_be_encoded_is_reported_as_input_error(value):
+    """DB 문자셋으로 표현할 수 없는 문자열을 저장 전에 검증 오류로 처리하는지 확인한다.
+
+    :param value: 짝이 맞지 않는 유니코드 서로게이트를 포함한 등록 요청.
+    """
+    with pytest.raises(StorageValidationError, match="UTF-8"):
+        prepare_record(value)
