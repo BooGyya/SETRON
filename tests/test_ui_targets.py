@@ -338,11 +338,13 @@ def test_new_goal_apply_failure_clears_results_and_retry_uses_same_n(window, sou
     window.query_panel.apply_draft()
     window.query_panel.set_target_draft(changed(window.query_state.target_draft))
     original = source.snapshot
+    release_catalog = window.pages["versions"].catalog
     def fail(query):
         raise RuntimeError("계산 실패 예시")
     monkeypatch.setattr(source, "snapshot", fail)
     failed = window.query_panel.apply_draft()
-    assert all(page.snapshot is None for page in window.pages.values())
+    assert all(window.pages[key].snapshot is None for key in ("dashboard", "heatmap", "equipment"))
+    assert window.pages["versions"].catalog is release_catalog
     assert target_map(failed.targets)[101, 1001] == 10011
     monkeypatch.setattr(source, "snapshot", original)
     retry = window.query_panel.apply_draft()

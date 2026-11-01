@@ -15,9 +15,13 @@ from setron.ui.equipment import EquipmentPage
 from setron.ui.target_data import describe_targets, initial_targets
 from setron.ui.target_dialog import TargetDialog
 from setron.ui.theme import install_theme
+from setron.ui.version_data import catalog_from_dashboard
+from setron.ui.version_demo import demo_version_catalog
+from setron.ui.versions import VersionsPage
 
 
-def create_window(source: DashboardSource | None = None) -> MainWindow:
+def create_window(source: DashboardSource | None = None, *, version_loader=None) -> MainWindow:
+    demo = source is None
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
     window.setWindowTitle("SETRON · 설비 현황 미리보기")
@@ -55,14 +59,26 @@ def create_window(source: DashboardSource | None = None) -> MainWindow:
     dashboard = DashboardPage(window.query_state, source, drilldown_connected=True)
     heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
     equipment = EquipmentPage(window.query_state, source)
+    if version_loader is None:
+        version_loader = lambda: demo_version_catalog(source) if demo else catalog_from_dashboard(source)
+    versions = VersionsPage(version_loader)
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
+    window.register_page("versions", versions, uses_query=False)
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
     origin_scroll = {}
+    overview_notice = window.notice.text()
 
     def sync_mode(*_):
+        if window.route == "versions":
+            window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
+            window.notice.setText("릴리즈 조회 전용 · 예시 자료 · DB 미연결")
+            list_action.setEnabled(False)
+        else:
+            window.notice.setText(overview_notice)
+            list_action.setEnabled(equipment.snapshot is not None and window.query_state.applied_is_current)
         if window.route == "equipment":
             window.header.title.setText("설비 상세" if equipment.mode == "detail" else "설비 목록")
             window.query_panel.setVisible(equipment.mode == "list")
@@ -98,6 +114,7 @@ def create_window(source: DashboardSource | None = None) -> MainWindow:
     heatmap.equipment_selected.connect(open_detail)
     equipment.back_requested.connect(go_back)
     equipment.mode_changed.connect(sync_mode)
+    versions.mode_changed.connect(sync_mode)
     window.page_changed.connect(sync_mode)
     window.header.action_requested.connect(open_all)
 

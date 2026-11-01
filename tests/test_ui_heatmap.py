@@ -176,7 +176,7 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     request = spy.at(0)[0]
     assert request.query is query and request.base_date == DAY and request.equipment_id == 1
     assert tile.isChecked() and "설비 상세" in page.selection_notice.text()
-    assert window.pages.keys() == {"dashboard", "heatmap", "equipment"}
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions"}
     assert window.route == "equipment" and window.pages["equipment"].mode == "detail"
     page.view_buttons.button(1).click()
     assert page.tile_buttons[1].isChecked()
