@@ -18,9 +18,11 @@ from setron.ui.theme import install_theme
 from setron.ui.version_data import catalog_from_dashboard
 from setron.ui.version_demo import demo_version_catalog
 from setron.ui.versions import VersionsPage
+from setron.ui.item_data import ItemManagerData, item_data_from_source
+from setron.ui.items import ItemsPage
 
 
-def create_window(source: DashboardSource | None = None, *, version_loader=None) -> MainWindow:
+def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None) -> MainWindow:
     demo = source is None
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
@@ -59,12 +61,19 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None)
     dashboard = DashboardPage(window.query_state, source, drilldown_connected=True)
     heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
     equipment = EquipmentPage(window.query_state, source)
+    custom_versions = version_loader is not None
     if version_loader is None:
         version_loader = lambda: demo_version_catalog(source) if demo else catalog_from_dashboard(source)
     versions = VersionsPage(version_loader)
+    if item_loader is None:
+        # 외부 릴리즈 ID를 기본 합성 설비 ID와 임의로 연결하지 않는다.
+        item_loader = (lambda: ItemManagerData(version_loader())) if custom_versions else (
+            lambda: item_data_from_source(version_loader(), source))
+    items = ItemsPage(item_loader)
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
     window.register_page("versions", versions, uses_query=False)
+    window.register_page("items", items, uses_query=False)
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
@@ -72,7 +81,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None)
     overview_notice = window.notice.text()
 
     def sync_mode(*_):
-        if window.route == "versions":
+        if window.route == "items":
+            window.header.title.setText("Item 상세" if items.mode == "detail" else "Item 매니저")
+            window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
+            list_action.setEnabled(False)
+        elif window.route == "versions":
             window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
             window.notice.setText("릴리즈 조회 전용 · 예시 자료 · DB 미연결")
             list_action.setEnabled(False)
@@ -115,6 +128,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None)
     equipment.back_requested.connect(go_back)
     equipment.mode_changed.connect(sync_mode)
     versions.mode_changed.connect(sync_mode)
+    items.mode_changed.connect(sync_mode)
     window.page_changed.connect(sync_mode)
     window.header.action_requested.connect(open_all)
 
