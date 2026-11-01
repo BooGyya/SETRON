@@ -250,6 +250,30 @@ uv run --locked --env-file .env python -m pytest tests/test_equipment_mysql.py -
 
 MySQL 설정이 없으면 실제 DB 테스트를 건너뜁니다. 새 테스트는 기존 스키마 fixture의 빈 DB 확인·생성·정리를 재사용합니다. Docker 또는 별도의 임시 Windows MySQL 5.6.19에서 실행할 수 있으며, 실제 사용 PC의 업무 데이터나 Excel/AI/UI 연동 검증을 대신하지 않습니다.
 
+### 릴리즈·Item 등록·수정·조회 검증 (BE-004)
+
+`tests/test_release_validation.py`는 등록 필수값·자료형·상태값, 편집 허용 필드, 실제 변경 항목 누적, 원본 위치 복사, 중복 Item·모델 범위, 미확인 날짜·순서를 검증합니다. 공통 입력 검증을 `storage/inputs.py`로 옮긴 뒤에도 기존 BE-002 검증 테스트를 함께 실행합니다.
+
+`tests/test_release_mysql.py`는 실제 MySQL 5.6.19의 공통 스키마에서 다음을 확인합니다.
+
+- 한 릴리즈에 같은 원본 번호의 여러 Item을 등록하고 새 서비스에서 동일 결과 재조회.
+- 릴리즈·Item 직접 수정 후 현재 관리값과 원본 셀 값·위치·입력 작업·등록 시각의 분리.
+- 직접 등록 묶음의 MANUAL 입력 작업 공유, 기존 기록 수정 시 입력 작업 추가 생성 방지.
+- 기존 릴리즈의 새 Item 추가, 공용 Item 재사용·수정, 포함·미포함·미확인 연결의 전체 조회.
+- 요청에 없는 연결 유지와 다른 릴리즈로의 자동 상속 방지.
+- 후속 Item의 출처 오류·실제 TEXT 용량 초과 시 앞선 입력 작업·릴리즈·Item·연결까지 전체 취소.
+- 후속 연결의 다른 설비군·없는 모델 오류 시 앞선 연결 변경 취소.
+- 대소문자·공백을 구분하는 버전 원문, 중복 등록·수정 실패 후 기존값 유지.
+- 관리 모델·계열 선택지, C3 구UI·통합UI 분리, 미확인·중복 순서 및 원본 없음의 명시적 조회.
+- 여러 시트의 None·False 원본값 보존, 다른 설비군 노트 연결 차단, 동시 Item 수정 시 값·수정 항목 유실 방지.
+
+```powershell
+uv run --locked python -m pytest tests/test_release_validation.py tests/test_equipment_validation.py -q
+uv run --locked --env-file .env python -m pytest tests/test_release_mysql.py tests/test_equipment_mysql.py -q
+```
+
+기존 스키마 fixture의 빈 DB 확인·생성·정리를 사용하며 기존 업무 테이블이 있는 DB에서는 실행하지 않습니다. 테스트 자료는 합성 데이터입니다. B-2 화면 저장이나 BE-010의 재계산 검증과 구분합니다. 새 클래스·함수의 설명은 [주석 작성 기준](architecture.md#클래스메서드-주석-작성-기준)에 맞춰 점검합니다.
+
 ## 5. 결과 기록 방식
 
 MR 본문의 `검증` 절에 결과를 남깁니다.
