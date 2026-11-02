@@ -1,6 +1,8 @@
 """C-1~C-3 Qt: 사용자 요청 시에만 Excel 연결, 원본 미리보기, 검토·수정, 확인 후 저장과 실패·중복 방지."""
 
 import os
+from types import SimpleNamespace
+from unittest.mock import create_autospec
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,7 +16,8 @@ from setron.features.ai.schemas import AITask, ExtractKind
 from setron.features.ai.service import extract_sheet
 from setron.features.excel_import.service import MemoryImportSaver
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseSaveError
-from setron.infrastructure.excel_reader import ExcelNotRunningError, NOT_RUNNING_MESSAGE
+from setron.infrastructure import excel_reader
+from setron.infrastructure.excel_reader import ExcelNotRunningError, NOT_RUNNING_MESSAGE, SheetData, WorkbookInfo
 from setron.ui.app import create_window
 from setron.ui.import_demo import EQUIPMENT_BOOK, RELEASE_BOOK, DemoExcel
 from setron.ui.theme import install_theme
@@ -28,9 +31,20 @@ class CountingExcel(DemoExcel):
         self.calls.append("list")
         return super().list_open_workbooks()
 
-    def read_sheet(self, workbook_name, sheet_name):
-        self.calls.append(("read", workbook_name, sheet_name))
-        return super().read_sheet(workbook_name, sheet_name)
+    def read_sheet(self, workbook_name, sheet_name, *, app_pid, full_name):
+        """실제 읽기 API의 필수 선택 정보를 유지하며 호출을 기록한다.
+
+        param
+        - workbook_name: 선택한 합성 파일명.
+        - sheet_name: 선택한 합성 시트명.
+        - app_pid: 선택 목록에서 받은 프로세스 번호.
+        - full_name: 선택 목록에서 받은 전체 파일명.
+
+        return
+        - 합성 원본 셀과 위치를 담은 SheetData.
+        """
+        self.calls.append(("read", workbook_name, sheet_name, app_pid, full_name))
+        return super().read_sheet(workbook_name, sheet_name, app_pid=app_pid, full_name=full_name)
 
 
 @pytest.fixture
@@ -72,7 +86,7 @@ def page(window):
 
 
 def read(page, book=EQUIPMENT_BOOK, sheet="Memory"):
-    page.workbook_combo.setCurrentIndex(page.workbook_combo.findData(book))
+    page.workbook_combo.setCurrentIndex(page.workbook_combo.findText(book))
     page.sheet_combo.setCurrentIndex(page.sheet_combo.findData(sheet))
     assert page.read_selected()
     QTest.qWait(10)
@@ -94,6 +108,100 @@ def test_menu_enabled_but_excel_is_connected_only_on_request(window, excel, page
     assert not page.read_button.isEnabled() and not page.extract_button.isEnabled()
     page.list_button.click()
     assert excel.calls == ["list"] and page.workbook_combo.count() == 2
+
+
+def identity_reader(books):
+    """실제 BE-006 호출 형식을 강제하며 선택한 창의 식별 정보를 셀로 반환한다.
+
+    param
+    - books: 목록 갱신·순서 변경을 재현할 통합문서 선택 정보 목록.
+
+    return
+    - 실제 read_sheet 시그니처를 검사하는 호출 기록 가능 가짜 Excel 객체.
+    """
+    def read_selected(workbook_name, sheet_name, *, app_pid, full_name):
+        """선택 식별 정보를 가짜 원본 값으로 반환한다.
+
+        param
+        - workbook_name: 선택한 파일명.
+        - sheet_name: 선택한 시트명.
+        - app_pid: 선택한 Excel 프로세스 번호.
+        - full_name: 선택 목록에서 받은 전체 파일명.
+
+        return
+        - 읽은 프로세스와 경로를 확인할 수 있는 합성 SheetData.
+        """
+        return SheetData(workbook_name, sheet_name, 1, 1, [[app_pid, full_name]], app_pid=app_pid)
+
+    return SimpleNamespace(
+        list_open_workbooks=lambda: books,
+        read_sheet=create_autospec(excel_reader.read_sheet, side_effect=read_selected),
+    )
+
+
+def test_real_reader_signature_receives_selected_pid_and_full_name(page):
+    """실제 읽기 API가 요구하는 프로세스 번호와 전체 이름을 UI가 전달하는지 확인한다.
+
+    param
+    - page: 실제 Qt 가져오기 화면 fixture.
+    """
+    selected = WorkbookInfo("원본.xlsx", "C:/source/원본.xlsx", ["Memory"], 7001)
+    reader = identity_reader([selected])
+    page.excel = reader
+    page.load_workbooks()
+    assert page.read_selected()
+    QTest.qWait(10)
+    assert page.snapshot is not None
+    reader.read_sheet.assert_called_once_with(
+        selected.name, "Memory", app_pid=selected.app_pid, full_name=selected.full_name,
+    )
+    assert page.snapshot.cells["B1"] == selected.full_name
+
+
+@pytest.mark.parametrize("same_path", [False, True], ids=["다른 경로", "같은 경로의 다른 창"])
+def test_duplicate_workbook_names_keep_selected_process_and_sheet(page, same_path):
+    """동명 파일도 선택한 창의 시트 목록과 읽기 대상으로 구분하는지 확인한다.
+
+    param
+    - page: 실제 Qt 가져오기 화면 fixture.
+    - same_path: 같은 전체 경로가 서로 다른 Excel 프로세스에 열린 경우 여부.
+    """
+    first = WorkbookInfo("동일.xlsx", "C:/first/동일.xlsx", ["첫 시트"], 7001)
+    selected = WorkbookInfo("동일.xlsx", first.full_name if same_path else "C:/second/동일.xlsx", ["선택 시트"], 7002)
+    reader = identity_reader([first, selected])
+    page.excel = reader
+    page.load_workbooks()
+    page.workbook_combo.setCurrentIndex(1)
+    assert page.workbook_combo.itemText(0) != page.workbook_combo.itemText(1)
+    assert page.sheet_combo.currentData() == "선택 시트"
+    assert page.read_selected()
+    QTest.qWait(10)
+    assert page.snapshot is not None and page.snapshot.cells["A1"] == 7002
+    reader.read_sheet.assert_called_once_with(
+        selected.name, "선택 시트", app_pid=7002, full_name=selected.full_name,
+    )
+
+
+def test_workbook_refresh_preserves_identity_when_list_order_changes(page):
+    """목록 앞에 동명 파일이 추가돼도 이전에 선택한 창을 유지하는지 확인한다.
+
+    param
+    - page: 실제 Qt 가져오기 화면 fixture.
+    """
+    first = WorkbookInfo("동일.xlsx", "C:/first/동일.xlsx", ["첫 시트"], 7001)
+    selected = WorkbookInfo("동일.xlsx", "C:/second/동일.xlsx", ["선택 시트"], 7002)
+    books = [first, selected]
+    reader = identity_reader(books)
+    page.excel = reader
+    page.load_workbooks()
+    page.workbook_combo.setCurrentIndex(1)
+    books.insert(0, WorkbookInfo("동일.xlsx", "C:/third/동일.xlsx", ["새 시트"], 7003))
+    page.load_workbooks()
+    assert page.workbook_combo.currentIndex() == 2
+    assert page.sheet_combo.currentData() == "선택 시트"
+    assert page.read_selected()
+    QTest.qWait(10)
+    reader.read_sheet.assert_called_once_with(selected.name, "선택 시트", app_pid=7002, full_name=selected.full_name)
 
 
 def test_excel_not_running_is_reported_without_preview(window, page):
