@@ -35,6 +35,7 @@
 -- C. LISTED의 target_group_ids는 실제 equipment_group ID여야 하며 적용 계열도 검사한다.
 --    JSON 안의 ID에는 일반 외래키를 걸 수 없다. 모델 삭제 전 JSON 참조도 검사한다.
 -- D. source_reference는 필드명별 {sheet, cells} 객체다. 각 행의 batch_id로 원본을 찾는다.
+--    설비 현황·SW·PM의 같은 필드가 여러 시트에 있으면 {sheet, cells} 목록으로 모두 보존한다.
 --    원본 raw_data와 가져오기 일시는 저장 후 덮어쓰지 않는다.
 -- E. edited_fields는 사용자가 직접 수정한 필드명을 기록하며 원본과 분리한다.
 --    기존 Excel 행을 직접 수정할 때는 원래 batch_id·source_reference를 유지한다.

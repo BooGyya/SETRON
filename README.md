@@ -2,7 +2,7 @@
 
 setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성하며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에 사용할 의존성입니다.
 
-현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답을 사용하는 AI 호출 흐름, DB 연결과 공통 저장 서비스가 구현되어 있습니다. 공통 UI·조회 조건과 합성 예시 자료를 사용하는 대시보드·버전 히트맵·설비 목록/상세를 실행할 수 있으며, 업무 화면과 DB의 연결, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 연동은 후속 작업입니다.
+현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답을 사용하는 AI 호출 흐름, DB 연결과 공통 저장 서비스, 기준일별 설비 저장·조회, 릴리즈·Item 등록·수정·원본 비교가 구현되어 있습니다. 공통 UI·조회 조건과 합성 예시 자료를 사용하는 대시보드·버전 히트맵·설비 목록/상세를 실행할 수 있으며, 업무 화면과 DB의 연결, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 연동은 후속 작업입니다.
 
 ## Excel 가져오기 현황
 
@@ -242,7 +242,60 @@ finally:
 
 릴리즈 버전 삭제와 릴리즈 교체 내부의 Item 삭제는 대상과 위험 규칙을 잠근 뒤 기존 위험 근거에 원문 정보를 추가하고 `UNRESOLVED`로 바꿉니다. 근거 보존과 삭제는 다른 변경과 같은 트랜잭션에서 수행하므로 중간 실패 시 함께 취소됩니다. 정수 ID와 숫자로만 된 ID 문자열을 지원하며, DB에서 읽은 기본키로 참조를 비교합니다.
 
-관리 데이터의 수정·삭제는 앱의 저장 서비스를 통해 수행합니다. HeidiSQL에서 직접 바꾸면 앱의 검증과 삭제 전 근거 보존을 거치지 않습니다. 스키마 주석에 정리한 계열 일치·원본 불변·모델 적용 범위 등 기능별 규칙은 후속 업무 서비스에서 구현해야 합니다.
+관리 데이터의 수정·삭제는 앱의 저장 서비스를 통해 수행합니다. HeidiSQL에서 직접 바꾸면 앱의 검증과 삭제 전 근거 보존을 거치지 않습니다. 설비 현황과 릴리즈·Item은 아래 업무 서비스의 검증을 사용합니다. 위험 범위·재가져오기 후 재계산 등 나머지 규칙은 각 후속 업무 서비스에서 구현합니다.
+
+## 설비·PM·버전 계열 저장 (BE-002)
+
+`features/equipment/`의 `EquipmentService`는 검토가 끝난 현황을 기존 공통 스키마에 저장하고 정확한 기준일로 다시 조회합니다. UI·AI 추출과는 독립적으로 사용할 수 있습니다.
+
+- `save_snapshots(tuple[SnapshotInput, ...])`: 같은 저장 요청 전체를 하나의 트랜잭션으로 처리합니다. 호기 코드는 전체 사업장에서 재사용하고, 기준일별 소속·원본 모델명·형상·개조 정보와 PM 구성을 따로 보존합니다.
+- `get_snapshot(equipment_code, base_date)`: 해당 날짜의 `StoredSnapshot`을 반환합니다. 기록이 없으면 `None`이며 이전 날짜나 현재값으로 채우지 않습니다. 날짜 간 동일 PM의 식별은 `equipment_id + pm_name`입니다.
+- `resolve_model(model_name, category)`: 등록 모델 중 확인된 이름을 찾습니다. 확정 별칭 `M5 → M-O5`만 허용하며 `M-O5 Prime`과 KCTC/Oxide의 O2를 임의로 합치지 않습니다. 대응이 없거나 여러 개면 확인을 요청하는 검증 오류를 반환합니다.
+
+`SnapshotInput`의 `software`는 `SoftwareInput` 목록이고, 각 SW의 `pms`에는 고정 위치와 확인된 모델 ID를 담은 `PmInput`을 지정합니다. 일반 설비는 PM 목록을 비우고 현황의 `group_id`를 지정합니다. 같은 현황·계열·버전 원문의 정확한 중복은 SW 한 행을 공유하며 PM 연결과 모든 원본 위치를 유지합니다. 같은 PM의 상충 값은 저장을 막고, 같은 계열의 다른 PM에 서로 다른 버전이 있는 경우에는 모두 저장한 뒤 `pm_mismatch_families`로 알려줍니다.
+
+모델·계열·릴리즈 ID는 원본 검토로 확인한 기존 등록값을 전달합니다. 릴리즈의 계열 일치와 모델/계열의 최상위 설비군을 검사하지만, 같은 설비군이라는 이유로 모델별 릴리즈 적용 가능성을 확정하지 않습니다. 미등록 SW는 원문과 계열을 보존하고 `release_version_id=None`으로 저장합니다. C3 형상은 원문 속성이며 계열을 자동 생성하거나 나누지 않습니다. 구UI/통합UI에는 각각 확인된 다른 계열 ID를 전달합니다. Memory/Foundry는 `None`을 허용하며 표시값은 `미확인`입니다.
+
+입력 작업은 먼저 공통 저장 서비스에 등록합니다. `EXCEL`이면 현황·SW·PM의 출처에 지정한 시트·셀이 `import_batch.raw_data`에 실제로 있어야 합니다. 출처는 필드별 `{sheet, cells}`이며 여러 시트에서 중복 추출한 필드는 이 객체들의 목록으로 보존합니다. 저장 중 입력 자료와 보관 원본은 바꾸지 않습니다. `MANUAL` 입력은 출처를 생략할 수 있습니다.
+
+이미 저장된 같은 호기·날짜의 현황은 덮어쓰지 않고 재가져오기 검토가 필요하다는 오류를 반환합니다. 재가져오기 충돌 선택·수정과 UI 연결은 후속 BE-009/025에서 구현합니다.
+
+```powershell
+uv run --locked python -m pytest tests/test_equipment_validation.py -q
+# 기존 관리 테이블이 없는 전용 MySQL 5.6.19 테스트 DB 사용
+uv run --locked --env-file .env python -m pytest tests/test_equipment_mysql.py -q
+```
+
+## 릴리즈·Item 등록·수정·조회 (BE-004)
+
+`features/release/ReleaseService`는 기존 `release_version`, `item`, `release_version_item`, `import_batch`를 사용합니다. 새 테이블이나 의존성을 추가하지 않습니다.
+
+| 메서드 | 처리 내용 |
+| --- | --- |
+| `register_release(value, items=())` | 릴리즈와 여러 새 Item을 한 번에 등록. 새 Item은 해당 버전에 `APPLIED`, 모델 범위는 `UNKNOWN`으로 연결 |
+| `register_item(release_id, value)` | 기존 릴리즈에 새 Item 추가 |
+| `update_release(release_id, changes)` | 허용된 릴리즈 관리값 수정 및 실제 수정 항목 기록 |
+| `update_item(item_id, changes)` | Item 번호·내용 수정. 여러 릴리즈가 같은 Item을 공유하면 관리값도 함께 반영 |
+| `save_item_links(release_id, links)` | 기존 Item의 포함 상태와 확인된 모델 범위 등록·수정. 요청에 없는 연결은 유지 |
+| `get_release(release_id)`, `get_item(item_id)` | 현재 관리값과 보관 원본 셀 값·위치를 분리해 조회 |
+| `list_groups()`, `list_families(group_id)`, `list_releases(family_id)` | 릴리즈가 저장된 관리 모델·계열 선택지와 계열별 릴리즈 목록 조회 |
+
+등록 입력은 `ReleaseInput`, `ItemInput`, 연결 입력은 `ItemLinkInput`을 사용합니다. `batch_id=None`으로 직접 등록하면 이번 요청의 자료들이 하나의 새 `MANUAL` 입력 작업을 공유합니다. Excel 자료는 기존 입력 작업 ID와 필드별 `{sheet, cells}` 출처를 전달하며, 참조한 셀이 보관 원본에 있는지 검사합니다. 여러 시트의 출처는 객체 목록으로 보존합니다.
+
+릴리즈는 `version_raw`, `version_suffix`, `released_at`, `version_order`, `item_mapping_status`를 수정할 수 있고, Item은 `item_no`, `content`를 수정할 수 있습니다. 기존 `batch_id`, `source_reference`, 계열·노트·기본키는 이 수정 API에서 변경하지 않습니다. `edited_fields`는 실제로 바뀐 관리 항목을 누적하며 수정 요청에서 직접 덮어쓸 수 없습니다. 원래 값으로 되돌려도 과거에 직접 수정한 사실은 유지합니다.
+
+조회 결과의 `RecordView.current`는 현재 DB 관리값이고, `original_cells`는 필드명·시트·셀 주소·보관 원본값입니다. 원본을 확인할 자료가 없으면 빈 튜플과 `has_original=False`를 반환합니다. 수정 후에도 원본 입력 작업의 셀 값·위치·등록 시각을 유지합니다.
+
+모델 선택지는 계열의 **관리 모델** 기준이며 릴리즈의 실제 적용 모델 전체를 뜻하지 않습니다. `LISTED` 범위는 검토로 확인한 모델 ID만 명시하고 DB 존재 여부·중복·설비군 일치를 검사합니다. 같은 설비군이라는 이유로 모델 적용 범위를 확정하거나 다른 버전으로 Item을 상속하지 않습니다. 일반 Item 삭제·숨김·비활성화는 제공하지 않습니다.
+
+현재 범위는 백엔드 서비스입니다. B-2 화면의 편집·저장 연결은 후속 작업이며, 등록·수정 후 적용 여부·N 유효성·위험 결과의 재계산은 BE-010에서 연결합니다.
+
+```powershell
+uv run --locked python -m pytest tests/test_release_validation.py -q
+uv run --locked --env-file .env python -m pytest tests/test_release_mysql.py -q
+```
+
+클래스·메서드 주석은 [주석 작성 기준](docs/architecture.md#클래스메서드-주석-작성-기준)을 따릅니다.
 
 ## 실행
 

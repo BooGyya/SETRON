@@ -229,6 +229,52 @@ uv run --locked --env-file .env python -m pytest -q
 
 DB 회귀 테스트는 저장 성공·전체 취소, JSON·원문 보존, 삭제 전 위험 근거 보존과 동시 삭제를 검증합니다. 실제 연결 중단은 저장 도중과 COMMIT 전송 직전에 테스트 연결만 종료해 검증하며, 성공한 commit의 응답만 유실되는 경우는 포함하지 않습니다. 자세한 접속·오류 처리 기준은 [README](../README.md#db-연결과-저장-처리-be-001)를 참고합니다.
 
+### 설비·PM·버전 계열 저장 검증 (BE-002)
+
+`tests/test_equipment_validation.py`는 DB 없이 필수값, 선택 속성의 `None`, 원문 불변, 같은 SW/PM 중복과 여러 시트의 출처 병합, 같은 PM 위치의 충돌 및 다른 PM의 정상 버전 차이를 확인합니다.
+
+`tests/test_equipment_mysql.py`는 공통 스키마를 적용한 전용 DB에서 다음을 검증합니다.
+
+- O2/O3 혼합 한 호기의 SW 두 행·PM 네 위치 저장과 재조회, 원본 입력 작업 불변.
+- 같은 호기의 두 날짜·사업장·라인·개조 상태와 PM1의 v1→v3 연결, 기록이 없는 날짜의 `None`.
+- 같은 계열의 서로 다른 PM 버전 보존·비차단 불일치 표시, 미등록 버전 원문 및 NULL 릴리즈 연결.
+- 중복 SW/PM의 공유 저장과 여러 시트의 모든 출처 보존.
+- 뒤쪽 현황의 잘못된 릴리즈 계열·모델 설비군·출처·없는 모델로 앞쪽 현황까지 전체 취소.
+- 기존 호기·날짜의 덮어쓰기 거부, 전역 고유 호기 코드와 현황 간 PM 연결을 막는 실제 DB 제약.
+- M5/M-O5 대응과 M-O5 Prime 부모 관계, KCTC/Oxide 분리, C3 같은 UI의 형상 무관 계열 공유 및 구UI/통합UI 분리.
+
+```powershell
+uv run --locked python -m pytest tests/test_equipment_validation.py -q
+uv run --locked --env-file .env python -m pytest tests/test_equipment_mysql.py -q
+```
+
+MySQL 설정이 없으면 실제 DB 테스트를 건너뜁니다. 새 테스트는 기존 스키마 fixture의 빈 DB 확인·생성·정리를 재사용합니다. Docker 또는 별도의 임시 Windows MySQL 5.6.19에서 실행할 수 있으며, 실제 사용 PC의 업무 데이터나 Excel/AI/UI 연동 검증을 대신하지 않습니다.
+
+### 릴리즈·Item 등록·수정·조회 검증 (BE-004)
+
+`tests/test_release_validation.py`는 등록 필수값·자료형·상태값, 편집 허용 필드, 실제 변경 항목 누적, 원본 위치 복사, 중복 Item·모델 범위, 미확인 날짜·순서를 검증합니다. 공통 입력 검증을 `storage/inputs.py`로 옮긴 뒤에도 기존 BE-002 검증 테스트를 함께 실행합니다.
+
+`tests/test_release_mysql.py`는 실제 MySQL 5.6.19의 공통 스키마에서 다음을 확인합니다.
+
+- 한 릴리즈에 같은 원본 번호의 여러 Item을 등록하고 새 서비스에서 동일 결과 재조회.
+- 릴리즈·Item 직접 수정 후 현재 관리값과 원본 셀 값·위치·입력 작업·등록 시각의 분리.
+- 직접 등록 묶음의 MANUAL 입력 작업 공유, 기존 기록 수정 시 입력 작업 추가 생성 방지.
+- 기존 릴리즈의 새 Item 추가, 공용 Item 재사용·수정, 포함·미포함·미확인 연결의 전체 조회.
+- 요청에 없는 연결 유지와 다른 릴리즈로의 자동 상속 방지.
+- 후속 Item의 출처 오류·실제 TEXT 용량 초과 시 앞선 입력 작업·릴리즈·Item·연결까지 전체 취소.
+- 후속 연결의 다른 설비군·없는 모델 오류 시 앞선 연결 변경 취소.
+- 대소문자·공백을 구분하는 버전 원문, 중복 등록·수정 실패 후 기존값 유지.
+- 관리 모델·계열 선택지, C3 구UI·통합UI 분리, 미확인·중복 순서 및 원본 없음의 명시적 조회.
+- 여러 시트의 None·False 원본값 보존, 다른 설비군 노트 연결 차단, 동시 Item 수정 시 값·수정 항목 유실 방지.
+- UTF-8로 표현할 수 없는 버전·접미사·Item 내용의 입력 검증과 수정 실패 후 기존 관리값·원본 보존.
+
+```powershell
+uv run --locked python -m pytest tests/test_release_validation.py tests/test_equipment_validation.py -q
+uv run --locked --env-file .env python -m pytest tests/test_release_mysql.py tests/test_equipment_mysql.py -q
+```
+
+기존 스키마 fixture의 빈 DB 확인·생성·정리를 사용하며 기존 업무 테이블이 있는 DB에서는 실행하지 않습니다. 테스트 자료는 합성 데이터입니다. B-2 화면 저장이나 BE-010의 재계산 검증과 구분합니다. 새 클래스·함수의 설명은 [주석 작성 기준](architecture.md#클래스메서드-주석-작성-기준)에 맞춰 점검합니다.
+
 ## 5. 결과 기록 방식
 
 MR 본문의 `검증` 절에 결과를 남깁니다.

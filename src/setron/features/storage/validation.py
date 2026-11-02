@@ -5,7 +5,7 @@ from copy import deepcopy
 
 
 class StorageValidationError(ValueError):
-    """입력값이 저장 형식이나 허용 범위를 벗어났을 때 발생한다."""
+    """관리 데이터 입력 검증 오류."""
 
 
 TABLE_NAMES = (
@@ -59,11 +59,33 @@ ENUMS = {
 
 
 def fail(table, field, reason):
+    """문제가 있는 테이블·필드·사유를 담아 입력 검증 오류를 발생시킨다.
+
+    param
+    - table: 검증 중인 관리 테이블 이름.
+    - field: 오류가 있는 필드 이름.
+    - reason: 값을 저장할 수 없는 사유.
+
+    raises
+    - StorageValidationError: 호출할 때마다 지정한 검증 오류 발생.
+    """
     raise StorageValidationError(f"{table}.{field}: {reason}")
 
 
 def _validate_json_keys(table, field, value):
-    """JSON 변환 과정에서 키가 문자열로 바뀌어 원본값이 사라지는 것을 막는다."""
+    """중첩된 JSON 객체에서도 모든 키가 문자열인지 검사한다.
+
+    숫자·불리언 키를 문자열로 바꾸는 과정에서 같은 이름의 원본값이 덮어써지는 것을 막는다.
+    순환 참조는 탐색 중 재방문하지 않고 실제 JSON 직렬화 단계에서 오류로 처리한다.
+
+    param
+    - table: 검증 중인 관리 테이블 이름.
+    - field: JSON을 저장할 필드 이름.
+    - value: 중첩 객체·목록을 포함할 수 있는 검사 대상 값.
+
+    raises
+    - StorageValidationError: 객체의 키에 문자열이 아닌 값이 포함된 경우.
+    """
     pending = [value]
     visited = set()
     while pending:
@@ -80,7 +102,20 @@ def _validate_json_keys(table, field, value):
 
 
 def json_text(table, field, value, rule):
-    """필드가 허용하는 JSON 구조를 검사하고 저장용 문자열로 변환한다."""
+    """필드별 JSON 구조와 값을 검사한 뒤 저장용 문자열로 변환한다.
+
+    param
+    - table: JSON을 저장할 관리 테이블 이름.
+    - field: JSON을 저장할 필드 이름.
+    - value: JSON 객체·목록·일반 값 등 변환 대상.
+    - rule: 객체·수정 필드명 목록·모델 ID 목록 등 해당 필드에 적용할 구조 규칙.
+
+    return
+    - 한글 원문을 유지한 JSON 문자열. None을 허용하는 규칙에서는 None 반환 가능.
+
+    raises
+    - StorageValidationError: 구조·키·목록 값이 잘못됐거나 순환 참조·NaN 등 직렬화 불가 값이 있는 경우.
+    """
     if value is None and rule in {"object_optional", "group_ids"}:
         return None
     if rule in {"object", "object_optional"} and not isinstance(value, dict):
@@ -107,7 +142,22 @@ def json_text(table, field, value, rule):
 
 
 def encode_record(table, values, *, inserting=False):
-    """입력값에 기본값과 검증 규칙을 적용하고 DB에 전달할 형식으로 변환한다."""
+    """앱 형식의 관리값을 검증하고 JSON 문자열·UTF-8 바이트로 변환한다.
+
+    입력 객체는 직접 수정하지 않는다. 수정 시에는 기존 행과 변경값을 합친 값을 전달해야 한다.
+    컬럼 존재 여부·자료형·길이 검사는 이후 StorageRepository에서 수행한다.
+
+    param
+    - table: 변환할 관리 테이블 이름.
+    - values: 앱에서 사용하는 문자열·JSON 객체 등 관리값.
+    - inserting: True이면 등록 기본값과 빈 수정 항목 목록 등을 먼저 적용.
+
+    return
+    - 상태·JSON·원문 검증을 마친 DB 저장 형식의 값 복사본.
+
+    raises
+    - StorageValidationError: 지원하지 않는 테이블 또는 잘못된 상태·JSON·원문이 포함된 경우.
+    """
     if table not in TABLE_NAMES:
         raise StorageValidationError("지원하지 않는 관리 테이블입니다.")
     result = deepcopy(DEFAULTS.get(table, {})) if inserting else {}
@@ -151,7 +201,19 @@ def encode_record(table, values, *, inserting=False):
 
 
 def decode_record(table, values):
-    """DB에서 읽은 JSON과 UTF-8 바이트를 앱에서 사용할 값으로 복원한다."""
+    """DB에서 읽은 JSON 문자열과 UTF-8 바이너리 원문을 앱 형식으로 복원한다.
+
+    param
+    - table: 복원 규칙을 적용할 관리 테이블 이름.
+    - values: DB에서 조회한 행의 값.
+
+    return
+    - JSON 객체와 원문 문자열을 포함한 행 복사본.
+
+    raises
+    - StorageValidationError: 저장된 JSON 문자열을 해석할 수 없는 경우.
+    - UnicodeDecodeError: 저장된 바이너리 원문이 UTF-8 형식이 아닌 경우.
+    """
     result = dict(values)
     for field in BINARY_COLUMNS.get(table, {}):
         if isinstance(result.get(field), (bytes, bytearray, memoryview)):

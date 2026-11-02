@@ -33,6 +33,14 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def schema_database():
+    """테스트 DB에 관리 스키마를 적용하고 이번 실행에서 만든 테이블만 정리한다.
+
+    기존 관리 테이블이 있는 DB에서는 실행을 중단한다. SETRON_TEST_DB_ 접속
+    설정을 사용하며, 같은 모듈의 테스트가 생성된 스키마를 공유한다.
+
+    return
+    - 스키마 검증 중 사용할 MySQL 연결 관리자.
+    """
     config = DatabaseConfig.from_env(prefix="SETRON_TEST_DB_")
     database = Database.from_env(prefix="SETRON_TEST_DB_")
     schema_path = Path(__file__).resolve().parents[1] / "database" / "schema_mysql5619.sql"
@@ -65,12 +73,33 @@ def schema_database():
 
 @pytest.fixture
 def storage(schema_database):
+    """검증용 스키마를 사용하는 공통 저장 서비스를 제공한다.
+
+    param
+    - schema_database: 관리 스키마가 적용된 테스트 DB 연결 관리자.
+
+    return
+    - 해당 DB에 연결된 공통 저장 서비스.
+    """
     return StorageService(schema_database)
 
 
 @pytest.fixture
 def kill_test_connection(schema_database):
+    """테스트가 확보한 MySQL 연결을 종료하는 함수를 제공한다.
+
+    param
+    - schema_database: 연결 종료 명령을 실행할 테스트 DB 연결 관리자.
+
+    return
+    - 연결 ID를 받아 별도 제어 연결에서 KILL CONNECTION을 실행하는 함수.
+    """
     def kill(connection_id):
+        """지정한 테스트 연결을 별도 DB 연결에서 종료한다.
+
+        param
+        - connection_id: 이번 테스트가 확보한 양의 정수 MySQL 연결 ID.
+        """
         # 이번 테스트가 확보한 연결만 같은 계정의 별도 연결에서 종료한다.
         assert type(connection_id) is int and connection_id > 0
         with schema_database.engine.connect() as control:
@@ -81,6 +110,15 @@ def kill_test_connection(schema_database):
 
 
 def graph(tx, suffix):
+    """검증에 필요한 입력 작업·설비군·버전 계열을 같은 트랜잭션에 추가한다.
+
+    param
+    - tx: 테스트 자료를 추가할 공통 저장 트랜잭션.
+    - suffix: 다른 테스트 자료와 이름을 구분할 문자열.
+
+    return
+    - 생성한 입력 작업 ID, 설비군 ID, 버전 계열 ID의 튜플.
+    """
     batch = tx.insert("import_batch", {"source_type": "MANUAL"})
     group = tx.insert("equipment_group", {"group_name": "M-O2-" + suffix, "category": "OXIDE"})
     family = tx.insert("version_family", {"group_id": group["group_id"], "family_name": suffix})
@@ -88,6 +126,11 @@ def graph(tx, suffix):
 
 
 def test_exact_server_version_and_all_tables(schema_database):
+    """MySQL 5.6.19·테이블 이름 설정·전체 관리 테이블의 InnoDB 적용을 검증한다.
+
+    param
+    - schema_database: 프로젝트 스키마가 적용된 테스트 DB 연결 관리자.
+    """
     with schema_database.engine.connect() as connection:
         assert connection.scalar(text("SELECT VERSION()")).split("-")[0] == "5.6.19"
         assert connection.scalar(text("SELECT @@lower_case_table_names")) == 1
@@ -99,6 +142,11 @@ def test_exact_server_version_and_all_tables(schema_database):
 
 
 def test_large_json_and_unicode_are_preserved(storage):
+    """큰 JSON과 한글·이모지·특수문자 원문을 저장 후 그대로 읽을 수 있는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    """
     original = {"Memory😀": {"A1": "한글😀\"\\" * 12000, "A2": [1, True, None]}}
     with storage.transaction() as tx:
         batch = tx.insert("import_batch", {"source_type": "EXCEL", "raw_data": original})
@@ -109,6 +157,11 @@ def test_large_json_and_unicode_are_preserved(storage):
 
 
 def test_validation_failure_cancels_the_whole_batch(storage):
+    """입력 검증 실패 시 같은 트랜잭션에서 먼저 추가한 설비도 취소되는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    """
     with pytest.raises(StorageValidationError):
         with storage.transaction() as tx:
             tx.insert("equipment", {"equipment_code": "ROLLBACK-CHECK"})
@@ -118,6 +171,11 @@ def test_validation_failure_cancels_the_whole_batch(storage):
 
 
 def test_text_overflow_is_an_error_and_cancels_earlier_writes(storage):
+    """TEXT 용량 초과가 DB 오류로 처리되고 앞선 저장도 취소되는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    """
     with pytest.raises(DatabaseSaveError):
         with storage.transaction() as tx:
             tx.insert("equipment", {"equipment_code": "TEXT-OVERFLOW"})
@@ -129,6 +187,11 @@ def test_text_overflow_is_an_error_and_cancels_earlier_writes(storage):
 
 
 def test_exact_versions_and_pm_links_survive(storage):
+    """버전의 대소문자·끝 공백과 PM별 버전 연결을 보존하고 원문 중복은 막는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    """
     with storage.transaction() as tx:
         batch_id, group_id, family_id = graph(tx, "exact")
         versions = [tx.insert("release_version", {"family_id": family_id, "version_raw": raw, "batch_id": batch_id}) for raw in ("v1", "V1", "v1 ")]
@@ -156,6 +219,12 @@ def test_exact_versions_and_pm_links_survive(storage):
 
 @pytest.mark.parametrize("id_format", [int, str], ids=["integer-id", "string-id"])
 def test_version_deletion_keeps_all_risk_references(storage, id_format):
+    """버전 삭제 시 위험 근거를 보존하고 작업 취소 시 참조와 상태까지 복원되는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    - id_format: 삭제 API에 넘길 ID의 형식을 만드는 int 또는 str.
+    """
     with storage.transaction() as tx:
         batch_id, _, family_id = graph(tx, "risk-version")
         version = tx.insert("release_version", {"family_id": family_id, "version_raw": "v2_가😀", "batch_id": batch_id})
@@ -191,6 +260,12 @@ def test_version_deletion_keeps_all_risk_references(storage, id_format):
 
 @pytest.mark.parametrize("id_format", [int, str], ids=["integer-id", "string-id"])
 def test_item_deletion_preserves_source_cells(storage, id_format):
+    """내부 Item 삭제 시 원본 셀 근거를 위험 규칙에 남기고 미확인 상태로 바꾸는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    - id_format: 삭제 API에 넘길 ID의 형식을 만드는 int 또는 str.
+    """
     with storage.transaction() as tx:
         batch_id, _, family_id = graph(tx, "risk-item")
         item = tx.insert("item", {"content": "수정항목😀", "batch_id": batch_id, "source_reference": {"content": {"sheet": "릴리즈", "cells": ["B2"]}}})
@@ -215,6 +290,11 @@ def test_item_deletion_preserves_source_cells(storage, id_format):
 
 
 def test_storage_initialization_reports_mysql_authentication_failure(schema_database):
+    """저장 서비스의 MySQL 인증 실패와 이후 정상 설정으로의 접속을 검증한다.
+
+    param
+    - schema_database: 정상 접속 확인에 사용할 테스트 DB 연결 관리자.
+    """
     config = DatabaseConfig.from_env(prefix="SETRON_TEST_DB_")
     database = Database(create_mysql_engine(replace(config, password="invalid-" + uuid4().hex)))
     try:
@@ -232,6 +312,12 @@ def test_storage_initialization_reports_mysql_authentication_failure(schema_data
 
 @pytest.mark.parametrize("invalid_type", ["suffix", "decimal-string", "float", "boolean"])
 def test_deletion_rejects_ambiguous_ids_before_changing_any_rows(storage, invalid_type):
+    """정수 ID로 명확히 해석할 수 없는 삭제 요청이 기존 자료를 바꾸지 않는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    - invalid_type: 잘못된 ID를 구성할 접미사·소수 문자열·실수·불리언 구분값.
+    """
     with storage.transaction() as tx:
         batch_id, _, family_id = graph(tx, "invalid-id-" + invalid_type)
         item = tx.insert("item", {"content": "삭제하면 안 되는 항목", "batch_id": batch_id})
@@ -256,6 +342,12 @@ def test_deletion_rejects_ambiguous_ids_before_changing_any_rows(storage, invali
 
 @pytest.mark.parametrize("operation", ["insert", "update"])
 def test_invalid_json_keys_cancel_the_whole_batch(storage, operation):
+    """JSON 키 검증 실패 시 추가·수정 전체가 취소되고 입력과 기존 값이 보존되는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    - operation: 잘못된 JSON을 전달할 insert 또는 update 작업.
+    """
     existing_key = "json_original_" + operation
     new_key = "json_rejected_" + operation
     code = "JSON-KEY-CANCEL-" + operation
@@ -286,6 +378,11 @@ def test_invalid_json_keys_cancel_the_whole_batch(storage, operation):
 
 
 def test_sql_delete_failure_restores_risk_evidence_and_earlier_writes(storage):
+    """외래키로 삭제가 실패하면 위험 근거 변경과 앞선 저장도 취소되는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    """
     with storage.transaction() as tx:
         batch_id, _, family_id = graph(tx, "delete-restricted")
         item = tx.insert("item", {"content": "삭제 전 원본😀", "batch_id": batch_id})
@@ -327,6 +424,14 @@ def test_sql_delete_failure_restores_risk_evidence_and_earlier_writes(storage):
 
 
 def test_concurrent_version_deletions_preserve_all_risk_evidence(schema_database):
+    """같은 위험 규칙을 참조하는 버전들의 동시 삭제가 근거를 유실하지 않는지 검증한다.
+
+    잠금 대기 초과·교착으로 취소된 작업은 취소 결과를 확인한 뒤 새 트랜잭션에서
+    다시 실행한다. 최종 저장 결과가 불명확한 오류는 재시도 대상으로 다루지 않는다.
+
+    param
+    - schema_database: 동시 삭제 검증에 필요한 스키마를 준비하는 테스트 DB 연결 관리자.
+    """
     # 잠금 대기 시간 설정이 다른 테스트에 남지 않도록 별도 연결 풀을 사용한다.
     database = Database.from_env(prefix="SETRON_TEST_DB_")
     try:
@@ -350,6 +455,18 @@ def test_concurrent_version_deletions_preserve_all_risk_evidence(schema_database
         barrier = Barrier(2, timeout=5)
 
         def delete_version(version_id):
+            """다른 작업과 시점을 맞춰 버전을 삭제하고 확정된 결과를 반환한다.
+
+            param
+            - version_id: 이번 작업에서 삭제할 릴리즈 버전 ID.
+
+            return
+            - 버전 ID와 저장 성공 여부의 튜플. 잠금 대기 초과·교착으로 취소되면 False.
+
+            raises
+            - DatabaseCommitUnknownError: 최종 저장 단계에서 연결이 끊겨 결과를 확정할 수 없는 경우.
+            - DatabaseSaveError: 잠금 대기 초과·교착 이외의 DB 저장 오류가 발생한 경우.
+            """
             try:
                 with storage.transaction() as tx:
                     tx.session.execute(text("SET SESSION innodb_lock_wait_timeout = 3"))
@@ -423,6 +540,12 @@ def test_concurrent_version_deletions_preserve_all_risk_evidence(schema_database
 
 
 def test_real_disconnect_during_save_rolls_back_deletion_and_evidence(storage, kill_test_connection):
+    """저장 도중 실제 연결을 끊으면 삭제·위험 근거·앞선 추가가 모두 취소되는지 검증한다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    - kill_test_connection: 테스트가 확보한 MySQL 연결을 종료하는 함수.
+    """
     with storage.transaction() as tx:
         batch_id, _, family_id = graph(tx, "disconnect-during-save")
         item = tx.insert("item", {
@@ -459,6 +582,15 @@ def test_real_disconnect_during_save_rolls_back_deletion_and_evidence(storage, k
 
 
 def test_real_disconnect_at_commit_reports_unknown_without_retry(storage, kill_test_connection):
+    """최종 저장 단계의 실제 연결 단절을 결과 미확인으로 알리고 재시도하지 않는지 검증한다.
+
+    이 테스트는 COMMIT 전송 전에 연결을 끊는다. 저장 성공 후 응답만 유실되는
+    상황을 재현하는 테스트는 아니다.
+
+    param
+    - storage: 테스트 DB의 공통 저장 서비스.
+    - kill_test_connection: 테스트가 확보한 MySQL 연결을 종료하는 함수.
+    """
     with storage.transaction() as tx:
         batch_id, _, family_id = graph(tx, "disconnect-at-commit")
         item = tx.insert("item", {"content": "최종 저장 전 원본😀", "batch_id": batch_id})
@@ -470,6 +602,11 @@ def test_real_disconnect_at_commit_reports_unknown_without_retry(storage, kill_t
     commit_attempts = []
 
     def disconnect_before_commit(connection):
+        """commit 시도 횟수를 기록하고 COMMIT 전송 전에 해당 연결을 종료한다.
+
+        param
+        - connection: 최종 저장을 시도하는 SQLAlchemy 연결.
+        """
         # COMMIT 전송 직전에 실제 연결을 종료해 최종 저장 단계의 오류 분류를 확인한다.
         connection_id = connection.scalar(text("SELECT CONNECTION_ID()"))
         commit_attempts.append(connection_id)
