@@ -1,0 +1,6098 @@
+{
+  "task": "EXCEL_EXTRACT",
+  "status": "OK",
+  "message": "추출 결과를 원본과 대조했습니다. 검토 후 검증을 진행하세요.",
+  "data": {
+    "kind": "EQUIPMENT_STATUS",
+    "workbook_name": "화성_설비현황표_SEMES_ETCH_교육용_제작.xlsx",
+    "sheet_name": "Foundry",
+    "rows": [
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "S1",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPH58",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v1.1.1.6D_1",
+          "ui_type": "LEGACY",
+          "structure_type": null,
+          "geometry_type": "6각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S1",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "6각",
+          "ui_type": "구UI",
+          "equipment_code": "ESPH58",
+          "version_raw": "v1.1.1.6D_1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B4",
+            "value": "S1\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B4",
+            "value": "S1\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C4",
+            "value": "M-C3(6각) / 구UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D4",
+            "value": "ESPH58"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G4",
+            "value": "v1.1.1.6D_1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C4",
+            "value": "M-C3(6각) / 구UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C4",
+            "value": "M-C3(6각) / 구UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "LEGACY",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 1
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "S1",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPL69",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "메모리버전임",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S1",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPL69",
+          "version_raw": "메모리버전임"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B4",
+            "value": "S1\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B4",
+            "value": "S1\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C5",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D5",
+            "value": "ESPL69"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G5",
+            "value": "메모리버전임"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C5",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C5",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 2
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "S1",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPQ86",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "메모리버전임",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S1",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPQ86",
+          "version_raw": "메모리버전임"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B4",
+            "value": "S1\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B4",
+            "value": "S1\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C6",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D6",
+            "value": "ESPQ86"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G6",
+            "value": "메모리버전임"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C6",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C6",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 3
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPD15",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F17",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPD15",
+          "version_raw": "v3.52_F17"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C7",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D7",
+            "value": "ESPD15"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G7",
+            "value": "v3.52_F17"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C7",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C7",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 4
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPL14",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F15",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPL14",
+          "version_raw": "v3.52_F15"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C8",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D8",
+            "value": "ESPL14"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G8",
+            "value": "v3.52_F15"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C8",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C8",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 5
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPW74",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.53_F1",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPW74",
+          "version_raw": "v3.53_F1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C9",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D9",
+            "value": "ESPW74"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G9",
+            "value": "v3.53_F1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C9",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C9",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 6
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPU35",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F15",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPU35",
+          "version_raw": "v3.52_F15"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C10",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D10",
+            "value": "ESPU35"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G10",
+            "value": "v3.52_F15"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C10",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C10",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 7
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPG40",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F17",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPG40",
+          "version_raw": "v3.52_F17"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C11",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D11",
+            "value": "ESPG40"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G11",
+            "value": "v3.52_F17"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C11",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C11",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 8
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPU05",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F15_a (H)",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPU05",
+          "version_raw": "v3.52_F15_a (H)"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C12",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D12",
+            "value": "ESPU05"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G12",
+            "value": "v3.52_F15_a (H)"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C12",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C12",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 9
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPE74",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F16",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPE74",
+          "version_raw": "v3.52_F16"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C13",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D13",
+            "value": "ESPE74"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G13",
+            "value": "v3.52_F16"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C13",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C13",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 10
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPY64",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F13_a",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPY64",
+          "version_raw": "v3.52_F13_a"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C14",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D14",
+            "value": "ESPY64"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G14",
+            "value": "v3.52_F13_a"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C14",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C14",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 11
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "1L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPF02",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.53_F1",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "1L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPF02",
+          "version_raw": "v3.53_F1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B7",
+            "value": "1L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C15",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D15",
+            "value": "ESPF02"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G15",
+            "value": "v3.53_F1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C15",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C15",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 12
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPG85",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F17",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "equipment_code": "ESPG85",
+          "version_raw": "v3.52_F17"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C16",
+            "value": "M-C3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D16",
+            "value": "ESPG85"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G16",
+            "value": "v3.52_F17"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+            "field": "ui_type",
+            "address": null,
+            "row_number": 13
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 13
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 13
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPR96",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F13_a",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "equipment_code": "ESPR96",
+          "version_raw": "v3.52_F13_a"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C17",
+            "value": "M-C3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D17",
+            "value": "ESPR96"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G17",
+            "value": "v3.52_F13_a"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+            "field": "ui_type",
+            "address": null,
+            "row_number": 14
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 14
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 14
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGT41",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.2.2_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGT41",
+          "version_raw": "v4.57.2.2_f1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C18",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D18",
+            "value": "ESPGT41"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G18",
+            "value": "v4.57.2.2_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C18",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C18",
+            "row_number": 15
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 15
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 15
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGD23",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.2.2_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGD23",
+          "version_raw": "v4.57.2.2_f1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C19",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D19",
+            "value": "ESPGD23"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G19",
+            "value": "v4.57.2.2_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C19",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C19",
+            "row_number": 16
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 16
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 16
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGR76",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": null,
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGR76"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C20",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D20",
+            "value": "ESPGR76"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C20",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C20",
+            "row_number": 17
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 17
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "version_raw",
+            "address": null,
+            "row_number": 17
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 17
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGW35",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.2.2_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGW35",
+          "version_raw": "v4.57.2.2_f1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C21",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D21",
+            "value": "ESPGW35"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G21",
+            "value": "v4.57.2.2_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C21",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C21",
+            "row_number": 18
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 18
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 18
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGW64",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.2.2_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGW64",
+          "version_raw": "v4.57.2.2_f1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C22",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D22",
+            "value": "ESPGW64"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G22",
+            "value": "v4.57.2.2_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C22",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C22",
+            "row_number": 19
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 19
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 19
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPW85",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F17",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "equipment_code": "ESPW85",
+          "version_raw": "v3.52_F17"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C23",
+            "value": "M-C3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D23",
+            "value": "ESPW85"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G23",
+            "value": "v3.52_F17"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+            "field": "ui_type",
+            "address": null,
+            "row_number": 20
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 20
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 20
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C4+",
+          "production_area": null,
+          "equipment_code": "ESPGL76",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.0.1_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C4+",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGL76",
+          "version_raw": "v4.57.0.1_f1"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C24",
+            "value": "M-C4+ / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D24",
+            "value": "ESPGL76"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G24",
+            "value": "v4.57.0.1_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C24",
+            "value": "M-C4+ / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C24",
+            "row_number": 21
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 21
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 21
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": "(기흥)",
+          "line": "5L",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPW71",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F16",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "5L",
+          "site": "(기흥)",
+          "model_name": "M-C3",
+          "equipment_code": "ESPW71",
+          "version_raw": "v3.52_F16"
+        },
+        "sources": {
+          "site": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "line": {
+            "sheet": "Foundry",
+            "address": "B16",
+            "value": "5L\n(기흥)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C25",
+            "value": "M-C3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D25",
+            "value": "ESPW71"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G25",
+            "value": "v3.52_F16"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+            "field": "ui_type",
+            "address": null,
+            "row_number": 22
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 22
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 22
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPV07",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.53_F1",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S3",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPV07",
+          "version_raw": "v3.53_F1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B26",
+            "value": "S3"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C27",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D27",
+            "value": "ESPV07"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G27",
+            "value": "v3.53_F1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C27",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C27",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 23
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 23
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPM37",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F17",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S3",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPM37",
+          "version_raw": "v3.52_F17"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B26",
+            "value": "S3"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C28",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D28",
+            "value": "ESPM37"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G28",
+            "value": "v3.52_F17"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C28",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C28",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 24
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 24
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "POLY",
+          "model_name": "M-C3",
+          "production_area": null,
+          "equipment_code": "ESPP20",
+          "pm_name": null,
+          "family_name": "C3",
+          "version_raw": "v3.52_F16",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "geometry_type": "5각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S3",
+          "model_name": "M-C3",
+          "geometry_type": "5각",
+          "ui_type": "통합UI",
+          "equipment_code": "ESPP20",
+          "version_raw": "v3.52_F16"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B26",
+            "value": "S3"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C29",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D29",
+            "value": "ESPP20"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G29",
+            "value": "v3.52_F16"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C29",
+            "value": "M-C3(5각) / 통합UI"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C29",
+            "value": "M-C3(5각) / 통합UI"
+          }
+        },
+        "family_key": {
+          "category": "POLY",
+          "family_name": "C3",
+          "ui_type": "INTEGRATED",
+          "structure_type": null,
+          "model_name": "C3"
+        },
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 25
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 25
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGY85",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.56.8.1_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S3",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGY85",
+          "version_raw": "v4.56.8.1_f1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B26",
+            "value": "S3"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C30",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D30",
+            "value": "ESPGY85"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G30",
+            "value": "v4.56.8.1_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C30",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C30",
+            "row_number": 26
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 26
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 26
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 26
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGN02",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.56.9.1_f2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S3",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGN02",
+          "version_raw": "v4.56.9.1_f2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B26",
+            "value": "S3"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C31",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D31",
+            "value": "ESPGN02"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G31",
+            "value": "v4.56.9.1_f2"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C31",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C31",
+            "row_number": 27
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 27
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 27
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 27
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "POLY",
+          "model_name": "M-C4",
+          "production_area": null,
+          "equipment_code": "ESPGR46",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.0.1_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "S3",
+          "model_name": "M-C4",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGR46",
+          "version_raw": "v4.57.0.1_f1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B26",
+            "value": "S3"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C32",
+            "value": "M-C4 / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D32",
+            "value": "ESPGR46"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G32",
+            "value": "v4.57.0.1_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C32",
+            "value": "M-C4 / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C32",
+            "row_number": 28
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 28
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 28
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 28
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "POLY",
+          "model_name": "M-C4+",
+          "production_area": null,
+          "equipment_code": "ESPGC37",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.2.2_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "V1",
+          "model_name": "M-C4+",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGC37",
+          "version_raw": "v4.57.2.2_f1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B33",
+            "value": "V1"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C34",
+            "value": "M-C4+ / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D34",
+            "value": "ESPGC37"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G34",
+            "value": "v4.57.2.2_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C34",
+            "value": "M-C4+ / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C34",
+            "row_number": 29
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 29
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 29
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 29
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "POLY",
+          "model_name": "M-C4+",
+          "production_area": null,
+          "equipment_code": "ESPGP21",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.56.9.1_f2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "V1",
+          "model_name": "M-C4+",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGP21",
+          "version_raw": "v4.56.9.1_f2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B33",
+            "value": "V1"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C35",
+            "value": "M-C4+ / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D35",
+            "value": "ESPGP21"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G35",
+            "value": "v4.56.9.1_f2"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C35",
+            "value": "M-C4+ / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C35",
+            "row_number": 30
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 30
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 30
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 30
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "NRD-V (V1)",
+          "group_name": "POLY",
+          "model_name": "M-C4/C4+",
+          "production_area": null,
+          "equipment_code": "ESPGC60",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.57.0.1_f1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "group_name": "POLY",
+          "line": "NRD-V (V1)",
+          "model_name": "M-C4/C4+",
+          "ui_type": "Smart UI",
+          "equipment_code": "ESPGC60",
+          "version_raw": "v4.57.0.1_f1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B37",
+            "value": "NRD-V (V1)"
+          },
+          "group_name": {
+            "sheet": "Foundry",
+            "address": "A4",
+            "value": "POLY"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C37",
+            "value": "M-C4/C4+ / Smart UI"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D37",
+            "value": "ESPGC60"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G37",
+            "value": "v4.57.0.1_f1"
+          },
+          "ui_type": {
+            "sheet": "Foundry",
+            "address": "C37",
+            "value": "M-C4/C4+ / Smart UI"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+            "field": "ui_type",
+            "address": "C37",
+            "row_number": 31
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 31
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 31
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 31
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOC44",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.52_F14",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "S3",
+          "model_name": "M-O2",
+          "equipment_code": "ESOC44",
+          "version_raw": "v3.52_F14"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B41",
+            "value": "S3"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C41",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D41",
+            "value": "ESOC44"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G41",
+            "value": "v3.52_F14"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 32
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 32
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 32
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOV96",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "V3.52_F14",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "S3",
+          "model_name": "M-O2",
+          "equipment_code": "ESOV96",
+          "version_raw": "V3.52_F14"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B41",
+            "value": "S3"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C42",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D42",
+            "value": "ESOV96"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G42",
+            "value": "V3.52_F14"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 33
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 33
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 33
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOV38",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.52_F17",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "S3",
+          "model_name": "M-O2",
+          "equipment_code": "ESOV38",
+          "version_raw": "v3.52_F17"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B41",
+            "value": "S3"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C43",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D43",
+            "value": "ESOV38"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G43",
+            "value": "v3.52_F17"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 34
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 34
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 34
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOU56",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "S3",
+          "model_name": "M-O2",
+          "equipment_code": "ESOU56",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B41",
+            "value": "S3"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C44",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D44",
+            "value": "ESOU56"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G44",
+            "value": "v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 35
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 35
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 35
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOA26",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "S3",
+          "model_name": "M-O2",
+          "equipment_code": "ESOA26",
+          "version_raw": "v3.53_F1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B41",
+            "value": "S3"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C45",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D45",
+            "value": "ESOA26"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G45",
+            "value": "v3.53_F1"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 36
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 36
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 36
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "S3",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOE22",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "S3",
+          "model_name": "M-O2",
+          "equipment_code": "ESOE22",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B41",
+            "value": "S3"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C46",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D46",
+            "value": "ESOE22"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G46",
+            "value": "v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 37
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 37
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 37
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOX08",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.52_F16",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "V1",
+          "model_name": "M-O2",
+          "equipment_code": "ESOX08",
+          "version_raw": "v3.52_F16"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B47",
+            "value": "V1"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C47",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D47",
+            "value": "ESOX08"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G47",
+            "value": "v3.52_F16"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 38
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 38
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 38
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOW54",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "V1",
+          "model_name": "M-O2",
+          "equipment_code": "ESOW54",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B47",
+            "value": "V1"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C48",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D48",
+            "value": "ESOW54"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G48",
+            "value": "v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 39
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 39
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 39
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOJ88",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "V1",
+          "model_name": "M-O2",
+          "equipment_code": "ESOJ88",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B47",
+            "value": "V1"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C49",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D49",
+            "value": "ESOJ88"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G49",
+            "value": "v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 40
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 40
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 40
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOA17",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "V1",
+          "model_name": "M-O2",
+          "equipment_code": "ESOA17",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B47",
+            "value": "V1"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C50",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D50",
+            "value": "ESOA17"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G50",
+            "value": "v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 41
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 41
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 41
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOU23",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "V1",
+          "model_name": "M-O2",
+          "equipment_code": "ESOU23",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B47",
+            "value": "V1"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C51",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D51",
+            "value": "ESOU23"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G51",
+            "value": "v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 42
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 42
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 42
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "V1",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESOR40",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.52_F15",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "V1",
+          "model_name": "M-O2",
+          "equipment_code": "ESOR40",
+          "version_raw": "v3.52_F15"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B47",
+            "value": "V1"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C52",
+            "value": "M-O2"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D52",
+            "value": "ESOR40"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G52",
+            "value": "v3.52_F15"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 43
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 43
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 43
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "MFAB",
+          "group_name": null,
+          "model_name": "M-O5(Prime)",
+          "production_area": null,
+          "equipment_code": "ESOPT42",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.63.76.1_a2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": "6각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "MFAB",
+          "model_name": "M-O5(Prime)",
+          "geometry_type": "6각",
+          "equipment_code": "ESOPT42",
+          "version_raw": "v4.63.76.1_a2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B54",
+            "value": "MFAB"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C54",
+            "value": "M-O5(Prime)(6각)"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D54",
+            "value": "ESOPT42"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G54",
+            "value": "v4.63.76.1_a2"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C54",
+            "value": "M-O5(Prime)(6각)"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 44
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 44
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 44
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "MFAB",
+          "group_name": null,
+          "model_name": "M-O5(Prime)",
+          "production_area": null,
+          "equipment_code": "ESOPQ32",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.62.75.1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": "6각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "MFAB",
+          "model_name": "M-O5(Prime)",
+          "geometry_type": "6각",
+          "equipment_code": "ESOPQ32",
+          "version_raw": "v4.62.75.1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B54",
+            "value": "MFAB"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C55",
+            "value": "M-O5(Prime)(6각)"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D55",
+            "value": "ESOPQ32"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G55",
+            "value": "v4.62.75.1"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C55",
+            "value": "M-O5(Prime)(6각)"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 45
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 45
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 45
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "MFAB",
+          "group_name": null,
+          "model_name": "M-O5(Prime)",
+          "production_area": null,
+          "equipment_code": "ESOPW28",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.56.63.1_a1",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": "6각",
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "MFAB",
+          "model_name": "M-O5(Prime)",
+          "geometry_type": "6각",
+          "equipment_code": "ESOPW28",
+          "version_raw": "v4.56.63.1_a1"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B54",
+            "value": "MFAB"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C56",
+            "value": "M-O5(Prime)(6각)"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D56",
+            "value": "ESOPW28"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G56",
+            "value": "v4.56.63.1_a1"
+          },
+          "geometry_type": {
+            "sheet": "Foundry",
+            "address": "C56",
+            "value": "M-O5(Prime)(6각)"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 46
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 46
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 46
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "NRD (MR2동)",
+          "group_name": null,
+          "model_name": null,
+          "production_area": null,
+          "equipment_code": "ESON81",
+          "pm_name": "PM1",
+          "family_name": null,
+          "version_raw": "v4.50.1.1_a",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "NRD (MR2동)",
+          "pm_name": "PM1",
+          "model_name": "M-O3",
+          "equipment_code": "ESON81",
+          "version_raw": "v4.50.1.1_a"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B57",
+            "value": "NRD (MR2동)"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C57",
+            "value": "M-O2/O3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D57",
+            "value": "ESON81"
+          },
+          "pm_name": {
+            "sheet": "Foundry",
+            "address": "P57",
+            "value": "PM1, 2는 O3, PM3, 4는 O2"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G57",
+            "value": "O3: v4.50.1.1_a / O2: v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+            "field": "model_name",
+            "address": "C57",
+            "row_number": 47
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 47
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 47
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "model_name",
+            "address": "C57",
+            "row_number": 47
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 47
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "NRD (MR2동)",
+          "group_name": null,
+          "model_name": null,
+          "production_area": null,
+          "equipment_code": "ESON81",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v4.50.1.1_a",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "NRD (MR2동)",
+          "pm_name": "PM2",
+          "model_name": "M-O3",
+          "equipment_code": "ESON81",
+          "version_raw": "v4.50.1.1_a"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B57",
+            "value": "NRD (MR2동)"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C57",
+            "value": "M-O2/O3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D57",
+            "value": "ESON81"
+          },
+          "pm_name": {
+            "sheet": "Foundry",
+            "address": "P57",
+            "value": "PM1, 2는 O3, PM3, 4는 O2"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G57",
+            "value": "O3: v4.50.1.1_a / O2: v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+            "field": "model_name",
+            "address": "C57",
+            "row_number": 48
+          },
+          {
+            "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+            "field": "pm_name",
+            "address": "P57",
+            "row_number": 48
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 48
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 48
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "model_name",
+            "address": "C57",
+            "row_number": 48
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 48
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "NRD (MR2동)",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESON81",
+          "pm_name": "PM3",
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "NRD (MR2동)",
+          "pm_name": "PM3",
+          "model_name": "M-O2",
+          "equipment_code": "ESON81",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B57",
+            "value": "NRD (MR2동)"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C57",
+            "value": "M-O2/O3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D57",
+            "value": "ESON81"
+          },
+          "pm_name": {
+            "sheet": "Foundry",
+            "address": "P57",
+            "value": "PM1, 2는 O3, PM3, 4는 O2"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G57",
+            "value": "O3: v4.50.1.1_a / O2: v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 49
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 49
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 49
+          }
+        ]
+      },
+      {
+        "values": {
+          "base_date": null,
+          "site": null,
+          "line": "NRD (MR2동)",
+          "group_name": "OXIDE",
+          "model_name": "M-O2",
+          "production_area": null,
+          "equipment_code": "ESON81",
+          "pm_name": null,
+          "family_name": null,
+          "version_raw": "v3.53_F2",
+          "ui_type": null,
+          "structure_type": null,
+          "geometry_type": null,
+          "modification_type": null,
+          "engine_version": null,
+          "epd_version": null
+        },
+        "raw_values": {
+          "line": "NRD (MR2동)",
+          "pm_name": "PM4",
+          "model_name": "M-O2",
+          "equipment_code": "ESON81",
+          "version_raw": "v3.53_F2"
+        },
+        "sources": {
+          "line": {
+            "sheet": "Foundry",
+            "address": "B57",
+            "value": "NRD (MR2동)"
+          },
+          "model_name": {
+            "sheet": "Foundry",
+            "address": "C57",
+            "value": "M-O2/O3"
+          },
+          "equipment_code": {
+            "sheet": "Foundry",
+            "address": "D57",
+            "value": "ESON81"
+          },
+          "pm_name": {
+            "sheet": "Foundry",
+            "address": "P57",
+            "value": "PM1, 2는 O3, PM3, 4는 O2"
+          },
+          "version_raw": {
+            "sheet": "Foundry",
+            "address": "G57",
+            "value": "O3: v4.50.1.1_a / O2: v3.53_F2"
+          }
+        },
+        "family_key": null,
+        "issues": [
+          {
+            "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+            "field": "pm_name",
+            "address": "P57",
+            "row_number": 50
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "base_date",
+            "address": null,
+            "row_number": 50
+          },
+          {
+            "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+            "field": "site",
+            "address": null,
+            "row_number": 50
+          },
+          {
+            "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+            "field": "family_name",
+            "address": null,
+            "row_number": 50
+          }
+        ]
+      }
+    ],
+    "issues": [
+      {
+        "reason": "기준 날짜가 시트 자료에 없습니다.",
+        "field": "base_date",
+        "address": null,
+        "row_number": null
+      },
+      {
+        "reason": "사업장 표기는 일부 라인에만 확인되며, 나머지 라인의 사업장은 자료만으로 확인할 수 없습니다.",
+        "field": "site",
+        "address": "B26",
+        "row_number": null
+      },
+      {
+        "reason": "그룹명이 확인되지 않습니다.",
+        "field": "group_name",
+        "address": "A41",
+        "row_number": null
+      },
+      {
+        "reason": "설비 행은 있으나 SW 버전 값이 비어 있습니다.",
+        "field": "version_raw",
+        "address": "G20",
+        "row_number": null
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 1
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 2
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 3
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 4
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 5
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 6
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 7
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 8
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 9
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 10
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 11
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 12
+      },
+      {
+        "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+        "field": "ui_type",
+        "address": null,
+        "row_number": 13
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 13
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 13
+      },
+      {
+        "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+        "field": "ui_type",
+        "address": null,
+        "row_number": 14
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 14
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 14
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C18",
+        "row_number": 15
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 15
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 15
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C19",
+        "row_number": 16
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 16
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 16
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C20",
+        "row_number": 17
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 17
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "version_raw",
+        "address": null,
+        "row_number": 17
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 17
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C21",
+        "row_number": 18
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 18
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 18
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C22",
+        "row_number": 19
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 19
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 19
+      },
+      {
+        "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+        "field": "ui_type",
+        "address": null,
+        "row_number": 20
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 20
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 20
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C24",
+        "row_number": 21
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 21
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 21
+      },
+      {
+        "reason": "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.",
+        "field": "ui_type",
+        "address": null,
+        "row_number": 22
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 22
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 22
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 23
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 23
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 24
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 24
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 25
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 25
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C30",
+        "row_number": 26
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 26
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 26
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 26
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C31",
+        "row_number": 27
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 27
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 27
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 27
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C32",
+        "row_number": 28
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 28
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 28
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 28
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C34",
+        "row_number": 29
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 29
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 29
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 29
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C35",
+        "row_number": 30
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 30
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 30
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 30
+      },
+      {
+        "reason": "구UI 또는 통합UI 구분을 확인하세요.",
+        "field": "ui_type",
+        "address": "C37",
+        "row_number": 31
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 31
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 31
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 31
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 32
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 32
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 32
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 33
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 33
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 33
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 34
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 34
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 34
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 35
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 35
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 35
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 36
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 36
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 36
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 37
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 37
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 37
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 38
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 38
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 38
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 39
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 39
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 39
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 40
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 40
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 40
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 41
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 41
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 41
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 42
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 42
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 42
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 43
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 43
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 43
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 44
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 44
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 44
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 45
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 45
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 45
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 46
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 46
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 46
+      },
+      {
+        "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+        "field": "model_name",
+        "address": "C57",
+        "row_number": 47
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 47
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 47
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "model_name",
+        "address": "C57",
+        "row_number": 47
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 47
+      },
+      {
+        "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+        "field": "model_name",
+        "address": "C57",
+        "row_number": 48
+      },
+      {
+        "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+        "field": "pm_name",
+        "address": "P57",
+        "row_number": 48
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 48
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 48
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "model_name",
+        "address": "C57",
+        "row_number": 48
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 48
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 49
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 49
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 49
+      },
+      {
+        "reason": "추출값을 원본 셀에서 확인할 수 없습니다.",
+        "field": "pm_name",
+        "address": "P57",
+        "row_number": 50
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "base_date",
+        "address": null,
+        "row_number": 50
+      },
+      {
+        "reason": "추출값이 없거나 확인되지 않았습니다. 원본을 확인하고 보완하세요.",
+        "field": "site",
+        "address": null,
+        "row_number": 50
+      },
+      {
+        "reason": "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.",
+        "field": "family_name",
+        "address": null,
+        "row_number": 50
+      }
+    ],
+    "raw_data": {
+      "Foundry": {
+        "A2": "설비군",
+        "B2": "Line",
+        "C2": "설비군(상세)",
+        "D2": "설비호기",
+        "E2": "설비위치",
+        "F2": null,
+        "G2": "Version",
+        "H2": null,
+        "I2": "CTC IP",
+        "J2": "EPD",
+        "K2": null,
+        "L2": "개조, 횡전개 현황",
+        "M2": null,
+        "N2": null,
+        "O2": null,
+        "P2": null,
+        "Q2": null,
+        "R2": null,
+        "S2": null,
+        "T2": null,
+        "U2": null,
+        "A3": null,
+        "B3": null,
+        "C3": null,
+        "D3": null,
+        "E3": "Flow",
+        "F3": "Bay",
+        "G3": "SW",
+        "H3": "Engine",
+        "I3": null,
+        "J3": "Version",
+        "K3": "IP",
+        "L3": "VTR개조",
+        "M3": "WDT",
+        "N3": null,
+        "O3": null,
+        "P3": null,
+        "Q3": "Eprime",
+        "R3": "Filezilla",
+        "S3": "LogConv",
+        "T3": null,
+        "U3": null,
+        "A4": "POLY",
+        "B4": "S1\n(기흥)",
+        "C4": "M-C3(6각) / 구UI",
+        "D4": "ESPH58",
+        "E4": null,
+        "F4": null,
+        "G4": "v1.1.1.6D_1",
+        "H4": null,
+        "I4": null,
+        "J4": null,
+        "K4": null,
+        "L4": null,
+        "M4": null,
+        "N4": null,
+        "O4": null,
+        "P4": null,
+        "Q4": null,
+        "R4": null,
+        "S4": null,
+        "T4": null,
+        "U4": null,
+        "A5": null,
+        "B5": null,
+        "C5": "M-C3(5각) / 통합UI",
+        "D5": "ESPL69",
+        "E5": null,
+        "F5": null,
+        "G5": "메모리버전임",
+        "H5": null,
+        "I5": null,
+        "J5": null,
+        "K5": null,
+        "L5": null,
+        "M5": null,
+        "N5": null,
+        "O5": null,
+        "P5": null,
+        "Q5": null,
+        "R5": null,
+        "S5": null,
+        "T5": null,
+        "U5": null,
+        "A6": null,
+        "B6": null,
+        "C6": "M-C3(5각) / 통합UI",
+        "D6": "ESPQ86",
+        "E6": null,
+        "F6": null,
+        "G6": "메모리버전임",
+        "H6": null,
+        "I6": null,
+        "J6": null,
+        "K6": null,
+        "L6": null,
+        "M6": null,
+        "N6": null,
+        "O6": null,
+        "P6": null,
+        "Q6": null,
+        "R6": null,
+        "S6": null,
+        "T6": null,
+        "U6": null,
+        "A7": null,
+        "B7": "1L\n(기흥)",
+        "C7": "M-C3(5각) / 통합UI",
+        "D7": "ESPD15",
+        "E7": null,
+        "F7": null,
+        "G7": "v3.52_F17",
+        "H7": null,
+        "I7": null,
+        "J7": null,
+        "K7": null,
+        "L7": null,
+        "M7": null,
+        "N7": null,
+        "O7": "O2, C3, C4는 Foundry용 버전이 따로 있음.",
+        "P7": null,
+        "Q7": null,
+        "R7": null,
+        "S7": null,
+        "T7": null,
+        "U7": null,
+        "A8": null,
+        "B8": null,
+        "C8": "M-C3(5각) / 통합UI",
+        "D8": "ESPL14",
+        "E8": null,
+        "F8": null,
+        "G8": "v3.52_F15",
+        "H8": null,
+        "I8": null,
+        "J8": null,
+        "K8": null,
+        "L8": null,
+        "M8": null,
+        "N8": null,
+        "O8": null,
+        "P8": null,
+        "Q8": null,
+        "R8": null,
+        "S8": null,
+        "T8": null,
+        "U8": null,
+        "A9": null,
+        "B9": null,
+        "C9": "M-C3(5각) / 통합UI",
+        "D9": "ESPW74",
+        "E9": null,
+        "F9": null,
+        "G9": "v3.53_F1",
+        "H9": null,
+        "I9": null,
+        "J9": null,
+        "K9": null,
+        "L9": null,
+        "M9": null,
+        "N9": null,
+        "O9": null,
+        "P9": null,
+        "Q9": null,
+        "R9": null,
+        "S9": null,
+        "T9": null,
+        "U9": null,
+        "A10": null,
+        "B10": null,
+        "C10": "M-C3(5각) / 통합UI",
+        "D10": "ESPU35",
+        "E10": null,
+        "F10": null,
+        "G10": "v3.52_F15",
+        "H10": null,
+        "I10": null,
+        "J10": null,
+        "K10": null,
+        "L10": null,
+        "M10": null,
+        "N10": null,
+        "O10": null,
+        "P10": null,
+        "Q10": null,
+        "R10": null,
+        "S10": null,
+        "T10": null,
+        "U10": null,
+        "A11": null,
+        "B11": null,
+        "C11": "M-C3(5각) / 통합UI",
+        "D11": "ESPG40",
+        "E11": null,
+        "F11": null,
+        "G11": "v3.52_F17",
+        "H11": null,
+        "I11": null,
+        "J11": null,
+        "K11": null,
+        "L11": null,
+        "M11": null,
+        "N11": null,
+        "O11": null,
+        "P11": null,
+        "Q11": null,
+        "R11": null,
+        "S11": null,
+        "T11": null,
+        "U11": null,
+        "A12": null,
+        "B12": null,
+        "C12": "M-C3(5각) / 통합UI",
+        "D12": "ESPU05",
+        "E12": null,
+        "F12": null,
+        "G12": "v3.52_F15_a (H)",
+        "H12": null,
+        "I12": null,
+        "J12": null,
+        "K12": null,
+        "L12": null,
+        "M12": null,
+        "N12": null,
+        "O12": null,
+        "P12": null,
+        "Q12": null,
+        "R12": null,
+        "S12": null,
+        "T12": null,
+        "U12": null,
+        "A13": null,
+        "B13": null,
+        "C13": "M-C3(5각) / 통합UI",
+        "D13": "ESPE74",
+        "E13": null,
+        "F13": null,
+        "G13": "v3.52_F16",
+        "H13": null,
+        "I13": null,
+        "J13": null,
+        "K13": null,
+        "L13": null,
+        "M13": null,
+        "N13": null,
+        "O13": null,
+        "P13": null,
+        "Q13": null,
+        "R13": null,
+        "S13": null,
+        "T13": null,
+        "U13": null,
+        "A14": null,
+        "B14": null,
+        "C14": "M-C3(5각) / 통합UI",
+        "D14": "ESPY64",
+        "E14": null,
+        "F14": null,
+        "G14": "v3.52_F13_a",
+        "H14": null,
+        "I14": null,
+        "J14": null,
+        "K14": null,
+        "L14": null,
+        "M14": null,
+        "N14": null,
+        "O14": null,
+        "P14": null,
+        "Q14": null,
+        "R14": null,
+        "S14": null,
+        "T14": null,
+        "U14": null,
+        "A15": null,
+        "B15": null,
+        "C15": "M-C3(5각) / 통합UI",
+        "D15": "ESPF02",
+        "E15": null,
+        "F15": null,
+        "G15": "v3.53_F1",
+        "H15": null,
+        "I15": null,
+        "J15": null,
+        "K15": null,
+        "L15": null,
+        "M15": null,
+        "N15": null,
+        "O15": null,
+        "P15": null,
+        "Q15": null,
+        "R15": null,
+        "S15": null,
+        "T15": null,
+        "U15": null,
+        "A16": null,
+        "B16": "5L\n(기흥)",
+        "C16": "M-C3",
+        "D16": "ESPG85",
+        "E16": null,
+        "F16": null,
+        "G16": "v3.52_F17",
+        "H16": null,
+        "I16": null,
+        "J16": null,
+        "K16": null,
+        "L16": null,
+        "M16": null,
+        "N16": null,
+        "O16": null,
+        "P16": null,
+        "Q16": null,
+        "R16": null,
+        "S16": null,
+        "T16": null,
+        "U16": null,
+        "A17": null,
+        "B17": null,
+        "C17": "M-C3",
+        "D17": "ESPR96",
+        "E17": null,
+        "F17": null,
+        "G17": "v3.52_F13_a",
+        "H17": null,
+        "I17": null,
+        "J17": null,
+        "K17": null,
+        "L17": null,
+        "M17": null,
+        "N17": null,
+        "O17": null,
+        "P17": null,
+        "Q17": null,
+        "R17": null,
+        "S17": null,
+        "T17": null,
+        "U17": null,
+        "A18": null,
+        "B18": null,
+        "C18": "M-C4 / Smart UI",
+        "D18": "ESPGT41",
+        "E18": null,
+        "F18": null,
+        "G18": "v4.57.2.2_f1",
+        "H18": null,
+        "I18": null,
+        "J18": null,
+        "K18": null,
+        "L18": null,
+        "M18": null,
+        "N18": null,
+        "O18": null,
+        "P18": null,
+        "Q18": null,
+        "R18": null,
+        "S18": null,
+        "T18": null,
+        "U18": null,
+        "A19": null,
+        "B19": null,
+        "C19": "M-C4 / Smart UI",
+        "D19": "ESPGD23",
+        "E19": null,
+        "F19": null,
+        "G19": "v4.57.2.2_f1",
+        "H19": null,
+        "I19": null,
+        "J19": null,
+        "K19": null,
+        "L19": null,
+        "M19": null,
+        "N19": null,
+        "O19": null,
+        "P19": null,
+        "Q19": null,
+        "R19": null,
+        "S19": null,
+        "T19": null,
+        "U19": null,
+        "A20": null,
+        "B20": null,
+        "C20": "M-C4 / Smart UI",
+        "D20": "ESPGR76",
+        "E20": null,
+        "F20": null,
+        "G20": null,
+        "H20": null,
+        "I20": null,
+        "J20": null,
+        "K20": null,
+        "L20": null,
+        "M20": null,
+        "N20": null,
+        "O20": null,
+        "P20": null,
+        "Q20": null,
+        "R20": null,
+        "S20": null,
+        "T20": null,
+        "U20": null,
+        "A21": null,
+        "B21": null,
+        "C21": "M-C4 / Smart UI",
+        "D21": "ESPGW35",
+        "E21": null,
+        "F21": null,
+        "G21": "v4.57.2.2_f1",
+        "H21": null,
+        "I21": null,
+        "J21": null,
+        "K21": null,
+        "L21": null,
+        "M21": null,
+        "N21": null,
+        "O21": null,
+        "P21": null,
+        "Q21": null,
+        "R21": null,
+        "S21": null,
+        "T21": null,
+        "U21": null,
+        "A22": null,
+        "B22": null,
+        "C22": "M-C4 / Smart UI",
+        "D22": "ESPGW64",
+        "E22": null,
+        "F22": null,
+        "G22": "v4.57.2.2_f1",
+        "H22": null,
+        "I22": null,
+        "J22": null,
+        "K22": null,
+        "L22": null,
+        "M22": null,
+        "N22": null,
+        "O22": null,
+        "P22": null,
+        "Q22": null,
+        "R22": null,
+        "S22": null,
+        "T22": null,
+        "U22": null,
+        "A23": null,
+        "B23": null,
+        "C23": "M-C3",
+        "D23": "ESPW85",
+        "E23": null,
+        "F23": null,
+        "G23": "v3.52_F17",
+        "H23": null,
+        "I23": null,
+        "J23": null,
+        "K23": null,
+        "L23": null,
+        "M23": null,
+        "N23": null,
+        "O23": null,
+        "P23": null,
+        "Q23": null,
+        "R23": null,
+        "S23": null,
+        "T23": null,
+        "U23": null,
+        "A24": null,
+        "B24": null,
+        "C24": "M-C4+ / Smart UI",
+        "D24": "ESPGL76",
+        "E24": null,
+        "F24": null,
+        "G24": "v4.57.0.1_f1",
+        "H24": null,
+        "I24": null,
+        "J24": null,
+        "K24": null,
+        "L24": null,
+        "M24": null,
+        "N24": null,
+        "O24": null,
+        "P24": null,
+        "Q24": null,
+        "R24": null,
+        "S24": null,
+        "T24": null,
+        "U24": null,
+        "A25": null,
+        "B25": null,
+        "C25": "M-C3",
+        "D25": "ESPW71",
+        "E25": null,
+        "F25": null,
+        "G25": "v3.52_F16",
+        "H25": null,
+        "I25": null,
+        "J25": null,
+        "K25": null,
+        "L25": null,
+        "M25": null,
+        "N25": null,
+        "O25": null,
+        "P25": null,
+        "Q25": null,
+        "R25": null,
+        "S25": null,
+        "T25": null,
+        "U25": null,
+        "A26": null,
+        "B26": "S3",
+        "C26": null,
+        "D26": null,
+        "E26": null,
+        "F26": null,
+        "G26": null,
+        "H26": null,
+        "I26": null,
+        "J26": null,
+        "K26": null,
+        "L26": null,
+        "M26": null,
+        "N26": null,
+        "O26": null,
+        "P26": null,
+        "Q26": null,
+        "R26": null,
+        "S26": null,
+        "T26": null,
+        "U26": null,
+        "A27": null,
+        "B27": null,
+        "C27": "M-C3(5각) / 통합UI",
+        "D27": "ESPV07",
+        "E27": null,
+        "F27": null,
+        "G27": "v3.53_F1",
+        "H27": null,
+        "I27": null,
+        "J27": null,
+        "K27": null,
+        "L27": null,
+        "M27": null,
+        "N27": null,
+        "O27": null,
+        "P27": null,
+        "Q27": null,
+        "R27": null,
+        "S27": null,
+        "T27": null,
+        "U27": null,
+        "A28": null,
+        "B28": null,
+        "C28": "M-C3(5각) / 통합UI",
+        "D28": "ESPM37",
+        "E28": null,
+        "F28": null,
+        "G28": "v3.52_F17",
+        "H28": null,
+        "I28": null,
+        "J28": null,
+        "K28": null,
+        "L28": null,
+        "M28": null,
+        "N28": null,
+        "O28": null,
+        "P28": null,
+        "Q28": null,
+        "R28": null,
+        "S28": null,
+        "T28": null,
+        "U28": null,
+        "A29": null,
+        "B29": null,
+        "C29": "M-C3(5각) / 통합UI",
+        "D29": "ESPP20",
+        "E29": null,
+        "F29": null,
+        "G29": "v3.52_F16",
+        "H29": null,
+        "I29": null,
+        "J29": null,
+        "K29": null,
+        "L29": null,
+        "M29": null,
+        "N29": null,
+        "O29": null,
+        "P29": null,
+        "Q29": null,
+        "R29": null,
+        "S29": null,
+        "T29": null,
+        "U29": null,
+        "A30": null,
+        "B30": null,
+        "C30": "M-C4 / Smart UI",
+        "D30": "ESPGY85",
+        "E30": null,
+        "F30": null,
+        "G30": "v4.56.8.1_f1",
+        "H30": null,
+        "I30": null,
+        "J30": null,
+        "K30": null,
+        "L30": null,
+        "M30": null,
+        "N30": null,
+        "O30": null,
+        "P30": null,
+        "Q30": null,
+        "R30": null,
+        "S30": null,
+        "T30": null,
+        "U30": null,
+        "A31": null,
+        "B31": null,
+        "C31": "M-C4 / Smart UI",
+        "D31": "ESPGN02",
+        "E31": null,
+        "F31": null,
+        "G31": "v4.56.9.1_f2",
+        "H31": null,
+        "I31": null,
+        "J31": null,
+        "K31": null,
+        "L31": null,
+        "M31": null,
+        "N31": null,
+        "O31": null,
+        "P31": null,
+        "Q31": null,
+        "R31": null,
+        "S31": null,
+        "T31": null,
+        "U31": null,
+        "A32": null,
+        "B32": null,
+        "C32": "M-C4 / Smart UI",
+        "D32": "ESPGR46",
+        "E32": null,
+        "F32": null,
+        "G32": "v4.57.0.1_f1",
+        "H32": null,
+        "I32": null,
+        "J32": null,
+        "K32": null,
+        "L32": null,
+        "M32": null,
+        "N32": null,
+        "O32": null,
+        "P32": null,
+        "Q32": null,
+        "R32": null,
+        "S32": null,
+        "T32": null,
+        "U32": null,
+        "A33": null,
+        "B33": "V1",
+        "C33": null,
+        "D33": null,
+        "E33": null,
+        "F33": null,
+        "G33": null,
+        "H33": null,
+        "I33": null,
+        "J33": null,
+        "K33": null,
+        "L33": null,
+        "M33": null,
+        "N33": null,
+        "O33": null,
+        "P33": null,
+        "Q33": null,
+        "R33": null,
+        "S33": null,
+        "T33": null,
+        "U33": null,
+        "A34": null,
+        "B34": null,
+        "C34": "M-C4+ / Smart UI",
+        "D34": "ESPGC37",
+        "E34": null,
+        "F34": null,
+        "G34": "v4.57.2.2_f1",
+        "H34": null,
+        "I34": null,
+        "J34": null,
+        "K34": null,
+        "L34": null,
+        "M34": null,
+        "N34": null,
+        "O34": null,
+        "P34": null,
+        "Q34": null,
+        "R34": null,
+        "S34": null,
+        "T34": null,
+        "U34": null,
+        "A35": null,
+        "B35": null,
+        "C35": "M-C4+ / Smart UI",
+        "D35": "ESPGP21",
+        "E35": null,
+        "F35": null,
+        "G35": "v4.56.9.1_f2",
+        "H35": null,
+        "I35": null,
+        "J35": null,
+        "K35": null,
+        "L35": null,
+        "M35": null,
+        "N35": null,
+        "O35": null,
+        "P35": null,
+        "Q35": null,
+        "R35": null,
+        "S35": null,
+        "T35": null,
+        "U35": null,
+        "A36": null,
+        "B36": null,
+        "C36": null,
+        "D36": null,
+        "E36": null,
+        "F36": null,
+        "G36": null,
+        "H36": null,
+        "I36": null,
+        "J36": null,
+        "K36": null,
+        "L36": null,
+        "M36": null,
+        "N36": null,
+        "O36": null,
+        "P36": null,
+        "Q36": null,
+        "R36": null,
+        "S36": null,
+        "T36": null,
+        "U36": null,
+        "A37": null,
+        "B37": "NRD-V (V1)",
+        "C37": "M-C4/C4+ / Smart UI",
+        "D37": "ESPGC60",
+        "E37": null,
+        "F37": null,
+        "G37": "v4.57.0.1_f1",
+        "H37": null,
+        "I37": null,
+        "J37": null,
+        "K37": null,
+        "L37": null,
+        "M37": null,
+        "N37": null,
+        "O37": null,
+        "P37": null,
+        "Q37": null,
+        "R37": null,
+        "S37": null,
+        "T37": null,
+        "U37": null,
+        "A38": null,
+        "B38": null,
+        "C38": null,
+        "D38": null,
+        "E38": null,
+        "F38": null,
+        "G38": null,
+        "H38": null,
+        "I38": null,
+        "J38": null,
+        "K38": null,
+        "L38": null,
+        "M38": null,
+        "N38": null,
+        "O38": null,
+        "P38": null,
+        "Q38": null,
+        "R38": null,
+        "S38": null,
+        "T38": null,
+        "U38": null,
+        "A39": null,
+        "B39": null,
+        "C39": null,
+        "D39": null,
+        "E39": null,
+        "F39": null,
+        "G39": null,
+        "H39": null,
+        "I39": null,
+        "J39": null,
+        "K39": null,
+        "L39": null,
+        "M39": null,
+        "N39": null,
+        "O39": null,
+        "P39": null,
+        "Q39": null,
+        "R39": null,
+        "S39": null,
+        "T39": null,
+        "U39": null,
+        "A40": null,
+        "B40": null,
+        "C40": null,
+        "D40": null,
+        "E40": null,
+        "F40": null,
+        "G40": null,
+        "H40": null,
+        "I40": null,
+        "J40": null,
+        "K40": null,
+        "L40": null,
+        "M40": null,
+        "N40": null,
+        "O40": null,
+        "P40": null,
+        "Q40": null,
+        "R40": null,
+        "S40": null,
+        "T40": null,
+        "U40": null,
+        "A41": null,
+        "B41": "S3",
+        "C41": "M-O2",
+        "D41": "ESOC44",
+        "E41": null,
+        "F41": null,
+        "G41": "v3.52_F14",
+        "H41": null,
+        "I41": null,
+        "J41": null,
+        "K41": null,
+        "L41": null,
+        "M41": null,
+        "N41": null,
+        "O41": null,
+        "P41": null,
+        "Q41": null,
+        "R41": null,
+        "S41": null,
+        "T41": null,
+        "U41": null,
+        "A42": null,
+        "B42": null,
+        "C42": "M-O2",
+        "D42": "ESOV96",
+        "E42": null,
+        "F42": null,
+        "G42": "V3.52_F14",
+        "H42": null,
+        "I42": null,
+        "J42": null,
+        "K42": null,
+        "L42": null,
+        "M42": null,
+        "N42": null,
+        "O42": null,
+        "P42": null,
+        "Q42": null,
+        "R42": null,
+        "S42": null,
+        "T42": null,
+        "U42": null,
+        "A43": null,
+        "B43": null,
+        "C43": "M-O2",
+        "D43": "ESOV38",
+        "E43": null,
+        "F43": null,
+        "G43": "v3.52_F17",
+        "H43": null,
+        "I43": null,
+        "J43": null,
+        "K43": null,
+        "L43": null,
+        "M43": null,
+        "N43": null,
+        "O43": null,
+        "P43": null,
+        "Q43": null,
+        "R43": null,
+        "S43": null,
+        "T43": null,
+        "U43": null,
+        "A44": null,
+        "B44": null,
+        "C44": "M-O2",
+        "D44": "ESOU56",
+        "E44": null,
+        "F44": null,
+        "G44": "v3.53_F2",
+        "H44": null,
+        "I44": null,
+        "J44": null,
+        "K44": null,
+        "L44": null,
+        "M44": null,
+        "N44": null,
+        "O44": null,
+        "P44": null,
+        "Q44": null,
+        "R44": null,
+        "S44": null,
+        "T44": null,
+        "U44": null,
+        "A45": null,
+        "B45": null,
+        "C45": "M-O2",
+        "D45": "ESOA26",
+        "E45": null,
+        "F45": null,
+        "G45": "v3.53_F1",
+        "H45": null,
+        "I45": null,
+        "J45": null,
+        "K45": null,
+        "L45": null,
+        "M45": null,
+        "N45": null,
+        "O45": null,
+        "P45": null,
+        "Q45": null,
+        "R45": null,
+        "S45": null,
+        "T45": null,
+        "U45": null,
+        "A46": null,
+        "B46": null,
+        "C46": "M-O2",
+        "D46": "ESOE22",
+        "E46": null,
+        "F46": null,
+        "G46": "v3.53_F2",
+        "H46": null,
+        "I46": null,
+        "J46": null,
+        "K46": null,
+        "L46": null,
+        "M46": null,
+        "N46": null,
+        "O46": null,
+        "P46": null,
+        "Q46": null,
+        "R46": null,
+        "S46": null,
+        "T46": null,
+        "U46": null,
+        "A47": null,
+        "B47": "V1",
+        "C47": "M-O2",
+        "D47": "ESOX08",
+        "E47": null,
+        "F47": null,
+        "G47": "v3.52_F16",
+        "H47": null,
+        "I47": null,
+        "J47": null,
+        "K47": null,
+        "L47": null,
+        "M47": null,
+        "N47": null,
+        "O47": null,
+        "P47": null,
+        "Q47": null,
+        "R47": null,
+        "S47": null,
+        "T47": null,
+        "U47": null,
+        "A48": null,
+        "B48": null,
+        "C48": "M-O2",
+        "D48": "ESOW54",
+        "E48": null,
+        "F48": null,
+        "G48": "v3.53_F2",
+        "H48": null,
+        "I48": null,
+        "J48": null,
+        "K48": null,
+        "L48": null,
+        "M48": null,
+        "N48": null,
+        "O48": null,
+        "P48": null,
+        "Q48": null,
+        "R48": null,
+        "S48": null,
+        "T48": null,
+        "U48": null,
+        "A49": null,
+        "B49": null,
+        "C49": "M-O2",
+        "D49": "ESOJ88",
+        "E49": null,
+        "F49": null,
+        "G49": "v3.53_F2",
+        "H49": null,
+        "I49": null,
+        "J49": null,
+        "K49": null,
+        "L49": null,
+        "M49": null,
+        "N49": null,
+        "O49": null,
+        "P49": null,
+        "Q49": null,
+        "R49": null,
+        "S49": null,
+        "T49": null,
+        "U49": null,
+        "A50": null,
+        "B50": null,
+        "C50": "M-O2",
+        "D50": "ESOA17",
+        "E50": null,
+        "F50": null,
+        "G50": "v3.53_F2",
+        "H50": null,
+        "I50": null,
+        "J50": null,
+        "K50": null,
+        "L50": null,
+        "M50": null,
+        "N50": null,
+        "O50": null,
+        "P50": null,
+        "Q50": null,
+        "R50": null,
+        "S50": null,
+        "T50": null,
+        "U50": null,
+        "A51": null,
+        "B51": null,
+        "C51": "M-O2",
+        "D51": "ESOU23",
+        "E51": null,
+        "F51": null,
+        "G51": "v3.53_F2",
+        "H51": null,
+        "I51": null,
+        "J51": null,
+        "K51": null,
+        "L51": null,
+        "M51": null,
+        "N51": null,
+        "O51": null,
+        "P51": null,
+        "Q51": null,
+        "R51": null,
+        "S51": null,
+        "T51": null,
+        "U51": null,
+        "A52": null,
+        "B52": null,
+        "C52": "M-O2",
+        "D52": "ESOR40",
+        "E52": null,
+        "F52": null,
+        "G52": "v3.52_F15",
+        "H52": null,
+        "I52": null,
+        "J52": null,
+        "K52": null,
+        "L52": null,
+        "M52": null,
+        "N52": null,
+        "O52": null,
+        "P52": null,
+        "Q52": null,
+        "R52": null,
+        "S52": null,
+        "T52": null,
+        "U52": null,
+        "A53": null,
+        "B53": null,
+        "C53": null,
+        "D53": null,
+        "E53": null,
+        "F53": null,
+        "G53": null,
+        "H53": null,
+        "I53": null,
+        "J53": null,
+        "K53": null,
+        "L53": null,
+        "M53": null,
+        "N53": null,
+        "O53": null,
+        "P53": null,
+        "Q53": null,
+        "R53": null,
+        "S53": null,
+        "T53": null,
+        "U53": null,
+        "A54": null,
+        "B54": "MFAB",
+        "C54": "M-O5(Prime)(6각)",
+        "D54": "ESOPT42",
+        "E54": null,
+        "F54": null,
+        "G54": "v4.63.76.1_a2",
+        "H54": null,
+        "I54": null,
+        "J54": null,
+        "K54": null,
+        "L54": null,
+        "M54": null,
+        "N54": null,
+        "O54": null,
+        "P54": null,
+        "Q54": null,
+        "R54": null,
+        "S54": null,
+        "T54": null,
+        "U54": null,
+        "A55": null,
+        "B55": null,
+        "C55": "M-O5(Prime)(6각)",
+        "D55": "ESOPQ32",
+        "E55": null,
+        "F55": null,
+        "G55": "v4.62.75.1",
+        "H55": null,
+        "I55": null,
+        "J55": null,
+        "K55": null,
+        "L55": null,
+        "M55": null,
+        "N55": null,
+        "O55": null,
+        "P55": null,
+        "Q55": null,
+        "R55": null,
+        "S55": null,
+        "T55": null,
+        "U55": null,
+        "A56": null,
+        "B56": null,
+        "C56": "M-O5(Prime)(6각)",
+        "D56": "ESOPW28",
+        "E56": null,
+        "F56": null,
+        "G56": "v4.56.63.1_a1",
+        "H56": null,
+        "I56": null,
+        "J56": null,
+        "K56": null,
+        "L56": null,
+        "M56": null,
+        "N56": null,
+        "O56": null,
+        "P56": null,
+        "Q56": null,
+        "R56": null,
+        "S56": null,
+        "T56": null,
+        "U56": null,
+        "A57": null,
+        "B57": "NRD (MR2동)",
+        "C57": "M-O2/O3",
+        "D57": "ESON81",
+        "E57": null,
+        "F57": null,
+        "G57": "O3: v4.50.1.1_a / O2: v3.53_F2",
+        "H57": null,
+        "I57": null,
+        "J57": null,
+        "K57": null,
+        "L57": null,
+        "M57": null,
+        "N57": null,
+        "O57": null,
+        "P57": "PM1, 2는 O3, PM3, 4는 O2",
+        "Q57": null,
+        "R57": null,
+        "S57": null,
+        "T57": null,
+        "U57": null
+      }
+    }
+  },
+  "source": "REAL",
+  "raw_content": "{\"rows\":[{\"values\":{\"group_name\":\"POLY\",\"line\":\"S1\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"6각\",\"ui_type\":\"구UI\",\"equipment_code\":\"ESPH58\",\"version_raw\":\"v1.1.1.6D_1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B4\",\"site\":\"B4\",\"model_name\":\"C4\",\"geometry_type\":\"C4\",\"ui_type\":\"C4\",\"equipment_code\":\"D4\",\"version_raw\":\"G4\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S1\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPL69\",\"version_raw\":\"메모리버전임\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B4\",\"site\":\"B4\",\"model_name\":\"C5\",\"geometry_type\":\"C5\",\"ui_type\":\"C5\",\"equipment_code\":\"D5\",\"version_raw\":\"G5\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S1\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPQ86\",\"version_raw\":\"메모리버전임\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B4\",\"site\":\"B4\",\"model_name\":\"C6\",\"geometry_type\":\"C6\",\"ui_type\":\"C6\",\"equipment_code\":\"D6\",\"version_raw\":\"G6\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPD15\",\"version_raw\":\"v3.52_F17\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C7\",\"geometry_type\":\"C7\",\"ui_type\":\"C7\",\"equipment_code\":\"D7\",\"version_raw\":\"G7\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPL14\",\"version_raw\":\"v3.52_F15\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C8\",\"geometry_type\":\"C8\",\"ui_type\":\"C8\",\"equipment_code\":\"D8\",\"version_raw\":\"G8\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPW74\",\"version_raw\":\"v3.53_F1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C9\",\"geometry_type\":\"C9\",\"ui_type\":\"C9\",\"equipment_code\":\"D9\",\"version_raw\":\"G9\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPU35\",\"version_raw\":\"v3.52_F15\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C10\",\"geometry_type\":\"C10\",\"ui_type\":\"C10\",\"equipment_code\":\"D10\",\"version_raw\":\"G10\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPG40\",\"version_raw\":\"v3.52_F17\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C11\",\"geometry_type\":\"C11\",\"ui_type\":\"C11\",\"equipment_code\":\"D11\",\"version_raw\":\"G11\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPU05\",\"version_raw\":\"v3.52_F15_a (H)\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C12\",\"geometry_type\":\"C12\",\"ui_type\":\"C12\",\"equipment_code\":\"D12\",\"version_raw\":\"G12\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPE74\",\"version_raw\":\"v3.52_F16\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C13\",\"geometry_type\":\"C13\",\"ui_type\":\"C13\",\"equipment_code\":\"D13\",\"version_raw\":\"G13\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPY64\",\"version_raw\":\"v3.52_F13_a\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C14\",\"geometry_type\":\"C14\",\"ui_type\":\"C14\",\"equipment_code\":\"D14\",\"version_raw\":\"G14\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"1L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPF02\",\"version_raw\":\"v3.53_F1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B7\",\"site\":\"B7\",\"model_name\":\"C15\",\"geometry_type\":\"C15\",\"ui_type\":\"C15\",\"equipment_code\":\"D15\",\"version_raw\":\"G15\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"equipment_code\":\"ESPG85\",\"version_raw\":\"v3.52_F17\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C16\",\"equipment_code\":\"D16\",\"version_raw\":\"G16\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"equipment_code\":\"ESPR96\",\"version_raw\":\"v3.52_F13_a\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C17\",\"equipment_code\":\"D17\",\"version_raw\":\"G17\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGT41\",\"version_raw\":\"v4.57.2.2_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C18\",\"ui_type\":\"C18\",\"equipment_code\":\"D18\",\"version_raw\":\"G18\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGD23\",\"version_raw\":\"v4.57.2.2_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C19\",\"ui_type\":\"C19\",\"equipment_code\":\"D19\",\"version_raw\":\"G19\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGR76\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C20\",\"ui_type\":\"C20\",\"equipment_code\":\"D20\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGW35\",\"version_raw\":\"v4.57.2.2_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C21\",\"ui_type\":\"C21\",\"equipment_code\":\"D21\",\"version_raw\":\"G21\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGW64\",\"version_raw\":\"v4.57.2.2_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C22\",\"ui_type\":\"C22\",\"equipment_code\":\"D22\",\"version_raw\":\"G22\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"equipment_code\":\"ESPW85\",\"version_raw\":\"v3.52_F17\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C23\",\"equipment_code\":\"D23\",\"version_raw\":\"G23\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C4+\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGL76\",\"version_raw\":\"v4.57.0.1_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C24\",\"ui_type\":\"C24\",\"equipment_code\":\"D24\",\"version_raw\":\"G24\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"5L\",\"site\":\"(기흥)\",\"model_name\":\"M-C3\",\"equipment_code\":\"ESPW71\",\"version_raw\":\"v3.52_F16\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B16\",\"site\":\"B16\",\"model_name\":\"C25\",\"equipment_code\":\"D25\",\"version_raw\":\"G25\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S3\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPV07\",\"version_raw\":\"v3.53_F1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B26\",\"model_name\":\"C27\",\"geometry_type\":\"C27\",\"ui_type\":\"C27\",\"equipment_code\":\"D27\",\"version_raw\":\"G27\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S3\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPM37\",\"version_raw\":\"v3.52_F17\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B26\",\"model_name\":\"C28\",\"geometry_type\":\"C28\",\"ui_type\":\"C28\",\"equipment_code\":\"D28\",\"version_raw\":\"G28\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S3\",\"model_name\":\"M-C3\",\"geometry_type\":\"5각\",\"ui_type\":\"통합UI\",\"equipment_code\":\"ESPP20\",\"version_raw\":\"v3.52_F16\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B26\",\"model_name\":\"C29\",\"geometry_type\":\"C29\",\"ui_type\":\"C29\",\"equipment_code\":\"D29\",\"version_raw\":\"G29\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S3\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGY85\",\"version_raw\":\"v4.56.8.1_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B26\",\"model_name\":\"C30\",\"ui_type\":\"C30\",\"equipment_code\":\"D30\",\"version_raw\":\"G30\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S3\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGN02\",\"version_raw\":\"v4.56.9.1_f2\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B26\",\"model_name\":\"C31\",\"ui_type\":\"C31\",\"equipment_code\":\"D31\",\"version_raw\":\"G31\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"S3\",\"model_name\":\"M-C4\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGR46\",\"version_raw\":\"v4.57.0.1_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B26\",\"model_name\":\"C32\",\"ui_type\":\"C32\",\"equipment_code\":\"D32\",\"version_raw\":\"G32\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"V1\",\"model_name\":\"M-C4+\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGC37\",\"version_raw\":\"v4.57.2.2_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B33\",\"model_name\":\"C34\",\"ui_type\":\"C34\",\"equipment_code\":\"D34\",\"version_raw\":\"G34\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"V1\",\"model_name\":\"M-C4+\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGP21\",\"version_raw\":\"v4.56.9.1_f2\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B33\",\"model_name\":\"C35\",\"ui_type\":\"C35\",\"equipment_code\":\"D35\",\"version_raw\":\"G35\"}},{\"values\":{\"group_name\":\"POLY\",\"line\":\"NRD-V (V1)\",\"model_name\":\"M-C4/C4+\",\"ui_type\":\"Smart UI\",\"equipment_code\":\"ESPGC60\",\"version_raw\":\"v4.57.0.1_f1\"},\"sources\":{\"group_name\":\"A4\",\"line\":\"B37\",\"model_name\":\"C37\",\"ui_type\":\"C37\",\"equipment_code\":\"D37\",\"version_raw\":\"G37\"}},{\"values\":{\"line\":\"S3\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOC44\",\"version_raw\":\"v3.52_F14\"},\"sources\":{\"line\":\"B41\",\"model_name\":\"C41\",\"equipment_code\":\"D41\",\"version_raw\":\"G41\"}},{\"values\":{\"line\":\"S3\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOV96\",\"version_raw\":\"V3.52_F14\"},\"sources\":{\"line\":\"B41\",\"model_name\":\"C42\",\"equipment_code\":\"D42\",\"version_raw\":\"G42\"}},{\"values\":{\"line\":\"S3\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOV38\",\"version_raw\":\"v3.52_F17\"},\"sources\":{\"line\":\"B41\",\"model_name\":\"C43\",\"equipment_code\":\"D43\",\"version_raw\":\"G43\"}},{\"values\":{\"line\":\"S3\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOU56\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B41\",\"model_name\":\"C44\",\"equipment_code\":\"D44\",\"version_raw\":\"G44\"}},{\"values\":{\"line\":\"S3\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOA26\",\"version_raw\":\"v3.53_F1\"},\"sources\":{\"line\":\"B41\",\"model_name\":\"C45\",\"equipment_code\":\"D45\",\"version_raw\":\"G45\"}},{\"values\":{\"line\":\"S3\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOE22\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B41\",\"model_name\":\"C46\",\"equipment_code\":\"D46\",\"version_raw\":\"G46\"}},{\"values\":{\"line\":\"V1\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOX08\",\"version_raw\":\"v3.52_F16\"},\"sources\":{\"line\":\"B47\",\"model_name\":\"C47\",\"equipment_code\":\"D47\",\"version_raw\":\"G47\"}},{\"values\":{\"line\":\"V1\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOW54\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B47\",\"model_name\":\"C48\",\"equipment_code\":\"D48\",\"version_raw\":\"G48\"}},{\"values\":{\"line\":\"V1\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOJ88\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B47\",\"model_name\":\"C49\",\"equipment_code\":\"D49\",\"version_raw\":\"G49\"}},{\"values\":{\"line\":\"V1\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOA17\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B47\",\"model_name\":\"C50\",\"equipment_code\":\"D50\",\"version_raw\":\"G50\"}},{\"values\":{\"line\":\"V1\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOU23\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B47\",\"model_name\":\"C51\",\"equipment_code\":\"D51\",\"version_raw\":\"G51\"}},{\"values\":{\"line\":\"V1\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESOR40\",\"version_raw\":\"v3.52_F15\"},\"sources\":{\"line\":\"B47\",\"model_name\":\"C52\",\"equipment_code\":\"D52\",\"version_raw\":\"G52\"}},{\"values\":{\"line\":\"MFAB\",\"model_name\":\"M-O5(Prime)\",\"geometry_type\":\"6각\",\"equipment_code\":\"ESOPT42\",\"version_raw\":\"v4.63.76.1_a2\"},\"sources\":{\"line\":\"B54\",\"model_name\":\"C54\",\"geometry_type\":\"C54\",\"equipment_code\":\"D54\",\"version_raw\":\"G54\"}},{\"values\":{\"line\":\"MFAB\",\"model_name\":\"M-O5(Prime)\",\"geometry_type\":\"6각\",\"equipment_code\":\"ESOPQ32\",\"version_raw\":\"v4.62.75.1\"},\"sources\":{\"line\":\"B54\",\"model_name\":\"C55\",\"geometry_type\":\"C55\",\"equipment_code\":\"D55\",\"version_raw\":\"G55\"}},{\"values\":{\"line\":\"MFAB\",\"model_name\":\"M-O5(Prime)\",\"geometry_type\":\"6각\",\"equipment_code\":\"ESOPW28\",\"version_raw\":\"v4.56.63.1_a1\"},\"sources\":{\"line\":\"B54\",\"model_name\":\"C56\",\"geometry_type\":\"C56\",\"equipment_code\":\"D56\",\"version_raw\":\"G56\"}},{\"values\":{\"line\":\"NRD (MR2동)\",\"pm_name\":\"PM1\",\"model_name\":\"M-O3\",\"equipment_code\":\"ESON81\",\"version_raw\":\"v4.50.1.1_a\"},\"sources\":{\"line\":\"B57\",\"pm_name\":\"P57\",\"model_name\":\"C57\",\"equipment_code\":\"D57\",\"version_raw\":\"G57\"}},{\"values\":{\"line\":\"NRD (MR2동)\",\"pm_name\":\"PM2\",\"model_name\":\"M-O3\",\"equipment_code\":\"ESON81\",\"version_raw\":\"v4.50.1.1_a\"},\"sources\":{\"line\":\"B57\",\"pm_name\":\"P57\",\"model_name\":\"C57\",\"equipment_code\":\"D57\",\"version_raw\":\"G57\"}},{\"values\":{\"line\":\"NRD (MR2동)\",\"pm_name\":\"PM3\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESON81\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B57\",\"pm_name\":\"P57\",\"model_name\":\"C57\",\"equipment_code\":\"D57\",\"version_raw\":\"G57\"}},{\"values\":{\"line\":\"NRD (MR2동)\",\"pm_name\":\"PM4\",\"model_name\":\"M-O2\",\"equipment_code\":\"ESON81\",\"version_raw\":\"v3.53_F2\"},\"sources\":{\"line\":\"B57\",\"pm_name\":\"P57\",\"model_name\":\"C57\",\"equipment_code\":\"D57\",\"version_raw\":\"G57\"}}],\"review_notes\":[{\"reason\":\"기준 날짜가 시트 자료에 없습니다.\",\"field\":\"base_date\",\"address\":null},{\"reason\":\"사업장 표기는 일부 라인에만 확인되며, 나머지 라인의 사업장은 자료만으로 확인할 수 없습니다.\",\"field\":\"site\",\"address\":\"B26\"},{\"reason\":\"그룹명이 확인되지 않습니다.\",\"field\":\"group_name\",\"address\":\"A41\"},{\"reason\":\"설비 행은 있으나 SW 버전 값이 비어 있습니다.\",\"field\":\"version_raw\",\"address\":\"G20\"}]}"
+}

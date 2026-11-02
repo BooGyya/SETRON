@@ -22,6 +22,9 @@ FIELD_LABELS = {
     "model_name": "모델명", "production_area": "Memory/Foundry", "equipment_code": "설비 호기",
     "pm_name": "PM", "family_name": "SW 계열", "version_raw": "SW 버전 원문",
     "release_date": "출시일", "item_no": "Item 번호", "content": "변경 내용", "target_models": "대상 모델",
+    "ui_type": "UI 구분", "structure_type": "구조 구분", "geometry_type": "형상",
+    "modification_type": "개조 정보", "modification_mark": "개조 적용 표식",
+    "engine_version": "Engine 버전", "epd_version": "EPD 버전",
 }
 
 KIND_LABELS = {ExtractKind.EQUIPMENT_STATUS: "설비 현황", ExtractKind.RELEASE_NOTE: "릴리즈 노트"}

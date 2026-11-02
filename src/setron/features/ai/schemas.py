@@ -58,12 +58,18 @@ class ExtractKind(str, Enum):
     RELEASE_NOTE = "RELEASE_NOTE"
 
 
-# 추출 결과의 공통 항목 이름 (FUN-019). 원본 표기를 그대로 담고, 정규화는 검토·저장 단계에서 한다.
+# 추출 결과에는 원본 표기를 담는다. features/extraction에서 출처를 대조하고 정리한다.
 EQUIPMENT_STATUS_FIELDS = (
     "base_date", "site", "line", "group_name", "model_name", "production_area",
     "equipment_code", "pm_name", "family_name", "version_raw",
+    "ui_type", "structure_type", "geometry_type", "modification_type",
+    "engine_version", "epd_version",
 )
-RELEASE_NOTE_FIELDS = ("version_raw", "release_date", "item_no", "content", "target_models")
+RELEASE_NOTE_FIELDS = (
+    "version_raw", "release_date", "item_no", "content", "target_models",
+    "group_name", "model_name", "family_name", "ui_type", "structure_type",
+    "modification_type", "modification_mark",
+)
 
 
 @dataclass(frozen=True)

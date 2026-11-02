@@ -17,6 +17,8 @@
 - AI 추출의 합격 기준(필드별 일치율 등)은 Jira S15P31B106-71에서 정한 기준을 따릅니다.
 - MySQL 통합 테스트는 Docker의 전용 MySQL 5.6.19에서 자동 실행합니다. 실제 사용 PC의 Windows MySQL 접속·저장 검증은 해당 환경이 준비된 뒤 별도로 진행합니다.
 
+BE-007의 GMS 실제 호출과 전체 필드 평가는 [AI Excel 추출 테스트 결과](test-results/be-007-ai-extraction.md)에 기록합니다. 원본 셀로 먼저 고정한 135개 레코드·16개 필드와 같은 지시문으로 `gpt-6.1-sol`·`gpt-6-luna`를 비교했습니다. 후처리 일치율은 sol 99.36%, luna 90.10%(추가 결과 페널티 포함)이며, 같은 정답 위치만 비교하면 luna 91.52%입니다. 판정 보류 131개를 제외한 커버리지는 93.94%로 같고, 모델별·시트별 1회 측정입니다. [sol 원본·정답·실제 응답](test-results/be-007-evaluation/README.md), [luna 응답·토큰·시간](test-results/be-007-evaluation-luna/README.md), [모델별 추출 오류 비교표](test-results/be-007-evaluation-luna/model-field-errors.md)와 재계산 스크립트를 보존합니다.
+
 ### 공통 UI 검증 (작업 단위 2)
 
 `tests/test_ui_common.py`는 Qt offscreen 플랫폼에서 실제 위젯과 QTest 이벤트로 시작 안내, 준비 중 메뉴, 담당 페이지 등록·이동, 단일 활성 메뉴, 원본 아이콘·폰트 로딩, 키보드 조작과 페이지 입력 상태 보존을 확인합니다. 1600×960·1100×800·960×600 창에서 헤더 줄바꿈·사이드바 스크롤과, 긴 페이지를 숨겼을 때 다른 화면이 늘어나지 않는지도 검증합니다. 업무 화면이나 DB·Excel은 실행하지 않습니다.

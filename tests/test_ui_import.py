@@ -218,7 +218,11 @@ def test_issue_selects_row_and_highlights_source_cell(page):
 def test_release_note_flow_saves_items_without_equipment_fields(page, saver):
     page.kind_combo.setCurrentIndex(page.kind_combo.findData(ExtractKind.RELEASE_NOTE.value))
     extracted(page, book=RELEASE_BOOK, sheet="Release")
-    assert page.row_model.headings[2:] == ("SW 버전 원문", "출시일", "Item 번호", "변경 내용", "대상 모델")
+    assert page.row_model.headings[2:] == (
+        "SW 버전 원문", "출시일", "Item 번호", "변경 내용", "대상 모델",
+        "설비군", "모델명", "SW 계열", "UI 구분", "구조 구분", "개조 정보", "개조 적용 표식",
+    )
+    assert "설비 호기" not in page.row_model.headings and "기준일" not in page.row_model.headings
     assert page.save_button.isEnabled()
     page.save()
     QTest.qWait(10)
