@@ -71,6 +71,9 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── import_save/
+│       │   │   ├── __init__.py
+│       │   │   └── service.py
 │       │   ├── item/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
@@ -552,7 +555,18 @@ BE-004의 ReleaseService 및 허용 필드는 현재 develop에 존재하지만 
 
 AI 분석 화면은 질문을 해석한 뒤 아무 조건도 바꾸지 않는다. Site·Line·설비군은 공통 조회 선택지의 이름·키와 정확히 같을 때만 연결하고, 원본 구역명을 Fab/Line으로 추정하지 않는다. 복수 선택·기준일·모델·SW 계열·버전·Item·해석 불가 조건은 그대로 표시하며, 사용자가 직접 체크를 해제하기 전에는 적용을 막는다. 확인창 승인 후 공통 조회 초안을 바꾸고 적용하며, 목표 N은 바꾸지 않는다. 목표 N 변경이 적용 대기 중이거나 해석 뒤 선택지가 바뀌면 적용하지 않는다. 분석은 현재 적용 조건의 대시보드 계산값만 보내고, 예제 응답의 근거 문장은 자료로 확인한 근거가 아니라고 표시한다.
 
-후속 통합 사항: 실제 DB 저장 서비스(`ImportSaver` 구현: `import_batch`·설비·현황·버전·PM·릴리즈·Item 매핑과 같은 트랜잭션), `ReferenceData` 공급, 회사 AI 실제 클라이언트, Excel 읽기·AI 호출의 워커 스레드 실행, 저장 후 선택지·결과 갱신 방식은 A·B·데이터 담당자와 확정한다. O5의 JIRA·접수라인·비고는 `RELEASE_NOTE_FIELDS`에 없어 추출·저장하지 않는다.
+DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 있다. 후속 통합 사항: `ReferenceData` 공급, 회사 AI 실제 클라이언트, Excel 읽기·AI 호출의 워커 스레드 실행, 저장 후 선택지·결과 갱신 방식은 A·B·데이터 담당자와 확정한다. O5의 JIRA·접수라인·비고는 `RELEASE_NOTE_FIELDS`에 없어 추출·저장하지 않는다.
+
+### 가져오기 DB 저장 (Jira S15P31B106-75)
+
+`features/import_save/service.py`의 `DatabaseImportSaver`가 `ImportSaver`를 구현한다. `SaveRequest` 하나를 한 트랜잭션으로 저장한다: `import_batch`(EXCEL, `{시트: {셀: 값}}` 원본) → 설비 현황(`EquipmentService.save_snapshots_in`) 또는 릴리즈·Item(`ReleaseService.register_release_in`). 하나라도 실패하면 입력 작업까지 함께 취소한다. 두 `*_in` 메서드는 호출자가 연 트랜잭션을 받는 공개 진입점이며, 기존 `save_snapshots`·`register_release`는 이를 감싼다.
+
+- 설비 행은 `호기 + 기준일`로 묶어 현황 하나로 만들고, 같은 계열·같은 버전 원문 행은 SW 하나로 합친다. PM 이름이 있는 행은 그 SW의 PM이 되고 PM 모델은 행의 모델이다. 모델이 하나면 대표 모델, 여러 개면 대표 모델 없음(혼합형)이다.
+- 모델은 설비군(Poly·Oxide·KCTC·HPA, 없으면 확정된 모델 소속) 안에서 이름이 정확히 같은 등록 모델만 연결한다. 별칭은 M5 → M-O5만 쓴다. 계열은 모델(또는 기본 모델)의 계열 중 이름이 같은 것, 없으면 "이름 + 공백"으로 시작하는 것을 후보로 두고 UI 구분(구UI·통합UI)으로 하나를 고른다. 하나로 정해지지 않으면 저장하지 않는다.
+- 설비 적용 버전은 같은 계열·같은 버전 원문 릴리즈가 있을 때만 연결한다. 릴리즈는 `계열 + 버전 원문`으로 묶고, Item은 APPLIED·범위 미확인으로 연결한다. 검토 화면에서 고친 항목은 출시일·버전·Item 번호·내용만 `edited_fields`에 남긴다.
+- 같은 호기·기준일 현황이나 같은 계열·버전 릴리즈가 이미 있으면 묶음 전체를 저장하지 않는다. 교체·재가져오기(BE-009·010·025), 릴리즈 노트 문서 등록, Item 대상 모델 범위 지정은 이번 범위가 아니다.
+- 앱(`python -m setron`)은 `SETRON_DB_NAME`이 설정돼 있으면 `ui/import_page.saver_from_env()`로 이 저장소를 쓰고, 없으면 메모리 저장소를 쓴다. DB 접속은 첫 저장 때 한다. 대시보드·HeatMap은 아직 합성 자료라 저장 결과가 조회 화면에 나오지 않는다.
+- `database/seed_demo_catalog.sql`은 교육용 자료의 모델 표기로 만든 시연용 모델 9개·계열 9개다. 확정 기준 자료가 아니며 개발 DB에만 적용한다.
 
 ## B 읽기 변환 공통 기반
 

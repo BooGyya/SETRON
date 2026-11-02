@@ -26,7 +26,7 @@ from setron.ui.items import ItemsPage
 from setron.ui.ai_data import facts_from_snapshot
 from setron.ui.ai_page import AIPage
 from setron.ui.import_demo import DemoExcel
-from setron.ui.import_page import ImportPage
+from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead
 
 
@@ -128,7 +128,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
             list_action.setEnabled(False)
         elif window.route == "import":
-            window.notice.setText("데이터 가져오기 · 실행 중인 Excel 읽기 · AI 예제 응답 · 메모리 저장소(DB 미연결)")
+            window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · AI 예제 응답 · 저장 위치: {importer.saver.target_label}")
             list_action.setEnabled(False)
         elif window.route == "ai":
             window.notice.setText("AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음")
@@ -254,7 +254,9 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("SETRON")
     install_theme(app)
-    window = create_window(excel=DemoExcel() if args.demo_excel else None)
+    # SETRON_DB_* 접속 설정이 있으면 가져오기 저장을 DB로 한다. 대시보드 등 조회 화면은 아직 합성 자료다.
+    window = create_window(excel=DemoExcel() if args.demo_excel else None,
+                           import_saver=saver_from_env())
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.ai.schemas import ExtractKind
+from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.excel_import.schemas import FIELD_LABELS, ISSUE_LABELS, KIND_LABELS, IssueLevel
 from setron.features.excel_import.service import (
     build_save_request, cell_text, describe_save_error, draft_from_extract, edit_value, extract_cells,
@@ -47,6 +48,14 @@ def _workbook_key(book):
     - 동명 파일과 목록 순서 변경에 영향을 받지 않는 내부 선택 키.
     """
     return json.dumps([book.name, book.app_pid, book.full_name], ensure_ascii=False)
+
+
+def saver_from_env():
+    """``SETRON_DB_*`` 접속 설정이 있으면 DB 저장소, 없으면 None(화면 기본값인 메모리 저장소)을 돌려준다.
+
+    DB 접속은 첫 저장 때 한다. 앱 시작만으로 DB에 연결하지 않는다.
+    """
+    return DatabaseImportSaver.from_env()
 
 
 class SheetGridModel(QAbstractTableModel):
