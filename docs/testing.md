@@ -361,3 +361,9 @@ uv run pytest tests/test_ui_item_distribution.py tests/test_ui_items.py tests/te
 `python -m pytest tests/test_ui_async_read.py -q`는 Event로 반환 시점을 제어하는 느린 가짜 공급자를 사용한다. 버전/Item 화면의 UI 이벤트 응답, 워커 실행/UI 완료 스레드, 중복 요청 차단, 예외·형식 오류 후 재시도, 화면 이탈·이전 성공/실패 지연 응답 무시, 삭제된 화면 응답 차단, 이전 상세 제거 및 정상 0건을 검사한다. 실제 DB와 미확정 매핑은 연결하지 않는다.
 
 화면 예시: [가짜 지연 공급자의 로딩 상태](screenshots/b-read/async-loading.png). 실제 DB 화면이 아니며 조회 중 필터·재조회 비활성화를 확인한다.
+
+## B 자료 출처 안내 검증
+
+`python -m pytest tests/test_ui_source_notices.py tests/test_ui_async_read.py -q`로 외부 메모리 설명과 상단 안내 일치, 기본 합성 자료 표시, 설명 누락, 일반 텍스트 표시, 관측 연결/정상 0건, 조회 실패 시 이전 출처 제거 및 로딩/취소 건수 미확인을 확인한다. 실제 DB 없이 합성 공급자만 사용한다.
+
+[외부 메모리 자료 안내 화면](screenshots/b-read/source-notice.png)은 공통 UI에서 고정 예시 문구 대신 전달된 설명을 표시하는 검증 화면이다.

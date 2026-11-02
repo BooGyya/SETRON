@@ -12,6 +12,7 @@ from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import SECONDARY
 from setron.ui.versions import VersionsPage, _fit
 from setron.ui.read_worker import ReadRequest
+from setron.ui.source_notice import source_description, observation_description
 
 
 def _text(text="", size=13):
@@ -183,6 +184,7 @@ class ItemsPage(QWidget):
         self.status.set_tone("info")
         self.notice.setText("조회 중입니다. 완료될 때까지 기다려 주세요.")
         self.empty.setText("Item 자료 불러오는 중")
+        self.count.setText("조회 중 · 결과 건수는 완료 후 표시합니다.")
         self.read_request.start(self.loader)
 
     def _loaded(self, data, error):
@@ -202,7 +204,7 @@ class ItemsPage(QWidget):
             self.data = data
             self.status.setText("Item 매니저 · 읽기 전용")
             self.status.set_tone("info")
-            self.notice.setText(data.versions.source_label)
+            self.notice.setText(source_description(data.versions.source_label))
         self.search.setEnabled(self.data is not None)
         self._filter_changed()
 
@@ -218,6 +220,7 @@ class ItemsPage(QWidget):
             self.status.setText("조회 취소")
             self.notice.setText("다시 불러오기를 눌러 조회해 주세요.")
             self.empty.setText("조회 취소 · 다시 불러오기 가능")
+            self.count.setText("조회 취소 · 결과 미확인")
         super().hideEvent(event)
 
     def _filter_changed(self, *_):
@@ -227,6 +230,7 @@ class ItemsPage(QWidget):
         self.render_list()
 
     def render_list(self):
+        """전달된 Item 목록과 조회 결과 미확인을 구분해 표시한다."""
         found = self.data.search(self.search.text()) if self.data else ()
         pages = max(1, (len(found) + self.page_size - 1) // self.page_size)
         self.page_index = max(0, min(self.page_index, pages - 1))
@@ -243,9 +247,11 @@ class ItemsPage(QWidget):
         self.table.setVisible(bool(rows))
         self.empty.setVisible(not rows)
         self.empty.setText("자료 불러오기 실패 · 재시도해 주세요." if self.data is None else
-                           "검색 결과가 없습니다." if self.search.text().strip() else "Item 자료 없음 또는 미연결 · 미포함으로 판정하지 않습니다.")
+                           "검색 결과가 없습니다." if self.search.text().strip() else "전달된 Item 자료가 없습니다. 미포함으로 판정하지 않습니다.")
         self.count.setText(f"검색 결과 {len(found)}건 · 행 선택 또는 Enter로 상세 보기 · 포함 건수는 저장된 확인 행 기준")
         self.page_label.setText(f"{self.page_index + 1} / {pages}")
+        if self.data is None:
+            self.count.setText("조회 결과 미확인")
         self.previous.setEnabled(self.page_index > 0)
         self.next.setEnabled(self.page_index + 1 < pages)
 
@@ -255,6 +261,14 @@ class ItemsPage(QWidget):
         self.render_list()
 
     def open_row(self, row):
+        """선택한 Item의 출처와 명시된 관측 상태를 표시한다.
+
+        param
+        - row: 현재 목록의 행 번호.
+
+        return
+        - 상세 열기 성공이면 True, 유효한 행이 아니면 False.
+        """
         if self.mode != "list" or not 0 <= row < len(self.visible_entries):
             return False
         entry = self.visible_entries[row]
@@ -282,8 +296,7 @@ class ItemsPage(QWidget):
         connected = self.data.observations_connected and bool(releases)
         summary = catalog.summarize(item, self.data.records) if connected else None
         self.equipment = summary.equipment if summary else ()
-        self.observation_note.setText((f"관측 기준일 {self.data.base_date.isoformat()} · 전체 관측 범위 · 공통 조회 조건과 독립\n" if self.data.observations_connected else "")
-                                     + self.data.observation_label)
+        self.observation_note.setText(observation_description(self.data))
         self.summary.setText(" · ".join(f"{APPLICATION_LABELS[s]} {n}대" for s, n in summary.counts().items())
                              + f" · HPA 제외 {summary.hpa_excluded}대" if summary else "적용 현황 미확인 · 릴리즈 연결 또는 설비 관측 자료가 필요합니다.")
         with QSignalBlocker(self.state_filter):

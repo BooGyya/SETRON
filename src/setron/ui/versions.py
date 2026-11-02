@@ -11,6 +11,7 @@ from setron.ui.version_data import VersionCatalog
 from setron.ui.version_edit_data import EditDraft
 from setron.ui.version_edit_dialog import VersionEditDialog
 from setron.ui.read_worker import ReadRequest
+from setron.ui.source_notice import source_description
 
 
 def _field(title, widget):
@@ -190,6 +191,7 @@ class VersionsPage(QWidget):
         self.status.set_tone("info")
         self.notice.setText("조회 중입니다. 완료될 때까지 기다려 주세요.")
         self.empty.setText("릴리즈 자료 불러오는 중")
+        self.count.setText("조회 중 · 결과 건수는 완료 후 표시합니다.")
         self.read_request.start(self.loader)
 
     def _loaded(self, catalog, error):
@@ -210,7 +212,7 @@ class VersionsPage(QWidget):
             self.catalog = catalog
             self.status.setText("릴리즈 목록 · 읽기 전용")
             self.status.set_tone("info")
-            self.notice.setText(catalog.source_label)
+            self.notice.setText(source_description(catalog.source_label))
         with QSignalBlocker(self.model_filter):
             self.model_filter.clear()
             models = {} if self.catalog is None else {p.model_id: p.model_name for p in self.catalog.pairs}
@@ -232,6 +234,7 @@ class VersionsPage(QWidget):
             self.status.setText("조회 취소")
             self.notice.setText("다시 불러오기를 눌러 조회해 주세요.")
             self.empty.setText("조회 취소 · 다시 불러오기 가능")
+            self.count.setText("조회 취소 · 결과 미확인")
         super().hideEvent(event)
 
     def _model_changed(self, *_args, preferred_family=None):
@@ -252,6 +255,7 @@ class VersionsPage(QWidget):
         self.render_list()
 
     def render_list(self):
+        """현재 목록을 표시하며 조회 실패를 정상 0건과 구분한다."""
         catalog = self.catalog
         self.filtered_entries = () if catalog is None else catalog.list_releases(
             self.model_filter.currentData(), self.family_filter.currentData(), self.search.text(), descending=self.order.currentData())
@@ -277,6 +281,8 @@ class VersionsPage(QWidget):
         self.count.setText(f"검색 결과 {len(self.filtered_entries)}건 · 행을 선택하거나 Enter로 상세 보기\n"
                            "확인된 순서 기준 정렬 · 순서 미확인은 마지막 · 중복 순서는 선후 미확인")
         self.page_label.setText(f"{self.page_index + 1} / {pages}")
+        if catalog is None:
+            self.count.setText("조회 결과 미확인")
         self.previous.setEnabled(self.page_index > 0)
         self.next.setEnabled(self.page_index + 1 < pages)
         for widget in (self.model_filter, self.family_filter, self.search, self.order):

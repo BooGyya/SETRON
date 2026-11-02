@@ -134,6 +134,7 @@ def test_loading_responsive_and_duplicate_blocked(context):
     assert slow.thread != get_ident()
     assert page.read_request.busy and not page.refresh.isEnabled()
     assert "불러오는 중" in page.status.text() and result(page) is None
+    assert "완료 후" in page.count.text() and "0건" not in page.count.text()
     tick = []
     QTimer.singleShot(0, lambda: tick.append(get_ident()))
     wait_until(lambda: bool(tick))
@@ -188,6 +189,7 @@ def test_leave_retry_and_late_response(context, late_error):
     wait_until(first.started.is_set)
     page.hide()
     assert not page.read_request.busy and "취소" in page.status.text()
+    assert "결과 미확인" in page.count.text()
     page.show()
     second = SlowRead(value)
     loaders.append(second)

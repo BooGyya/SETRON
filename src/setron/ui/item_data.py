@@ -23,11 +23,21 @@ BASIS_LABELS = {
 
 @dataclass(frozen=True)
 class ItemManagerData:
+    """관측 연결 상태와 출처 설명을 구분하는 Item 화면 자료.
+
+    ivar
+    - versions: 릴리즈·Item 읽기 자료.
+    - records: 같은 기준일의 설비 관측. 정상 0건은 빈 튜플.
+    - base_date: 연결된 관측 기준일. 미연결이면 None 가능.
+    - observations_connected: 관측 자료 전달 여부. 설명 문자열로 추정하지 않는다.
+    - observation_label: 관측 자료 출처 설명. 생략은 연결 상태를 뜻하지 않는다.
+    """
+
     versions: VersionCatalog
     records: tuple[EquipmentRecord, ...] = ()
     base_date: date | None = None
     observations_connected: bool = False
-    observation_label: str = "설비 관측 자료 미연결"
+    observation_label: str = "관측 자료 출처 설명 미제공"
 
     def __post_init__(self):
         if not isinstance(self.versions, VersionCatalog):

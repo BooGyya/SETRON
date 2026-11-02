@@ -135,7 +135,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             list_action.setEnabled(False)
         elif window.route == "versions":
             window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
-            window.notice.setText("릴리즈 조회 전용 · 예시 자료 · DB 미연결")
+            window.notice.setText("릴리즈 조회 전용 · 자료 출처와 조회 상태는 본문 참조")
             list_action.setEnabled(False)
         else:
             window.notice.setText(overview_notice)
