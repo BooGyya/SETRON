@@ -4,6 +4,8 @@ Excel 읽기·AI 추출·저장은 주입받은 객체에 요청한다. 화면�
 메뉴에 들어와도 Excel에 바로 연결하지 않고, 사용자가 불러오기를 눌렀을 때만 연결한다.
 """
 
+from collections import Counter
+import json
 import uuid
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
@@ -33,6 +35,18 @@ SOURCE_LABELS = {
     ResponseSource.REAL: "실제 AI API 응답(REAL)",
     None: "AI 응답 출처 미확인",
 }
+
+
+def _workbook_key(book):
+    """선택한 파일명·Excel 프로세스·전체 경로를 하나의 선택 키로 보존한다.
+
+    param
+    - book: BE-006에서 받은 WorkbookInfo.
+
+    return
+    - 동명 파일과 목록 순서 변경에 영향을 받지 않는 내부 선택 키.
+    """
+    return json.dumps([book.name, book.app_pid, book.full_name], ensure_ascii=False)
 
 
 class SheetGridModel(QAbstractTableModel):
@@ -92,6 +106,7 @@ class SheetGridModel(QAbstractTableModel):
 class ImportPage(QWidget):
     """``excel``은 ``list_open_workbooks()``·``read_sheet()``를 제공한다(기본 ``excel_reader`` 모듈).
 
+    ``read_sheet``에는 선택 목록의 파일명·app_pid·full_name을 함께 전달한다.
     ``extractor(kind, sheet_name, cells)``는 :class:`AIResult`를, ``saver``는 :class:`ImportSaver`를 따른다.
     None이면 회사 AI·저장 서비스 연결 전 기본값인 예제 응답과 메모리 저장소를 쓴다.
     """
@@ -314,6 +329,11 @@ class ImportPage(QWidget):
     # --- C-1 Excel 선택·미리보기 ----------------------------------------------
 
     def load_workbooks(self):
+        """열린 통합문서 목록을 갱신하고 파일명·프로세스·전체 경로로 기존 선택을 유지한다.
+
+        return
+        - 선택 가능한 통합문서가 있으면 True.
+        """
         try:
             self.workbooks = tuple(self.excel.list_open_workbooks())
         except ExcelReadError as exc:
@@ -328,19 +348,33 @@ class ImportPage(QWidget):
         previous = self.workbook_combo.currentData()
         self.workbook_combo.blockSignals(True)
         self.workbook_combo.clear()
+        names = Counter(book.name for book in self.workbooks)
         for book in self.workbooks:
-            self.workbook_combo.addItem(book.name, book.name)
-            self.workbook_combo.setItemData(self.workbook_combo.count() - 1, book.full_name, Qt.ItemDataRole.ToolTipRole)
+            text = f"{book.name} · Excel {book.app_pid} · {book.full_name}" if names[book.name] > 1 else book.name
+            self.workbook_combo.addItem(text, _workbook_key(book))
+            self.workbook_combo.setItemData(
+                self.workbook_combo.count() - 1, f"{book.full_name}\nExcel {book.app_pid}", Qt.ItemDataRole.ToolTipRole,
+            )
         index = self.workbook_combo.findData(previous)
         self.workbook_combo.setCurrentIndex(index if index >= 0 else 0 if self.workbooks else -1)
         self.workbook_combo.blockSignals(False)
         self._fill_sheets()
         return bool(self.workbooks)
 
+    def _selected_workbook(self):
+        """현재 선택 키와 일치하는 통합문서 정보를 찾는다.
+
+        return
+        - 선택 목록의 WorkbookInfo. 일치하는 선택이 없으면 None.
+        """
+        key = self.workbook_combo.currentData()
+        return next((book for book in self.workbooks if _workbook_key(book) == key), None)
+
     def _fill_sheets(self, *_):
+        """파일명뿐 아니라 선택한 Excel 창과 경로가 일치하는 시트 목록을 표시한다."""
         previous = self.sheet_combo.currentData()
         self.sheet_combo.clear()
-        book = next((b for b in self.workbooks if b.name == self.workbook_combo.currentData()), None)
+        book = self._selected_workbook()
         for name in book.sheet_names if book else ():
             self.sheet_combo.addItem(name, name)
         index = self.sheet_combo.findData(previous)
@@ -357,23 +391,35 @@ class ImportPage(QWidget):
         self.source_badge.set_tone("neutral")
 
     def read_selected(self):
-        workbook, sheet = self.workbook_combo.currentData(), self.sheet_combo.currentData()
+        """선택 정보를 고정해 해당 통합문서의 시트 읽기를 예약한다.
+
+        return
+        - 선택이 있고 다른 작업 중이 아니어서 읽기를 예약하면 True.
+        """
+        workbook, sheet = self._selected_workbook(), self.sheet_combo.currentData()
         if self.busy or workbook is None or sheet is None:
             return False
         self._reset_draft()
         self.state = "reading"
-        self._set_status("시트 읽는 중", "info", f"{workbook} · {sheet}")
+        self._set_status("시트 읽는 중", "info", f"{workbook.name} · {sheet}")
         self._render()
         generation = self.generation
         QTimer.singleShot(0, lambda: self._read(generation, workbook, sheet))
         return True
 
     def _read(self, generation, workbook, sheet):
+        """예약 당시 선택한 Excel 프로세스와 전체 파일명으로 읽는다.
+
+        param
+        - generation: 이전 화면 요청과 구분하는 세대 번호.
+        - workbook: 선택 목록에서 고정한 WorkbookInfo.
+        - sheet: 선택한 원본 시트 이름.
+        """
         if generation != self.generation:
             return
         self.state = "idle"
         try:
-            data = self.excel.read_sheet(workbook, sheet)
+            data = self.excel.read_sheet(workbook.name, sheet, app_pid=workbook.app_pid, full_name=workbook.full_name)
             snapshot = snapshot_sheet(data)
         except ExcelReadError as exc:
             self.snapshot = None

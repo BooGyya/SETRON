@@ -19,6 +19,8 @@
 
 BE-007의 GMS 실제 호출과 전체 필드 평가는 [AI Excel 추출 테스트 결과](test-results/be-007-ai-extraction.md)에 기록합니다. 원본 셀로 먼저 고정한 135개 레코드·16개 필드와 같은 지시문으로 `gpt-6.1-sol`·`gpt-6-luna`를 비교했습니다. 후처리 일치율은 sol 99.36%, luna 90.10%(추가 결과 페널티 포함)이며, 같은 정답 위치만 비교하면 luna 91.52%입니다. 판정 보류 131개를 제외한 커버리지는 93.94%로 같고, 모델별·시트별 1회 측정입니다. [sol 원본·정답·실제 응답](test-results/be-007-evaluation/README.md), [luna 응답·토큰·시간](test-results/be-007-evaluation-luna/README.md), [모델별 추출 오류 비교표](test-results/be-007-evaluation-luna/model-field-errors.md)와 재계산 스크립트를 보존합니다.
 
+BE-006·BE-007 병합 후 연결 점검(2026-11-02): 두 커밋과 BE-006 원본 파일의 보존은 확인했으나, 가져오기 화면이 `read_sheet()`에 필수 `app_pid`·`full_name`을 전달하지 않는 호환성 오류를 발견했습니다. 실제 함수 시그니처를 강제한 Qt 테스트로 기존 실패 4건을 재현한 뒤 선택 키를 파일명·프로세스·전체 경로로 바꾸고 데모의 호출 계약도 맞췄습니다. 동명 파일의 다른 경로·다른 창 구분과 목록 순서 변경 후 선택 유지를 포함해 `test_ui_import.py`, `test_excel_reader.py`, `test_extraction_service.py`, `test_openai_client.py`, `test_ai_service.py`, `test_excel_import_service.py`의 **236개가 통과**했습니다. [선택 상태 화면](screenshots/b2/import-workbook-identity.png)은 합성 자료이며, 실제 읽기 확인은 기존 교육용 Excel의 Memory·Foundry에서 별도로 수행했습니다. 두 시트가 보관 스냅샷과 같았고 BE-007에 보관 응답을 `EXAMPLE`로 재생해 85개·50개 행을 확인했습니다. 추가 실제 AI 호출과 원본 수정·저장은 없었습니다.
+
 ### 공통 UI 검증 (작업 단위 2)
 
 `tests/test_ui_common.py`는 Qt offscreen 플랫폼에서 실제 위젯과 QTest 이벤트로 시작 안내, 준비 중 메뉴, 담당 페이지 등록·이동, 단일 활성 메뉴, 원본 아이콘·폰트 로딩, 키보드 조작과 페이지 입력 상태 보존을 확인합니다. 1600×960·1100×800·960×600 창에서 헤더 줄바꿈·사이드바 스크롤과, 긴 페이지를 숨겼을 때 다른 화면이 늘어나지 않는지도 검증합니다. 업무 화면이나 DB·Excel은 실행하지 않습니다.

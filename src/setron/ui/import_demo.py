@@ -55,15 +55,37 @@ class DemoExcel:
     """``excel_reader``와 같은 함수 형식으로 합성 통합문서를 돌려준다."""
 
     def list_open_workbooks(self):
-        return [WorkbookInfo(name, f"(합성) {name}", list(sheets)) for name, sheets in _BOOKS.items()]
+        """실제 읽기 API와 같은 선택 식별 정보를 가진 합성 목록을 반환한다.
 
-    def read_sheet(self, workbook_name, sheet_name):
+        return
+        - 합성 프로세스 번호 9000을 사용하는 통합문서 선택 목록.
+        """
+        return [WorkbookInfo(name, f"(합성) {name}", list(sheets), app_pid=9000) for name, sheets in _BOOKS.items()]
+
+    def read_sheet(self, workbook_name, sheet_name, *, app_pid, full_name):
+        """BE-006과 같은 필수 인자로 선택을 확인한 뒤 합성 시트를 반환한다.
+
+        param
+        - workbook_name: 합성 통합문서 이름.
+        - sheet_name: 합성 시트 이름.
+        - app_pid: 선택 목록에서 받은 합성 프로세스 번호.
+        - full_name: 선택 목록에서 받은 전체 이름.
+
+        return
+        - 선택한 합성 시트의 값과 병합 범위를 담은 SheetData.
+
+        raises
+        - WorkbookNotFoundError: 파일명·프로세스·전체 이름이 합성 목록과 다른 경우.
+        - SheetNotFoundError: 합성 통합문서에 시트가 없는 경우.
+        """
         if workbook_name not in _BOOKS:
             raise WorkbookNotFoundError(f"열려 있는 통합문서 중 '{workbook_name}'이(가) 없습니다.")
+        if app_pid != 9000 or full_name != f"(합성) {workbook_name}":
+            raise WorkbookNotFoundError("선택한 합성 통합문서 정보가 다릅니다. 목록에서 다시 선택하세요.")
         if sheet_name not in _BOOKS[workbook_name]:
             raise SheetNotFoundError(f"'{workbook_name}'에 '{sheet_name}' 시트가 없습니다.")
         values, merged = _BOOKS[workbook_name][sheet_name]
-        return SheetData(workbook_name, sheet_name, 1, 1, [list(row) for row in values], list(merged))
+        return SheetData(workbook_name, sheet_name, 1, 1, [list(row) for row in values], list(merged), app_pid=app_pid)
 
 
 def example_extractor(kind, sheet_name, cells):
