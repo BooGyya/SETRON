@@ -121,6 +121,22 @@ class QueryConditions:
     unresolved: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class QueryChoices:
+    """질문을 해석할 때 AI에 함께 주는 선택지. AI는 이 이름 중에서만 고른다 (BE-018).
+
+    수가 적은 사업장·라인·최상위 분류·모델·계열·저장된 기준일만 담는다. 버전과 Item은 많아서
+    AI가 질문의 표기를 그대로 뽑고, 프로그램이 등록 자료에서 찾는다.
+    """
+
+    sites: tuple[str, ...] = ()
+    lines: tuple[str, ...] = ()
+    groups: tuple[str, ...] = ()
+    models: tuple[str, ...] = ()
+    families: tuple[str, ...] = ()
+    base_dates: tuple[str, ...] = ()
+
+
 # --- 분석 (BE-019, BE-020) -------------------------------------------------
 
 @dataclass(frozen=True)
