@@ -1,4 +1,7 @@
-"""UI 시작점. 대시보드·히트맵·목록/상세는 같은 합성 관측을 쓰며 DB·Excel을 시작하지 않는다."""
+"""UI 시작점. 대시보드·히트맵·목록/상세는 같은 합성 관측을 쓰며 DB·Excel을 시작하지 않는다.
+
+데이터 가져오기는 사용자가 불러오기를 누를 때만 실행 중인 Excel에 연결하고, AI는 예제 응답을 사용한다.
+"""
 
 import argparse
 import sys
@@ -20,9 +23,14 @@ from setron.ui.version_demo import demo_version_catalog
 from setron.ui.versions import VersionsPage
 from setron.ui.item_data import ItemManagerData, item_data_from_source
 from setron.ui.items import ItemsPage
+from setron.ui.ai_data import facts_from_snapshot
+from setron.ui.ai_page import AIPage
+from setron.ui.import_demo import DemoExcel
+from setron.ui.import_page import ImportPage
 
 
-def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None) -> MainWindow:
+def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
+                  excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None) -> MainWindow:
     demo = source is None
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
@@ -70,10 +78,26 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         item_loader = (lambda: ItemManagerData(version_loader())) if custom_versions else (
             lambda: item_data_from_source(version_loader(), source))
     items = ItemsPage(item_loader)
+    # 저장 서비스·회사 AI 연결 전: 각 화면의 기본값은 메모리 저장소와 예제 응답이며 출처를 표시한다.
+    importer = ImportPage(excel, extractor, import_saver)
+
+    def apply_ai_selection(selection):
+        window.query_panel.set_draft(selection)
+        return window.query_panel.apply_draft()
+
+    def current_facts():
+        snapshot = dashboard.snapshot
+        if snapshot is None or not window.query_state.is_current(snapshot.query):
+            return None
+        return facts_from_snapshot(snapshot)
+
+    ai = AIPage(window.query_state, ai_parser, ai_analyzer, apply_ai_selection, current_facts)
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
     window.register_page("versions", versions, uses_query=False)
     window.register_page("items", items, uses_query=False)
+    window.register_page("import", importer, uses_query=False)
+    window.register_page("ai", ai, uses_query=False)
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
@@ -84,6 +108,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if window.route == "items":
             window.header.title.setText("Item 상세" if items.mode == "detail" else "Item 매니저")
             window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
+            list_action.setEnabled(False)
+        elif window.route == "import":
+            window.notice.setText("데이터 가져오기 · 실행 중인 Excel 읽기 · AI 예제 응답 · 메모리 저장소(DB 미연결)")
+            list_action.setEnabled(False)
+        elif window.route == "ai":
+            window.notice.setText("AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음")
             list_action.setEnabled(False)
         elif window.route == "versions":
             window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
@@ -182,6 +212,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             equipment.clear("설비 결과 표시 실패 · 다시 적용해 주세요")
 
     window.query_applied.connect(apply_query)
+    # 대시보드 계산 뒤에 연결해야 AI 화면이 같은 적용 조건의 결과를 읽는다.
+    window.query_applied.connect(lambda *_: ai.refresh())
+    window.query_panel.catalog_changed.connect(lambda *_: ai.refresh())
+    window.query_panel.targets_changed.connect(lambda *_: ai.refresh())
+    window.page_changed.connect(lambda key: ai.refresh() if key == "ai" else None)
+    ai.navigate_requested.connect(window.navigate)
+    importer.requery_requested.connect(lambda: window.navigate("dashboard"))
     window.query_panel.catalog_changed.connect(dashboard.invalidate)
     window.query_panel.catalog_changed.connect(heatmap.invalidate)
     window.query_panel.catalog_changed.connect(equipment.clear)
@@ -192,13 +229,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--auto-close-ms", type=int, default=0, help="실행 검증용 자동 종료 시간")
+    parser.add_argument("--demo-excel", action="store_true", help="실행 중인 Excel 대신 합성 통합문서로 가져오기 화면 확인")
     args = parser.parse_args(argv)
     if args.auto_close_ms < 0:
         parser.error("--auto-close-ms는 0 이상이어야 합니다.")
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("SETRON")
     install_theme(app)
-    window = create_window()
+    window = create_window(excel=DemoExcel() if args.demo_excel else None)
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
