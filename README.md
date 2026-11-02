@@ -1,6 +1,6 @@
 # S15P31B106
 
-setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성하며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에 사용할 의존성입니다.
+setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성하며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에, python-docx는 AI 분석 보고서의 DOCX 출력에 사용합니다.
 
 현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답을 사용하는 AI 호출 흐름, DB 연결과 공통 저장 서비스, 기준일별 설비 저장·조회, 릴리즈·Item 등록·수정·원본 비교가 구현되어 있습니다. 공통 UI·조회 조건과 합성 예시 자료를 사용하는 대시보드·버전 히트맵·설비 목록/상세를 실행할 수 있으며, 업무 화면과 DB의 연결, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 연동은 후속 작업입니다.
 

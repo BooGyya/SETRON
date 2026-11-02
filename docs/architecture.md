@@ -83,6 +83,10 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── report/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   ├── risk/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
@@ -123,6 +127,7 @@ S15P31B106/
 │   ├── test_item_service.py
 │   ├── test_priority_service.py
 │   ├── test_query_service.py
+│   ├── test_report_service.py
 │   ├── test_risk_service.py
 │   ├── test_schema_mysql.py
 │   ├── test_storage_service.py
@@ -324,6 +329,8 @@ Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디�
 `features/analysis/`는 AI 원인·현황 설명(FUN-036·038·039)에 보낼 자료를 만들고 답변의 숫자를 검사합니다. 조회 조건과 계열별 목표 N, 전체·사업장별 집계, 계열별 버전 분포, 사업장·사유별 위험 설비, 통일 지연 근거(목표 N에는 포함되고 설치 버전에는 없는 Item)를 모두 공통 계산으로 만들어 화면과 숫자가 같습니다. `explain()`은 이 자료로 `features/ai/`의 `analyze()`를 호출하고, 답변·근거에 나온 숫자 중 보낸 자료에 없는 것을 `unmatched_numbers`로 돌려줘 화면이 경고할 수 있게 합니다. 버전 표기 안의 숫자는 검사하지 않습니다. `tests/test_analysis_service.py`가 검증합니다.
 
 `features/forecast/`는 버전 통일 참고 예측(FUN-040)을 계산합니다. 계열마다 기간의 처음과 끝 현황을 설비 1대 × 계열 1건으로 비교해 기존 설비 패치, N 미만으로 내려간 건, 신규·전입, 이탈을 나누고, 기존 설비 패치만으로 구한 속도에 남은 N 미만 건수를 단순 비례해 잔여 기간과 참고 완료일을 계산합니다(멘토링 3차). 목표 N이 없거나, 한 날짜뿐이거나, 기존 설비 패치가 없으면 예측하지 않고 사유를 알립니다. 판단 불가가 남으면 완료로 단정하지 않습니다. `explain_forecast()`는 계산 방법·가정·한계와 함께 결과를 AI에 보내 설명을 받고 `features/analysis/`의 숫자 검사를 적용합니다. `tests/test_forecast_service.py`가 검증합니다.
+
+`features/report/`는 AI 분석 보고서를 Word(docx)로 저장합니다. 이미 받은 설명 결과(`features/analysis/`, `features/forecast/`)만 쓰고 AI를 다시 호출하지 않습니다. 자료 출처(예제 응답·회사 AI), 질문과 조회 조건, 답변의 근거·추정·미확인, AI에 보낸 자료를 그대로 옮긴 수치 표, 참고 예측의 계산 방법·가정·한계, 자료에 없는 숫자 경고를 차례로 넣으므로 보고서 숫자가 화면 집계와 같습니다. AI 호출이 실패해도 수치 표는 남깁니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. `tests/test_report_service.py`가 검증합니다.
 
 `features/export/`는 현황 보고서를 Excel(xlsx)로 저장합니다. 화면에서 계산한 집계·위험·노후도·우선순위 결과를 다시 계산하지 않고 표로 옮기므로 같은 조건이면 화면과 숫자가 같습니다. 조회 조건과 모델·계열별 목표 N을 첫 시트에 남기고, 계열별 막대·상태 구성비 원형·날짜별 적용률 꺾은선 차트는 같은 시트의 표 셀을 참조해 Excel에서 편집할 수 있습니다. 적용률을 계산할 수 없으면 0%가 아니라 빈 셀과 '계산 불가'로 적습니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. 관리 데이터 전체 내보내기와 트리맵 차트는 아직 포함하지 않습니다. `tests/test_export_service.py`가 검증합니다.
 
