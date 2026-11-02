@@ -6,7 +6,13 @@ setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 
 
 ## Excel 가져오기 현황
 
-`src/setron/infrastructure/excel_reader.py`는 사용자가 실행해 둔 Excel에 연결해 열린 통합문서·시트 목록과 선택한 시트의 사용 영역을 읽습니다. 원본 셀 값, 셀 주소와 병합 범위를 전달하며, Excel 미실행과 연결 실패를 구분해 알립니다.
+`src/setron/infrastructure/excel_reader.py`는 사용자가 실행해 둔 Excel에 연결해 열린 통합문서·시트 목록과 선택한 시트의 사용 영역을 읽습니다. `list_open_workbooks()`의 `name`·`sheet_names`·`app_pid`·`full_name`으로 대상을 선택하고, `read_sheet(name, sheet_name, app_pid=app_pid, full_name=full_name)`으로 읽습니다. 프로세스 번호와 선택 당시의 전체 이름은 필수입니다. 선택한 프로세스만 조회하므로 다른 창의 연결 오류가 해당 파일 읽기를 막지 않습니다. 읽기 전후에 전체 이름을 검증하며, 다른 폴더의 동명 파일로 바뀌면 `WorkbookSelectionChangedError`로 다시 선택하도록 알립니다. 비교 과정에서 파일을 직접 열거나 경로를 현재 작업 폴더에 맞춰 추정하지 않습니다.
+
+읽기 결과 `SheetData`는 원본 셀 값·시트명·사용 영역의 시작 좌표·병합 범위와 저장 확인창에 표시할 `workbook_name`을 전달합니다. `address_of(i, j)`로 0부터 시작하는 표 인덱스의 원본 셀 주소를 확인합니다. 병합된 빈 칸은 원본대로 유지하며, `filled_values()`는 병합 값을 펼친 별도 표를 만듭니다. Excel 오류 셀은 `#N/A` 같은 문자열로 전달해 빈 셀과 구분합니다. 파일명은 이번 가져오기의 확인용이며 이를 위한 DB 파일명 기록은 추가하지 않습니다.
+
+Excel 미실행·연결 실패·선택 파일/시트 없음·동일 파일명 중복·시트 읽기 실패는 각각 다른 오류로 구분합니다. 시트 목록이나 값·좌표·병합 범위를 읽다가 COM 연결이 끊겨도 시트가 없다는 오류로 바꾸지 않습니다. 저장 확인창과 검토 후 DB 저장 연결은 후속 화면·BE-009 작업입니다.
+
+현재 xlwings 연결 방식은 제한된 보기(Protected View) 창을 지원하지 않습니다. 목록 조회 시 일부 창이나 파일의 조회에 실패해도 정상 파일 목록은 반환하고, 실패는 `ExcelDiscoveryWarning`으로 전달합니다. UI를 연결할 때 이 경고를 수집해 일부 파일을 확인하지 못했다는 사실을 표시해야 합니다. 선택 가능한 파일이 없으면 원인에 따라 `ExcelProtectedViewError` 또는 `ExcelConnectionError`를 발생시킵니다. 앱이 제한된 보기를 해제하거나 파일 차단·보안 설정을 변경하지 않습니다.
 
 실제 Excel 연동에는 Windows용 데스크톱 Excel이 필요합니다. 파일 선택창에서 XLSX 파일을 직접 읽는 방식은 아직 구현되어 있지 않습니다. 현재 모듈은 파일을 서버에 업로드하거나 앱으로 복사하지 않고, 실행 중인 Excel에서 값을 읽습니다.
 
