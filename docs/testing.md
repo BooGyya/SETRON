@@ -316,3 +316,11 @@ uv run pytest tests/test_ui_items.py tests/test_ui_versions.py -q
 ```powershell
 uv run pytest tests/test_ui_item_distribution.py tests/test_ui_items.py tests/test_ui_equipment.py -q
 ```
+
+## B-2 편집 공통 기반 검증
+
+`python -m pytest -q tests/test_ui_version_edit.py tests/test_ui_versions.py`로 B-1 상세 진입·복귀 상태 보존과 B-2 미연결 경계를 검증합니다. 테스트 전용 필드와 가짜 비동기 서비스만 사용하며 실제 편집 허용 항목을 정의하거나 DB에 저장하지 않습니다.
+
+주요 검사: 원본/관리값/초안 분리, 변경 없음 차단, 검증 오류와 재검토, 미연결 저장 차단, 중복 제출 및 저장 중 닫기 방지, 성공 후 재저장 차단, 실패 후 초안 유지, 오래된 콜백 무시, 결과 미확인·제출 예외의 재시도 금지, 취소/창 닫기 폐기 확인. 전체 회귀 테스트는 `python -m pytest -q -ra`로 실행합니다.
+
+화면 자료: [실제 기본 대기 화면](screenshots/b2/pending-760.png), [테스트 전용 검토 예시](screenshots/b2/review-test-only.png). 두 번째 화면의 항목은 업무 필드가 아니며 기본 앱에서 노출되지 않습니다.
