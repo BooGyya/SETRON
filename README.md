@@ -2,7 +2,7 @@
 
 setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성하며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에 사용할 의존성입니다.
 
-현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답을 사용하는 AI 호출 흐름, DB 연결과 공통 저장 서비스, 기준일별 설비 저장·조회, 릴리즈·Item 등록·수정·원본 비교가 구현되어 있습니다. 공통 UI·조회 조건과 합성 예시 자료를 사용하는 대시보드·버전 히트맵·설비 목록/상세를 실행할 수 있으며, 업무 화면과 DB의 연결, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 연동은 후속 작업입니다.
+현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 모의 응답과 OpenAI SDK를 사용하는 AI 호출 계층, DB 연결과 공통 저장 서비스, 기준일별 설비 저장·조회, 릴리즈·Item 등록·수정·원본 비교가 구현되어 있습니다. 공통 UI·조회 조건과 합성 예시 자료를 사용하는 대시보드·버전 히트맵·설비 목록/상세를 실행할 수 있으며, 업무 화면과 DB의 연결, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 검증은 후속 작업입니다.
 
 ## Excel 가져오기 현황
 
@@ -15,6 +15,41 @@ Excel 미실행·연결 실패·선택 파일/시트 없음·동일 파일명 �
 현재 xlwings 연결 방식은 제한된 보기(Protected View) 창을 지원하지 않습니다. 목록 조회 시 일부 창이나 파일의 조회에 실패해도 정상 파일 목록은 반환하고, 실패는 `ExcelDiscoveryWarning`으로 전달합니다. UI를 연결할 때 이 경고를 수집해 일부 파일을 확인하지 못했다는 사실을 표시해야 합니다. 선택 가능한 파일이 없으면 원인에 따라 `ExcelProtectedViewError` 또는 `ExcelConnectionError`를 발생시킵니다. 앱이 제한된 보기를 해제하거나 파일 차단·보안 설정을 변경하지 않습니다.
 
 실제 Excel 연동에는 Windows용 데스크톱 Excel이 필요합니다. 파일 선택창에서 XLSX 파일을 직접 읽는 방식은 아직 구현되어 있지 않습니다. 현재 모듈은 파일을 서버에 업로드하거나 앱으로 복사하지 않고, 실행 중인 Excel에서 값을 읽습니다.
+
+## AI API 설정
+
+`infrastructure/ai_client.py`의 `OpenAICompatibleChatClient`는 기존 `ChatClient` 계약을 구현합니다. Excel 추출·질문 해석·분석 서비스에 같은 방식으로 전달하며, GMS와 사내 OpenAI 호환 서버를 바꿀 때는 환경변수만 변경합니다. [GMS 가이드](https://gms.ssafy.io/web/guide/quickstart)의 OpenAI 경로와 [공식 SDK](https://developers.openai.com/api/reference/python)의 `base_url` 설정을 사용합니다.
+
+| 환경변수 | 개발용 GMS | 사내 AI |
+| --- | --- | --- |
+| `SETRON_AI_BASE_URL` | `https://gms.ssafy.io/gmsapi/api.openai.com/v1` | 전달받은 기본 API 주소. `/chat/completions`는 붙이지 않음 |
+| `SETRON_AI_API_KEY` | 발급받은 GMS Key | 사내 인증 키. 서버가 허용한다고 확인된 경우 `EMPTY` |
+| `SETRON_AI_MODEL` | 사용 가능한 모델명. 교육 자료 평가에 사용한 값 `gpt-6.1-sol` | 사내 서버가 제공하는 모델명. 전달받은 예시 `gpt-4` |
+| `SETRON_AI_TIMEOUT` | 코드 기본 60초. `.env.example`은 전체 시트 평가에 맞춰 180초 | 선택 사항. 코드 기본 60초 |
+
+개발 설정은 `.env.example`, 사내 Windows 설정은 `.env.windows.example`을 참고합니다. 기존 `.env`를 덮어쓰지 말고 필요한 항목을 추가하세요. 실제 키는 Git에서 제외된 환경 파일에만 보관합니다. 앱 코드가 환경 파일을 직접 읽지는 않으므로 실행 시 `uv run --locked --env-file .env ...` 또는 `--env-file .env.windows`로 불러옵니다. 필수 AI 설정이 없으면 `AIConfigError`가 발생하며, 다른 `OPENAI_*` 설정이나 기본 OpenAI 서버로 대체하지 않습니다.
+
+```python
+from setron.features.ai.service import parse_question
+from setron.infrastructure.ai_client import OpenAICompatibleChatClient
+
+with OpenAICompatibleChatClient.from_env() as client:
+    result = parse_question(client, "화성 C3 설비의 버전 현황을 보여줘")
+    # Excel은 extract_sheet_data(client, kind, sheet_data), 분석은 analyze(client, question, facts).
+    # result.ok, result.status, result.message를 확인한 뒤 result.data를 사용합니다.
+```
+
+SDK 자동 재시도는 끕니다. 연결·HTTP 오류, 시간 초과와 호출 제한은 기존 공통 오류로 변환하고, 빈 답변·잘린 답변·거부·도구 호출 등 텍스트 작업을 완료하지 못한 응답은 `INVALID_RESPONSE`로 전달합니다. 성공한 실제 API 응답은 `ResponseSource.REAL`, 모의 응답은 `EXAMPLE`로 구분합니다. 서버별 지원 여부가 확인되지 않은 JSON 강제 출력·도구 호출 옵션은 전송하지 않습니다.
+
+클라이언트는 재사용하고 종료 시 `close()` 또는 `with` 문으로 연결을 정리합니다. 호출은 동기 방식이므로 UI에 연결할 때는 작업 스레드에서 실행해야 합니다. 모의 HTTP 전송 테스트는 실제 서버 호출이나 모델의 추출 정확도 검증을 대신하지 않습니다.
+
+## AI Excel 추출과 검토 (BE-007)
+
+`features/extraction/service.py`의 `extract_sheet_data(client, kind, sheet_data)`는 BE-006에서 읽은 `SheetData`를 기존 AI 호출 계층에 전달하고, 반환값을 원본 셀과 대조해 검토 자료를 만듭니다. 설비 현황과 릴리즈 노트를 처리하며 병합 셀의 실제 앵커, 호기·PM·SW 연결, C3 UI와 KCTC 구조 구분을 보존합니다.
+
+`result.ok`를 확인한 뒤 `result.data.rows`에서 정리한 `values`, AI 원문 `raw_values`, 셀 위치와 실제 값 `sources`를 확인합니다. 원본과 일치하지 않는 값은 검토값에서 제외하고 `issues`에 사유를 남깁니다. `needs_review`와 `issues`를 확인해 보완해야 하며, `OK`는 검토 자료 생성 성공을 뜻합니다. BE-008 검증·BE-009 저장과 UI 연결은 별도 단계입니다.
+
+GMS 교육 자료의 실제 추출과 모델 비교는 [BE-007 테스트 결과](docs/test-results/be-007-ai-extraction.md)에 기록했습니다. 원본 스냅샷·정답·실제 응답·오류별 대조표를 함께 보관하며, 모델의 표기 차이와 후처리 차단도 구분합니다.
 
 ## 개발 환경 준비
 

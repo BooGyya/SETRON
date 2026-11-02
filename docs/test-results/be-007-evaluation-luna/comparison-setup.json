@@ -1,0 +1,38 @@
+{
+  "prepared_at": "2026-11-02T13:52:44.983143+09:00",
+  "model_to_evaluate": "gpt-6-luna",
+  "baseline_model": "gpt-6.1-sol",
+  "baseline_bundle": "../be-007-evaluation",
+  "baseline_file_sha256": {
+    "benchmark.py": "2d7e6971904d268e43edf370d1a11b31c8ec8f3f429e10411c21954bae002031",
+    "field-comparison.html": "a1a46b044f3badd147d06b2f7bab5a87f50a45b51cd26fcf3963d5ea2ecd4397",
+    "field-comparison.json": "5ce92bbe14580d80928c3a7180ccce892c575fe7ed5d8254bb6b4ce3ab2b6c8c",
+    "field-comparison.md": "efeed024f194ce6fd9d3cfe4cc39c3666f2958ab94c28d65dc1ffd13a892267d",
+    "ground-truth.html": "95758dcac28e2e4e591c8750e663fe847001a786c2c89acce1ce78fa154bc0a5",
+    "ground-truth.json": "e73599f83fe8839cd99eaa305b1894860db7afd814fcfc5864df4e79d20be578",
+    "metrics.json": "a052db45cd75f1816d747fe6b3a8696694689c804096949f9bf7d8a7c0a42373",
+    "README.md": "3f76f50af0ba76913fa653bc287b4cda0a428d6b64ba863ca1b56af8f4cb0788",
+    "reference-manifest.json": "60ce817aa5a57803e32ec521e3ff7768fb6d4687fd370a29c77949662677154e",
+    "reference-policy.md": "bf345e0ae35713ce059eba9da1e85bd505ed52c1c5f4e46458a85979d0b819c5",
+    "render_tables.py": "e7fa2251aff1cde6fef9e829395b2458fb0b6b246b6167786954a8f7f66ee7c9",
+    "request-Foundry.json": "1a439960b29e9bf3eb9f49c9223e175cf1ceb8b82ae26285045b11583bb7d90a",
+    "request-Memory.json": "f3d027ff5b991d026f62c5f8db559a2fade0ffc2a7db6e5ef47f96ecb5dd81a6",
+    "response-Foundry.json": "c385e052c0d3d790d8bc2e5091c02eb70c1d54f4ebff072d67ed92a6debe0049",
+    "response-Memory.json": "50052d54a8a698b282bbe0fd541544a9810819e7b82b8063672e80adec5623ef",
+    "result-Foundry.json": "4b3b263f84d5b59993e0ca8343355946db6dc7606f25d48c7a48be1b157d0fe0",
+    "result-Memory.json": "bc6f3c11637d6d8bf1b79c50ed3464e57f76e2eb2c8930c036a9379c35737fca",
+    "source-snapshot.json": "1347d7b6d1eb3871a01210718e48563f19831b4f275f3106f9532376be46e595",
+    "source-workbook.xlsx": "226088fa955cede2761e0962404835a78b79e348cc6319d8c377d90a447b847e",
+    "test_benchmark.py": "3c7414e0150aed8bd0586b1c181325e1797a2c7b2b06523a75ad5f05fbfd4925"
+  },
+  "shared_file_sha256": {
+    "benchmark.py": "2d7e6971904d268e43edf370d1a11b31c8ec8f3f429e10411c21954bae002031",
+    "render_tables.py": "e7fa2251aff1cde6fef9e829395b2458fb0b6b246b6167786954a8f7f66ee7c9",
+    "source-snapshot.json": "1347d7b6d1eb3871a01210718e48563f19831b4f275f3106f9532376be46e595",
+    "ground-truth.json": "e73599f83fe8839cd99eaa305b1894860db7afd814fcfc5864df4e79d20be578",
+    "reference-manifest.json": "60ce817aa5a57803e32ec521e3ff7768fb6d4687fd370a29c77949662677154e",
+    "reference-policy.md": "bf345e0ae35713ce059eba9da1e85bd505ed52c1c5f4e46458a85979d0b819c5"
+  },
+  "key_copied": false,
+  "environment_file_modified": false
+}

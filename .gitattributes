@@ -1,0 +1,12 @@
+# 해시로 고정한 실제 요청·응답·정답 증거의 바이트를 그대로 보존한다.
+/docs/test-results/be-007-evaluation/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/docs/test-results/be-007-evaluation-luna/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+
+# 평가에 사용한 제품 파일은 당시 줄바꿈을 체크아웃 환경과 무관하게 유지한다.
+/src/setron/infrastructure/ai_client.py text eol=crlf
+/src/setron/infrastructure/excel_reader.py text eol=crlf
+/src/setron/features/ai/schemas.py text eol=crlf
+/src/setron/features/ai/service.py text eol=crlf
+/src/setron/features/extraction/*.py text eol=lf
+/pyproject.toml text eol=lf
+/uv.lock text eol=lf

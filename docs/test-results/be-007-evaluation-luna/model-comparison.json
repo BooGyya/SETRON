@@ -1,0 +1,1636 @@
+{
+  "created_at": "2026-11-02T13:58:43.362343+09:00",
+  "source_sha256": "1347d7b6d1eb3871a01210718e48563f19831b4f275f3106f9532376be46e595",
+  "reference_sha256": "e73599f83fe8839cd99eaa305b1894860db7afd814fcfc5864df4e79d20be578",
+  "policy_sha256": "bf345e0ae35713ce059eba9da1e85bd505ed52c1c5f4e46458a85979d0b819c5",
+  "messages_sha256_by_sheet": {
+    "Memory": "53dd00d6ef2bdf109937429cc13f2fcfda8e7187646b7c5f22d09aae19f07001",
+    "Foundry": "df7e50b3049b8cd2356b6150dbd6349daef7789494568e2b681193e1d9103630"
+  },
+  "comparison_script_sha256": "2ab67239f849695af98ca45e8e00eab93625ca678111fc05bec8e79f3cc3c2e9",
+  "conditions_verified_equal": true,
+  "repetitions_per_sheet_per_model": 1,
+  "generation_parameters": "Only model and messages sent; temperature, seed and reasoning effort not explicitly specified.",
+  "models": {
+    "gpt-6.1-sol": {
+      "bundle": "be-007-evaluation",
+      "by_sheet": {
+        "Memory": {
+          "started_at": "2026-11-02T13:44:39.834629+09:00",
+          "finished_at": "2026-11-02T13:45:50.800396+09:00",
+          "elapsed_seconds": 70.962,
+          "request_characters": 6500,
+          "response_characters": 41035,
+          "result_rows": 85,
+          "review_issues": 273,
+          "usage": {
+            "prompt_tokens": 3996,
+            "completion_tokens": 12190,
+            "total_tokens": 16186,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 3993,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 320,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        "Foundry": {
+          "started_at": "2026-11-02T13:45:58.516270+09:00",
+          "finished_at": "2026-11-02T13:46:56.201913+09:00",
+          "elapsed_seconds": 57.681,
+          "request_characters": 4164,
+          "response_characters": 25284,
+          "result_rows": 50,
+          "review_issues": 157,
+          "usage": {
+            "prompt_tokens": 2464,
+            "completion_tokens": 8129,
+            "total_tokens": 10593,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 2461,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 351,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        }
+      },
+      "totals": {
+        "elapsed_seconds": 128.643,
+        "request_characters": 10664,
+        "response_characters": 66319,
+        "result_rows": 135,
+        "prompt_tokens": 6460,
+        "completion_tokens": 20319,
+        "total_tokens": 26779,
+        "cached_tokens": 0,
+        "cache_write_tokens": 6454,
+        "reasoning_tokens": 671
+      },
+      "accuracy": {
+        "overall": {
+          "raw": {
+            "reference_field_positions": 2160,
+            "evaluated_fields": 2160,
+            "correct_fields": 2151,
+            "accuracy_pct": 99.5833,
+            "reference_coverage_pct": 100.0,
+            "nonempty_reference_fields": 802,
+            "correct_nonempty_fields": 793,
+            "nonempty_accuracy_pct": 98.8778,
+            "null_reference_fields": 1358,
+            "invented_values": 0,
+            "unresolved_fields": 0,
+            "verdict_counts": {
+              "correct": 2151,
+              "mismatch": 4,
+              "omitted_value": 5
+            }
+          },
+          "normalized": {
+            "reference_field_positions": 2160,
+            "evaluated_fields": 2029,
+            "correct_fields": 2016,
+            "accuracy_pct": 99.3593,
+            "reference_coverage_pct": 93.9352,
+            "nonempty_reference_fields": 825,
+            "correct_nonempty_fields": 812,
+            "nonempty_accuracy_pct": 98.4242,
+            "null_reference_fields": 1204,
+            "invented_values": 0,
+            "unresolved_fields": 131,
+            "verdict_counts": {
+              "correct": 2016,
+              "unresolved_abstained": 131,
+              "mismatch": 5,
+              "omitted_value": 8
+            }
+          }
+        },
+        "by_sheet_and_stage": {
+          "Memory:raw": {
+            "reference_field_positions": 1360,
+            "evaluated_fields": 1360,
+            "correct_fields": 1356,
+            "accuracy_pct": 99.7059,
+            "reference_coverage_pct": 100.0,
+            "nonempty_reference_fields": 500,
+            "correct_nonempty_fields": 496,
+            "nonempty_accuracy_pct": 99.2,
+            "null_reference_fields": 860,
+            "invented_values": 0,
+            "unresolved_fields": 0,
+            "verdict_counts": {
+              "correct": 1356,
+              "mismatch": 2,
+              "omitted_value": 2
+            },
+            "expected_records": 85,
+            "actual_records": 85,
+            "matched_records": 85,
+            "missing_records": 0,
+            "extra_records": 0,
+            "exact_scorable_records": 83,
+            "record_recall_pct": 100.0,
+            "record_precision_pct": 100.0,
+            "row_exact_pct": 97.6471
+          },
+          "Memory:normalized": {
+            "reference_field_positions": 1360,
+            "evaluated_fields": 1272,
+            "correct_fields": 1268,
+            "accuracy_pct": 99.6855,
+            "reference_coverage_pct": 93.5294,
+            "nonempty_reference_fields": 497,
+            "correct_nonempty_fields": 493,
+            "nonempty_accuracy_pct": 99.1952,
+            "null_reference_fields": 775,
+            "invented_values": 0,
+            "unresolved_fields": 88,
+            "verdict_counts": {
+              "correct": 1268,
+              "unresolved_abstained": 88,
+              "mismatch": 2,
+              "omitted_value": 2
+            },
+            "expected_records": 85,
+            "actual_records": 85,
+            "matched_records": 85,
+            "missing_records": 0,
+            "extra_records": 0,
+            "exact_scorable_records": 83,
+            "record_recall_pct": 100.0,
+            "record_precision_pct": 100.0,
+            "row_exact_pct": 97.6471
+          },
+          "Foundry:raw": {
+            "reference_field_positions": 800,
+            "evaluated_fields": 800,
+            "correct_fields": 795,
+            "accuracy_pct": 99.375,
+            "reference_coverage_pct": 100.0,
+            "nonempty_reference_fields": 302,
+            "correct_nonempty_fields": 297,
+            "nonempty_accuracy_pct": 98.3444,
+            "null_reference_fields": 498,
+            "invented_values": 0,
+            "unresolved_fields": 0,
+            "verdict_counts": {
+              "correct": 795,
+              "omitted_value": 3,
+              "mismatch": 2
+            },
+            "expected_records": 50,
+            "actual_records": 50,
+            "matched_records": 50,
+            "missing_records": 0,
+            "extra_records": 0,
+            "exact_scorable_records": 45,
+            "record_recall_pct": 100.0,
+            "record_precision_pct": 100.0,
+            "row_exact_pct": 90.0
+          },
+          "Foundry:normalized": {
+            "reference_field_positions": 800,
+            "evaluated_fields": 757,
+            "correct_fields": 748,
+            "accuracy_pct": 98.8111,
+            "reference_coverage_pct": 94.625,
+            "nonempty_reference_fields": 328,
+            "correct_nonempty_fields": 319,
+            "nonempty_accuracy_pct": 97.2561,
+            "null_reference_fields": 429,
+            "invented_values": 0,
+            "unresolved_fields": 43,
+            "verdict_counts": {
+              "correct": 748,
+              "unresolved_abstained": 43,
+              "omitted_value": 6,
+              "mismatch": 3
+            },
+            "expected_records": 50,
+            "actual_records": 50,
+            "matched_records": 50,
+            "missing_records": 0,
+            "extra_records": 0,
+            "exact_scorable_records": 47,
+            "record_recall_pct": 100.0,
+            "record_precision_pct": 100.0,
+            "row_exact_pct": 94.0
+          }
+        },
+        "by_field": {
+          "raw": {
+            "base_date": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "site": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 22,
+              "correct_nonempty_fields": 22,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 113,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "line": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 133,
+              "correct_nonempty_fields": 133,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 2,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "group_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 116,
+              "correct_nonempty_fields": 116,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 19,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "model_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 131,
+              "accuracy_pct": 97.037,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 131,
+              "nonempty_accuracy_pct": 97.037,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 131,
+                "mismatch": 4
+              }
+            },
+            "production_area": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "equipment_code": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 135,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "pm_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 4,
+              "correct_nonempty_fields": 4,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 131,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "family_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "version_raw": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 134,
+              "correct_nonempty_fields": 134,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 1,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "ui_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 49,
+              "correct_nonempty_fields": 49,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 86,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "structure_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 48,
+              "correct_nonempty_fields": 48,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 87,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "geometry_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 21,
+              "correct_nonempty_fields": 21,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 114,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "modification_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 130,
+              "accuracy_pct": 96.2963,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 5,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": 0.0,
+              "null_reference_fields": 130,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 130,
+                "omitted_value": 5
+              }
+            },
+            "engine_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "epd_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            }
+          },
+          "normalized": {
+            "base_date": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "site": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 22,
+              "correct_nonempty_fields": 22,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 113,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "line": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 133,
+              "correct_nonempty_fields": 133,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 2,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "group_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 109,
+              "correct_fields": 106,
+              "accuracy_pct": 97.2477,
+              "reference_coverage_pct": 80.7407,
+              "nonempty_reference_fields": 109,
+              "correct_nonempty_fields": 106,
+              "nonempty_accuracy_pct": 97.2477,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 26,
+              "verdict_counts": {
+                "correct": 106,
+                "unresolved_abstained": 26,
+                "omitted_value": 3
+              }
+            },
+            "model_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 130,
+              "accuracy_pct": 96.2963,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 130,
+              "nonempty_accuracy_pct": 96.2963,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 130,
+                "mismatch": 5
+              }
+            },
+            "production_area": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "equipment_code": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 135,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "pm_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 4,
+              "correct_nonempty_fields": 4,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 131,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "family_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 42,
+              "correct_fields": 42,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 31.1111,
+              "nonempty_reference_fields": 42,
+              "correct_nonempty_fields": 42,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 93,
+              "verdict_counts": {
+                "correct": 42,
+                "unresolved_abstained": 93
+              }
+            },
+            "version_raw": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 134,
+              "correct_nonempty_fields": 134,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 1,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "ui_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 123,
+              "correct_fields": 123,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 91.1111,
+              "nonempty_reference_fields": 37,
+              "correct_nonempty_fields": 37,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 86,
+              "invented_values": 0,
+              "unresolved_fields": 12,
+              "verdict_counts": {
+                "correct": 123,
+                "unresolved_abstained": 12
+              }
+            },
+            "structure_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 48,
+              "correct_nonempty_fields": 48,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 87,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "geometry_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 21,
+              "correct_nonempty_fields": 21,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 114,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "modification_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 130,
+              "accuracy_pct": 96.2963,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 5,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": 0.0,
+              "null_reference_fields": 130,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 130,
+                "omitted_value": 5
+              }
+            },
+            "engine_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "epd_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            }
+          }
+        }
+      },
+      "fixed_reference_accuracy": {
+        "raw": {
+          "correct_fields": 2151,
+          "reference_evaluated_fields": 2160,
+          "accuracy_pct": 99.5833
+        },
+        "normalized": {
+          "correct_fields": 2016,
+          "reference_evaluated_fields": 2029,
+          "accuracy_pct": 99.3593
+        }
+      }
+    },
+    "gpt-6-luna": {
+      "bundle": "be-007-evaluation-luna",
+      "by_sheet": {
+        "Memory": {
+          "started_at": "2026-11-02T13:53:09.832028+09:00",
+          "finished_at": "2026-11-02T13:54:05.207278+09:00",
+          "elapsed_seconds": 55.371,
+          "request_characters": 6500,
+          "response_characters": 22383,
+          "result_rows": 85,
+          "review_issues": 284,
+          "usage": {
+            "prompt_tokens": 3996,
+            "completion_tokens": 8118,
+            "total_tokens": 12114,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 3993,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1051,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        },
+        "Foundry": {
+          "started_at": "2026-11-02T13:54:34.408489+09:00",
+          "finished_at": "2026-11-02T13:55:24.240720+09:00",
+          "elapsed_seconds": 49.828,
+          "request_characters": 4164,
+          "response_characters": 13178,
+          "result_rows": 50,
+          "review_issues": 140,
+          "usage": {
+            "prompt_tokens": 2464,
+            "completion_tokens": 6639,
+            "total_tokens": 9103,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 2461,
+              "audio_tokens": 0
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 2248,
+              "audio_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
+            }
+          }
+        }
+      },
+      "totals": {
+        "elapsed_seconds": 105.199,
+        "request_characters": 10664,
+        "response_characters": 35561,
+        "result_rows": 135,
+        "prompt_tokens": 6460,
+        "completion_tokens": 14757,
+        "total_tokens": 21217,
+        "cached_tokens": 0,
+        "cache_write_tokens": 6454,
+        "reasoning_tokens": 3299
+      },
+      "accuracy": {
+        "overall": {
+          "raw": {
+            "reference_field_positions": 2160,
+            "evaluated_fields": 2160,
+            "correct_fields": 2018,
+            "accuracy_pct": 93.4259,
+            "reference_coverage_pct": 100.0,
+            "nonempty_reference_fields": 802,
+            "correct_nonempty_fields": 699,
+            "nonempty_accuracy_pct": 87.1571,
+            "null_reference_fields": 1358,
+            "invented_values": 39,
+            "unresolved_fields": 0,
+            "verdict_counts": {
+              "correct": 2018,
+              "invented_value": 39,
+              "mismatch": 50,
+              "omitted_value": 53
+            }
+          },
+          "normalized": {
+            "reference_field_positions": 2160,
+            "evaluated_fields": 2061,
+            "correct_fields": 1857,
+            "accuracy_pct": 90.1019,
+            "reference_coverage_pct": 93.9352,
+            "nonempty_reference_fields": 825,
+            "correct_nonempty_fields": 710,
+            "nonempty_accuracy_pct": 86.0606,
+            "null_reference_fields": 1204,
+            "invented_values": 39,
+            "unresolved_fields": 131,
+            "verdict_counts": {
+              "correct": 1857,
+              "invented_value": 39,
+              "mismatch": 49,
+              "omitted_value": 54,
+              "unresolved_abstained": 131,
+              "missing_record": 30,
+              "extra_record": 32
+            }
+          }
+        },
+        "by_sheet_and_stage": {
+          "Memory:raw": {
+            "reference_field_positions": 1360,
+            "evaluated_fields": 1360,
+            "correct_fields": 1249,
+            "accuracy_pct": 91.8382,
+            "reference_coverage_pct": 100.0,
+            "nonempty_reference_fields": 500,
+            "correct_nonempty_fields": 426,
+            "nonempty_accuracy_pct": 85.2,
+            "null_reference_fields": 860,
+            "invented_values": 37,
+            "unresolved_fields": 0,
+            "verdict_counts": {
+              "correct": 1249,
+              "invented_value": 37,
+              "mismatch": 24,
+              "omitted_value": 50
+            },
+            "expected_records": 85,
+            "actual_records": 85,
+            "matched_records": 85,
+            "missing_records": 0,
+            "extra_records": 0,
+            "exact_scorable_records": 0,
+            "record_recall_pct": 100.0,
+            "record_precision_pct": 100.0,
+            "row_exact_pct": 0.0
+          },
+          "Memory:normalized": {
+            "reference_field_positions": 1360,
+            "evaluated_fields": 1272,
+            "correct_fields": 1165,
+            "accuracy_pct": 91.5881,
+            "reference_coverage_pct": 93.5294,
+            "nonempty_reference_fields": 497,
+            "correct_nonempty_fields": 427,
+            "nonempty_accuracy_pct": 85.9155,
+            "null_reference_fields": 775,
+            "invented_values": 37,
+            "unresolved_fields": 88,
+            "verdict_counts": {
+              "correct": 1165,
+              "invented_value": 37,
+              "mismatch": 24,
+              "omitted_value": 46,
+              "unresolved_abstained": 88
+            },
+            "expected_records": 85,
+            "actual_records": 85,
+            "matched_records": 85,
+            "missing_records": 0,
+            "extra_records": 0,
+            "exact_scorable_records": 26,
+            "record_recall_pct": 100.0,
+            "record_precision_pct": 100.0,
+            "row_exact_pct": 30.5882
+          },
+          "Foundry:raw": {
+            "reference_field_positions": 800,
+            "evaluated_fields": 800,
+            "correct_fields": 769,
+            "accuracy_pct": 96.125,
+            "reference_coverage_pct": 100.0,
+            "nonempty_reference_fields": 302,
+            "correct_nonempty_fields": 273,
+            "nonempty_accuracy_pct": 90.3974,
+            "null_reference_fields": 498,
+            "invented_values": 2,
+            "unresolved_fields": 0,
+            "verdict_counts": {
+              "correct": 769,
+              "mismatch": 26,
+              "omitted_value": 3,
+              "invented_value": 2
+            },
+            "expected_records": 50,
+            "actual_records": 50,
+            "matched_records": 50,
+            "missing_records": 0,
+            "extra_records": 0,
+            "exact_scorable_records": 22,
+            "record_recall_pct": 100.0,
+            "record_precision_pct": 100.0,
+            "row_exact_pct": 44.0
+          },
+          "Foundry:normalized": {
+            "reference_field_positions": 800,
+            "evaluated_fields": 789,
+            "correct_fields": 692,
+            "accuracy_pct": 87.706,
+            "reference_coverage_pct": 94.625,
+            "nonempty_reference_fields": 328,
+            "correct_nonempty_fields": 283,
+            "nonempty_accuracy_pct": 86.2805,
+            "null_reference_fields": 429,
+            "invented_values": 2,
+            "unresolved_fields": 43,
+            "verdict_counts": {
+              "correct": 692,
+              "mismatch": 25,
+              "unresolved_abstained": 43,
+              "omitted_value": 8,
+              "invented_value": 2,
+              "missing_record": 30,
+              "extra_record": 32
+            },
+            "expected_records": 50,
+            "actual_records": 50,
+            "matched_records": 48,
+            "missing_records": 2,
+            "extra_records": 2,
+            "exact_scorable_records": 22,
+            "record_recall_pct": 96.0,
+            "record_precision_pct": 96.0,
+            "row_exact_pct": 44.0
+          }
+        },
+        "by_field": {
+          "raw": {
+            "base_date": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "site": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 113,
+              "accuracy_pct": 83.7037,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 22,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": 0.0,
+              "null_reference_fields": 113,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 113,
+                "mismatch": 22
+              }
+            },
+            "line": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 133,
+              "accuracy_pct": 98.5185,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 133,
+              "correct_nonempty_fields": 133,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 2,
+              "invented_values": 2,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "invented_value": 2
+              }
+            },
+            "group_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 116,
+              "correct_nonempty_fields": 116,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 19,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "model_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 109,
+              "accuracy_pct": 80.7407,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 109,
+              "nonempty_accuracy_pct": 80.7407,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 109,
+                "mismatch": 26
+              }
+            },
+            "production_area": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "equipment_code": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 135,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "pm_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 133,
+              "accuracy_pct": 98.5185,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 4,
+              "correct_nonempty_fields": 2,
+              "nonempty_accuracy_pct": 50.0,
+              "null_reference_fields": 131,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "mismatch": 2
+              }
+            },
+            "family_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "version_raw": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 134,
+              "correct_nonempty_fields": 134,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 1,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "ui_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 49,
+              "correct_nonempty_fields": 49,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 86,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "structure_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 50,
+              "accuracy_pct": 37.037,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 48,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": 0.0,
+              "null_reference_fields": 87,
+              "invented_values": 37,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "invented_value": 37,
+                "omitted_value": 48,
+                "correct": 50
+              }
+            },
+            "geometry_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 21,
+              "correct_nonempty_fields": 21,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 114,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "modification_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 130,
+              "accuracy_pct": 96.2963,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 5,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": 0.0,
+              "null_reference_fields": 130,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 130,
+                "omitted_value": 5
+              }
+            },
+            "engine_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            },
+            "epd_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 135,
+              "correct_fields": 135,
+              "accuracy_pct": 100.0,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 135
+              }
+            }
+          },
+          "normalized": {
+            "base_date": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "site": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 111,
+              "accuracy_pct": 81.0219,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 22,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": 0.0,
+              "null_reference_fields": 113,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 111,
+                "mismatch": 22,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "line": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 131,
+              "accuracy_pct": 95.6204,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 133,
+              "correct_nonempty_fields": 131,
+              "nonempty_accuracy_pct": 98.4962,
+              "null_reference_fields": 2,
+              "invented_values": 2,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 131,
+                "invented_value": 2,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "group_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 111,
+              "correct_fields": 103,
+              "accuracy_pct": 92.7928,
+              "reference_coverage_pct": 80.7407,
+              "nonempty_reference_fields": 109,
+              "correct_nonempty_fields": 103,
+              "nonempty_accuracy_pct": 94.4954,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 26,
+              "verdict_counts": {
+                "correct": 103,
+                "unresolved_abstained": 26,
+                "omitted_value": 4,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "model_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 105,
+              "accuracy_pct": 76.6423,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 105,
+              "nonempty_accuracy_pct": 77.7778,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 105,
+                "mismatch": 27,
+                "omitted_value": 1,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "production_area": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "equipment_code": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 135,
+              "correct_nonempty_fields": 133,
+              "nonempty_accuracy_pct": 98.5185,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "pm_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 4,
+              "correct_nonempty_fields": 2,
+              "nonempty_accuracy_pct": 50.0,
+              "null_reference_fields": 131,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "family_name": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 44,
+              "correct_fields": 20,
+              "accuracy_pct": 45.4545,
+              "reference_coverage_pct": 31.1111,
+              "nonempty_reference_fields": 42,
+              "correct_nonempty_fields": 20,
+              "nonempty_accuracy_pct": 47.619,
+              "null_reference_fields": 0,
+              "invented_values": 0,
+              "unresolved_fields": 93,
+              "verdict_counts": {
+                "correct": 20,
+                "omitted_value": 22,
+                "unresolved_abstained": 93,
+                "extra_record": 2
+              }
+            },
+            "version_raw": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 134,
+              "correct_nonempty_fields": 132,
+              "nonempty_accuracy_pct": 98.5075,
+              "null_reference_fields": 1,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "ui_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 125,
+              "correct_fields": 121,
+              "accuracy_pct": 96.8,
+              "reference_coverage_pct": 91.1111,
+              "nonempty_reference_fields": 37,
+              "correct_nonempty_fields": 37,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 86,
+              "invented_values": 0,
+              "unresolved_fields": 12,
+              "verdict_counts": {
+                "correct": 121,
+                "unresolved_abstained": 12,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "structure_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 74,
+              "accuracy_pct": 54.0146,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 48,
+              "correct_nonempty_fields": 26,
+              "nonempty_accuracy_pct": 54.1667,
+              "null_reference_fields": 87,
+              "invented_values": 37,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "invented_value": 37,
+                "omitted_value": 22,
+                "correct": 74,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "geometry_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 21,
+              "correct_nonempty_fields": 21,
+              "nonempty_accuracy_pct": 100.0,
+              "null_reference_fields": 114,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "modification_type": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 128,
+              "accuracy_pct": 93.4307,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 5,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": 0.0,
+              "null_reference_fields": 130,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 128,
+                "omitted_value": 5,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "engine_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            },
+            "epd_version": {
+              "reference_field_positions": 135,
+              "evaluated_fields": 137,
+              "correct_fields": 133,
+              "accuracy_pct": 97.0803,
+              "reference_coverage_pct": 100.0,
+              "nonempty_reference_fields": 0,
+              "correct_nonempty_fields": 0,
+              "nonempty_accuracy_pct": null,
+              "null_reference_fields": 135,
+              "invented_values": 0,
+              "unresolved_fields": 0,
+              "verdict_counts": {
+                "correct": 133,
+                "missing_record": 2,
+                "extra_record": 2
+              }
+            }
+          }
+        }
+      },
+      "fixed_reference_accuracy": {
+        "raw": {
+          "correct_fields": 2018,
+          "reference_evaluated_fields": 2160,
+          "accuracy_pct": 93.4259
+        },
+        "normalized": {
+          "correct_fields": 1857,
+          "reference_evaluated_fields": 2029,
+          "accuracy_pct": 91.5229
+        }
+      }
+    }
+  },
+  "luna_minus_sol": {
+    "elapsed_seconds": {
+      "luna_minus_sol": -23.444,
+      "change_pct": -18.2241,
+      "luna_over_sol_ratio": 0.817759
+    },
+    "prompt_tokens": {
+      "luna_minus_sol": 0,
+      "change_pct": 0.0,
+      "luna_over_sol_ratio": 1.0
+    },
+    "completion_tokens": {
+      "luna_minus_sol": -5562,
+      "change_pct": -27.3734,
+      "luna_over_sol_ratio": 0.726266
+    },
+    "total_tokens": {
+      "luna_minus_sol": -5562,
+      "change_pct": -20.77,
+      "luna_over_sol_ratio": 0.7923
+    },
+    "response_characters": {
+      "luna_minus_sol": -30758,
+      "change_pct": -46.3789,
+      "luna_over_sol_ratio": 0.536211
+    },
+    "raw": {
+      "accuracy_pct_pp": -6.1574,
+      "nonempty_accuracy_pct_pp": -11.7207
+    },
+    "normalized": {
+      "accuracy_pct_pp": -9.2574,
+      "nonempty_accuracy_pct_pp": -12.3636
+    }
+  },
+  "paired_reference_field_counts": {
+    "raw": {
+      "both_correct": 2016,
+      "sol_only_correct": 135,
+      "both_incorrect": 7,
+      "luna_only_correct": 2
+    },
+    "normalized": {
+      "both_correct": 1857,
+      "sol_only_correct": 159,
+      "unresolved": 131,
+      "both_incorrect": 13
+    }
+  },
+  "extra_field_errors_by_model": {
+    "gpt-6-luna": 32
+  }
+}
