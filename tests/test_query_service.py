@@ -9,8 +9,8 @@ from setron.features.ai.service import parse_question
 from setron.features.item.schemas import Item
 from setron.features.query.schemas import (
     FamilyChoice,
+    GroupChoice,
     IssueKind,
-    ModelChoice,
     QueryCatalog,
 )
 from setron.features.query.service import answer_query, resolve_conditions, select_records
@@ -32,8 +32,8 @@ RELEASES = {
 CATALOG = QueryCatalog(
     sites=("평택", "화성"),
     lines=("P1", "16L"),
-    models=(ModelChoice(M_O2, "M-O2", "OXIDE"), ModelChoice(M_O3, "M-O3", "OXIDE"),
-            ModelChoice(M_C4, "M-C4", "POLY"), ModelChoice(M_HPA, "HPA", "ETC")),
+    groups=(GroupChoice(M_O2, "O2", "M-O2", "OXIDE"), GroupChoice(M_O3, "O3", "M-O3", "OXIDE"),
+            GroupChoice(M_C4, "C4", "M-C4", "POLY"), GroupChoice(M_HPA, "HPA", "HPA", "ETC")),
     families=(FamilyChoice(F_O2_MEM, "O2 Memory", M_O2), FamilyChoice(F_O2_FDY, "O2 Foundry", M_O2),
               FamilyChoice(F_O3, "O3", M_O3), FamilyChoice(F_C4, "C4", M_C4)),
     dates=(DAY1, DAY2),
@@ -70,8 +70,8 @@ def codes(records):
 def test_choices_exclude_analysis_excluded_models_and_list_stored_dates():
     choices = CATALOG.choices()
 
-    assert choices.groups == ("OXIDE", "POLY")
-    assert "HPA" not in choices.models
+    assert choices.groups == ("O2", "O3", "C4")
+    assert choices.models == ("M-O2", "M-O3", "M-C4")
     assert choices.families == ("O2 Memory", "O2 Foundry", "O3", "C4")
     assert choices.base_dates == ("2026-09-21", "2026-10-21")
 
@@ -89,12 +89,12 @@ def test_parse_question_sends_choices_in_system_prompt():
 # --- 조건 확정 -------------------------------------------------------------------
 
 def test_values_in_choices_are_resolved_ignoring_case_and_spaces():
-    query = resolve(sites=[" 화성 "], lines=["16l"], groups=["Oxide"], models=["m-o3"], families=["o2 memory"],
+    query = resolve(sites=[" 화성 "], lines=["16l"], groups=["c4"], families=["o2 memory"],
                     target_view=TargetView.HEATMAP)
 
     assert query.ready
-    assert (query.sites, query.lines, query.categories) == (("화성",), ("16L",), ("OXIDE",))
-    assert (query.group_ids, query.family_ids) == ((M_O3,), (F_O2_MEM,))
+    assert (query.sites, query.lines) == (("화성",), ("16L",))
+    assert (query.group_ids, query.family_ids) == ((M_C4,), (F_O2_MEM,))
     assert query.target_view is TargetView.HEATMAP
 
 
@@ -110,8 +110,14 @@ def test_value_not_in_choices_is_reported_with_candidates_and_blocks_navigation(
     assert not query.ready and query.target_view is None
 
 
-def test_hpa_model_is_not_a_choice():
-    assert resolve(models=["HPA"]).issues[0].kind is IssueKind.NOT_IN_CHOICES
+def test_group_label_and_model_name_point_to_same_group():
+    """화면 설비군 이름(C4)과 모델명(M-C4)은 같은 설비군 조건이 된다."""
+    assert resolve(groups=["C4"], models=["M-C4"]).group_ids == (M_C4,)
+    assert resolve(groups=["O2"], models=["M-O3"]).group_ids == (M_O2, M_O3)
+
+
+def test_hpa_group_is_not_a_choice():
+    assert resolve(groups=["HPA"]).issues[0].kind is IssueKind.NOT_IN_CHOICES
 
 
 def test_ai_unresolved_condition_needs_user_check():
@@ -169,11 +175,13 @@ def test_family_condition_keeps_only_matching_pms_of_mixed_equipment():
     assert [pm.pm_name for pm in selected[0].pms] == ["PM2"]
 
 
-def test_category_and_version_conditions_filter_pms():
-    poly = select_records(RECORDS, resolve(groups=["POLY"]), CATALOG)
+def test_group_and_version_conditions_filter_pms():
+    c4 = select_records(RECORDS, resolve(groups=["C4"]), CATALOG)
+    o3 = select_records(RECORDS, resolve(models=["M-O3"]), CATALOG)
     old_o2 = select_records(RECORDS, resolve(families=["O2 Memory"], versions=["v2.1"]), CATALOG)
 
-    assert codes(poly) == [("DM-003", DAY2)]
+    assert codes(c4) == [("DM-003", DAY2)]
+    assert [pm.pm_name for pm in o3[0].pms] == ["PM2"]
     assert codes(old_o2) == [("DM-002", DAY2)]
 
 

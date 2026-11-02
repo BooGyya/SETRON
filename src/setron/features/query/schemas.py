@@ -19,11 +19,16 @@ from setron.features.version.service import FamilyReleases
 
 
 @dataclass(frozen=True)
-class ModelChoice:
-    """설비 모델 하나 (ERD `equipment_group`). ``category``는 POLY / OXIDE / KCTC / ETC다."""
+class GroupChoice:
+    """설비군 하나 (ERD `equipment_group`).
+
+    ``name``은 화면 조회 칩의 설비군 이름(예: C4, Inline Ox), ``model_name``은 모델명(예: M-C4)이다.
+    둘 다 같은 설비군을 가리킨다. ``category``는 POLY / OXIDE / KCTC / ETC이며 ETC(HPA)는 선택지에서 뺀다.
+    """
 
     group_id: int
     name: str
+    model_name: str
     category: str
 
 
@@ -47,23 +52,25 @@ class QueryCatalog:
 
     sites: tuple[str, ...] = ()
     lines: tuple[str, ...] = ()
-    models: tuple[ModelChoice, ...] = ()
+    groups: tuple[GroupChoice, ...] = ()
     families: tuple[FamilyChoice, ...] = ()
     dates: tuple[date, ...] = ()
     releases: Mapping[int, FamilyReleases] = field(default_factory=dict)
     items: tuple[Item, ...] = ()
 
     @property
-    def categories(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(m.category for m in self.models if m.category != "ETC"))
+    def analysis_groups(self) -> tuple[GroupChoice, ...]:
+        """분석 대상 설비군. HPA 같은 분석 제외 분류(ETC)는 뺀다."""
+        return tuple(g for g in self.groups if g.category != "ETC")
 
     def choices(self) -> QueryChoices:
-        """AI에 함께 줄 선택지. HPA 같은 분석 제외 분류(ETC)는 넣지 않는다."""
+        """AI에 함께 줄 선택지."""
+        groups = self.analysis_groups
         return QueryChoices(
             sites=self.sites,
             lines=self.lines,
-            groups=self.categories,
-            models=tuple(m.name for m in self.models if m.category != "ETC"),
+            groups=tuple(g.name for g in groups),
+            models=tuple(g.model_name for g in groups),
             families=tuple(f.name for f in self.families),
             base_dates=tuple(d.isoformat() for d in sorted(self.dates)),
         )
@@ -115,7 +122,6 @@ class ResolvedQuery:
     base_date: date | None = None
     sites: tuple[str, ...] = ()
     lines: tuple[str, ...] = ()
-    categories: tuple[str, ...] = ()
     group_ids: tuple[int, ...] = ()
     family_ids: tuple[int, ...] = ()
     release_ids: tuple[int, ...] = ()
@@ -129,8 +135,8 @@ class ResolvedQuery:
 
     @property
     def filters_pms(self) -> bool:
-        """모델·분류·계열·버전 조건이 있어 PM 단위로 걸러야 하는지."""
-        return bool(self.categories or self.group_ids or self.family_ids or self.release_ids)
+        """설비군·계열·버전 조건이 있어 PM 단위로 걸러야 하는지."""
+        return bool(self.group_ids or self.family_ids or self.release_ids)
 
 
 @dataclass(frozen=True)

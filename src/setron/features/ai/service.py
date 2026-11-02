@@ -50,8 +50,9 @@ COMMON_RULES = (
 
 QUERY_PROMPT = (
     "너는 반도체 설비 SW 버전 현황 프로그램의 질문 해석기다.\n"
-    "사용자 질문에서 조회 조건을 찾아 아래 형식으로 답한다. groups는 최상위 분류(POLY/OXIDE/KCTC), "
-    "models는 설비 모델, families는 버전 계열이다. 선택지가 주어지지 않은 값은 질문에 적힌 표기 그대로 쓴다.\n"
+    "사용자 질문에서 조회 조건을 찾아 아래 형식으로 답한다. groups는 설비군(예: C4, O2, Inline Ox), "
+    "models는 설비 모델명(예: M-C4), families는 버전 계열이다. Poly·Oxide·KCTC 같은 상위 분류는 "
+    "해당 설비군을 모두 적는다. 선택지가 주어지지 않은 값은 질문에 적힌 표기 그대로 쓴다.\n"
     '{"sites": [], "lines": [], "groups": [], "models": [], "families": [], "versions": [], "items": [],\n'
     ' "base_date": "YYYY-MM-DD 또는 null", "target_view": "DASHBOARD|HEATMAP|ITEM_MANAGER|ANALYSIS 또는 null",\n'
     ' "unresolved": ["해석하지 못한 조건"]}\n'
@@ -104,7 +105,7 @@ def parse_question(
 
 
 def _choice_lines(choices: QueryChoices) -> str:
-    fields = [("sites", "사업장"), ("lines", "라인"), ("groups", "최상위 분류"), ("models", "모델"),
+    fields = [("sites", "사업장"), ("lines", "라인"), ("groups", "설비군"), ("models", "모델명"),
               ("families", "버전 계열"), ("base_dates", "저장된 기준일(base_date)")]
     return "\n".join(
         f"{label} 선택지({key}): {json.dumps(list(getattr(choices, key)), ensure_ascii=False)}" for key, label in fields
