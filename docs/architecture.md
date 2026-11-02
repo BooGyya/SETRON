@@ -67,6 +67,10 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── forecast/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   ├── item/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
@@ -115,6 +119,7 @@ S15P31B106/
 │   ├── test_excel_import_service.py
 │   ├── test_excel_reader.py
 │   ├── test_export_service.py
+│   ├── test_forecast_service.py
 │   ├── test_item_service.py
 │   ├── test_priority_service.py
 │   ├── test_query_service.py
@@ -317,6 +322,8 @@ Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디�
 `features/query/`는 AI가 질문에서 찾은 조회 조건을 검사하고 해당 자료를 고릅니다. 질문 해석 때 사업장·라인·설비군(화면 조회 칩과 같은 C4·O2 단위)·모델명·계열·저장된 기준일 선택지(`QueryCatalog.choices()`)를 AI에 함께 주어 그 안에서 고르게 하고, 돌아온 값이 정말 선택지에 있는지 검사합니다. 버전은 등록 릴리즈에서, Item은 `search_items`로 찾으며, 여러 개에 해당하거나 찾지 못한 조건은 후보와 함께 사용자 확인으로 넘깁니다. 확인할 조건이 남으면 조회하지 않고 화면도 옮기지 않습니다. 확정한 조건으로 설비(혼합 설비는 맞는 PM만)를 골라 `features/aggregation/`의 공통 집계를 만들고, 같은 조건 객체를 화면 이동에 넘깁니다. 읽기만 하며 DB 값을 바꾸지 않습니다. `tests/test_query_service.py`가 검증합니다.
 
 `features/analysis/`는 AI 원인·현황 설명(FUN-036·038·039)에 보낼 자료를 만들고 답변의 숫자를 검사합니다. 조회 조건과 계열별 목표 N, 전체·사업장별 집계, 계열별 버전 분포, 사업장·사유별 위험 설비, 통일 지연 근거(목표 N에는 포함되고 설치 버전에는 없는 Item)를 모두 공통 계산으로 만들어 화면과 숫자가 같습니다. `explain()`은 이 자료로 `features/ai/`의 `analyze()`를 호출하고, 답변·근거에 나온 숫자 중 보낸 자료에 없는 것을 `unmatched_numbers`로 돌려줘 화면이 경고할 수 있게 합니다. 버전 표기 안의 숫자는 검사하지 않습니다. `tests/test_analysis_service.py`가 검증합니다.
+
+`features/forecast/`는 버전 통일 참고 예측(FUN-040)을 계산합니다. 계열마다 기간의 처음과 끝 현황을 설비 1대 × 계열 1건으로 비교해 기존 설비 패치, N 미만으로 내려간 건, 신규·전입, 이탈을 나누고, 기존 설비 패치만으로 구한 속도에 남은 N 미만 건수를 단순 비례해 잔여 기간과 참고 완료일을 계산합니다(멘토링 3차). 목표 N이 없거나, 한 날짜뿐이거나, 기존 설비 패치가 없으면 예측하지 않고 사유를 알립니다. 판단 불가가 남으면 완료로 단정하지 않습니다. `explain_forecast()`는 계산 방법·가정·한계와 함께 결과를 AI에 보내 설명을 받고 `features/analysis/`의 숫자 검사를 적용합니다. `tests/test_forecast_service.py`가 검증합니다.
 
 `features/export/`는 현황 보고서를 Excel(xlsx)로 저장합니다. 화면에서 계산한 집계·위험·노후도·우선순위 결과를 다시 계산하지 않고 표로 옮기므로 같은 조건이면 화면과 숫자가 같습니다. 조회 조건과 모델·계열별 목표 N을 첫 시트에 남기고, 계열별 막대·상태 구성비 원형·날짜별 적용률 꺾은선 차트는 같은 시트의 표 셀을 참조해 Excel에서 편집할 수 있습니다. 적용률을 계산할 수 없으면 0%가 아니라 빈 셀과 '계산 불가'로 적습니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. 관리 데이터 전체 내보내기와 트리맵 차트는 아직 포함하지 않습니다. `tests/test_export_service.py`가 검증합니다.
 
