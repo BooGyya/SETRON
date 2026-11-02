@@ -1,9 +1,10 @@
 """조회 결과의 확정 필드 변환. DB·Qt·로더를 실행하거나 적용 모델을 추정하지 않는다."""
 
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import date
 
-from setron.features.aggregation.schemas import PmVersion
+from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.equipment.schemas import StoredSnapshot
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
 from setron.features.release.schemas import RecordView, ReleaseDetail, SourceCell
@@ -182,3 +183,67 @@ def read_pm_versions(snapshot: StoredSnapshot) -> tuple[PmVersion, ...]:
             seen.add(key)
             result.append(PmVersion(name, model_id, sw.family_id, sw.version_raw, sw.release_version_id))
     return tuple(result)
+
+
+def read_equipment_record(snapshot: StoredSnapshot, excluded_group_ids: Collection[int]) -> EquipmentRecord:
+    """관측 하나를 집계·위험·우선순위·예측이 받는 설비 단위 입력으로 변환한다.
+
+    분석 제외는 모델의 analysis_enabled로만 정한다. 설비가 쓰는 모델(대표 모델과 PM 모델)이
+    모두 제외 모델이면 HPA로 표시하고, 제외 모델과 분석 모델이 섞이면 임의로 정하지 않는다.
+
+    param
+    - snapshot: 특정 관측일의 서비스 결과.
+    - excluded_group_ids: analysis_enabled = false인 모델 ID 목록.
+
+    return
+    - 원본 모델명과 PM·SW 연결을 유지한 EquipmentRecord.
+
+    raises
+    - StorageValidationError: 설비·관측 필드가 잘못됐거나, PM 연결이 잘못됐거나, 제외 모델이 섞인 경우.
+    """
+    pms = read_pm_versions(snapshot)
+    excluded = _excluded_groups(excluded_group_ids)
+    identifier(snapshot.equipment_id, "equipment_id")
+    required_text(snapshot.equipment_code, "equipment_code", 50)
+    required_text(snapshot.site, "site", 50)
+    if snapshot.line is not None:
+        required_text(snapshot.line, "line", 50)
+    required_text(snapshot.model_name, "model_name", 255)
+    groups = {pm.group_id for pm in pms}
+    if snapshot.group_id is not None:
+        groups.add(snapshot.group_id)
+    hpa = groups & excluded
+    require(not hpa or hpa == groups, f"{snapshot.equipment_code}: 분석 제외 모델과 분석 모델이 한 설비에 섞여 있습니다.")
+    return EquipmentRecord(snapshot.equipment_id, snapshot.equipment_code, snapshot.base_date, snapshot.site,
+                           snapshot.line, snapshot.model_name, pms, is_hpa=bool(hpa))
+
+
+def read_equipment_records(snapshots: Iterable[StoredSnapshot],
+                           excluded_group_ids: Collection[int]) -> tuple[EquipmentRecord, ...]:
+    """여러 관측을 변환한다. 여러 기준일을 함께 받을 수 있다 (예측·추이).
+
+    param
+    - snapshots: 관측 결과 목록.
+    - excluded_group_ids: analysis_enabled = false인 모델 ID 목록.
+
+    return
+    - 입력 순서의 EquipmentRecord 튜플.
+
+    raises
+    - StorageValidationError: 각 관측이 잘못됐거나 같은 설비·같은 기준일 관측이 중복된 경우.
+    """
+    result, seen = [], set()
+    for snapshot in snapshots:
+        record = read_equipment_record(snapshot, excluded_group_ids)
+        key = (record.equipment_id, record.base_date)
+        require(key not in seen, f"{record.equipment_code}: 같은 기준일 관측이 중복되었습니다.")
+        seen.add(key)
+        result.append(record)
+    return tuple(result)
+
+
+def _excluded_groups(group_ids: Collection[int]) -> frozenset[int]:
+    require(not isinstance(group_ids, (str, bytes)), "분석 제외 모델은 ID 목록이어야 합니다.")
+    for group_id in group_ids:
+        identifier(group_id, "excluded_group_id")
+    return frozenset(group_ids)

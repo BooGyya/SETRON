@@ -11,7 +11,15 @@ from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.release.schemas import LinkedItemView, RecordView, ReleaseDetail, SourceCell
 from setron.features.storage.validation import StorageValidationError
 from setron.features.version.service import sort_releases
-from setron.ui.read_converters import read_item, read_item_links, read_pm_versions, read_release
+from setron.features.aggregation.service import summarize
+from setron.ui.read_converters import (
+    read_equipment_record,
+    read_equipment_records,
+    read_item,
+    read_item_links,
+    read_pm_versions,
+    read_release,
+)
 
 
 def record(table="release_version", **changes):
@@ -176,3 +184,69 @@ def test_cross_family_pm_conflict_and_partial_mapping_rejected():
         read_pm_versions(replace(value, software=(first, replace(second, pms=first.pms))))
     with pytest.raises(StorageValidationError):
         read_pm_versions(replace(value, group_id=4, software=(first, replace(second, pms=()))))
+
+
+def hpa_snapshot(**changes):
+    """PM 없는 SW 하나와 대표 모델을 가진 단일 모델 관측을 만든다."""
+    sw = StoredSoftware(equipment_version_id=20, batch_id=7, family_id=2, version_raw="V9")
+    value = StoredSnapshot(equipment_id=5, snapshot_id=50, equipment_code="HPA1", base_date=date(2026, 11, 1),
+                           site="P1", model_name="HPA", batch_id=7, group_id=9, software=(sw,))
+    return replace(value, **changes)
+
+
+def test_equipment_record_keeps_snapshot_fields_and_pms():
+    """관측 필드와 PM·SW 연결을 그대로 옮기고 원본 모델명을 바꾸지 않는다."""
+    value = snapshot(line="L1")
+    before = deepcopy(value)
+    record = read_equipment_record(value, {9})
+    assert (record.equipment_id, record.equipment_code, record.base_date, record.site, record.line,
+            record.model_name, record.is_hpa) == (1, "EQ1", date(2026, 11, 1), "P1", "L1", "혼합", False)
+    assert record.pms == read_pm_versions(value)
+    assert value == before
+    assert read_equipment_record(snapshot(), ()).line is None
+
+
+def test_hpa_is_decided_by_excluded_models_only():
+    """모델명이 아니라 analysis_enabled = false 모델 ID로만 HPA를 판단한다."""
+    assert read_equipment_record(hpa_snapshot(), {9}).is_hpa
+    assert not read_equipment_record(hpa_snapshot(), ()).is_hpa
+    assert read_equipment_record(snapshot(), {4}).is_hpa
+
+
+def test_mixed_excluded_and_analysis_models_rejected():
+    """대표 모델과 PM 모델 중 일부만 제외 모델이면 임의로 판단하지 않는다."""
+    with pytest.raises(StorageValidationError):
+        read_equipment_record(snapshot(group_id=6), {4})
+    with pytest.raises(StorageValidationError):
+        read_equipment_record(snapshot(group_id=6), {6})
+
+
+@pytest.mark.parametrize("changes", [
+    {"equipment_id": 0}, {"equipment_code": " "}, {"site": ""}, {"line": " "},
+    {"model_name": None}, {"equipment_code": "E" * 51},
+])
+def test_invalid_equipment_fields_rejected(changes):
+    with pytest.raises(StorageValidationError):
+        read_equipment_record(snapshot(**changes), ())
+
+
+@pytest.mark.parametrize("excluded", ["9", (0,), (True,)])
+def test_invalid_excluded_ids_rejected(excluded):
+    with pytest.raises(StorageValidationError):
+        read_equipment_record(hpa_snapshot(), excluded)
+
+
+def test_records_reject_duplicate_observation_and_keep_dates():
+    """같은 설비·같은 기준일 관측은 거부하고, 다른 기준일은 함께 변환한다."""
+    later = snapshot(snapshot_id=100, base_date=date(2026, 11, 2))
+    records = read_equipment_records([snapshot(), later], ())
+    assert [r.base_date for r in records] == [date(2026, 11, 1), date(2026, 11, 2)]
+    with pytest.raises(StorageValidationError):
+        read_equipment_records([snapshot(), snapshot(snapshot_id=101)], ())
+
+
+def test_records_feed_common_summary():
+    """변환 결과를 공통 집계에 바로 넣을 수 있고 HPA는 설비 수에서 빠진다."""
+    records = read_equipment_records([snapshot(), hpa_snapshot()], {9})
+    summary = summarize(records, {}, {})
+    assert (summary.equipment_count, summary.hpa_excluded) == (1, 1)
