@@ -55,6 +55,10 @@ S15P31B106/
 │       │   │   ├── examples.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── export/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   ├── item/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
@@ -92,6 +96,7 @@ S15P31B106/
 │   ├── test_database_environment.py
 │   ├── test_database_mysql.py
 │   ├── test_excel_reader.py
+│   ├── test_export_service.py
 │   ├── test_item_service.py
 │   ├── test_priority_service.py
 │   ├── test_risk_service.py
@@ -287,6 +292,8 @@ Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디�
 `features/risk/`는 등록된 위험 지정(`risk_rule`)으로 설비와 버전의 위험 여부를 판정합니다. 환경·안전 필수 Item 미적용, 결함 Item의 위험 범위([시작, 해제) 버전) 포함, 직접 지정한 위험 버전 중 하나라도 확인되면 위험이고, 자료가 부족하면 '미확인'으로 둡니다. Item 포함 여부는 `features/item/`의 판정을 그대로 쓰며, 위험은 N 대비 격차·노후도와 따로 판단합니다. `tests/test_risk_service.py`가 검증합니다.
 
 `features/priority/`는 업그레이드할 설비의 우선순위를 정합니다. `features/risk/`의 위험 판정으로 위험 설비를 먼저 두고, 같은 위험 수준 안에서는 `features/aging/`의 경과 기간이 긴 설비를 먼저 둡니다. 혼합 설비는 계열 중 가장 오래된 버전의 기간을 대표로 쓰고 계열별 기간도 함께 남깁니다. 위험이 미확인이거나 출시일이 없어 기간을 모르는 설비는 순위 없이 '확인 필요' 목록에 빠진 근거와 함께 둡니다. 목표 N 달성 여부는 순위에 쓰지 않습니다. `tests/test_priority_service.py`가 검증합니다.
+
+`features/export/`는 현황 보고서를 Excel(xlsx)로 저장합니다. 화면에서 계산한 집계·위험·노후도·우선순위 결과를 다시 계산하지 않고 표로 옮기므로 같은 조건이면 화면과 숫자가 같습니다. 조회 조건과 모델·계열별 목표 N을 첫 시트에 남기고, 계열별 막대·상태 구성비 원형·날짜별 적용률 꺾은선 차트는 같은 시트의 표 셀을 참조해 Excel에서 편집할 수 있습니다. 적용률을 계산할 수 없으면 0%가 아니라 빈 셀과 '계산 불가'로 적습니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. 관리 데이터 전체 내보내기와 트리맵 차트는 아직 포함하지 않습니다. `tests/test_export_service.py`가 검증합니다.
 
 데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
 
