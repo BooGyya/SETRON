@@ -11,6 +11,7 @@ from setron.ui.item_distribution import ItemDistribution
 from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import SECONDARY
 from setron.ui.versions import VersionsPage, _fit
+from setron.ui.read_worker import ReadRequest
 
 
 def _text(text="", size=13):
@@ -21,7 +22,7 @@ def _text(text="", size=13):
 
 
 class ItemsPage(QWidget):
-    """loader는 I/O가 완료된 ItemManagerData를 반환한다. DB 연결은 외부 워커의 책임이다."""
+    """메모리 또는 명시적 BackgroundRead 공급자를 사용하는 Item 조회 화면."""
 
     mode_changed = Signal(str)
     equipment_selected = Signal(object)
@@ -29,8 +30,15 @@ class ItemsPage(QWidget):
     page_size = 12
 
     def __init__(self, loader):
+        """기존 Item 화면에 읽기 요청 조정자를 연결한다.
+
+        param
+        - loader: ItemManagerData 메모리 공급자 또는 워커용 BackgroundRead.
+        """
         super().__init__()
         self.loader, self.data = loader, None
+        self.read_request = ReadRequest(self)
+        self.read_request.completed.connect(self._loaded)
         self.mode, self.page_index, self.selected_id = "list", 0, None
         self.visible_entries, self.equipment = (), ()
         self.revision, self.selected_equipment_id = 0, None
@@ -158,17 +166,34 @@ class ItemsPage(QWidget):
         self.mode_changed.emit(mode)
 
     def reload(self):
+        """이전 상세 요청을 무효화하고 중복 실행 없이 자료를 요청한다."""
+        if self.read_request.busy:
+            return
         self._invalidate_selection()
         self.selected_id, self.equipment = None, ()
         self.title.clear()
         self.content.clear()
         for model in (self.release_model, self.source_model, self.equipment_model):
             model.set_rows(())
-        try:
-            data = self.loader()
-            if not isinstance(data, ItemManagerData):
-                raise ValueError("Item 읽기 자료 형식이 올바르지 않습니다.")
-        except Exception:
+        self.data = None
+        self.search.setEnabled(False)
+        self._filter_changed()
+        self.refresh.setEnabled(False)
+        self.status.setText("Item 자료 불러오는 중")
+        self.status.set_tone("info")
+        self.notice.setText("조회 중입니다. 완료될 때까지 기다려 주세요.")
+        self.empty.setText("Item 자료 불러오는 중")
+        self.read_request.start(self.loader)
+
+    def _loaded(self, data, error):
+        """현재 요청 결과에 기존 목록·오류 표시를 적용한다.
+
+        param
+        - data: 조회 결과.
+        - error: 공급자 실패 또는 None.
+        """
+        self.refresh.setEnabled(True)
+        if error is not None or not isinstance(data, ItemManagerData):
             self.data = None
             self.status.setText("Item 자료 불러오기 실패")
             self.status.set_tone("danger")
@@ -180,6 +205,20 @@ class ItemsPage(QWidget):
             self.notice.setText(data.versions.source_label)
         self.search.setEnabled(self.data is not None)
         self._filter_changed()
+
+    def hideEvent(self, event):
+        """화면 이탈 시 진행 중 응답을 무효화한다.
+
+        param
+        - event: Qt 숨김 이벤트.
+        """
+        if self.read_request.busy:
+            self.read_request.cancel()
+            self.refresh.setEnabled(True)
+            self.status.setText("조회 취소")
+            self.notice.setText("다시 불러오기를 눌러 조회해 주세요.")
+            self.empty.setText("조회 취소 · 다시 불러오기 가능")
+        super().hideEvent(event)
 
     def _filter_changed(self, *_):
         self._invalidate_selection()
