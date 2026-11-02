@@ -47,11 +47,21 @@ class ItemEntry:
 
 @dataclass(frozen=True)
 class VersionCatalog:
+    """모델·릴리즈·Item과 전달된 출처 설명을 묶는 읽기 자료.
+
+    ivar
+    - pairs: 확인된 모델·계열 관계.
+    - releases: 릴리즈와 적용 모델·출처.
+    - items: Item과 출처.
+    - version_items: 명시적으로 전달된 릴리즈별 Item 연결.
+    - source_label: 자료 출처 설명. 설명 누락만으로 DB 연결 여부를 판단하지 않는다.
+    """
+
     pairs: tuple[ModelFamily, ...]
     releases: tuple[ReleaseEntry, ...]
     items: tuple[ItemEntry, ...] = ()
     version_items: tuple[VersionItem, ...] = ()
-    source_label: str = "자료 공급자 미연결"
+    source_label: str = "자료 출처 설명 미제공"
 
     def __post_init__(self):
         pairs = {(p.model_id, p.family_id) for p in self.pairs}
