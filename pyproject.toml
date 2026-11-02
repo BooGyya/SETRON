@@ -12,6 +12,7 @@ dependencies = [
     "openpyxl",
     "xlwings",
     "openai>=3.42.1,<4",
+    "python-docx",
 ]
 
 [dependency-groups]

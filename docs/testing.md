@@ -107,6 +107,29 @@ Figma VER3 릴리즈 표 `526:60329`와 속성 표 `526:60380`을 기준으로 �
 
 B-1 검증 결과(2026-11-01): 전체 470개 통과, MySQL 테스트 설정 미등록 24개와 Docker CLI 미설치 1개 건너뜀. 커밋 전 B-1 25개를 다시 실행해 통과했습니다. Windows에서 목록 → 상세 → 목록 복귀도 확인했습니다. 검토용 Qt 캡처: [목록](screenshots/b1/list-1600.png), [상세 기본 정보](screenshots/b1/detail-1600-top.png), [Item과 출처](screenshots/b1/detail-1600-bottom.png). 모든 캡처는 합성 자료이며 실제 회사 데이터가 아닙니다.
 
+### Excel 가져오기 C-1~C-3 검증
+
+`tests/test_excel_import_service.py`는 원본 셀 값·주소·병합 범위 보존, AI 원본과 수정값 분리·되돌리기, 필수값 공란의 묶음 전체 차단(HPA 포함), 형식·길이 오류, 출처 셀과 AI 값 불일치·위치 없음·범위 밖, 같은 PM 상충과 정확한 중복 병합, 다른 PM 차이의 비차단 예외, 릴리즈 Item 규칙, 기준 자료 유무, 파일명을 넣지 않는 `raw_data`, 저장 오류의 화면 상태 변환을 검증한다.
+
+`tests/test_ui_import.py`는 합성 통합문서로 메뉴 진입 시 Excel 미연결, Excel 미실행 안내, 열 문자·행 번호·병합 미리보기, 예제 응답 표시와 오류 중 저장 차단, 수정 후 저장, 확인창 취소, 저장 중 재요청 차단, 성공 후 잠금·재조회 안내(A 적용 조건·목표 N 불변), 실패 후 같은 요청 재시도, 결과 미확인 잠금, 행 제외, 검토 항목→행/셀 이동, 릴리즈 노트 흐름, 종류 변경·처리 중 입력 잠금, AI 호출 실패를 확인한다. 1600×960·1100×800·960×600에서 메인 가로 넘침을 검사한다.
+
+```powershell
+uv run --locked python -m pytest tests/test_excel_import_service.py tests/test_ui_import.py -q
+uv run --locked python -m setron --demo-excel
+```
+
+실제 Excel 연결과 DB 저장은 검증하지 않았다. 기본 저장소는 메모리이며 AI 결과는 예제 응답이다.
+
+### AI 분석 C-4 검증
+
+`tests/test_ui_ai.py`는 선택지 정확 대조와 Site에 맞는 Line 선택, 원본 구역명 미추정, 복수 선택·기준일·모델·버전·Item·해석 불가 조건의 보존과 적용 차단, 사용자가 제외한 조건만 적용하는지 검증한다. Qt 테스트는 해석만으로 초안·적용 조건이 바뀌지 않음, 확인 후 적용과 화면 이동 시 대시보드 결과가 같은 적용 조건을 사용함, 확인 취소, 목표 N 대기·선택지 변경 시 차단, 해석 실패·처리 중 재요청 차단, 분석 자료가 대시보드 계산값과 같음, 근거·추정·미확인 분리와 EXAMPLE/REAL 표시를 확인한다.
+
+```powershell
+uv run --locked python -m pytest tests/test_ui_ai.py -q
+```
+
+회사 AI 실제 API 결과는 검증하지 않았다. 환경 기록에는 `예제 응답`으로 적는다.
+
 ## 2. 단위 테스트 작성 규칙
 
 - 테스트 파일은 `tests/test_<대상 모듈>.py`로 만듭니다. 예: `tests/test_excel_reader.py`, `tests/test_ai_service.py`
@@ -318,3 +341,11 @@ uv run pytest tests/test_ui_items.py tests/test_ui_versions.py -q
 ```powershell
 uv run pytest tests/test_ui_item_distribution.py tests/test_ui_items.py tests/test_ui_equipment.py -q
 ```
+
+## B-2 편집 공통 기반 검증
+
+`python -m pytest -q tests/test_ui_version_edit.py tests/test_ui_versions.py`로 B-1 상세 진입·복귀 상태 보존과 B-2 미연결 경계를 검증합니다. 테스트 전용 필드와 가짜 비동기 서비스만 사용하며 실제 편집 허용 항목을 정의하거나 DB에 저장하지 않습니다.
+
+주요 검사: 원본/관리값/초안 분리, 변경 없음 차단, 검증 오류와 재검토, 미연결 저장 차단, 중복 제출 및 저장 중 닫기 방지, 성공 후 재저장 차단, 실패 후 초안 유지, 오래된 콜백 무시, 결과 미확인·제출 예외의 재시도 금지, 취소/창 닫기 폐기 확인. 전체 회귀 테스트는 `python -m pytest -q -ra`로 실행합니다.
+
+화면 자료: [실제 기본 대기 화면](screenshots/b2/pending-760.png), [테스트 전용 검토 예시](screenshots/b2/review-test-only.png). 두 번째 화면의 항목은 업무 필드가 아니며 기본 앱에서 노출되지 않습니다.

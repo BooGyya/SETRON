@@ -36,6 +36,10 @@ S15P31B106/
 │       │   ├── versions.py
 │       │   ├── version_data.py
 │       │   ├── version_demo.py
+│       │   ├── import_page.py
+│       │   ├── import_demo.py
+│       │   ├── ai_page.py
+│       │   ├── ai_data.py
 │       │   ├── theme.py
 │       │   ├── assets/
 │       │   └── check_environment.py
@@ -55,6 +59,18 @@ S15P31B106/
 │       │   │   ├── examples.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── analysis/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
+│       │   ├── export/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
+│       │   ├── forecast/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   ├── item/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
@@ -63,7 +79,19 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── query/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
+│       │   ├── report/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   ├── risk/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
+│       │   ├── excel_import/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
@@ -87,13 +115,19 @@ S15P31B106/
 │   ├── test_aggregation_service.py
 │   ├── test_aging_mysql.py
 │   ├── test_aging_service.py
+│   ├── test_analysis_service.py
 │   ├── test_ai_service.py
 │   ├── test_database.py
 │   ├── test_database_environment.py
 │   ├── test_database_mysql.py
+│   ├── test_excel_import_service.py
 │   ├── test_excel_reader.py
+│   ├── test_export_service.py
+│   ├── test_forecast_service.py
 │   ├── test_item_service.py
 │   ├── test_priority_service.py
+│   ├── test_query_service.py
+│   ├── test_report_service.py
 │   ├── test_risk_service.py
 │   ├── test_schema_mysql.py
 │   ├── test_storage_service.py
@@ -104,6 +138,8 @@ S15P31B106/
 │   ├── test_ui_heatmap.py
 │   ├── test_ui_equipment.py
 │   ├── test_ui_targets.py
+│   ├── test_ui_import.py
+│   ├── test_ui_ai.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -287,6 +323,16 @@ Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디�
 `features/risk/`는 등록된 위험 지정(`risk_rule`)으로 설비와 버전의 위험 여부를 판정합니다. 환경·안전 필수 Item 미적용, 결함 Item의 위험 범위([시작, 해제) 버전) 포함, 직접 지정한 위험 버전 중 하나라도 확인되면 위험이고, 자료가 부족하면 '미확인'으로 둡니다. Item 포함 여부는 `features/item/`의 판정을 그대로 쓰며, 위험은 N 대비 격차·노후도와 따로 판단합니다. `tests/test_risk_service.py`가 검증합니다.
 
 `features/priority/`는 업그레이드할 설비의 우선순위를 정합니다. `features/risk/`의 위험 판정으로 위험 설비를 먼저 두고, 같은 위험 수준 안에서는 `features/aging/`의 경과 기간이 긴 설비를 먼저 둡니다. 혼합 설비는 계열 중 가장 오래된 버전의 기간을 대표로 쓰고 계열별 기간도 함께 남깁니다. 위험이 미확인이거나 출시일이 없어 기간을 모르는 설비는 순위 없이 '확인 필요' 목록에 빠진 근거와 함께 둡니다. 목표 N 달성 여부는 순위에 쓰지 않습니다. `tests/test_priority_service.py`가 검증합니다.
+
+`features/query/`는 AI가 질문에서 찾은 조회 조건을 검사하고 해당 자료를 고릅니다. 질문 해석 때 사업장·라인·설비군(화면 조회 칩과 같은 C4·O2 단위)·모델명·계열·저장된 기준일 선택지(`QueryCatalog.choices()`)를 AI에 함께 주어 그 안에서 고르게 하고, 돌아온 값이 정말 선택지에 있는지 검사합니다. 버전은 등록 릴리즈에서, Item은 `search_items`로 찾으며, 여러 개에 해당하거나 찾지 못한 조건은 후보와 함께 사용자 확인으로 넘깁니다. 확인할 조건이 남으면 조회하지 않고 화면도 옮기지 않습니다. 확정한 조건으로 설비(혼합 설비는 맞는 PM만)를 골라 `features/aggregation/`의 공통 집계를 만들고, 같은 조건 객체를 화면 이동에 넘깁니다. 읽기만 하며 DB 값을 바꾸지 않습니다. `tests/test_query_service.py`가 검증합니다.
+
+`features/analysis/`는 AI 원인·현황 설명(FUN-036·038·039)에 보낼 자료를 만들고 답변의 숫자를 검사합니다. 조회 조건과 계열별 목표 N, 전체·사업장별 집계, 계열별 버전 분포, 사업장·사유별 위험 설비, 통일 지연 근거(목표 N에는 포함되고 설치 버전에는 없는 Item)를 모두 공통 계산으로 만들어 화면과 숫자가 같습니다. `explain()`은 이 자료로 `features/ai/`의 `analyze()`를 호출하고, 답변·근거에 나온 숫자 중 보낸 자료에 없는 것을 `unmatched_numbers`로 돌려줘 화면이 경고할 수 있게 합니다. 버전 표기 안의 숫자는 검사하지 않습니다. `tests/test_analysis_service.py`가 검증합니다.
+
+`features/forecast/`는 버전 통일 참고 예측(FUN-040)을 계산합니다. 계열마다 기간의 처음과 끝 현황을 설비 1대 × 계열 1건으로 비교해 기존 설비 패치, N 미만으로 내려간 건, 신규·전입, 이탈을 나누고, 기존 설비 패치만으로 구한 속도에 남은 N 미만 건수를 단순 비례해 잔여 기간과 참고 완료일을 계산합니다(멘토링 3차). 목표 N이 없거나, 한 날짜뿐이거나, 기존 설비 패치가 없으면 예측하지 않고 사유를 알립니다. 판단 불가가 남으면 완료로 단정하지 않습니다. `explain_forecast()`는 계산 방법·가정·한계와 함께 결과를 AI에 보내 설명을 받고 `features/analysis/`의 숫자 검사를 적용합니다. `tests/test_forecast_service.py`가 검증합니다.
+
+`features/report/`는 AI 분석 보고서를 Word(docx)로 저장합니다. 이미 받은 설명 결과(`features/analysis/`, `features/forecast/`)만 쓰고 AI를 다시 호출하지 않습니다. 자료 출처(예제 응답·회사 AI), 질문과 조회 조건, 답변의 근거·추정·미확인, AI에 보낸 자료를 그대로 옮긴 수치 표, 참고 예측의 계산 방법·가정·한계, 자료에 없는 숫자 경고를 차례로 넣으므로 보고서 숫자가 화면 집계와 같습니다. AI 호출이 실패해도 수치 표는 남깁니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. `tests/test_report_service.py`가 검증합니다.
+
+`features/export/`는 현황 보고서를 Excel(xlsx)로 저장합니다. 화면에서 계산한 집계·위험·노후도·우선순위 결과를 다시 계산하지 않고 표로 옮기므로 같은 조건이면 화면과 숫자가 같습니다. 조회 조건과 모델·계열별 목표 N을 첫 시트에 남기고, 계열별 막대·상태 구성비 원형·날짜별 적용률 꺾은선 차트는 같은 시트의 표 셀을 참조해 Excel에서 편집할 수 있습니다. 적용률을 계산할 수 없으면 0%가 아니라 빈 셀과 '계산 불가'로 적습니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. 관리 데이터 전체 내보내기와 트리맵 차트는 아직 포함하지 않습니다. `tests/test_export_service.py`가 검증합니다.
 
 데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
 
@@ -474,3 +520,36 @@ class ReleaseRepository:
 ## 문서 갱신
 
 폴더를 추가하거나 이동하고, 모듈의 책임 또는 호출 관계를 바꾸면 같은 변경에 이 문서도 갱신합니다. 프로젝트 전체 구조가 달라지면 README의 구조 설명도 함께 수정합니다.
+
+## B-2 편집 공통 기반 (실제 항목·저장 미연결)
+
+`ui/version_edit_data.py`는 명시적으로 주입한 텍스트 항목의 원본·시작 관리값과 초안, 불변 변경 요청을 분리합니다. 실제 릴리즈 필드 목록이나 DB DTO를 새로 정의하지 않습니다. 원본 미연결(None)과 빈 원본값을 구분하며 검토 시 변경 항목만 검증합니다. 날짜·정수·Item 연결 등 업무별 입력과 BE-004 어댑터는 후속 작업입니다.
+
+`VersionsPage`의 릴리즈 수정 버튼은 `VersionEditDialog`를 엽니다. 기본 경로는 항목이 비어 있고 gateway=None이므로 편집 항목 대기와 저장 미연결을 안내하며 저장할 수 없습니다. 기존 공통 Card·StatusBadge·표·버튼·테마를 재사용하고 모달 안에서 목록 선택과 A 상태를 유지합니다.
+
+외부에서 항목과 비동기 EditGateway를 명시적으로 주입하는 테스트 경계에서만 초안 → 검토 → 제출 → 결과 흐름을 실행합니다. gateway.submit은 즉시 반환해야 하며 완료 콜백은 Qt queued signal로 GUI 스레드에 전달합니다. DB나 파일 I/O는 UI 위젯에 추가하지 않았습니다. 성공 응답만 성공으로 표시하며 실패는 입력 유지 후 재검토, 결과 미확인/제출 예외는 자동 재시도 금지로 처리합니다. 요청 번호와 상태로 중복·오래된 응답을 무시합니다. 저장 중 입력·중복 제출·닫기를 차단하고 취소/Escape/창 닫기는 초안 폐기를 확인합니다.
+
+BE-004의 ReleaseService 및 허용 필드는 현재 develop에 존재하지만 이번 B-2 기반에서는 연결하지 않습니다. 저장 후 실데이터 재조회·재판정, 실제 DB 저장, Excel 출력은 이번 범위가 아닙니다. 향후 정정 연결 시 과거 관측 사실은 유지하고 정정된 릴리즈로 조회·새 출력 결과를 다시 판단합니다.
+
+## C 담당 화면 · Excel 가져오기와 AI 분석
+
+`import` 메뉴에 `ui/import_page.py`의 `ImportPage`, `ai` 메뉴에 `ui/ai_page.py`의 `AIPage`를 `uses_query=False`로 등록한다. 두 화면은 SQL을 실행하지 않고 주입받은 Excel 읽기·AI·저장 객체에 요청한다. `ui/app.py`는 공통 셸 규칙에 따라 UI 모듈만 가져오며, 기본 예제 응답·메모리 저장소는 각 화면 모듈이 채운다.
+
+| 모듈 | 책임 |
+| --- | --- |
+| `features/excel_import/schemas.py` | 시트 원본(`SheetSnapshot`), 검토 행(`ReviewRow`: AI 원본과 수정값 분리), 검토 항목, 저장 요청·결과, `ImportSaver` 형식 |
+| `features/excel_import/service.py` | 원본 고정, AI 결과→검토 초안, 수정·제외·되돌리기, 저장 전 검사, 저장 요청 생성, 메모리 저장소, 저장 오류의 화면 상태 변환 |
+| `ui/import_page.py` | C-1 통합문서·시트 선택과 원본 미리보기, C-2 추출 행 검토·수정, C-3 확인창·저장 중·성공·실패·결과 미확인 표시와 중복 저장 방지 |
+| `ui/import_demo.py` | `--demo-excel` 실행과 테스트용 합성 통합문서, 회사 AI 연결 전 종류별 예제 추출 응답 |
+| `ui/ai_data.py` | C-4 질문 조건과 공통 조회 선택지의 정확한 대조, 적용 가능 여부, 분석에 보낼 대시보드 계산값 |
+| `ui/ai_page.py` | 질문 해석, 조건 확인·직접 제외, 확인 후 공통 조회 적용·화면 이동, 근거·추정·미확인 분리 표시 |
+
+가져오기 화면은 메뉴 진입만으로 Excel에 연결하지 않는다. 사용자가 불러오기를 누르면 `excel_reader`로 열린 통합문서 목록을 읽고, 시트를 읽은 시점의 셀 값·주소·병합 범위를 `SheetSnapshot`으로 고정한다. AI 추출값(`original`)과 사용자 수정값(`edits`)을 따로 두며, 수정하지 않은 AI 값은 출처 셀의 원본 값과 비교해 다르거나 위치가 없으면 확인 필요로 표시한다.
+
+저장 전 검사에서 필수값 공란·날짜/숫자/Memory·Foundry 형식·길이·같은 PM의 상충 버전·같은 설비/기준일의 소속 불일치·릴리즈 Item 내용 상충은 오류이며, 하나라도 남으면 묶음 전체를 저장하지 않는다(HPA 포함). 정확한 중복은 원본 위치를 모아 한 행으로 합치고, 다른 PM의 버전 차이는 저장을 막지 않는 예외로 안내한다. 설비 미존재·미등록 버전은 `ReferenceData`를 받을 때만 확인 필요로 표시하고, 다운그레이드처럼 이전 현황이 필요한 검사는 기준 자료 연결 전까지 안내로 남긴다.
+
+`SaveRequest.raw_data`는 시트명·셀 주소별 원본값과 병합 범위만 담고 파일명은 넣지 않는다(파일명은 확인창에만 표시). 각 행은 정규화한 저장 값, 필드별 `{sheet, cells}` 출처, `edited_fields`를 가진다. 현재 기본 저장소는 `MemoryImportSaver`이며 조회 화면 자료를 바꾸지 않는다. 저장 후에는 재조회를 안내하고 대시보드로 이동만 한다. `DatabaseCommitUnknownError`는 결과 미확인 상태로 바꿔 재저장을 막는다.
+
+AI 분석 화면은 질문을 해석한 뒤 아무 조건도 바꾸지 않는다. Site·Line·설비군은 공통 조회 선택지의 이름·키와 정확히 같을 때만 연결하고, 원본 구역명을 Fab/Line으로 추정하지 않는다. 복수 선택·기준일·모델·SW 계열·버전·Item·해석 불가 조건은 그대로 표시하며, 사용자가 직접 체크를 해제하기 전에는 적용을 막는다. 확인창 승인 후 공통 조회 초안을 바꾸고 적용하며, 목표 N은 바꾸지 않는다. 목표 N 변경이 적용 대기 중이거나 해석 뒤 선택지가 바뀌면 적용하지 않는다. 분석은 현재 적용 조건의 대시보드 계산값만 보내고, 예제 응답의 근거 문장은 자료로 확인한 근거가 아니라고 표시한다.
+
+후속 통합 사항: 실제 DB 저장 서비스(`ImportSaver` 구현: `import_batch`·설비·현황·버전·PM·릴리즈·Item 매핑과 같은 트랜잭션), `ReferenceData` 공급, 회사 AI 실제 클라이언트, Excel 읽기·AI 호출의 워커 스레드 실행, 저장 후 선택지·결과 갱신 방식은 A·B·데이터 담당자와 확정한다. O5의 JIRA·접수라인·비고는 `RELEASE_NOTE_FIELDS`에 없어 추출·저장하지 않는다.

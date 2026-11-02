@@ -21,6 +21,7 @@ from setron.features.ai.schemas import (
     ExtractedRow,
     ExtractKind,
     ExtractResult,
+    QueryChoices,
     QueryConditions,
     ReviewNote,
     TargetView,
@@ -50,7 +51,9 @@ COMMON_RULES = (
 
 QUERY_PROMPT = (
     "너는 반도체 설비 SW 버전 현황 프로그램의 질문 해석기다.\n"
-    "사용자 질문에서 조회 조건을 찾아 아래 형식으로 답한다. 값은 질문에 적힌 표기 그대로 쓴다.\n"
+    "사용자 질문에서 조회 조건을 찾아 아래 형식으로 답한다. groups는 설비군(예: C4, O2, Inline Ox), "
+    "models는 설비 모델명(예: M-C4), families는 버전 계열이다. Poly·Oxide·KCTC 같은 상위 분류는 "
+    "해당 설비군을 모두 적는다. 선택지가 주어지지 않은 값은 질문에 적힌 표기 그대로 쓴다.\n"
     '{"sites": [], "lines": [], "groups": [], "models": [], "families": [], "versions": [], "items": [],\n'
     ' "base_date": "YYYY-MM-DD 또는 null", "target_view": "DASHBOARD|HEATMAP|ITEM_MANAGER|ANALYSIS 또는 null",\n'
     ' "unresolved": ["해석하지 못한 조건"]}\n'
@@ -102,10 +105,33 @@ class InvalidResponse(ValueError):
     """응답이 정해진 형식이 아니다."""
 
 
-def parse_question(client: ChatClient, question: str) -> AIResult[QueryConditions]:
-    """사용자 질문에서 조회 조건을 찾는다 (BE-018, FUN-041)."""
-    messages = [ChatMessage("system", QUERY_PROMPT), ChatMessage("user", question)]
+CHOICE_RULES = (
+    "아래 선택지가 있는 항목은 선택지의 이름을 그대로 골라 쓴다. 질문의 다른 표현(예: 오투, 16라인, 지난달)도 "
+    "가장 맞는 선택지로 바꾼다.\n"
+    "선택지에 없는 조건은 지어내지 말고 unresolved에 적는다. 질문만으로 여러 선택지 중 하나를 고를 수 없으면 "
+    "임의로 고르지 말고 unresolved에 '질문 표현 → 후보1 / 후보2 중 확인 필요' 형식으로 적는다.\n"
+    "versions와 items는 선택지 없이 질문에 적힌 표기 그대로 쓴다.\n"
+)
+
+
+def parse_question(
+    client: ChatClient, question: str, choices: QueryChoices | None = None
+) -> AIResult[QueryConditions]:
+    """사용자 질문에서 조회 조건을 찾는다 (BE-018, FUN-041).
+
+    ``choices``를 주면 사업장·라인·분류·모델·계열·기준일을 그 선택지 안에서 고르게 한다.
+    """
+    prompt = QUERY_PROMPT if choices is None else f"{QUERY_PROMPT}\n{CHOICE_RULES}{_choice_lines(choices)}"
+    messages = [ChatMessage("system", prompt), ChatMessage("user", question)]
     return _run(client, AITask.QUERY_PARSE, messages, _to_query_conditions)
+
+
+def _choice_lines(choices: QueryChoices) -> str:
+    fields = [("sites", "사업장"), ("lines", "라인"), ("groups", "설비군"), ("models", "모델명"),
+              ("families", "버전 계열"), ("base_dates", "저장된 기준일(base_date)")]
+    return "\n".join(
+        f"{label} 선택지({key}): {json.dumps(list(getattr(choices, key)), ensure_ascii=False)}" for key, label in fields
+    )
 
 
 def analyze(client: ChatClient, question: str, facts: Mapping[str, Any]) -> AIResult[AnalysisAnswer]:

@@ -1,6 +1,6 @@
 # S15P31B106
 
-setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성하며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에 사용할 의존성입니다.
+setron은 설비 소프트웨어 버전 및 Release Item을 관리하는 Python 기반 Windows 데스크톱 애플리케이션입니다. PySide6로 화면을 구성하며 SQLAlchemy와 PyMySQL로 각 PC의 MySQL에 연결합니다. 현재 Excel 읽기는 xlwings를 사용하며, pandas와 openpyxl은 데이터 처리와 XLSX 출력에, python-docx는 AI 분석 보고서의 DOCX 출력에 사용합니다.
 
 현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 모의 응답과 OpenAI SDK를 사용하는 AI 호출 계층, DB 연결과 공통 저장 서비스, 기준일별 설비 저장·조회, 릴리즈·Item 등록·수정·원본 비교가 구현되어 있습니다. 공통 UI·조회 조건과 합성 예시 자료를 사용하는 대시보드·버전 히트맵·설비 목록/상세를 실행할 수 있으며, 업무 화면과 DB의 연결, Excel에서 읽은 자료의 저장 흐름과 실제 회사 AI API 검증은 후속 작업입니다.
 
@@ -573,3 +573,7 @@ Item 상세의 **Site · 설비 히트맵** 보기를 선택하면 Site별 네 �
 - [Git 협업 규칙](docs/git-conventions.md): 브랜치, 커밋, 리뷰 및 병합 규칙
 - [테스트 전략](docs/testing.md): 테스트 종류별 범위, 기능별 체크리스트, 실행·결과 기록 방법
 - [ERD 초안](docs/mermaid-diagram.png): 작성 중인 데이터 관계도. DB 스키마는 아직 확정되지 않았습니다.
+
+### B-2 수정 화면 공통 기반
+
+릴리즈 상세의 **릴리즈 수정**에서 공통 편집 대화상자를 열 수 있습니다. 현재는 **편집 항목 확인 대기·저장 미연결** 상태이며 실제 릴리즈 필드를 변경하거나 DB·파일에 저장하지 않습니다. 초안 비교·검증·취소·비동기 저장 성공/실패/결과 미확인 처리는 테스트 전용 항목과 가짜 저장 서비스로 검증합니다. 실제 필드 입력과 BE-004 연결은 별도 작업입니다.
