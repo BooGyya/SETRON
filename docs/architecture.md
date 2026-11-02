@@ -558,6 +558,8 @@ AI 분석 화면은 질문을 해석한 뒤 아무 조건도 바꾸지 않는다
 
 `ui/read_converters.py`는 이미 조회된 `RecordView`, `ReleaseDetail`, `StoredSnapshot`만 변환한다. 서비스·DB·Qt 위젯을 실행하지 않는다. `read_release`는 적용 모델이 없는 `ReleaseRead`를 반환하고 `read_item`, `read_item_links`, `read_pm_versions`는 확정된 현재값·명시적 연결만 옮긴다. 순서·출시일·번호의 명시적 None은 보존하고 필드 누락, 잘못된 ID/상태, 중복 연결은 검증 오류로 구분한다.
 
+`read_equipment_record(s)`는 `StoredSnapshot`을 집계·위험·우선순위·예측의 입력인 `EquipmentRecord`로 바꾼다. PM·SW는 `read_pm_versions`로 옮기고, HPA 여부는 호출하는 쪽이 넘긴 `analysis_enabled` = false 모델 ID로만 정한다. 대표 모델과 PM 모델이 모두 제외 모델이면 HPA이고, 일부만 제외 모델이면 검증 오류다. 여러 기준일을 함께 받을 수 있으며 같은 설비·같은 기준일 관측이 중복되면 오류로 처리한다.
+
 `ReleaseRead`는 완성된 `VersionCatalog`가 아니다. 관리 모델을 실제 적용 모델로 복사하지 않으며 적용 범위·분석 제외 여부·전체 목록·관측 출처 계약은 공통 공급자에서 별도로 해결한다. `SourceReference`에는 셀 위치만 옮기고 원본 값/입력 일시는 원본 `RecordView`에 남긴다. 문서명·개정번호를 생성하지 않는다. PM 없는 SW에 대표 모델이 없거나 PM 위치/같은 계열의 대표 SW 연결이 중복되거나 일부 SW의 PM 연결이 없으면 임의로 합치지 않고 오류로 처리한다. 앱의 기본 로더 및 B-2 편집 필드·저장 연결은 변경하지 않는다.
 
 ## B 비동기 읽기 실행 경계
