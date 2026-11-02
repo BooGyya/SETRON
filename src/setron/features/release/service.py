@@ -48,17 +48,36 @@ class ReleaseService:
         - DatabaseSaveError: 같은 계열의 버전 원문 중복 등으로 DB 저장에 실패한 경우.
         - DatabaseCommitUnknownError: 최종 저장 중 연결이 끊겨 반영 여부를 확인할 수 없는 경우.
         """
+        with self.storage.transaction() as tx:
+            return self.register_release_in(tx, value, items)
+
+    def register_release_in(self, tx, value: ReleaseInput, items: tuple[ItemInput, ...] = ()) -> ReleaseDetail:
+        """호출자가 연 트랜잭션 안에서 릴리즈와 새 Item들을 등록한다.
+
+        입력 작업 생성 등 다른 저장과 한 번에 확정해야 할 때 쓴다. 확정·취소는 호출자가 관리한다.
+
+        param
+        - tx: 호출자가 연 StorageTransaction.
+        - value: 검토를 마친 릴리즈 등록 요청.
+        - items: 이 릴리즈에 포함된 새 Item 등록 요청 튜플. 없으면 빈 튜플.
+
+        return
+        - 원본 비교 정보와 연결 Item을 포함한 ReleaseDetail.
+
+        raises
+        - StorageValidationError: 입력 또는 원본·계열 연결이 잘못된 경우.
+        - LookupError: 연결할 입력 작업·계열·노트가 없는 경우.
+        """
         require(type(value) is ReleaseInput, "ReleaseInput 형식이 필요합니다.")
         require(isinstance(items, tuple) and all(type(item) is ItemInput for item in items), "새 Item 요청 튜플이 필요합니다.")
         release_values = prepare_record(value)
         item_values = tuple(prepare_record(item) for item in items)
-        with self.storage.transaction() as tx:
-            manual_batch = {}
-            release = self._insert(tx, "release_version", release_values, manual_batch)
-            for values in item_values:
-                item = self._insert(tx, "item", values, manual_batch)
-                self._link(tx, release, ItemLinkInput(item_id=item["item_id"], item_state=ItemState.APPLIED))
-            return self._detail(tx, release)
+        manual_batch = {}
+        release = self._insert(tx, "release_version", release_values, manual_batch)
+        for values in item_values:
+            item = self._insert(tx, "item", values, manual_batch)
+            self._link(tx, release, ItemLinkInput(item_id=item["item_id"], item_state=ItemState.APPLIED))
+        return self._detail(tx, release)
 
     def register_item(self, release_id: int, value: ItemInput):
         """기존 릴리즈에 포함된 새 Item을 등록한다.

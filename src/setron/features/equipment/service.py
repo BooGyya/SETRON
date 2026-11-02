@@ -68,12 +68,30 @@ class EquipmentService:
         - DatabaseSaveError: DB 저장 중 오류가 발생한 경우.
         - DatabaseCommitUnknownError: 최종 저장 중 연결이 끊겨 반영 여부를 확인할 수 없는 경우.
         """
+        with self.storage.transaction() as tx:
+            return self.save_snapshots_in(tx, snapshots)
+
+    def save_snapshots_in(self, tx, snapshots: tuple[SnapshotInput, ...]) -> tuple[StoredSnapshot, ...]:
+        """호출자가 연 트랜잭션 안에서 설비 현황 묶음을 저장한다.
+
+        입력 작업 생성 등 다른 저장과 한 번에 확정해야 할 때 쓴다. 확정·취소는 호출자가 관리한다.
+
+        param
+        - tx: 호출자가 연 StorageTransaction.
+        - snapshots: 검토를 마친 SnapshotInput의 비어 있지 않은 튜플.
+
+        return
+        - 입력 순서대로 구성한 StoredSnapshot 튜플.
+
+        raises
+        - StorageValidationError: 입력이 잘못됐거나 같은 호기·기준일의 현황이 중복된 경우.
+        - LookupError: 연결할 입력 작업·모델·계열·릴리즈가 DB에 없는 경우.
+        """
         require(isinstance(snapshots, tuple) and bool(snapshots), "저장할 현황 묶음이 필요합니다.")
         prepared = tuple(prepare_snapshot(snapshot) for snapshot in snapshots)
         keys = [(value.equipment_code, value.base_date) for value in prepared]
         require(len(set(keys)) == len(keys), "같은 호기·기준일의 현황이 중복됐습니다. 저장 전에 합쳐야 합니다.")
-        with self.storage.transaction() as tx:
-            return tuple(self._save(tx, value) for value in prepared)
+        return tuple(self._save(tx, value) for value in prepared)
 
     def _save(self, tx, value):
         """공통 트랜잭션 안에서 설비 현황 한 건과 적용 SW·PM을 저장한다.
