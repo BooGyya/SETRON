@@ -351,3 +351,7 @@ uv run pytest tests/test_ui_item_distribution.py tests/test_ui_items.py tests/te
 주요 검사: 원본/관리값/초안 분리, 변경 없음 차단, 검증 오류와 재검토, 미연결 저장 차단, 중복 제출 및 저장 중 닫기 방지, 성공 후 재저장 차단, 실패 후 초안 유지, 오래된 콜백 무시, 결과 미확인·제출 예외의 재시도 금지, 취소/창 닫기 폐기 확인. 전체 회귀 테스트는 `python -m pytest -q -ra`로 실행합니다.
 
 화면 자료: [실제 기본 대기 화면](screenshots/b2/pending-760.png), [테스트 전용 검토 예시](screenshots/b2/review-test-only.png). 두 번째 화면의 항목은 업무 필드가 아니며 기본 앱에서 노출되지 않습니다.
+
+## B 확정 필드 읽기 변환 검증
+
+`python -m pytest tests/test_ui_read_converters.py -q`로 실제 DB 없이 서비스 형태의 합성 조회 결과를 검증한다. 원문·None·동일 version_order·다중 시트/셀·원본 값 불변, 명시적 Item 연결 3종과 범위, 빈 연결 비상속, 복수 SW/PM 보존 및 대표 모델 미확정 거부를 확인한다. 기존 B 화면 및 버전/Item/릴리즈/설비 검증 테스트를 함께 실행해 회귀를 확인한다. 실제 DB 연결 또는 업무 편집 항목 확정 검증은 아니다.
