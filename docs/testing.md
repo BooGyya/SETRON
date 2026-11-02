@@ -355,3 +355,9 @@ uv run pytest tests/test_ui_item_distribution.py tests/test_ui_items.py tests/te
 ## B 확정 필드 읽기 변환 검증
 
 `python -m pytest tests/test_ui_read_converters.py -q`로 실제 DB 없이 서비스 형태의 합성 조회 결과를 검증한다. 원문·None·동일 version_order·다중 시트/셀·원본 값 불변, 명시적 Item 연결 3종과 범위, 빈 연결 비상속, 복수 SW/PM 보존 및 대표 모델 미확정 거부를 확인한다. 기존 B 화면 및 버전/Item/릴리즈/설비 검증 테스트를 함께 실행해 회귀를 확인한다. 실제 DB 연결 또는 업무 편집 항목 확정 검증은 아니다.
+
+## B 비동기 읽기 검증
+
+`python -m pytest tests/test_ui_async_read.py -q`는 Event로 반환 시점을 제어하는 느린 가짜 공급자를 사용한다. 버전/Item 화면의 UI 이벤트 응답, 워커 실행/UI 완료 스레드, 중복 요청 차단, 예외·형식 오류 후 재시도, 화면 이탈·이전 성공/실패 지연 응답 무시, 삭제된 화면 응답 차단, 이전 상세 제거 및 정상 0건을 검사한다. 실제 DB와 미확정 매핑은 연결하지 않는다.
+
+화면 예시: [가짜 지연 공급자의 로딩 상태](screenshots/b-read/async-loading.png). 실제 DB 화면이 아니며 조회 중 필터·재조회 비활성화를 확인한다.

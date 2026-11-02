@@ -10,6 +10,7 @@ from setron.ui.theme import SECONDARY
 from setron.ui.version_data import VersionCatalog
 from setron.ui.version_edit_data import EditDraft
 from setron.ui.version_edit_dialog import VersionEditDialog
+from setron.ui.read_worker import ReadRequest
 
 
 def _field(title, widget):
@@ -30,7 +31,7 @@ def _fit(table):
 
 
 class VersionsPage(QWidget):
-    """loader는 메모리의 VersionCatalog를 제공한다. 실제 I/O는 외부 워커에서 완료한 뒤 연결한다."""
+    """메모리 또는 명시적 BackgroundRead 공급자를 사용하는 릴리즈 조회 화면."""
 
     mode_changed = Signal(str)
     page_size = 12
@@ -39,10 +40,12 @@ class VersionsPage(QWidget):
         """릴리즈 조회와 저장 미연결 편집 진입점을 구성한다.
 
         param
-        - loader: 메모리의 VersionCatalog를 반환하는 공급자.
+        - loader: VersionCatalog 메모리 공급자 또는 워커용 BackgroundRead.
         """
         super().__init__()
         self.loader, self.catalog = loader, None
+        self.read_request = ReadRequest(self)
+        self.read_request.completed.connect(self._loaded)
         self.mode, self.page_index, self.selected_id = "list", 0, None
         self.visible_entries, self.filtered_entries = (), ()
         body = QVBoxLayout(self)
@@ -171,17 +174,34 @@ class VersionsPage(QWidget):
         self.mode_changed.emit(mode)
 
     def reload(self):
-        old_model, old_family = self.model_filter.currentData(), self.family_filter.currentData()
+        """이전 상세를 비우고 중복 실행 없이 자료를 요청한다."""
+        if self.read_request.busy:
+            return
+        self._previous_filters = self.model_filter.currentData(), self.family_filter.currentData()
         self.selected_id = None
         self._set_mode("list")
         self.info_model.set_rows(())
         self.item_model.set_rows(())
         self.source_model.set_rows(())
-        try:
-            catalog = self.loader()
-            if not isinstance(catalog, VersionCatalog):
-                raise ValueError("릴리즈 읽기 자료 형식이 올바르지 않습니다.")
-        except Exception:
+        self.catalog = None
+        self.render_list()
+        self.refresh.setEnabled(False)
+        self.status.setText("릴리즈 자료 불러오는 중")
+        self.status.set_tone("info")
+        self.notice.setText("조회 중입니다. 완료될 때까지 기다려 주세요.")
+        self.empty.setText("릴리즈 자료 불러오는 중")
+        self.read_request.start(self.loader)
+
+    def _loaded(self, catalog, error):
+        """현재 요청 결과에 기존 목록·오류 표시를 적용한다.
+
+        param
+        - catalog: 조회 결과.
+        - error: 공급자 실패 또는 None.
+        """
+        old_model, old_family = self._previous_filters
+        self.refresh.setEnabled(True)
+        if error is not None or not isinstance(catalog, VersionCatalog):
             self.catalog = None
             self.status.setText("릴리즈 자료 불러오기 실패")
             self.status.set_tone("danger")
@@ -199,6 +219,20 @@ class VersionsPage(QWidget):
             index = self.model_filter.findData(old_model)
             self.model_filter.setCurrentIndex(index if index >= 0 else 0 if models else -1)
         self._model_changed(preferred_family=old_family)
+
+    def hideEvent(self, event):
+        """화면 이탈 시 진행 중 응답을 무효화한다.
+
+        param
+        - event: Qt 숨김 이벤트.
+        """
+        if self.read_request.busy:
+            self.read_request.cancel()
+            self.refresh.setEnabled(True)
+            self.status.setText("조회 취소")
+            self.notice.setText("다시 불러오기를 눌러 조회해 주세요.")
+            self.empty.setText("조회 취소 · 다시 불러오기 가능")
+        super().hideEvent(event)
 
     def _model_changed(self, *_args, preferred_family=None):
         with QSignalBlocker(self.family_filter):

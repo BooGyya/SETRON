@@ -27,10 +27,26 @@ from setron.ui.ai_data import facts_from_snapshot
 from setron.ui.ai_page import AIPage
 from setron.ui.import_demo import DemoExcel
 from setron.ui.import_page import ImportPage
+from setron.ui.read_worker import BackgroundRead
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None) -> MainWindow:
+    """공통 화면과 명시적으로 전달된 공급자를 연결한다.
+
+    param
+    - source: 대시보드 자료. None이면 합성 예시.
+    - version_loader: 릴리즈 메모리 공급자 또는 BackgroundRead.
+    - item_loader: Item 메모리 공급자 또는 BackgroundRead. 생략 시 릴리즈 공급자의 실행 방식을 따른다.
+    - excel: 실행 중 Excel 읽기 객체 또는 기본 읽기 객체를 선택하는 None.
+    - extractor: 추출 공급자. None이면 예제 응답.
+    - import_saver: Import 저장 공급자. None이면 메모리 저장.
+    - ai_parser: 질문 해석 공급자. None이면 예제 응답.
+    - ai_analyzer: 분석 공급자. None이면 예제 응답.
+
+    return
+    - 실제 DB 연결을 자동 생성하지 않는 MainWindow.
+    """
     demo = source is None
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
@@ -77,6 +93,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         # 외부 릴리즈 ID를 기본 합성 설비 ID와 임의로 연결하지 않는다.
         item_loader = (lambda: ItemManagerData(version_loader())) if custom_versions else (
             lambda: item_data_from_source(version_loader(), source))
+        if isinstance(version_loader, BackgroundRead):
+            item_loader = BackgroundRead(item_loader)
     items = ItemsPage(item_loader)
     # 저장 서비스·회사 AI 연결 전: 각 화면의 기본값은 메모리 저장소와 예제 응답이며 출처를 표시한다.
     importer = ImportPage(excel, extractor, import_saver)
