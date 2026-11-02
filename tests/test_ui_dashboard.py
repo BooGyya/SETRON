@@ -381,7 +381,7 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
 
 def test_real_entrypoint_registers_dashboard_and_heatmap_and_does_not_auto_apply(app):
     window = create_window()
-    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items"}
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai"}
     assert window.query_state.applied is None
     assert "합성 예시" in window.notice.text()
     assert window.nav["heatmap"].isEnabled()

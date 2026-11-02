@@ -36,6 +36,10 @@ S15P31B106/
 │       │   ├── versions.py
 │       │   ├── version_data.py
 │       │   ├── version_demo.py
+│       │   ├── import_page.py
+│       │   ├── import_demo.py
+│       │   ├── ai_page.py
+│       │   ├── ai_data.py
 │       │   ├── theme.py
 │       │   ├── assets/
 │       │   └── check_environment.py
@@ -71,6 +75,10 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── excel_import/
+│       │   │   ├── __init__.py
+│       │   │   ├── schemas.py
+│       │   │   └── service.py
 │       │   ├── storage/
 │       │   │   ├── __init__.py
 │       │   │   ├── repository.py
@@ -95,6 +103,7 @@ S15P31B106/
 │   ├── test_database.py
 │   ├── test_database_environment.py
 │   ├── test_database_mysql.py
+│   ├── test_excel_import_service.py
 │   ├── test_excel_reader.py
 │   ├── test_export_service.py
 │   ├── test_item_service.py
@@ -109,6 +118,8 @@ S15P31B106/
 │   ├── test_ui_heatmap.py
 │   ├── test_ui_equipment.py
 │   ├── test_ui_targets.py
+│   ├── test_ui_import.py
+│   ├── test_ui_ai.py
 │   └── test_version_service.py
 ├── docs/
 │   ├── architecture.md
@@ -491,3 +502,26 @@ class ReleaseRepository:
 외부에서 항목과 비동기 EditGateway를 명시적으로 주입하는 테스트 경계에서만 초안 → 검토 → 제출 → 결과 흐름을 실행합니다. gateway.submit은 즉시 반환해야 하며 완료 콜백은 Qt queued signal로 GUI 스레드에 전달합니다. DB나 파일 I/O는 UI 위젯에 추가하지 않았습니다. 성공 응답만 성공으로 표시하며 실패는 입력 유지 후 재검토, 결과 미확인/제출 예외는 자동 재시도 금지로 처리합니다. 요청 번호와 상태로 중복·오래된 응답을 무시합니다. 저장 중 입력·중복 제출·닫기를 차단하고 취소/Escape/창 닫기는 초안 폐기를 확인합니다.
 
 BE-004의 ReleaseService 및 허용 필드는 현재 develop에 존재하지만 이번 B-2 기반에서는 연결하지 않습니다. 저장 후 실데이터 재조회·재판정, 실제 DB 저장, Excel 출력은 이번 범위가 아닙니다. 향후 정정 연결 시 과거 관측 사실은 유지하고 정정된 릴리즈로 조회·새 출력 결과를 다시 판단합니다.
+
+## C 담당 화면 · Excel 가져오기와 AI 분석
+
+`import` 메뉴에 `ui/import_page.py`의 `ImportPage`, `ai` 메뉴에 `ui/ai_page.py`의 `AIPage`를 `uses_query=False`로 등록한다. 두 화면은 SQL을 실행하지 않고 주입받은 Excel 읽기·AI·저장 객체에 요청한다. `ui/app.py`는 공통 셸 규칙에 따라 UI 모듈만 가져오며, 기본 예제 응답·메모리 저장소는 각 화면 모듈이 채운다.
+
+| 모듈 | 책임 |
+| --- | --- |
+| `features/excel_import/schemas.py` | 시트 원본(`SheetSnapshot`), 검토 행(`ReviewRow`: AI 원본과 수정값 분리), 검토 항목, 저장 요청·결과, `ImportSaver` 형식 |
+| `features/excel_import/service.py` | 원본 고정, AI 결과→검토 초안, 수정·제외·되돌리기, 저장 전 검사, 저장 요청 생성, 메모리 저장소, 저장 오류의 화면 상태 변환 |
+| `ui/import_page.py` | C-1 통합문서·시트 선택과 원본 미리보기, C-2 추출 행 검토·수정, C-3 확인창·저장 중·성공·실패·결과 미확인 표시와 중복 저장 방지 |
+| `ui/import_demo.py` | `--demo-excel` 실행과 테스트용 합성 통합문서, 회사 AI 연결 전 종류별 예제 추출 응답 |
+| `ui/ai_data.py` | C-4 질문 조건과 공통 조회 선택지의 정확한 대조, 적용 가능 여부, 분석에 보낼 대시보드 계산값 |
+| `ui/ai_page.py` | 질문 해석, 조건 확인·직접 제외, 확인 후 공통 조회 적용·화면 이동, 근거·추정·미확인 분리 표시 |
+
+가져오기 화면은 메뉴 진입만으로 Excel에 연결하지 않는다. 사용자가 불러오기를 누르면 `excel_reader`로 열린 통합문서 목록을 읽고, 시트를 읽은 시점의 셀 값·주소·병합 범위를 `SheetSnapshot`으로 고정한다. AI 추출값(`original`)과 사용자 수정값(`edits`)을 따로 두며, 수정하지 않은 AI 값은 출처 셀의 원본 값과 비교해 다르거나 위치가 없으면 확인 필요로 표시한다.
+
+저장 전 검사에서 필수값 공란·날짜/숫자/Memory·Foundry 형식·길이·같은 PM의 상충 버전·같은 설비/기준일의 소속 불일치·릴리즈 Item 내용 상충은 오류이며, 하나라도 남으면 묶음 전체를 저장하지 않는다(HPA 포함). 정확한 중복은 원본 위치를 모아 한 행으로 합치고, 다른 PM의 버전 차이는 저장을 막지 않는 예외로 안내한다. 설비 미존재·미등록 버전은 `ReferenceData`를 받을 때만 확인 필요로 표시하고, 다운그레이드처럼 이전 현황이 필요한 검사는 기준 자료 연결 전까지 안내로 남긴다.
+
+`SaveRequest.raw_data`는 시트명·셀 주소별 원본값과 병합 범위만 담고 파일명은 넣지 않는다(파일명은 확인창에만 표시). 각 행은 정규화한 저장 값, 필드별 `{sheet, cells}` 출처, `edited_fields`를 가진다. 현재 기본 저장소는 `MemoryImportSaver`이며 조회 화면 자료를 바꾸지 않는다. 저장 후에는 재조회를 안내하고 대시보드로 이동만 한다. `DatabaseCommitUnknownError`는 결과 미확인 상태로 바꿔 재저장을 막는다.
+
+AI 분석 화면은 질문을 해석한 뒤 아무 조건도 바꾸지 않는다. Site·Line·설비군은 공통 조회 선택지의 이름·키와 정확히 같을 때만 연결하고, 원본 구역명을 Fab/Line으로 추정하지 않는다. 복수 선택·기준일·모델·SW 계열·버전·Item·해석 불가 조건은 그대로 표시하며, 사용자가 직접 체크를 해제하기 전에는 적용을 막는다. 확인창 승인 후 공통 조회 초안을 바꾸고 적용하며, 목표 N은 바꾸지 않는다. 목표 N 변경이 적용 대기 중이거나 해석 뒤 선택지가 바뀌면 적용하지 않는다. 분석은 현재 적용 조건의 대시보드 계산값만 보내고, 예제 응답의 근거 문장은 자료로 확인한 근거가 아니라고 표시한다.
+
+후속 통합 사항: 실제 DB 저장 서비스(`ImportSaver` 구현: `import_batch`·설비·현황·버전·PM·릴리즈·Item 매핑과 같은 트랜잭션), `ReferenceData` 공급, 회사 AI 실제 클라이언트, Excel 읽기·AI 호출의 워커 스레드 실행, 저장 후 선택지·결과 갱신 방식은 A·B·데이터 담당자와 확정한다. O5의 JIRA·접수라인·비고는 `RELEASE_NOTE_FIELDS`에 없어 추출·저장하지 않는다.
