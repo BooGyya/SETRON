@@ -8,6 +8,8 @@ from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import SECONDARY
 from setron.ui.version_data import VersionCatalog
+from setron.ui.version_edit_data import EditDraft
+from setron.ui.version_edit_dialog import VersionEditDialog
 
 
 def _field(title, widget):
@@ -34,6 +36,11 @@ class VersionsPage(QWidget):
     page_size = 12
 
     def __init__(self, loader):
+        """릴리즈 조회와 저장 미연결 편집 진입점을 구성한다.
+
+        param
+        - loader: 메모리의 VersionCatalog를 반환하는 공급자.
+        """
         super().__init__()
         self.loader, self.catalog = loader, None
         self.mode, self.page_index, self.selected_id = "list", 0, None
@@ -141,7 +148,11 @@ class VersionsPage(QWidget):
         self.source_table = read_table(self.source_model, "릴리즈와 Item 출처", (220, 430, 280, 185))
         source_card.body.addWidget(self.source_table)
         detail.addWidget(source_card)
-        self.read_only = label("읽기 전용 · 릴리즈 수정·저장과 Item 적용 설비 연결은 후속 작업입니다.",
+        self.edit_button = button("릴리즈 수정")
+        self.edit_button.clicked.connect(self.open_editor)
+        detail.addWidget(self.edit_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.editor = None
+        self.read_only = label("편집 항목 확인 대기 · 수정 화면의 공통 흐름만 준비되었으며 실제 저장은 연결되지 않았습니다.",
                                13, color=SECONDARY, wrap=True)
         detail.addWidget(self.read_only)
         body.addWidget(self.detail_view)
@@ -291,3 +302,15 @@ class VersionsPage(QWidget):
             row = self.list_model.ids.index(self.selected_id)
             self.table.setCurrentIndex(self.list_model.index(row, 0))
             self.table.setFocus()
+
+    def open_editor(self):
+        """선택 릴리즈의 빈 편집 기반을 열고 실제 필드·DB 연결은 제공하지 않는다."""
+        if self.mode != "detail" or self.catalog is None or self.selected_id is None:
+            return
+        if self.editor is not None and self.editor.isVisible():
+            self.editor.raise_()
+            return
+        if self.editor is not None:
+            self.editor.deleteLater()
+        self.editor = VersionEditDialog(EditDraft(self.selected_id), title=self.detail_title.text(), parent=self)
+        self.editor.open()
