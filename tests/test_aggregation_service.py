@@ -170,7 +170,18 @@ def test_missing_target_for_model_family_is_undetermined():
 
     comparison = result.equipment[0].families[0].pms[0].comparison
     assert comparison.status is CompareStatus.UNDETERMINED
-    assert comparison.reason is CompareReason.TARGET_INVALID
+    assert comparison.reason is CompareReason.TARGET_NOT_SET
+    assert comparison.message == "이 계열의 목표 N이 지정되지 않았습니다."
+
+
+def test_family_without_release_data_is_undetermined_with_its_own_reason():
+    families = {**FAMILIES, 99: FamilyReleases(99, [])}
+
+    result = summarize([equipment(1, pm(None, M_O2, 99, "v1")), equipment(2, pm(None, M_O2, 98, "v1"))],
+                       families, {(M_O2, 99): 1})
+
+    reasons = [e.families[0].pms[0].comparison.reason for e in result.equipment]
+    assert reasons == [CompareReason.NO_RELEASE_DATA, CompareReason.NO_RELEASE_DATA]
 
 
 def test_no_records_reports_no_data():

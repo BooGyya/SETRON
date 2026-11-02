@@ -110,12 +110,12 @@ def summarize_by_date(
 
 
 def _compare_pm(pm, families: Mapping[int, FamilyReleases], targets: Targets) -> VersionComparison:
-    target_id = targets.get((pm.group_id, pm.family_id))
     family = families.get(pm.family_id)
-    if target_id is None or family is None:
+    if family is None or not family.releases:
         return VersionComparison(
-            pm.version_raw, None, None, CompareStatus.UNDETERMINED, reason=CompareReason.TARGET_INVALID
+            pm.version_raw, None, None, CompareStatus.UNDETERMINED, reason=CompareReason.NO_RELEASE_DATA
         )
+    target_id = targets.get((pm.group_id, pm.family_id))
     return compare_version(family, pm.version_raw, target_id, release_version_id=pm.release_version_id)
 
 

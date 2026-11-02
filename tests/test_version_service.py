@@ -138,6 +138,20 @@ def test_invalid_target_asks_to_reselect(target_id):
     assert "다시 선택" in result.message
 
 
+def test_target_not_set_is_not_asked_to_reselect():
+    """목표 미지정은 사용자가 고른 상태이므로 'N을 다시 선택'하라고 안내하지 않는다."""
+    result = compare_version(FamilyReleases(C4, c4_releases()), "v4.56.6.41", target_id=None)
+
+    assert (result.status, result.reason) == (CompareStatus.UNDETERMINED, CompareReason.TARGET_NOT_SET)
+    assert "다시 선택" not in result.message
+
+
+def test_family_without_releases_reports_missing_release_data():
+    result = compare_version(FamilyReleases(C4, []), "v4.56.6.41", target_id=11)
+
+    assert result.reason is CompareReason.NO_RELEASE_DATA
+
+
 def test_confirmed_alias_links_to_release_and_keeps_raw():
     kctc = 3
     releases = [ReleaseVersion(30, kctc, "v999.3.6", 1), ReleaseVersion(31, kctc, "v999.3.7", 2)]

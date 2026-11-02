@@ -60,6 +60,19 @@ class Basis(str, Enum):
     SCOPE_UNKNOWN = "SCOPE_UNKNOWN"
 
 
+# 화면에 보여주는 판정 근거 문구. Item 화면(ui/item_data.py)의 문구와 같다.
+BASIS_LABELS = {
+    Basis.STORED: "저장된 버전별 Item 상태",
+    Basis.NOT_STORED: "이 버전의 저장 행 없음",
+    Basis.NOT_IN_FAMILY: "이 계열의 대상 Item 아님",
+    Basis.NOT_LISTED: "지정 모델 범위 밖",
+    Basis.NO_RELEASE_DATA: "릴리즈 자료 없음",
+    Basis.MISSING_VERSION: "관측 SW 버전 없음",
+    Basis.NOT_REGISTERED: "등록 릴리즈 대응 없음",
+    Basis.SCOPE_UNKNOWN: "모델 적용 범위 미확인",
+}
+
+
 @dataclass(frozen=True)
 class Item:
     """변경 항목 하나 (ERD `item`)."""
@@ -95,6 +108,10 @@ class VersionItemState:
     basis: Basis
     source: VersionItem | None = None
 
+    @property
+    def basis_label(self) -> str:
+        return BASIS_LABELS[self.basis]
+
 
 @dataclass(frozen=True)
 class PmApplication:
@@ -102,6 +119,14 @@ class PmApplication:
     release: ReleaseVersion | None
     application: Application
     basis: Basis
+
+    @property
+    def label(self) -> str:
+        return APPLICATION_LABELS[self.application]
+
+    @property
+    def basis_label(self) -> str:
+        return BASIS_LABELS[self.basis]
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ import pytest
 
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.item.schemas import (
+    BASIS_LABELS,
     Application,
     Basis,
     Item,
@@ -112,6 +113,11 @@ def test_missing_row_is_unknown_not_inherited_from_version_order():
 
     assert (later.application, later.basis) == (Application.UNKNOWN, Basis.NOT_STORED)
     assert (earlier.application, earlier.basis) == (Application.UNKNOWN, Basis.NOT_STORED)
+    assert (later.label, later.basis_label) == ("미확인", "이 버전의 저장 행 없음")
+
+
+def test_every_basis_has_a_label():
+    assert set(BASIS_LABELS) == set(Basis)
 
 
 def test_removed_item_is_not_applied(catalog):
