@@ -22,8 +22,8 @@ QUERY_REPLY = json.dumps(
     {
         "sites": ["화성"],
         "lines": ["P1D"],
-        "groups": [],
-        "models": ["M-C4"],
+        "groups": ["C4"],
+        "models": [],
         "families": [],
         "versions": ["v4.56.6.43"],
         "items": [],

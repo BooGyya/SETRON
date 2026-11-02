@@ -1,11 +1,12 @@
 """질문에서 찾은 조회 조건을 검사하고 해당 자료를 고른다 (명세 BE-018, FUN-041·042·062).
 
-AI에는 수가 적은 선택지(사업장·라인·분류·모델·계열·저장된 기준일)를 함께 주고 그 안에서 고르게 한다.
+AI에는 수가 적은 선택지(사업장·라인·설비군·모델명·계열·저장된 기준일)를 함께 주고 그 안에서 고르게 한다.
 프로그램은 AI가 고른 값이 정말 선택지에 있는지만 검사해 지어낸 값을 걸러 낸다.
 버전과 Item은 수가 많아 AI가 질문의 표기를 그대로 뽑고, 프로그램이 등록 자료에서 찾는다.
 
 정한 규칙
 - 이름 대조는 앞뒤 공백과 대소문자만 무시한다. 그 밖의 표기 차이는 자동으로 잇지 않는다.
+- 설비군(C4)과 모델명(M-C4)은 같은 설비군을 가리키므로 둘 다 설비군 조건(``group_ids``)이 된다.
 - 버전은 같은 글자의 등록 릴리즈만 확정한다. 표기만 다른 후보는 BE-003 후보 찾기로 보여 주고 확인받는다.
 - Item은 검색 결과가 하나일 때만 확정한다.
 - 기준일이 없으면 저장된 가장 최근 날짜를 쓰고, 그 날짜를 조건에 적어 화면에도 같은 날짜를 넘긴다.
@@ -49,9 +50,11 @@ def resolve_conditions(conditions: QueryConditions, catalog: QueryCatalog) -> Re
 
     sites = pick("sites", conditions.sites, ((s, s) for s in catalog.sites))
     lines = pick("lines", conditions.lines, ((s, s) for s in catalog.lines))
-    categories = pick("groups", conditions.groups, ((c, c) for c in catalog.categories))
-    group_ids = pick("models", conditions.models,
-                     ((m.name, m.group_id) for m in catalog.models if m.category != "ETC"))
+    groups = catalog.analysis_groups
+    group_ids = tuple(dict.fromkeys(
+        pick("groups", conditions.groups, ((g.name, g.group_id) for g in groups))
+        + pick("models", conditions.models, ((g.model_name, g.group_id) for g in groups))
+    ))
     family_ids = pick("families", conditions.families, ((f.name, f.family_id) for f in catalog.families))
 
     base_date = _base_date(conditions.base_date, catalog, issues)
@@ -62,7 +65,6 @@ def resolve_conditions(conditions: QueryConditions, catalog: QueryCatalog) -> Re
         base_date=base_date,
         sites=sites,
         lines=lines,
-        categories=categories,
         group_ids=group_ids,
         family_ids=family_ids,
         release_ids=release_ids,
@@ -79,10 +81,9 @@ def select_records(
 ) -> tuple[EquipmentRecord, ...]:
     """확정한 조건에 맞는 설비만 고른다.
 
-    모델·분류·계열·버전 조건이 있으면 조건에 맞는 PM만 남기고, 맞는 PM이 없는 설비는 뺀다.
+    설비군·계열·버전 조건이 있으면 조건에 맞는 PM만 남기고, 맞는 PM이 없는 설비는 뺀다.
     그래야 'O2 현황'을 물었을 때 혼합 설비의 O3 부분이 집계에 섞이지 않는다.
     """
-    categories = {m.group_id: m.category for m in catalog.models}
     selected = []
     for record in records:
         if query.base_date and record.base_date != query.base_date:
@@ -94,7 +95,7 @@ def select_records(
         if not query.filters_pms:
             selected.append(record)
             continue
-        pms = tuple(pm for pm in record.pms if _pm_matches(pm, query, categories, catalog.releases))
+        pms = tuple(pm for pm in record.pms if _pm_matches(pm, query, catalog.releases))
         if pms:
             selected.append(_with_pms(record, pms))
     return tuple(selected)
@@ -173,11 +174,8 @@ def _items(texts: Iterable[str], catalog: QueryCatalog, issues: list[ConditionIs
 def _pm_matches(
     pm: PmVersion,
     query: ResolvedQuery,
-    categories: Mapping[int, str],
     releases: Mapping[int, FamilyReleases],
 ) -> bool:
-    if query.categories and categories.get(pm.group_id) not in query.categories:
-        return False
     if query.group_ids and pm.group_id not in query.group_ids:
         return False
     if query.family_ids and pm.family_id not in query.family_ids:
