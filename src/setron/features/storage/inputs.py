@@ -6,9 +6,12 @@ from .validation import StorageValidationError
 def require(condition, message):
     """검증 조건이 충족되는지 검사한다.
 
-    :param condition: 검사 결과. False로 평가되면 검증 실패로 처리.
-    :param message: 검증 실패 시 오류에 담을 설명.
-    :raises StorageValidationError: 조건이 충족되지 않은 경우.
+    param
+    - condition: 검사 결과. False로 평가되면 검증 실패로 처리.
+    - message: 검증 실패 시 오류에 담을 설명.
+
+    raises
+    - StorageValidationError: 조건이 충족되지 않은 경우.
     """
     if not condition:
         raise StorageValidationError(message)
@@ -19,9 +22,12 @@ def identifier(value, field):
 
     True와 숫자 문자열은 정수 ID로 허용하지 않는다.
 
-    :param value: 검사할 ID 값.
-    :param field: 오류 메시지에 표시할 항목 이름.
-    :raises StorageValidationError: 정수가 아니거나 1~4294967295 범위를 벗어난 경우.
+    param
+    - value: 검사할 ID 값.
+    - field: 오류 메시지에 표시할 항목 이름.
+
+    raises
+    - StorageValidationError: 정수가 아니거나 1~4294967295 범위를 벗어난 경우.
     """
     require(type(value) is int and 1 <= value <= 4294967295, f"{field}: 양의 정수 ID가 필요합니다.")
 
@@ -31,10 +37,13 @@ def required_text(value, field, limit):
 
     앞뒤 공백은 빈 값 판정에만 사용하며 원문은 변경하지 않는다.
 
-    :param value: 검사할 문자열.
-    :param field: 오류 메시지에 표시할 항목 이름.
-    :param limit: 허용하는 최대 글자 수.
-    :raises StorageValidationError: 문자열이 아니거나 공백뿐이거나 길이 제한을 넘은 경우.
+    param
+    - value: 검사할 문자열.
+    - field: 오류 메시지에 표시할 항목 이름.
+    - limit: 허용하는 최대 글자 수.
+
+    raises
+    - StorageValidationError: 문자열이 아니거나 공백뿐이거나 길이 제한을 넘은 경우.
     """
     require(isinstance(value, str) and bool(value.strip()) and len(value) <= limit,
             f"{field}: {limit}자 이내의 비어 있지 않은 원문이 필요합니다.")
@@ -46,9 +55,14 @@ def merge_sources(*references):
     같은 시트의 셀은 하나로 모으고 다른 시트의 위치는 각각 보존한다.
     전달받은 출처 객체는 변경하지 않는다.
 
-    :param references: 병합할 필드별 출처 객체들. 출처가 없는 None 항목은 제외.
-    :return: 필드별 출처 객체. 여러 시트의 출처는 {sheet, cells} 목록으로 보관하며, 출처가 없으면 None.
-    :raises StorageValidationError: 필드명·시트명·셀 목록의 형식이 잘못된 경우.
+    param
+    - references: 병합할 필드별 출처 객체들. 출처가 없는 None 항목은 제외.
+
+    return
+    - 필드별 출처 객체. 여러 시트의 출처는 {sheet, cells} 목록으로 보관하며, 출처가 없으면 None.
+
+    raises
+    - StorageValidationError: 필드명·시트명·셀 목록의 형식이 잘못된 경우.
     """
     result = {}
     for reference in references:

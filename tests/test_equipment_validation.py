@@ -13,8 +13,11 @@ from setron.features.storage.validation import StorageValidationError
 def snapshot(**changes):
     """기본 설비 현황을 생성하고 지정한 항목을 테스트 값으로 교체한다.
 
-    :param changes: 기본값 대신 사용할 항목 이름과 값.
-    :return: 테스트용 SnapshotInput.
+    param
+    - changes: 기본값 대신 사용할 항목 이름과 값.
+
+    return
+    - 테스트용 SnapshotInput.
     """
     values = dict(
         equipment_code="EQ-001", base_date=date(2026, 10, 27), site="화성", model_name="M-O2",
@@ -50,7 +53,8 @@ def test_optional_production_area_and_exact_originals_are_preserved():
 def test_invalid_required_values_are_not_guessed(changes):
     """필수값 누락이나 잘못된 자료형을 검증 오류로 처리하는지 확인한다.
 
-    :param changes: 잘못된 입력을 재현하기 위한 현황 항목과 값.
+    param
+    - changes: 잘못된 입력을 재현하기 위한 현황 항목과 값.
     """
     with pytest.raises(StorageValidationError):
         prepare_snapshot(snapshot(**changes))
@@ -91,7 +95,8 @@ def test_same_sheet_cells_are_unioned_exactly():
 def test_same_fixed_pm_position_with_conflicting_sw_family_or_model_is_blocked(second):
     """같은 PM 위치에 상충하는 SW·계열·모델을 배정하면 저장을 차단하는지 확인한다.
 
-    :param second: 기존 PM1 기록과 충돌하도록 구성한 두 번째 SW 입력.
+    param
+    - second: 기존 PM1 기록과 충돌하도록 구성한 두 번째 SW 입력.
     """
     first = SoftwareInput(family_id=1, version_raw="v1", pms=(PmInput(pm_name="PM1", group_id=1),))
     with pytest.raises(StorageValidationError, match="PM1"):
@@ -120,7 +125,8 @@ def test_missing_pm_connections_or_general_version_conflicts_need_review():
 def test_malformed_source_locations_are_blocked(source):
     """출처의 시트명이나 셀 목록이 잘못된 경우 검증 오류가 발생하는지 확인한다.
 
-    :param source: 시트명·셀 목록이 누락됐거나 형식이 잘못된 출처.
+    param
+    - source: 시트명·셀 목록이 누락됐거나 형식이 잘못된 출처.
     """
     with pytest.raises(StorageValidationError):
         prepare_snapshot(snapshot(source_reference=source))

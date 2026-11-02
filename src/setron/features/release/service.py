@@ -11,12 +11,18 @@ from .validation import prepare_changes, prepare_links, prepare_record
 
 
 class ReleaseService:
-    """릴리즈·Item 관리 서비스."""
+    """릴리즈·Item 관리 서비스.
+
+    검토된 관리값과 명시적인 Item 연결을 저장한다. 설비 적용 판정·위험 재계산은
+    수행하지 않는다. DB 오류는 공통 트랜잭션에서 전달하며, 최종 저장 결과가
+    불명확한 경우 요청을 자동으로 재시도하지 않는다.
+    """
 
     def __init__(self, storage):
         """공통 저장 서비스를 연결하고 릴리즈 레포지토리를 초기화한다.
 
-        :param storage: DB 접속과 업무 단위 트랜잭션을 관리하는 StorageService.
+        param
+        - storage: DB 접속과 업무 단위 트랜잭션을 관리하는 StorageService.
         """
         self.storage = storage
         self.repository = ReleaseRepository()
@@ -25,14 +31,22 @@ class ReleaseService:
         """릴리즈와 그 버전에 포함된 새 Item들을 한 번에 등록한다.
 
         새 Item은 APPLIED로 연결하고 모델 범위는 UNKNOWN으로 둔다.
-        등록 도중 실패하면 이번 요청에서 생성한 입력 작업·릴리즈·Item·연결을 함께 취소한다.
+        최종 저장 전 작업이 실패하면 이번 요청의 입력 작업·릴리즈·Item·연결을 함께 취소한다.
+        최종 저장 중 연결이 끊기면 반영 여부를 확인할 수 없는 오류를 전달한다.
 
-        :param value: 검토를 마친 릴리즈 등록 요청.
-        :param items: 이 릴리즈에 포함된 새 Item 등록 요청 튜플. 없으면 빈 튜플.
-        :return: 원본 비교 정보와 연결 Item을 포함한 ReleaseDetail.
-        :raises StorageValidationError: 입력 또는 원본·계열 연결이 잘못된 경우.
-        :raises LookupError: 연결할 입력 작업·계열·노트가 없는 경우.
-        :raises DatabaseSaveError: 같은 계열의 버전 원문 중복 등으로 DB 저장에 실패한 경우.
+        param
+        - value: 검토를 마친 릴리즈 등록 요청.
+        - items: 이 릴리즈에 포함된 새 Item 등록 요청 튜플. 없으면 빈 튜플.
+
+        return
+        - 원본 비교 정보와 연결 Item을 포함한 ReleaseDetail.
+
+        raises
+        - StorageValidationError: 입력 또는 원본·계열 연결이 잘못된 경우.
+        - LookupError: 연결할 입력 작업·계열·노트가 없는 경우.
+        - DatabaseConnectionError: 등록 작업을 시작하기 전에 DB 접속에 실패한 경우.
+        - DatabaseSaveError: 같은 계열의 버전 원문 중복 등으로 DB 저장에 실패한 경우.
+        - DatabaseCommitUnknownError: 최종 저장 중 연결이 끊겨 반영 여부를 확인할 수 없는 경우.
         """
         require(type(value) is ReleaseInput, "ReleaseInput 형식이 필요합니다.")
         require(isinstance(items, tuple) and all(type(item) is ItemInput for item in items), "새 Item 요청 튜플이 필요합니다.")
@@ -49,11 +63,22 @@ class ReleaseService:
     def register_item(self, release_id: int, value: ItemInput):
         """기존 릴리즈에 포함된 새 Item을 등록한다.
 
-        :param release_id: 새 Item을 연결할 릴리즈 ID.
-        :param value: 검토를 마친 Item 등록 요청.
-        :return: 등록한 Item의 원본·현재 관리값 비교 결과.
-        :raises StorageValidationError: 입력이나 원본 위치가 잘못된 경우.
-        :raises LookupError: 릴리즈·입력 작업·노트가 없는 경우.
+        Item 생성과 APPLIED 연결을 같은 트랜잭션에 저장한다. 모델 범위는
+        UNKNOWN으로 두며 다른 릴리즈에는 연결을 추가하지 않는다.
+
+        param
+        - release_id: 새 Item을 연결할 릴리즈 ID.
+        - value: 검토를 마친 Item 등록 요청.
+
+        return
+        - 등록한 Item의 원본·현재 관리값 비교 결과.
+
+        raises
+        - StorageValidationError: 입력이나 원본 위치가 잘못된 경우.
+        - LookupError: 릴리즈·입력 작업·노트가 없는 경우.
+        - DatabaseConnectionError: 등록 작업을 시작하기 전에 DB 접속에 실패한 경우.
+        - DatabaseSaveError: Item 또는 연결을 DB에 저장하지 못한 경우.
+        - DatabaseCommitUnknownError: 최종 저장 중 연결이 끊겨 반영 여부를 확인할 수 없는 경우.
         """
         identifier(release_id, "release_version_id")
         require(type(value) is ItemInput, "ItemInput 형식이 필요합니다.")
@@ -67,11 +92,19 @@ class ReleaseService:
     def update_release(self, release_id: int, changes: dict) -> ReleaseDetail:
         """릴리즈의 편집 가능한 관리값을 수정하고 원본 정보를 유지한다.
 
-        :param release_id: 수정할 릴리즈 ID.
-        :param changes: 버전 원문·접미사·출시일·확인된 순서·Item 매핑 확인 상태의 변경값.
-        :return: 수정 후 다시 조회한 ReleaseDetail.
-        :raises StorageValidationError: 편집할 수 없는 필드가 있거나 변경값이 잘못된 경우.
-        :raises LookupError: 수정 대상 릴리즈가 없는 경우.
+        param
+        - release_id: 수정할 릴리즈 ID.
+        - changes: version_raw, version_suffix, released_at, version_order, item_mapping_status 중 변경할 값.
+
+        return
+        - 수정 후 다시 조회한 ReleaseDetail.
+
+        raises
+        - StorageValidationError: 편집할 수 없는 필드가 있거나 변경값이 잘못된 경우.
+        - LookupError: 수정 대상 릴리즈가 없는 경우.
+        - DatabaseConnectionError: 수정 작업을 시작하기 전에 DB 접속에 실패한 경우.
+        - DatabaseSaveError: 버전 원문 중복 등으로 DB 수정에 실패한 경우.
+        - DatabaseCommitUnknownError: 최종 저장 중 연결이 끊겨 반영 여부를 확인할 수 없는 경우.
         """
         identifier(release_id, "release_version_id")
         with self.storage.transaction() as tx:
@@ -82,13 +115,21 @@ class ReleaseService:
         """Item 번호와 업데이트 내용을 수정한다.
 
         같은 Item을 여러 릴리즈가 공유하면 수정한 관리값도 함께 조회된다.
-        원본 입력 작업과 셀 위치·값은 변경하지 않는다.
+        원본 입력 작업과 셀 위치·값, 릴리즈별 포함 상태·모델 범위는 변경하지 않는다.
 
-        :param item_id: 수정할 Item ID.
-        :param changes: item_no와 content 중 변경할 항목과 값.
-        :return: 수정 후 Item의 원본·현재 관리값 비교 결과.
-        :raises StorageValidationError: 편집할 수 없는 필드가 있거나 변경값이 잘못된 경우.
-        :raises LookupError: 수정 대상 Item이 없는 경우.
+        param
+        - item_id: 수정할 Item ID.
+        - changes: item_no와 content 중 변경할 항목과 값.
+
+        return
+        - 수정 후 Item의 원본·현재 관리값 비교 결과.
+
+        raises
+        - StorageValidationError: 편집할 수 없는 필드가 있거나 변경값이 잘못된 경우.
+        - LookupError: 수정 대상 Item이 없는 경우.
+        - DatabaseConnectionError: 수정 작업을 시작하기 전에 DB 접속에 실패한 경우.
+        - DatabaseSaveError: Item 관리값을 DB에서 수정하지 못한 경우.
+        - DatabaseCommitUnknownError: 최종 저장 중 연결이 끊겨 반영 여부를 확인할 수 없는 경우.
         """
         identifier(item_id, "item_id")
         with self.storage.transaction() as tx:
@@ -100,11 +141,19 @@ class ReleaseService:
 
         요청에 없는 연결은 그대로 유지하며 다른 릴리즈로 상태를 자동 전파하지 않는다.
 
-        :param release_id: Item 연결을 저장할 릴리즈 ID.
-        :param links: 검토한 Item 포함 상태와 적용 모델 범위 튜플.
-        :return: 모든 기존 연결을 포함한 저장 후 ReleaseDetail.
-        :raises StorageValidationError: Item·모델 범위가 중복되거나 설비군이 맞지 않는 경우.
-        :raises LookupError: 릴리즈·Item·모델이 없는 경우.
+        param
+        - release_id: Item 연결을 저장할 릴리즈 ID.
+        - links: 검토한 Item 포함 상태와 적용 모델 범위 튜플. 빈 튜플이면 기존 연결을 유지.
+
+        return
+        - 모든 기존 연결을 포함한 저장 후 ReleaseDetail.
+
+        raises
+        - StorageValidationError: Item·모델 범위가 중복되거나 설비군이 맞지 않는 경우.
+        - LookupError: 릴리즈·Item·모델이 없는 경우.
+        - DatabaseConnectionError: 저장 작업을 시작하기 전에 DB 접속에 실패한 경우.
+        - DatabaseSaveError: Item 연결을 DB에 저장하지 못한 경우.
+        - DatabaseCommitUnknownError: 최종 저장 중 연결이 끊겨 반영 여부를 확인할 수 없는 경우.
         """
         identifier(release_id, "release_version_id")
         links = prepare_links(links)
@@ -117,10 +166,15 @@ class ReleaseService:
     def get_release(self, release_id: int) -> ReleaseDetail:
         """릴리즈의 관리값·원본 셀·연결 Item을 조회한다.
 
-        :param release_id: 조회할 릴리즈 ID.
-        :return: 저장된 Item 포함 상태와 모델 범위를 포함한 ReleaseDetail.
-        :raises LookupError: 해당 릴리즈가 없는 경우.
-        :raises StorageValidationError: ID나 보관된 출처가 잘못된 경우.
+        param
+        - release_id: 조회할 릴리즈 ID.
+
+        return
+        - 저장된 Item 포함 상태와 모델 범위를 포함한 ReleaseDetail.
+
+        raises
+        - LookupError: 해당 릴리즈가 없는 경우.
+        - StorageValidationError: ID나 보관된 출처가 잘못된 경우.
         """
         identifier(release_id, "release_version_id")
         with self.storage.transaction() as tx:
@@ -129,10 +183,15 @@ class ReleaseService:
     def get_item(self, item_id: int):
         """Item의 현재 관리값과 보관된 원본 셀을 조회한다.
 
-        :param item_id: 조회할 Item ID.
-        :return: Item의 원본·현재 관리값 비교 결과.
-        :raises LookupError: 해당 Item이 없는 경우.
-        :raises StorageValidationError: ID나 보관된 출처가 잘못된 경우.
+        param
+        - item_id: 조회할 Item ID.
+
+        return
+        - Item의 원본·현재 관리값 비교 결과.
+
+        raises
+        - LookupError: 해당 Item이 없는 경우.
+        - StorageValidationError: ID나 보관된 출처가 잘못된 경우.
         """
         identifier(item_id, "item_id")
         with self.storage.transaction() as tx:
@@ -141,7 +200,8 @@ class ReleaseService:
     def list_groups(self):
         """저장된 릴리즈의 계열 관리 모델 목록을 조회한다.
 
-        :return: 원본 조회 선택지로 사용할 관리 모델 목록. 실제 적용 모델 전체 목록을 뜻하지 않음.
+        return
+        - 원본 조회 선택지로 사용할 관리 모델 튜플. 릴리즈가 없으면 빈 튜플이며 실제 적용 모델 전체 목록을 뜻하지 않음.
         """
         with self.storage.transaction() as tx:
             return self.repository.groups(tx)
@@ -149,9 +209,15 @@ class ReleaseService:
     def list_families(self, group_id: int):
         """관리 모델 아래에 릴리즈가 저장된 버전 계열 목록을 조회한다.
 
-        :param group_id: 조회할 계열 관리 모델 ID.
-        :return: 릴리즈가 저장된 계열 목록. 자료가 없으면 빈 튜플.
-        :raises LookupError: 해당 관리 모델이 없는 경우.
+        param
+        - group_id: 조회할 계열 관리 모델 ID.
+
+        return
+        - 릴리즈가 저장된 계열 목록. 자료가 없으면 빈 튜플.
+
+        raises
+        - LookupError: 해당 관리 모델이 없는 경우.
+        - StorageValidationError: 관리 모델 ID가 양의 정수 범위를 벗어나거나 정수가 아닌 경우.
         """
         identifier(group_id, "group_id")
         with self.storage.transaction() as tx:
@@ -161,9 +227,15 @@ class ReleaseService:
     def list_releases(self, family_id: int):
         """계열별 릴리즈 목록을 원본 비교 정보와 함께 조회한다.
 
-        :param family_id: 조회할 버전 계열 ID.
-        :return: 확인된 순서가 앞선 RecordView 튜플. 자료가 없으면 빈 튜플.
-        :raises LookupError: 해당 계열이 없는 경우.
+        param
+        - family_id: 조회할 버전 계열 ID.
+
+        return
+        - 확인된 순서의 오름차순 RecordView 튜플. 순서 미확인은 마지막이며 자료가 없으면 빈 튜플.
+
+        raises
+        - LookupError: 해당 계열이 없는 경우.
+        - StorageValidationError: 계열 ID가 양의 정수 범위를 벗어나거나 정수가 아닌 경우.
         """
         identifier(family_id, "family_id")
         with self.storage.transaction() as tx:
@@ -173,13 +245,21 @@ class ReleaseService:
     def _insert(self, tx, table, values, manual_batch):
         """원본 및 연결 정보를 확인하고 새 릴리즈 또는 Item을 저장한다.
 
-        :param tx: 현재 등록 요청이 공유하는 저장 트랜잭션.
-        :param table: release_version 또는 item.
-        :param values: 형식을 검증한 등록 관리값.
-        :param manual_batch: 이번 요청에서 생성한 MANUAL 입력 작업 ID를 재사용할 객체.
-        :return: 생성된 관리 행.
-        :raises StorageValidationError: Excel 출처가 없거나 노트와 계열의 설비군이 다른 경우.
-        :raises LookupError: 연결할 입력 작업·노트·계열이 없는 경우.
+        원본 셀은 등록 후 비교 결과를 구성할 때 존재 여부를 확인한다.
+        릴리즈 등록일 때는 노트와 버전 계열의 설비군도 비교한다.
+
+        param
+        - tx: 현재 등록 요청이 공유하는 저장 트랜잭션.
+        - table: release_version 또는 item.
+        - values: 형식을 검증한 등록 관리값.
+        - manual_batch: 이번 요청에서 생성한 MANUAL 입력 작업 ID를 재사용할 객체.
+
+        return
+        - 생성된 관리 행.
+
+        raises
+        - StorageValidationError: 원본 위치가 잘못됐거나 릴리즈 등록 시 노트와 계열의 설비군이 다른 경우.
+        - LookupError: 연결할 입력 작업·노트·계열이 없는 경우.
         """
         values = deepcopy(values)
         if values["batch_id"] is None:
@@ -202,13 +282,18 @@ class ReleaseService:
     def _edit(self, tx, table, key, changes):
         """현재 행을 잠근 뒤 관리값과 실제 수정 항목만 갱신한다.
 
-        :param tx: 현재 수정 요청의 공통 저장 트랜잭션.
-        :param table: release_version 또는 item.
-        :param key: 수정 대상의 전체 기본키.
-        :param changes: 변경할 관리 항목과 값.
-        :return: 수정 후 다시 조회한 관리 행.
-        :raises StorageValidationError: 원본·식별자를 수정하거나 입력값이 잘못된 경우.
-        :raises LookupError: 수정할 기록이 없는 경우.
+        param
+        - tx: 현재 수정 요청의 공통 저장 트랜잭션.
+        - table: release_version 또는 item.
+        - key: 수정 대상의 전체 기본키.
+        - changes: 변경할 관리 항목과 값.
+
+        return
+        - 수정 후 다시 조회한 관리 행.
+
+        raises
+        - StorageValidationError: 원본·식별자를 수정하거나 입력값이 잘못된 경우.
+        - LookupError: 수정할 기록이 없는 경우.
         """
         current = self.repository.get(tx, table, key, lock=True)
         return tx.update(table, key, prepare_changes(table, current, changes))
@@ -216,11 +301,17 @@ class ReleaseService:
     def _link(self, tx, release, link):
         """한 Item의 릴리즈 연결과 모델 범위를 검증한 뒤 저장한다.
 
-        :param tx: 현재 요청의 공통 저장 트랜잭션.
-        :param release: 잠금 또는 신규 생성한 릴리즈 행.
-        :param link: 형식을 검증한 ItemLinkInput.
-        :raises LookupError: Item 또는 지정 모델이 없는 경우.
-        :raises StorageValidationError: 적용 모델과 릴리즈 계열의 설비군이 다른 경우.
+        지정 모델의 존재와 설비군을 검사한다. 실제 모델 적용 범위와 Item 포함 여부는
+        호출자가 검토한 값을 사용하며 릴리즈 순서나 모델명으로 추정하지 않는다.
+
+        param
+        - tx: 현재 요청의 공통 저장 트랜잭션.
+        - release: 잠금 또는 신규 생성한 릴리즈 행.
+        - link: 형식을 검증한 ItemLinkInput.
+
+        raises
+        - LookupError: Item·계열·계열 관리 모델 또는 지정 모델이 없는 경우.
+        - StorageValidationError: 적용 모델과 릴리즈 계열의 설비군이 다른 경우.
         """
         self.repository.get(tx, "item", {"item_id": link.item_id}, lock=True)
         if link.target_group_ids:
@@ -242,9 +333,12 @@ class ReleaseService:
     def _detail(self, tx, release):
         """릴리즈와 명시적으로 연결된 모든 Item의 상세 결과를 구성한다.
 
-        :param tx: 현재 조회에 사용하는 공통 저장 트랜잭션.
-        :param release: 조회 대상 릴리즈 행.
-        :return: 원본 비교 정보와 Item 연결을 포함한 ReleaseDetail.
+        param
+        - tx: 현재 조회에 사용하는 공통 저장 트랜잭션.
+        - release: 조회 대상 릴리즈 행.
+
+        return
+        - 원본 비교 정보와 Item 연결을 포함한 ReleaseDetail.
         """
         items = tuple(LinkedItemView(
             item=self.repository.view(tx, "item", tx.get("item", {"item_id": link["item_id"]})),

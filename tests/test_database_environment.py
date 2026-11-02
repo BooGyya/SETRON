@@ -17,6 +17,14 @@ TEST_PASSWORD = "test_${SETRON_UNSET_REVIEW_VALUE}_$test#@:/ password"
 
 @pytest.fixture
 def example_environment(tmp_path):
+    """설정 예시에 특수문자 비밀번호를 넣고 외부 DB 설정의 영향을 제거한다.
+
+    param
+    - tmp_path: 테스트용 환경변수 파일을 만들 임시 디렉터리.
+
+    return
+    - 환경변수 파일 경로와 자식 프로세스에 전달할 실행 환경의 튜플.
+    """
     content = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
     content = content.replace("replace_with_dev_password", DEV_PASSWORD)
     content = content.replace("replace_with_test_password", TEST_PASSWORD)
@@ -31,6 +39,13 @@ def example_environment(tmp_path):
 
 
 def test_uv_preserves_literal_passwords_from_example(example_environment):
+    """uv가 환경변수 파일의 달러 기호·공백 등 비밀번호 원문을 보존하는지 검증한다.
+
+    uv가 설치되지 않은 환경에서는 건너뛴다.
+
+    param
+    - example_environment: 비밀번호 검증용 환경변수 파일과 분리된 실행 환경.
+    """
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv가 설치되지 않았습니다.")
@@ -54,6 +69,14 @@ def test_uv_preserves_literal_passwords_from_example(example_environment):
 
 
 def test_compose_isolates_databases_and_preserves_passwords(example_environment):
+    """Compose 설정에서 비밀번호가 보존되고 개발·테스트 DB가 분리되는지 검증한다.
+
+    Docker CLI가 설치되지 않은 환경에서는 건너뛴다. 컨테이너를 실행하지 않고
+    DB 이름·사용자·호스트 포트·볼륨과 로컬 주소 바인딩을 확인한다.
+
+    param
+    - example_environment: 비밀번호 검증용 환경변수 파일과 분리된 실행 환경.
+    """
     docker = shutil.which("docker")
     if docker is None:
         pytest.skip("Docker CLI가 설치되지 않았습니다.")

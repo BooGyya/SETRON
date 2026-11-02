@@ -38,11 +38,18 @@ from setron.features.storage.validation import StorageValidationError, decode_re
     ],
 )
 def test_invalid_records_are_rejected(table, values):
+    """관리 테이블의 상태값·JSON·필수값 규칙에 어긋나는 입력이 거부되는지 검증한다.
+
+    param
+    - table: 입력 검증을 적용할 관리 테이블 이름.
+    - values: 해당 테이블의 저장 규칙에 어긋나는 입력값.
+    """
     with pytest.raises(StorageValidationError):
         encode_record(table, values, inserting=True)
 
 
 def test_json_and_exact_text_round_trip_without_changing_source():
+    """입력 사전을 바꾸지 않고 버전 원문과 JSON을 저장 형식으로 변환·복원하는지 검증한다."""
     original = {
         "version_raw": "v1.0_가😀 ",
         "source_reference": {"content": {"sheet": "원본😀", "cells": ["A1", "B2"]}},
@@ -69,11 +76,17 @@ def test_json_and_exact_text_round_trip_without_changing_source():
     ids=["integer", "boolean", "null", "float", "nested-object", "nested-list", "nested-tuple"],
 )
 def test_json_object_keys_must_be_strings_at_every_depth(value):
+    """중첩된 위치에서도 문자열이 아닌 JSON 객체 키를 거부하는지 검증한다.
+
+    param
+    - value: 최상위 또는 중첩 위치에 문자열이 아닌 객체 키를 포함한 값.
+    """
     with pytest.raises(StorageValidationError, match="키.*문자열"):
         encode_record("app_setting", {"setting_key": "invalid", "setting_value": value}, inserting=True)
 
 
 def test_valid_nested_json_keeps_string_keys_and_shared_values():
+    """문자열 키와 여러 위치에서 참조한 값을 포함한 JSON 내용이 보존되는지 검증한다."""
     shared = {"1": "한글😀", "true": True, "null": None, "values": [1, 1.5, False]}
     value = {"first": shared, "second": [shared]}
     encoded = encode_record("app_setting", {"setting_key": "valid", "setting_value": value}, inserting=True)
@@ -81,6 +94,7 @@ def test_valid_nested_json_keeps_string_keys_and_shared_values():
 
 
 def test_circular_json_is_rejected_as_a_validation_error():
+    """자기 자신을 참조하는 JSON 입력이 저장 검증 오류로 거부되는지 검증한다."""
     value = {}
     value["self"] = value
     with pytest.raises(StorageValidationError):
@@ -88,6 +102,7 @@ def test_circular_json_is_rejected_as_a_validation_error():
 
 
 def test_windows_runtime_config_is_independent_of_docker():
+    """Windows 설정 예시가 로컬 MySQL에 접속하고 테스트·관리자 설정을 제외하는지 검증한다."""
     from pathlib import Path
 
     from setron.infrastructure.database import DatabaseConfig

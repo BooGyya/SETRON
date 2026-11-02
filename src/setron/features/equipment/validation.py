@@ -15,9 +15,14 @@ def prepare_snapshot(value: SnapshotInput) -> SnapshotInput:
     계열과 버전 원문이 정확히 같은 SW만 합친다. 같은 PM 위치의 상충 값은 차단하고,
     서로 다른 PM의 버전 차이는 허용한다. DB의 연결 정보는 저장 서비스에서 확인한다.
 
-    :param value: 검증할 설비 현황 저장 요청.
-    :return: 원본 입력을 변경하지 않고 검증과 중복 정리를 마친 SnapshotInput 복사본.
-    :raises StorageValidationError: 필수값·자료형·출처·PM 연결에 오류가 있는 경우.
+    param
+    - value: 검증할 설비 현황 저장 요청.
+
+    return
+    - 원본 입력을 변경하지 않고 검증과 중복 정리를 마친 SnapshotInput 복사본.
+
+    raises
+    - StorageValidationError: 필수값·자료형·출처·PM 연결에 오류가 있는 경우.
     """
     require(isinstance(value, SnapshotInput), "SnapshotInput 형식이 필요합니다.")
     # 중복을 합치는 동안에도 호출자가 가진 원본 입력은 그대로 남겨둔다.

@@ -17,9 +17,12 @@ ITEM_EDITABLE = frozenset({"item_no", "content"})
 def optional_integer(value, field):
     """선택 정수 항목의 자료형과 DB 저장 범위를 검사한다.
 
-    :param value: 검사할 정수 또는 None.
-    :param field: 오류 메시지에 표시할 항목 이름.
-    :raises StorageValidationError: 값이 None이 아니면서 32비트 부호 있는 정수도 아닌 경우.
+    param
+    - value: 검사할 정수 또는 None.
+    - field: 오류 메시지에 표시할 항목 이름.
+
+    raises
+    - StorageValidationError: 값이 None이 아니면서 32비트 부호 있는 정수도 아닌 경우.
     """
     require(value is None or type(value) is int and -2147483648 <= value <= 2147483647,
             f"{field}: 정수 또는 None이 필요합니다.")
@@ -28,9 +31,12 @@ def optional_integer(value, field):
 def validate_values(table, values):
     """릴리즈 또는 Item의 현재 관리값을 검사한다.
 
-    :param table: release_version 또는 item.
-    :param values: 등록하거나 수정할 관리값 객체.
-    :raises StorageValidationError: 필수값·자료형·길이·상태값이 잘못됐거나 UTF-8로 저장할 수 없는 경우.
+    param
+    - table: release_version 또는 item.
+    - values: 등록하거나 수정할 관리값 객체.
+
+    raises
+    - StorageValidationError: 필수값·자료형·길이·상태값이 잘못됐거나 UTF-8로 저장할 수 없는 경우.
     """
     if table == "release_version":
         required_text(values["version_raw"], "version_raw", 100)
@@ -57,9 +63,14 @@ def validate_values(table, values):
 def prepare_record(value):
     """등록 요청을 검증하고 저장에 사용할 관리값 객체를 구성한다.
 
-    :param value: ReleaseInput 또는 ItemInput.
-    :return: 원본 위치와 수정 항목을 정리한 관리값 복사본.
-    :raises StorageValidationError: 요청 형식이나 입력 항목이 잘못된 경우.
+    param
+    - value: ReleaseInput 또는 ItemInput.
+
+    return
+    - 원본 위치와 수정 항목을 정리한 관리값 복사본.
+
+    raises
+    - StorageValidationError: 요청 형식이나 입력 항목이 잘못된 경우.
     """
     require(type(value) in {ReleaseInput, ItemInput}, "릴리즈 또는 Item 등록 요청이 필요합니다.")
     table = "release_version" if isinstance(value, ReleaseInput) else "item"
@@ -82,11 +93,16 @@ def prepare_record(value):
 def prepare_changes(table, current, changes):
     """수정 가능한 항목만 반영하고 실제로 바뀐 필드 이름을 기록한다.
 
-    :param table: release_version 또는 item.
-    :param current: 잠금 후 조회한 현재 DB 행.
-    :param changes: 변경할 필드 이름과 값.
-    :return: 검증한 변경값과 누적 edited_fields 객체.
-    :raises StorageValidationError: 원본 정보·식별자를 수정하거나 변경값이 잘못된 경우.
+    param
+    - table: release_version 또는 item.
+    - current: 잠금 후 조회한 현재 DB 행.
+    - changes: 변경할 필드 이름과 값.
+
+    return
+    - 검증한 변경값과 누적 edited_fields 객체.
+
+    raises
+    - StorageValidationError: 원본 정보·식별자를 수정하거나 변경값이 잘못된 경우.
     """
     editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDITABLE
     require(isinstance(changes, dict) and set(changes) <= editable, "편집할 수 없는 필드가 포함됐습니다.")
@@ -101,9 +117,14 @@ def prepare_changes(table, current, changes):
 def prepare_links(links):
     """릴리즈별 Item 포함 상태와 모델 범위의 형식을 검사한다.
 
-    :param links: ItemLinkInput 튜플.
-    :return: 입력 객체와 분리한 ItemLinkInput 튜플.
-    :raises StorageValidationError: ID·상태·범위가 잘못됐거나 Item이 중복된 경우.
+    param
+    - links: ItemLinkInput 튜플.
+
+    return
+    - 입력 객체와 분리한 ItemLinkInput 튜플.
+
+    raises
+    - StorageValidationError: ID·상태·범위가 잘못됐거나 Item이 중복된 경우.
     """
     require(isinstance(links, tuple), "Item 연결은 튜플로 전달해야 합니다.")
     for link in links:

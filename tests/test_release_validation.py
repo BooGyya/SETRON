@@ -23,7 +23,8 @@ from setron.features.storage.validation import StorageValidationError
 def test_invalid_release_inputs_are_rejected(changes):
     """릴리즈 필수값·자료형·상태·수정 항목의 오류를 차단하는지 확인한다.
 
-    :param changes: 잘못된 등록 항목과 값.
+    param
+    - changes: 잘못된 등록 항목과 값.
     """
     with pytest.raises(StorageValidationError):
         prepare_record(replace(ReleaseInput(family_id=1, version_raw="v1"), **changes))
@@ -37,7 +38,8 @@ def test_invalid_release_inputs_are_rejected(changes):
 def test_invalid_item_inputs_are_rejected(changes):
     """Item 필수값·식별자·번호·수정 항목의 오류를 차단하는지 확인한다.
 
-    :param changes: 잘못된 등록 항목과 값.
+    param
+    - changes: 잘못된 등록 항목과 값.
     """
     with pytest.raises(StorageValidationError):
         prepare_record(replace(ItemInput(content="원본 내용"), **changes))
@@ -65,8 +67,9 @@ def test_unknown_metadata_and_exact_version_originals_remain_unchanged():
 def test_source_identity_and_hidden_flags_cannot_be_edited(table, changes):
     """원본 정보·식별자·숨김 상태의 변경을 허용하지 않는지 확인한다.
 
-    :param table: 수정 대상 관리 테이블.
-    :param changes: 편집할 수 없는 항목과 값.
+    param
+    - table: 수정 대상 관리 테이블.
+    - changes: 편집할 수 없는 항목과 값.
     """
     current = prepare_record(ReleaseInput(family_id=1, version_raw="v1") if table == "release_version" else ItemInput(content="내용"))
     with pytest.raises(StorageValidationError):
@@ -89,7 +92,8 @@ def test_edit_marks_only_real_changes_and_keeps_previous_edit_history():
 def test_item_changes_are_validated_before_saving(changes):
     """Item 수정값도 등록과 같은 기준으로 검사하는지 확인한다.
 
-    :param changes: 필수 내용 누락 또는 잘못된 번호 변경값.
+    param
+    - changes: 필수 내용 누락 또는 잘못된 번호 변경값.
     """
     with pytest.raises(StorageValidationError):
         prepare_changes("item", prepare_record(ItemInput(content="유지")), changes)
@@ -105,7 +109,8 @@ def test_item_changes_are_validated_before_saving(changes):
 def test_invalid_item_link_inputs_are_rejected(changes):
     """Item 포함 상태·모델 범위·ID 목록의 오류를 차단하는지 확인한다.
 
-    :param changes: 잘못된 Item 연결 항목과 값.
+    param
+    - changes: 잘못된 Item 연결 항목과 값.
     """
     link = replace(ItemLinkInput(item_id=1, item_state=ItemState.APPLIED), **changes)
     with pytest.raises(StorageValidationError):
@@ -140,7 +145,8 @@ def test_confirmed_dates_and_duplicate_orders_are_not_reinterpreted():
 def test_text_that_cannot_be_encoded_is_reported_as_input_error(value):
     """DB 문자셋으로 표현할 수 없는 문자열을 저장 전에 검증 오류로 처리하는지 확인한다.
 
-    :param value: 짝이 맞지 않는 유니코드 서로게이트를 포함한 등록 요청.
+    param
+    - value: 짝이 맞지 않는 유니코드 서로게이트를 포함한 등록 요청.
     """
     with pytest.raises(StorageValidationError, match="UTF-8"):
         prepare_record(value)

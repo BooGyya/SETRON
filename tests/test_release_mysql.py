@@ -24,8 +24,11 @@ pytestmark = pytest.mark.skipif(not os.environ.get("SETRON_TEST_DB_NAME"), reaso
 def release_data(schema_database):
     """각 테스트에서 사용할 가상 모델·계열·노트와 Excel 원본을 등록한다.
 
-    :param schema_database: 공통 스키마를 적용한 전용 테스트 Database.
-    :return: 저장 서비스·릴리즈 서비스·원본 입력 작업·모델·계열·노트 등록 정보.
+    param
+    - schema_database: 공통 스키마를 적용한 전용 테스트 Database.
+
+    return
+    - 저장 서비스·릴리즈 서비스·원본 입력 작업·모델·계열·노트 등록 정보.
     """
     storage = StorageService(schema_database)
     groups, families, notes = {}, {}, {}
@@ -51,8 +54,11 @@ def release_data(schema_database):
 def excel_release(data):
     """가상 Excel 원본에 연결된 릴리즈 등록 요청을 생성한다.
 
-    :param data: release_data가 준비한 등록 정보.
-    :return: 원문·출시일·확인된 순서의 출처를 포함한 ReleaseInput.
+    param
+    - data: release_data가 준비한 등록 정보.
+
+    return
+    - 원문·출시일·확인된 순서의 출처를 포함한 ReleaseInput.
     """
     return ReleaseInput(family_id=data["families"]["O2"], version_raw=" v1_n4 ",
         batch_id=data["batch"]["batch_id"], release_note_id=data["notes"]["O2"],
@@ -64,9 +70,12 @@ def excel_release(data):
 def excel_item(data, number=1):
     """가상 Excel 원본에 연결된 Item 등록 요청을 생성한다.
 
-    :param data: release_data가 준비한 등록 정보.
-    :param number: 사용할 원본 Item 위치 번호. 1 또는 2.
-    :return: 내용과 원본 번호의 출처를 포함한 ItemInput.
+    param
+    - data: release_data가 준비한 등록 정보.
+    - number: 사용할 원본 Item 위치 번호. 1 또는 2.
+
+    return
+    - 내용과 원본 번호의 출처를 포함한 ItemInput.
     """
     raw = data["batch"]["raw_data"]["릴리즈"]
     return ItemInput(content=raw[f"C{number}"], item_no=raw[f"D{number}"], batch_id=data["batch"]["batch_id"],
@@ -77,8 +86,11 @@ def excel_item(data, number=1):
 def counts(storage):
     """전체 취소 여부를 비교하기 위해 입력 작업·릴리즈·Item·연결 행 수를 조회한다.
 
-    :param storage: 전용 테스트 DB의 StorageService.
-    :return: 관리 테이블별 행 수 객체.
+    param
+    - storage: 전용 테스트 DB의 StorageService.
+
+    return
+    - 관리 테이블별 행 수 객체.
     """
     with storage.transaction() as tx:
         return {name: tx.session.scalar(select(func.count()).select_from(tx.repository.table(name)))
@@ -88,7 +100,8 @@ def counts(storage):
 def test_release_and_multiple_items_survive_reload_with_separate_originals(release_data):
     """한 릴리즈에 같은 번호의 여러 Item을 연결하고 원본과 함께 다시 조회하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     detail = data["service"].register_release(excel_release(data), (excel_item(data), excel_item(data, 2)))
@@ -108,7 +121,8 @@ def test_release_and_multiple_items_survive_reload_with_separate_originals(relea
 def test_release_and_item_edits_keep_source_values_locations_batch_and_time(release_data):
     """직접 수정한 관리값과 보관 원본·위치·입력 시각이 분리되는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     service = data["service"]
@@ -134,7 +148,8 @@ def test_release_and_item_edits_keep_source_values_locations_batch_and_time(rele
 def test_manual_bundle_reuses_one_new_batch_and_edits_do_not_create_batches(release_data):
     """직접 등록한 묶음은 한 입력 작업을 공유하고 기존값 수정은 새 입력 작업을 만들지 않는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     before_count = counts(data["storage"])["import_batch"]
@@ -151,7 +166,8 @@ def test_manual_bundle_reuses_one_new_batch_and_edits_do_not_create_batches(rele
 def test_new_item_can_be_added_to_existing_release(release_data):
     """기존 릴리즈에 Item을 추가 등록하고 상세에서 조회할 수 있는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     service = release_data["service"]
     detail = service.register_release(excel_release(release_data))
@@ -165,7 +181,8 @@ def test_new_item_can_be_added_to_existing_release(release_data):
 def test_shared_item_edits_propagate_to_explicit_links_only(release_data):
     """공용 Item의 관리값은 연결된 릴리즈에 반영하고 연결되지 않은 후속 버전에는 전파하지 않는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     service = data["service"]
@@ -188,7 +205,8 @@ def test_shared_item_edits_propagate_to_explicit_links_only(release_data):
 def test_link_updates_keep_omitted_items_and_all_three_states_visible(release_data):
     """일부 연결의 상태만 수정해도 요청에 없는 Item과 미포함·미확인 연결이 모두 남는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     service = data["service"]
@@ -206,7 +224,8 @@ def test_link_updates_keep_omitted_items_and_all_three_states_visible(release_da
 def test_invalid_later_item_rolls_back_new_batch_release_items_and_links(release_data):
     """후속 Item의 원본 셀이 잘못되면 이번 요청에서 만든 모든 행이 취소되는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     before = counts(data["storage"])
@@ -220,7 +239,8 @@ def test_invalid_later_item_rolls_back_new_batch_release_items_and_links(release
 def test_sql_failure_in_later_item_rolls_back_the_whole_registration(release_data):
     """후속 Item의 실제 DB 저장 오류가 앞선 등록까지 취소하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     before = counts(data["storage"])
@@ -234,8 +254,9 @@ def test_sql_failure_in_later_item_rolls_back_the_whole_registration(release_dat
 def test_invalid_model_on_later_link_restores_earlier_link_updates(release_data, problem):
     """후속 연결의 모델 검증에 실패하면 앞선 Item 상태 변경도 취소되는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
-    :param problem: 다른 설비군 또는 존재하지 않는 모델 오류 유형.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
+    - problem: 다른 설비군 또는 존재하지 않는 모델 오류 유형.
     """
     data = release_data
     service = data["service"]
@@ -254,7 +275,8 @@ def test_invalid_model_on_later_link_restores_earlier_link_updates(release_data,
 def test_exact_version_uniqueness_and_failed_edit_preserve_existing_data(release_data):
     """버전 대소문자·공백을 보존하고 중복 등록·수정 실패 시 기존 기록을 유지하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     service = data["service"]
@@ -274,7 +296,8 @@ def test_exact_version_uniqueness_and_failed_edit_preserve_existing_data(release
 def test_editing_source_metadata_is_rejected_without_changing_originals(release_data):
     """원본 위치와 입력 작업을 바꾸려는 요청을 거부하고 관리값·원본을 보존하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     service = release_data["service"]
     detail = service.register_release(excel_release(release_data), (excel_item(release_data),))
@@ -290,7 +313,8 @@ def test_editing_source_metadata_is_rejected_without_changing_originals(release_
 def test_group_family_selection_uses_saved_releases_and_preserves_c3_ui_separation(release_data):
     """저장한 모델·계열 선택지를 제공하고 C3 구UI·통합UI를 분리하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     service = data["service"]
@@ -308,7 +332,8 @@ def test_group_family_selection_uses_saved_releases_and_preserves_c3_ui_separati
 def test_release_list_keeps_unknown_and_duplicate_orders_without_guessing(release_data):
     """확인된 순서만 정렬에 사용하고 미확인·중복 순서를 임의로 보정하지 않는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     for raw, order in (("a", 2), ("b", 1), ("c", None), ("d", 1)):
@@ -321,7 +346,8 @@ def test_release_list_keeps_unknown_and_duplicate_orders_without_guessing(releas
 def test_missing_originals_are_explicit_and_new_excel_records_require_sources(release_data):
     """기존 출처 누락은 원본 없음으로 반환하고 새 Excel 등록에는 출처를 요구하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     value = replace(excel_release(data), source_reference=None)
@@ -337,7 +363,8 @@ def test_missing_originals_are_explicit_and_new_excel_records_require_sources(re
 def test_multiple_source_sheets_keep_null_and_false_cell_values(release_data):
     """여러 시트의 원본 위치와 None·False 셀 값을 그대로 보존하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     value = replace(excel_release(release_data), source_reference={"version_raw": [
         {"sheet": "릴리즈", "cells": ["A1"]}, {"sheet": "추가", "cells": ["A1", "B1"]}]})
@@ -348,7 +375,8 @@ def test_multiple_source_sheets_keep_null_and_false_cell_values(release_data):
 def test_release_note_from_other_equipment_category_is_rejected(release_data):
     """다른 설비군의 릴리즈 노트를 연결하면 등록을 취소하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     before = counts(data["storage"])
@@ -360,7 +388,8 @@ def test_release_note_from_other_equipment_category_is_rejected(release_data):
 def test_concurrent_item_edits_keep_both_changes_and_edited_fields(release_data):
     """같은 Item의 서로 다른 항목을 동시에 수정해도 값과 수정 표시가 유실되지 않는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
     """
     data = release_data
     detail = data["service"].register_release(excel_release(data), (excel_item(data),))
@@ -370,8 +399,11 @@ def test_concurrent_item_edits_keep_both_changes_and_edited_fields(release_data)
     def edit(changes):
         """동시 시작 시점을 맞춘 뒤 별도 트랜잭션에서 Item을 수정한다.
 
-        :param changes: 한 작업에서 수정할 관리 항목과 값.
-        :return: 해당 수정 요청의 Item 조회 결과.
+        param
+        - changes: 한 작업에서 수정할 관리 항목과 값.
+
+        return
+        - 해당 수정 요청의 Item 조회 결과.
         """
         barrier.wait()
         return data["service"].update_item(item_id, changes)
@@ -390,8 +422,9 @@ def test_concurrent_item_edits_keep_both_changes_and_edited_fields(release_data)
 def test_unencodable_edits_are_validation_errors_and_preserve_saved_values(release_data, field):
     """저장할 수 없는 문자열 수정은 검증 오류로 알리고 기존 관리값·원본을 유지하는지 확인한다.
 
-    :param release_data: 전용 DB에 준비한 가상 등록 정보.
-    :param field: 잘못된 문자열을 입력할 Item 내용 또는 릴리즈 접미사 항목.
+    param
+    - release_data: 전용 DB에 준비한 가상 등록 정보.
+    - field: 잘못된 문자열을 입력할 Item 내용 또는 릴리즈 접미사 항목.
     """
     service = release_data["service"]
     detail = service.register_release(excel_release(release_data), (excel_item(release_data),))

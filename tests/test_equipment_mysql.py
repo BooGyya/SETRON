@@ -20,10 +20,13 @@ pytestmark = pytest.mark.skipif(not os.environ.get("SETRON_TEST_DB_NAME"), reaso
 def source(sheet="현황", cell="A1", field="version_raw"):
     """테스트용 필드 출처를 생성한다.
 
-    :param sheet: 원본 시트 이름. 기본값은 '현황'.
-    :param cell: 원본 셀 주소. 기본값은 'A1'.
-    :param field: 출처를 연결할 필드 이름. 기본값은 'version_raw'.
-    :return: 필드 이름에 시트·셀 위치를 연결한 출처 객체.
+    param
+    - sheet: 원본 시트 이름. 기본값은 '현황'.
+    - cell: 원본 셀 주소. 기본값은 'A1'.
+    - field: 출처를 연결할 필드 이름. 기본값은 'version_raw'.
+
+    return
+    - 필드 이름에 시트·셀 위치를 연결한 출처 객체.
     """
     return {field: {"sheet": sheet, "cells": [cell]}}
 
@@ -34,8 +37,11 @@ def catalog(schema_database):
 
     M-O5 파생형과 C3 UI별 계열을 포함하며 실제 업무 자료는 사용하지 않는다.
 
-    :param schema_database: 공통 스키마를 적용한 전용 테스트 Database.
-    :return: 저장 서비스, 입력 작업 행, 모델 ID 목록, 계열 ID 목록, 릴리즈 ID 목록의 튜플.
+    param
+    - schema_database: 공통 스키마를 적용한 전용 테스트 Database.
+
+    return
+    - 저장 서비스, 입력 작업 행, 모델 ID 목록, 계열 ID 목록, 릴리즈 ID 목록의 튜플.
     """
     storage = StorageService(schema_database)
     groups, families, releases = {}, {}, {}
@@ -60,9 +66,12 @@ def catalog(schema_database):
 def mixed(catalog, code):
     """PM1·2에 O3, PM3·4에 O2를 배정한 혼합 설비 현황을 생성한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
-    :param code: 생성할 현황의 호기 코드.
-    :return: 가상 혼합 설비의 SnapshotInput.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    - code: 생성할 현황의 호기 코드.
+
+    return
+    - 가상 혼합 설비의 SnapshotInput.
     """
     _, batch, groups, families, releases = catalog
     return SnapshotInput(equipment_code=code, base_date=date(2026, 10, 27), site="화성", line="C57",
@@ -77,10 +86,13 @@ def mixed(catalog, code):
 def row_count(storage, name, **filters):
     """전용 테스트 DB에서 검색 조건에 맞는 행 수를 조회한다.
 
-    :param storage: 테스트 DB에 연결된 StorageService.
-    :param name: 행 수를 조회할 테이블 이름.
-    :param filters: 컬럼명과 값으로 지정하는 검색 조건.
-    :return: 모든 검색 조건을 만족하는 행 수.
+    param
+    - storage: 테스트 DB에 연결된 StorageService.
+    - name: 행 수를 조회할 테이블 이름.
+    - filters: 컬럼명과 값으로 지정하는 검색 조건.
+
+    return
+    - 모든 검색 조건을 만족하는 행 수.
     """
     with storage.transaction() as tx:
         table = tx.repository.table(name)
@@ -90,7 +102,8 @@ def row_count(storage, name, **filters):
 def test_mixed_equipment_saves_two_families_four_pms_and_original_sources(catalog):
     """혼합 설비의 SW 두 행·PM 네 위치와 원문·출처가 저장 후에도 유지되는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, batch, _, _, _ = catalog
     value = mixed(catalog, "BE002-MIXED")
@@ -114,7 +127,8 @@ def test_mixed_equipment_saves_two_families_four_pms_and_original_sources(catalo
 def test_same_equipment_and_pm_positions_connect_across_dates_without_filling_gaps(catalog):
     """날짜별 호기·PM 연결과 당시 정보를 보존하고 기록이 없는 날짜는 비워두는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, _, _, _, releases = catalog
     value = mixed(catalog, "BE002-HISTORY")
@@ -139,7 +153,8 @@ def test_same_equipment_and_pm_positions_connect_across_dates_without_filling_ga
 def test_same_family_pm_mismatch_is_nonblocking_and_unregistered_raw_is_preserved(catalog):
     """같은 계열 PM의 버전 차이를 허용하고 미등록 원문과 불일치 표시를 보존하는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, _, groups, families, _ = catalog
     base = mixed(catalog, "BE002-MISMATCH")
@@ -155,7 +170,8 @@ def test_same_family_pm_mismatch_is_nonblocking_and_unregistered_raw_is_preserve
 def test_exact_duplicate_sw_and_pm_preserve_sources_across_sheets(catalog):
     """여러 시트의 중복 SW·PM을 한 번만 저장하고 모든 출처를 보존하는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, *_ = catalog
     base = mixed(catalog, "BE002-DEDUP")
@@ -172,8 +188,9 @@ def test_exact_duplicate_sw_and_pm_preserve_sources_across_sheets(catalog):
 def test_invalid_later_snapshot_rolls_back_the_entire_batch(catalog, problem):
     """후속 현황의 연결 정보나 출처가 잘못되면 앞선 현황까지 저장을 취소하는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
-    :param problem: 재현할 오류 유형. 릴리즈 계열·모델 설비군·출처·미등록 모델 중 하나.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    - problem: 재현할 오류 유형. 릴리즈 계열·모델 설비군·출처·미등록 모델 중 하나.
     """
     storage, _, groups, families, releases = catalog
     first = mixed(catalog, "BE002-ROLLBACK-FIRST-" + problem)
@@ -199,7 +216,8 @@ def test_invalid_later_snapshot_rolls_back_the_entire_batch(catalog, problem):
 def test_existing_equipment_date_requires_review_and_keeps_original_data(catalog):
     """기존 호기·기준일의 현황을 보존하고 DB가 중복 호기 코드 등록을 차단하는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, *_ = catalog
     service = EquipmentService(storage)
@@ -216,7 +234,8 @@ def test_existing_equipment_date_requires_review_and_keeps_original_data(catalog
 def test_only_confirmed_m5_alias_is_resolved_and_prime_and_categories_stay_distinct(catalog):
     """M5 별칭을 연결하면서 Prime 모델과 서로 다른 설비군을 구분하는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, _, groups, *_ = catalog
     service = EquipmentService(storage)
@@ -232,7 +251,8 @@ def test_only_confirmed_m5_alias_is_resolved_and_prime_and_categories_stay_disti
 def test_c3_geometry_does_not_create_families_and_ui_families_remain_separate(catalog):
     """C3의 형상과 관계없이 같은 UI는 계열을 공유하고 구UI·통합UI는 구분하는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, batch, groups, families, releases = catalog
     values = tuple(SnapshotInput(equipment_code="BE002-C3", base_date=date(2026, 10, day), site="화성",
@@ -253,7 +273,8 @@ def test_c3_geometry_does_not_create_families_and_ui_families_remain_separate(ca
 def test_database_blocks_cross_date_pm_link(catalog):
     """다른 현황의 SW에 PM을 연결하면 DB 외래키 제약이 저장을 차단하는지 확인한다.
 
-    :param catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
+    param
+    - catalog: 테스트용 저장 서비스·입력 작업·모델·계열·릴리즈 등록 정보.
     """
     storage, batch, groups, *_ = catalog
     first, second = EquipmentService(storage).save_snapshots((mixed(catalog, "BE002-FK-A"), mixed(catalog, "BE002-FK-B")))
