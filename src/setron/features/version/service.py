@@ -131,7 +131,7 @@ def _notation_key(text: str, skip: NotationDifference | None = None) -> str:
 def compare_version(
     family: FamilyReleases,
     version_raw: str | None,
-    target_id: int,
+    target_id: int | None,
     *,
     release_version_id: int | None = None,
 ) -> VersionComparison:
@@ -146,6 +146,10 @@ def compare_version(
     def result(status, release=None, target=None, steps=None, reason=None):
         return VersionComparison(version_raw, release, target, status, steps, reason)
 
+    if not family.releases:
+        return result(CompareStatus.UNDETERMINED, reason=CompareReason.NO_RELEASE_DATA)
+    if target_id is None:
+        return result(CompareStatus.UNDETERMINED, reason=CompareReason.TARGET_NOT_SET)
     target = family.get(target_id)
     if target is None or target.version_order is None or target.version_order in duplicated:
         return result(CompareStatus.UNDETERMINED, target=target, reason=CompareReason.TARGET_INVALID)

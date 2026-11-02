@@ -84,7 +84,9 @@ class CompareReason(str, Enum):
     OTHER_FAMILY = "OTHER_FAMILY"
     ORDER_UNKNOWN = "ORDER_UNKNOWN"
     ORDER_CONFLICT = "ORDER_CONFLICT"
+    TARGET_NOT_SET = "TARGET_NOT_SET"
     TARGET_INVALID = "TARGET_INVALID"
+    NO_RELEASE_DATA = "NO_RELEASE_DATA"
 
 
 REASON_MESSAGES = {
@@ -93,7 +95,9 @@ REASON_MESSAGES = {
     CompareReason.OTHER_FAMILY: "다른 버전 계열의 릴리즈라 비교하지 않습니다.",
     CompareReason.ORDER_UNKNOWN: "릴리즈 순서가 확인되지 않은 버전이 있습니다.",
     CompareReason.ORDER_CONFLICT: "같은 순서 값을 가진 릴리즈가 있어 선후를 알 수 없습니다.",
+    CompareReason.TARGET_NOT_SET: "이 계열의 목표 N이 지정되지 않았습니다.",
     CompareReason.TARGET_INVALID: "목표 N을 이 계열의 순서가 확인된 릴리즈에서 찾을 수 없습니다. N을 다시 선택해 주세요.",
+    CompareReason.NO_RELEASE_DATA: "이 계열의 릴리즈 자료가 없어 비교할 수 없습니다.",
 }
 
 
