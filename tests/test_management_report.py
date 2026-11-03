@@ -207,3 +207,14 @@ def test_current_report_reads_new_saved_values_without_journal_or_ai(revision_st
     assert value.summary.equipment[0].record.line == "2라인"
     assert value.summary.equipment[0].record.site == "화성"
     assert all_rows(storage, "import_batch") == before
+
+
+def test_status_report_ranks_priority_with_same_scope_risk_and_targets(observed_result):
+    """BE-017: 현황 보고서에 같은 범위·위험 판정·목표 N으로 계산한 우선순위를 담는다."""
+    value = report(observed_result)
+
+    assert [e.record.equipment_code for e in value.priority.ranked] == ["MIX-1", "NORMAL-2"]  # 위험 → N-1
+    assert value.priority.ranked[0].is_risk and value.priority.ranked[1].steps_behind == 1
+    assert value.priority.hpa_excluded == 1 and value.priority.has_rules
+    filtered = report(observed_result, filters=ReportFilter(site_names=("평택",)))
+    assert [e.record.equipment_code for e in filtered.priority.ranked] == ["NORMAL-2"]
