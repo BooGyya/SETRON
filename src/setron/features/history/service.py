@@ -1,6 +1,5 @@
 """정확한 날짜의 저장 관측을 조회하고 같은 트랜잭션에서 리플레이 자료를 구성한다."""
 
-from collections import Counter
 from collections.abc import Iterable
 from dataclasses import replace
 from datetime import date
@@ -9,10 +8,10 @@ from setron.features.query_options.schemas import QueryScope
 from setron.features.query_options.service import QueryOptionsService
 from setron.features.storage.inputs import require
 from setron.features.version.schemas import ReleaseVersion
-from setron.features.version.service import FamilyReleases
 
 from .comparison import compare_frames
 from .comparison_schemas import HistoryComparison
+from .release_catalog import HistoryReleases
 from .schemas import HistoryFrame, ReplayResult
 
 
@@ -65,14 +64,7 @@ class HistoryService:
                 row["release_version_id"], row["family_id"], row["version_raw"],
                 row["version_order"], row["released_at"],
             ) for row in self.query_options.repository.rows(tx, "release_version", family_id=family_id))
-            # DB는 공백까지 원문으로 보존하지만 BE-003의 원문 조회표는 앞뒤 공백을 제거한다.
-            # 충돌하는 표기는 자동 연결하지 않는다. 유일한 표기는 동일 버전 확인에 유지하되,
-            # 이 계열의 방향은 임시 비교 자료에서만 보류하며 저장된 원문·순서는 바꾸지 않는다.
-            raw_counts = Counter(release.version_raw.strip() for release in releases)
-            if len(raw_counts) != len(releases):
-                releases = tuple(replace(release, version_order=None) for release in releases
-                                 if raw_counts[release.version_raw.strip()] == 1)
-            families[family_id] = FamilyReleases(family_id, releases)
+            families[family_id] = HistoryReleases(family_id, releases)
         return compare_frames(before, after, families)
 
 

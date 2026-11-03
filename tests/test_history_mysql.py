@@ -88,6 +88,7 @@ def managed_rows(storage):
         repository = EquipmentRepository()
         return {name: repository.rows(tx, name) for name in (
             "equipment", "equipment_snapshot", "equipment_version", "equipment_pm", "import_batch", "app_setting",
+            "release_version",
         )}
 
 
@@ -236,4 +237,59 @@ def test_mysql_compared_whitespace_collision_preserves_changes_same_links_and_ra
     assert by_pm["PM4"].before.software.release_version_id is not None
     assert by_pm["PM4"].after.software.version_raw == "v2"
     assert by_pm["PM4"].after.software.release_version_id is None
+    assert managed_rows(storage) == original
+
+
+@pytest.mark.parametrize("confirmed_raw,alias_first", [
+    ("v1", True), ("v1", False), (" v1", True), (" v1", False),
+])
+def test_mysql_exact_release_identity_survives_normalized_collision(history_catalog, confirmed_raw, alias_first):
+    """공백까지 정확히 일치하는 원문은 확인된 ID와 같은 버전으로 유지한다."""
+    storage, code, groups, families, releases = history_catalog
+    registered = ReleaseService(storage).register_release(ReleaseInput(
+        family_id=families["O2"], version_raw=" v1", version_order=3,
+    ))
+    release_ids = {**releases, ("O2", " v1"): registered.release.current["release_version_id"]}
+    catalog = storage, code, groups, families, release_ids
+    alias, canonical = ("PM1", "O2", "확인된 별도 표기", confirmed_raw), ("PM1", "O2", confirmed_raw, None)
+    first = save_observation(catalog, EARLY, (alias if alias_first else canonical,))
+    last = save_observation(catalog, LATE, (canonical if alias_first else alias,))
+    original = managed_rows(storage)
+
+    result = HistoryService(storage).compare(EARLY, LATE, QueryScope(family_ids=(families["O2"],)))
+
+    change, = result.changes
+    assert change.status.value == change.direction.value == "UNCHANGED"
+    assert change.raw_changed is True
+    assert result.changed == result.changed_equipment_ids == ()
+    assert change.before.snapshot == first and change.after.snapshot == last
+    assert change.before.software.release_version_id == (release_ids["O2", confirmed_raw] if alias_first else None)
+    assert change.after.software.release_version_id == (None if alias_first else release_ids["O2", confirmed_raw])
+    assert managed_rows(storage) == original
+
+
+def test_mysql_exact_whitespace_distinct_releases_remain_distinct(history_catalog):
+    """정확한 두 원문을 공백 제거로 같은 버전으로 합치지 않고, 미확인 표기는 보류한다."""
+    storage, _, _, families, _ = history_catalog
+    ReleaseService(storage).register_release(ReleaseInput(
+        family_id=families["O2"], version_raw=" v1", version_order=3,
+    ))
+    first = save_observation(history_catalog, EARLY, (
+        ("PM1", "O2", "v1", None), ("PM2", "O2", "v1 ", None),
+    ))
+    last = save_observation(history_catalog, LATE, (
+        ("PM1", "O2", " v1", None), ("PM2", "O2", "v2", None),
+    ))
+    original = managed_rows(storage)
+
+    result = HistoryService(storage).compare(EARLY, LATE, QueryScope(family_ids=(families["O2"],)))
+
+    by_pm = {change.pm_name: change for change in result.changes}
+    assert set(by_pm) == {"PM1", "PM2"}
+    assert all(change.status.value == "CHANGED" for change in result.changes)
+    assert by_pm["PM1"].before.software.version_raw == "v1"
+    assert by_pm["PM1"].after.software.version_raw == " v1"
+    assert by_pm["PM2"].direction.value == "UNKNOWN"
+    assert result.changed_equipment_ids == (first.equipment_id,)
+    assert all(change.before.snapshot == first and change.after.snapshot == last for change in result.changes)
     assert managed_rows(storage) == original

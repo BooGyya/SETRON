@@ -1,5 +1,6 @@
 """BE-013 두 날짜의 실제 버전 변경을 고정 PM 위치와 확인된 릴리즈로 검증한다."""
 
+from dataclasses import replace
 from datetime import date, datetime
 
 import pytest
@@ -422,3 +423,70 @@ def test_empty_dates_return_empty_comparison_despite_ambiguous_release_catalog(r
 
     assert not result.before.has_data and not result.after.has_data
     assert result.changes == result.changed == result.changed_equipment_ids == ()
+
+
+@pytest.mark.parametrize("canonical,reverse,pms", [
+    ("v1", False, False), ("v1", True, True),
+    (" v1", False, True), (" v1", True, False),
+])
+def test_exact_release_raw_matches_confirmed_alias_despite_normalized_collision(
+    revision_storage, canonical, reverse, pms,
+):
+    """공백까지 일치하는 원문은 같은 정규화 키의 다른 릴리즈와 구분해 대응한다."""
+    storage = revision_storage
+    releases = {raw: release(storage, raw=raw, order=order)
+                for order, raw in enumerate(("v1", " v1"), 1)}
+    alias = (1, 1, "verified alias", releases[canonical])
+    exact = (1, 1, canonical, None)
+    first, last = (exact, alias) if reverse else (alias, exact)
+    observation(storage, day=EARLY, versions=(first,), pms=pms)
+    observation(storage, day=LATE, versions=(last,), pms=pms)
+    tables = ("equipment_snapshot", "equipment_version", "equipment_pm", "release_version")
+    original = {table: all_rows(storage, table) for table in tables}
+
+    result = HistoryService(storage).compare(EARLY, LATE)
+
+    change, = result.changes
+    assert change.status is ChangeStatus.UNCHANGED
+    assert change.direction is VersionDirection.UNCHANGED
+    assert change.raw_changed is True
+    assert (change.before.software.version_raw, change.after.software.version_raw) == (first[2], last[2])
+    assert (change.before.software.release_version_id, change.after.software.release_version_id) == (first[3], last[3])
+    assert result.changed == result.changed_equipment_ids == ()
+    assert {table: all_rows(storage, table) for table in tables} == original
+
+
+def test_whitespace_distinct_exact_release_raws_remain_different_versions(revision_storage):
+    """원문이 각각 다른 릴리즈에 정확히 대응하면 공백 제거 후 같아도 변경 사실을 유지한다."""
+    storage = revision_storage
+    release(storage, raw="v1", order=1)
+    release(storage, raw=" v1", order=2)
+    observation(storage, day=EARLY, versions=((1, 1, "v1", None),))
+    observation(storage, day=LATE, versions=((1, 1, " v1", None),))
+
+    result = HistoryService(storage).compare(EARLY, LATE)
+
+    change, = result.changed
+    assert change.status is ChangeStatus.CHANGED
+    assert change.raw_changed is True
+    assert (change.before.software.version_raw, change.after.software.version_raw) == ("v1", " v1")
+    assert change.before.software.release_version_id is change.after.software.release_version_id is None
+
+
+def test_invalid_explicit_release_id_is_not_replaced_by_exact_raw_match(revision_storage):
+    storage = revision_storage
+    confirmed = release(storage, raw="v1", order=1)
+    observation(storage, day=EARLY, versions=((1, 1, "v1", None),))
+    observation(storage, day=LATE, versions=((1, 1, "verified alias", confirmed),))
+    service = HistoryService(storage)
+    before, after = service.read(QueryScope(EARLY)), service.read(QueryScope(LATE))
+    match, = before.matches
+    software, = match.snapshot.software
+    snapshot = replace(match.snapshot, software=(replace(software, release_version_id=confirmed + 1000),))
+    before = replace(before, matches=(replace(match, snapshot=snapshot),))
+    family = FamilyReleases(1, (ReleaseVersion(confirmed, 1, "v1", 1),))
+
+    change, = compare_frames(before, after, {1: family}).changed
+
+    assert change.direction is VersionDirection.UNKNOWN
+    assert change.reason is ChangeReason.RELEASE_UNCONFIRMED
