@@ -568,12 +568,13 @@ DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 
 
 ### 가져오기 DB 저장 (Jira S15P31B106-75)
 
-`features/import_save/service.py`의 `DatabaseImportSaver`가 `ImportSaver`를 구현한다. `SaveRequest` 하나를 한 트랜잭션으로 저장한다: `import_batch`(EXCEL, `{시트: {셀: 값}}` 원본) → 설비 현황(`EquipmentService.save_snapshots_in`) 또는 릴리즈·Item(`ReleaseService.register_release_in`). 하나라도 실패하면 입력 작업까지 함께 취소한다. 두 `*_in` 메서드는 호출자가 연 트랜잭션을 받는 공개 진입점이며, 기존 `save_snapshots`·`register_release`는 이를 감싼다.
+`features/import_save/service.py`의 `DatabaseImportSaver`가 `ImportSaver`를 구현한다. `save(request)`·`save_many(requests)`는 시트별 `SaveRequest`를 한 트랜잭션으로 저장한다: 묶음 전체 재검증 → 시트마다 `import_batch`(EXCEL, `{시트: {셀: 값}}` 원본) → 설비 현황(`EquipmentService.import_snapshots_in`, 신규 저장 또는 기존 현황 부분 갱신) 또는 릴리즈·Item(`ReleaseService.register_release_in`). 하나라도 실패하면 모든 시트의 입력 작업까지 함께 취소한다. `*_in` 메서드는 호출자가 연 트랜잭션을 받는 공개 진입점이다.
 
 - 설비 행은 `호기 + 기준일`로 묶어 현황 하나로 만들고, 같은 계열·같은 버전 원문 행은 SW 하나로 합친다. PM 이름이 있는 행은 그 SW의 PM이 되고 PM 모델은 행의 모델이다. 모델이 하나면 대표 모델, 여러 개면 대표 모델 없음(혼합형)이다.
 - 모델은 설비군(Poly·Oxide·KCTC·HPA, 없으면 확정된 모델 소속) 안에서 이름이 정확히 같은 등록 모델만 연결한다. 별칭은 M5 → M-O5만 쓴다. 계열은 모델(또는 기본 모델)의 계열 중 이름이 같은 것, 없으면 "이름 + 공백"으로 시작하는 것을 후보로 두고 UI 구분(구UI·통합UI)으로 하나를 고른다. 하나로 정해지지 않으면 저장하지 않는다.
 - 설비 적용 버전은 같은 계열·같은 버전 원문 릴리즈가 있을 때만 연결한다. 릴리즈는 `계열 + 버전 원문`으로 묶고, Item은 APPLIED·범위 미확인으로 연결한다. 검토 화면에서 고친 항목은 출시일·버전·Item 번호·내용만 `edited_fields`에 남긴다.
-- 같은 호기·기준일 현황이나 같은 계열·버전 릴리즈가 이미 있으면 묶음 전체를 저장하지 않는다. 교체·재가져오기(BE-009·010·025), 릴리즈 노트 문서 등록, Item 대상 모델 범위 지정은 이번 범위가 아니다.
+- 같은 호기·기준일 현황이 이미 있으면 `load_reference()`로 기존값을 불러와 검토한 요청만, 검토 당시 값과 DB 값이 같을 때 갱신한다. 검토 없이 보냈거나 검토 후 DB 값이 바뀌었으면 묶음 전체를 보류한다. 재가져오기 규칙(PM 위치별 갱신, 사업장 고정, 공통정보 출처 등)은 README의 "날짜별 현황 저장·재가져오기 갱신 (BE-009)"에 있다.
+- 같은 계열·버전 릴리즈가 이미 있으면 묶음 전체를 저장하지 않는다. 릴리즈 교체(BE-010), 저장 후 직접 수정(BE-025), 릴리즈 노트 문서 등록, Item 대상 모델 범위 지정은 이 저장소 범위가 아니다.
 - 앱(`python -m setron`)은 `SETRON_DB_NAME`이 설정돼 있으면 `ui/import_page.saver_from_env()`로 이 저장소를 쓰고, 없으면 메모리 저장소를 쓴다. DB 접속은 첫 저장 때 한다.
 - 같은 설정이면 조회 화면도 `ui/database_source.py`의 `DatabaseDashboardSource`로 DB 자료를 읽는다. '조회 적용'마다 DB를 다시 읽으므로 저장 후 조회 적용을 누르면 반영된다. 조회 선택지는 VER3 선택지를 유지하고, Site는 이름이 같을 때만, 설비군은 `GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않거나 PM·HPA 연결을 확인해야 하는 현황은 빼고 건수를 안내한다. 목표 N·위험 기준은 DB에 없어 지정하지 않으므로 적용률은 계산 불가, 위험은 미확인으로 나온다. 목표 초안은 다시 읽은 모델·계열 목록에 맞춘다(고른 값 유지, 새 항목 미지정). 시작할 때 DB를 읽지 못하면 합성 예시로 시작하고 안내한다.
 - `database/seed_demo_catalog.sql`은 교육용 자료의 모델 표기로 만든 시연용 모델 9개·계열 9개다. 확정 기준 자료가 아니며 개발 DB에만 적용한다.
