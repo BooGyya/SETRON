@@ -72,7 +72,7 @@ def contents():
 def filled(storage, schema_database):  # noqa: F811
     saver = DatabaseImportSaver(storage)
     saver.save(request(ExtractKind.EQUIPMENT_STATUS, [
-        row(1, {"equipment_code": "C1", "version_raw": "F1"}, **{**EQUIPMENT, "line": TRICKY},
+        row(1, {"equipment_code": "C1", "version_raw": "F1"}, edited=("version_raw",), **{**EQUIPMENT, "line": TRICKY},
             equipment_code="EXP-1", model_name="M-O2", family_name="O2", version_raw="v1",
             pm_name="PM1")], "exp-1",
         cells={"C1": "EXP-1", "F1": TRICKY}))
