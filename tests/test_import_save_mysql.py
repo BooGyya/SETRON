@@ -1,6 +1,7 @@
 """가져오기 묶음의 DB 저장을 실제 MySQL 5.6.19 스키마와 시연용 기준 자료로 검증한다 (Jira S15P31B106-75)."""
 
 import os
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -12,13 +13,16 @@ from sqlalchemy import func, select
 from setron.features.ai.schemas import ExtractKind
 from setron.features.equipment.service import EquipmentService
 from setron.features.excel_import.schemas import DuplicateSaveError, SaveRequest, SaveRow
+from setron.features.excel_import.service import ImportValidationService, build_save_request
 from setron.features.import_save.service import DatabaseImportSaver, batch_raw_data
 from setron.features.release.service import ReleaseService
+from setron.features.release.schemas import ReleaseInput
 from setron.features.storage.service import StorageService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.ai_client import ResponseSource
 from setron.infrastructure.database import DatabaseConfig
 from test_schema_mysql import schema_database  # noqa: F401  공통 스키마 생성·정리 fixture 재사용
+from test_import_validation import draft as review_draft, row as review_row
 
 pytestmark = pytest.mark.skipif(not os.environ.get("SETRON_TEST_DB_NAME"), reason="MySQL 전용 테스트 DB 접속 설정이 필요합니다.")
 
@@ -213,7 +217,16 @@ def _family_id(storage, name):
 
 
 def replace_values(value, **changes):
-    return SaveRow(value.row_ids, {**value.values, **changes}, value.source_reference, value.edited_fields)
+    """검토 연결 ID와 출처를 유지하면서 합성 저장 행의 값만 교체한다.
+
+    param
+    - value: 교체 전 저장 요청 행.
+    - changes: 교체할 공통 항목 값.
+
+    return
+    - 기존 메타데이터를 보존한 새 저장 요청 행.
+    """
+    return replace(value, values={**value.values, **changes})
 
 
 def test_saver_is_created_only_with_db_settings():
@@ -225,3 +238,176 @@ def test_saver_is_created_only_with_db_settings():
 def test_raw_data_is_stored_as_sheet_cell_map():
     raw = {"sheet": "Memory", "cells": {"A1": "화성", "B5": 13}, "merged": ["A1:B1"]}
     assert batch_raw_data(raw) == {"Memory": {"A1": "화성", "B5": 13}}
+
+
+@pytest.mark.parametrize("kind", [ExtractKind.EQUIPMENT_STATUS, ExtractKind.RELEASE_NOTE])
+def test_pipeline_preserves_c3_ui_in_request_and_database(storage, kind):
+    """실제 검토 요청 생성부터 저장·재조회까지 C3 두 UI의 자료와 출처를 각각 보존한다.
+
+    param
+    - storage: 공통 스키마와 시연용 모델·계열을 등록한 테스트 저장 서비스.
+    - kind: 설비 현황 또는 릴리즈 노트.
+    """
+    source = review_draft(
+        review_row(group_name="POLY", model_name="M-C3", family_name="C3 구UI", equipment_code="QA-PIPE-C3-LEGACY",
+                   version_raw="v-c3-pipeline", item_no="41", content="같은 Item 원문"),
+        review_row(2, group_name="POLY", model_name="M-C3", family_name="C3 통합UI", equipment_code="QA-PIPE-C3-INTEGRATED",
+                   version_raw="v-c3-pipeline", item_no="41", content="같은 Item 원문"), kind=kind,
+    )
+    built = build_save_request(source, f"pipeline-c3-{kind.value}")
+    assert [value.values["ui_type"] for value in built.rows] == ["LEGACY", "INTEGRATED"]
+    assert [value.row_ids for value in built.rows] == [(1,), (2,)]
+    DatabaseImportSaver(storage).save(built)
+    for index, family_name in enumerate(("C3 구UI", "C3 통합UI")):
+        family_id = _family_id(storage, family_name)
+        if kind is ExtractKind.EQUIPMENT_STATUS:
+            saved = EquipmentService(storage).get_snapshot(built.rows[index].values["equipment_code"], date(2026, 11, 2))
+            assert saved.software[0].family_id == family_id
+            assert saved.software[0].source_reference["version_raw"] == built.rows[index].source_reference["version_raw"]
+        else:
+            saved = next(value for value in ReleaseService(storage).list_releases(family_id)
+                         if value.current["version_raw"] == "v-c3-pipeline")
+            assert saved.current["source_reference"]["version_raw"] == built.rows[index].source_reference["version_raw"]
+            assert len(ReleaseService(storage).get_release(saved.current["release_version_id"]).items) == 1
+
+
+def test_single_c3_candidate_of_another_ui_is_rejected(storage):
+    """모델의 후보가 하나뿐이어도 요청 UI와 다른 계열에 연결하지 않고 전체 저장을 취소한다.
+
+    param
+    - storage: 단일 UI 모델을 등록할 전용 테스트 저장 서비스.
+    """
+    with storage.transaction() as tx:
+        model = tx.insert("equipment_group", {"group_name": "QA-C3 단일 UI 모델", "category": "POLY"})
+        tx.insert("version_family", {"group_id": model["group_id"], "family_name": "C3", "ui_type": "LEGACY"})
+    source = review_draft(review_row(group_name="POLY", model_name="QA-C3 단일 UI 모델", family_name="C3 통합UI",
+                                    equipment_code="QA-PIPE-C3-WRONG", version_raw="v-single-ui"))
+    built = build_save_request(source, "pipeline-c3-wrong-ui")
+    assert built.rows[0].values["ui_type"] == "INTEGRATED"
+    batches = count(storage, "import_batch")
+    with pytest.raises(StorageValidationError, match="하나로 정할 수 없습니다"):
+        DatabaseImportSaver(storage).save(built)
+    assert count(storage, "import_batch") == batches
+    assert EquipmentService(storage).get_snapshot("QA-PIPE-C3-WRONG", date(2026, 11, 2)) is None
+
+
+@pytest.mark.parametrize("csv_sources", [False, True], ids=["목록형 출처", "기존 CSV 출처"])
+def test_pipeline_combines_all_pm_software_and_snapshot_sources(storage, csv_sources):
+    """요청 생성 후 목록·CSV 출처를 저장하고 같은 SW의 모든 PM 원본 위치를 다시 조회한다.
+
+    param
+    - storage: 실제 공통 스키마를 사용하는 테스트 저장 서비스.
+    - csv_sources: 기존 CSV 형식의 요청과 새 목록 형식 중 검사할 계약.
+    """
+    code = f"QA-PIPE-SOURCE-{int(csv_sources)}"
+    source = review_draft(review_row(equipment_code=code, version_raw="v-source-pipeline"),
+                          review_row(2, equipment_code=code, pm_name="PM2", version_raw="v-source-pipeline"))
+    built = build_save_request(source, f"pipeline-sources-{csv_sources}")
+    if csv_sources:
+        built = replace(built, rows=tuple(replace(value, source_reference={
+            name: {"sheet": ref["sheet"], "cells": ",".join(ref["cells"])}
+            for name, ref in value.source_reference.items()
+        }) for value in built.rows))
+    receipt = DatabaseImportSaver(storage).save(built)
+    saved = EquipmentService(storage).get_snapshot(code, date(2026, 11, 2))
+    assert len(saved.software) == 1 and len(saved.software[0].pms) == 2
+    assert saved.software[0].source_reference["version_raw"] == {"sheet": source.sheet.sheet_name, "cells": ["H1", "H2"]}
+    assert saved.source_reference["equipment_code"] == {"sheet": source.sheet.sheet_name, "cells": ["C1", "C2"]}
+    assert [pm.source_reference["pm_name"]["cells"] for pm in saved.software[0].pms] == [["G1"], ["G2"]]
+    with storage.transaction() as tx:
+        batch = tx.get("import_batch", {"batch_id": receipt.batch_id})
+    assert batch["raw_data"] == {source.sheet.sheet_name: source.sheet.cells}
+
+
+def test_pipeline_preserves_confirmed_alias_raw_text_and_release_id(storage):
+    """확정된 KCTC 별칭을 원문 변경 없이 명시 릴리즈 ID로 저장하고 재조회한다.
+
+    param
+    - storage: 시연용 KCTC 모델·계열을 등록한 테스트 저장 서비스.
+    """
+    family_id = _family_id(storage, "Inline O2")
+    release = ReleaseService(storage).register_release(ReleaseInput(family_id=family_id, version_raw="v999.3.7", version_order=1))
+    release_id = release.release.current["release_version_id"]
+    source = review_draft(review_row(group_name="KCTC", model_name="Inline O2", family_name="Inline O2",
+                                    equipment_code="QA-PIPE-ALIAS", version_raw="v999.3_7"))
+    validator = ImportValidationService(storage)
+    with storage.transaction() as tx:
+        reference = validator.repository.load(tx, (source,), aliases={family_id: {"v999.3_7": "v999.3.7"}})
+    built = build_save_request(source, "pipeline-confirmed-alias", reference)
+    assert built.rows[0].family_id == family_id and built.rows[0].release_version_id == release_id
+    DatabaseImportSaver(storage).save(built)
+    saved = EquipmentService(storage).get_snapshot("QA-PIPE-ALIAS", date(2026, 11, 2))
+    assert saved.software[0].version_raw == "v999.3_7" and saved.software[0].release_version_id == release_id
+    assert saved.software[0].source_reference["version_raw"] == built.rows[0].source_reference["version_raw"]
+
+
+def test_mismatched_review_family_or_release_id_cancels_the_batch(storage):
+    """검토 후 달라진 계열 ID 또는 다른 계열의 릴리즈 ID를 차단하고 입력 작업까지 취소한다.
+
+    param
+    - storage: 연결 오류를 확인할 실제 테스트 저장 서비스.
+    """
+    o2, o3 = _family_id(storage, "O2"), _family_id(storage, "O3")
+    release = ReleaseService(storage).register_release(ReleaseInput(family_id=o3, version_raw="v-other-family-review"))
+    other_release_id = release.release.current["release_version_id"]
+    source = review_draft(review_row(equipment_code="QA-PIPE-BAD-REVIEW", version_raw="v-review-raw"))
+    built = build_save_request(source, "pipeline-invalid-review")
+    batches = count(storage, "import_batch")
+    for fields, message in (({"family_id": o3}, "계열 ID"),
+                            ({"family_id": o2, "release_version_id": other_release_id}, "버전 계열")):
+        invalid = replace(built, rows=(replace(built.rows[0], **fields),))
+        with pytest.raises(StorageValidationError, match=message):
+            DatabaseImportSaver(storage).save(invalid)
+        assert count(storage, "import_batch") == batches
+    assert EquipmentService(storage).get_snapshot("QA-PIPE-BAD-REVIEW", date(2026, 11, 2)) is None
+
+
+def test_conflicting_review_release_ids_for_same_software_cancel_all_rows(storage):
+    """같은 SW 원문에 서로 다른 검토 릴리즈 ID가 있으면 어느 한 연결을 임의로 선택하지 않는다.
+
+    param
+    - storage: 동일 계열의 명시 연결 상충을 확인할 테스트 저장 서비스.
+    """
+    family_id = _family_id(storage, "O2")
+    ids = [ReleaseService(storage).register_release(ReleaseInput(family_id=family_id, version_raw=version))
+           .release.current["release_version_id"] for version in ("v-review-link-one", "v-review-link-two")]
+    source = review_draft(review_row(equipment_code="QA-PIPE-LINK-CONFLICT", version_raw="v-review-alias"),
+                          review_row(2, equipment_code="QA-PIPE-LINK-CONFLICT", pm_name="PM2", version_raw="v-review-alias"))
+    built = build_save_request(source, "pipeline-conflicting-review-ids")
+    invalid = replace(built, rows=tuple(replace(value, family_id=family_id, release_version_id=release_id)
+                                        for value, release_id in zip(built.rows, ids)))
+    batches = count(storage, "import_batch")
+    with pytest.raises(StorageValidationError, match="릴리즈 연결이 상충"):
+        DatabaseImportSaver(storage).save(invalid)
+    assert count(storage, "import_batch") == batches
+    assert EquipmentService(storage).get_snapshot("QA-PIPE-LINK-CONFLICT", date(2026, 11, 2)) is None
+
+
+@pytest.mark.parametrize("db_review", [False, True], ids=["기본 검토 요청", "DB 검증 요청"])
+def test_c3_mixed_family_names_choose_matching_ui_before_name_priority(storage, db_review):
+    """구UI의 정확한 C3 이름이 통합UI의 접두 이름 후보를 가리지 않게 실제 저장 경로를 검증한다.
+
+    param
+    - storage: 두 UI 계열을 가진 고유 모델을 등록할 테스트 저장 서비스.
+    - db_review: DB 검증의 명시 계열 ID가 있는 요청과 기본 검토 요청 중 확인할 경로.
+    """
+    model_name = f"QA-C3 혼합 명명 {int(db_review)}"
+    code = f"QA-PIPE-C3-MIXED-NAME-{int(db_review)}"
+    with storage.transaction() as tx:
+        model = tx.insert("equipment_group", {"group_name": model_name, "category": "POLY"})
+        tx.insert("version_family", {"group_id": model["group_id"], "family_name": "C3", "ui_type": "LEGACY"})
+        integrated = tx.insert("version_family", {"group_id": model["group_id"], "family_name": "C3 통합UI", "ui_type": "INTEGRATED"})
+    source = review_draft(review_row(group_name="POLY", model_name=model_name, family_name="C3 통합UI",
+                                    equipment_code=code, version_raw="v-c3-mixed-name"))
+    request_id = f"pipeline-c3-mixed-name-{db_review}"
+    if db_review:
+        built, = ImportValidationService(storage).prepare((source,), request_id)
+        assert built.rows[0].family_id == integrated["family_id"]
+    else:
+        built = build_save_request(source, request_id)
+        assert built.rows[0].family_id is None
+    assert built.rows[0].values["family_name"] == "C3" and built.rows[0].values["ui_type"] == "INTEGRATED"
+    DatabaseImportSaver(storage).save(built)
+    saved = EquipmentService(storage).get_snapshot(code, date(2026, 11, 2))
+    assert saved.software[0].family_id == integrated["family_id"]
+    assert saved.software[0].version_raw == "v-c3-mixed-name"

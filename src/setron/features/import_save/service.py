@@ -8,7 +8,8 @@
 - 모델은 같은 분류 안에서 이름이 정확히 같은 등록 모델 하나만 쓴다. 별칭은 M5 → M-O5만 쓴다.
 - 계열은 모델(또는 그 기본 모델)이 관리하는 계열 중 이름이 정확히 같은 것, 없으면 "이름 + 공백"으로
   시작하는 계열을 후보로 두고 UI 구분으로 하나를 고른다. 하나로 정해지지 않으면 저장하지 않는다.
-- 설비 적용 버전은 같은 계열의 같은 버전 원문 릴리즈가 있을 때만 연결하고, 없으면 미등록으로 둔다.
+- 검토에서 확인한 계열·릴리즈 ID는 저장 시 DB에서 다시 확인한다. 릴리즈 ID가 없으면 같은 계열의
+  같은 버전 원문만 연결하며, 대응이 없으면 미등록으로 둔다. 원문은 연결 ID와 별도로 보존한다.
 
 이번 범위에서 하지 않는 것
 - 같은 호기·기준일 현황이나 같은 계열·버전 릴리즈가 이미 있을 때의 교체·재가져오기 (BE-009·010·025)
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
 
@@ -30,6 +32,7 @@ from setron.features.excel_import.schemas import DuplicateSaveError, SaveReceipt
 from setron.features.release.schemas import ItemInput, ReleaseInput
 from setron.features.release.service import ReleaseService
 from setron.features.storage.service import StorageService
+from setron.features.storage.inputs import identifier, merge_sources
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import Database
 
@@ -116,6 +119,19 @@ class DatabaseImportSaver:
         return tuple(self._snapshot(tx, group, batch_id) for group in groups.values())
 
     def _snapshot(self, tx, rows: list[SaveRow], batch_id: int) -> SnapshotInput:
+        """같은 호기·날짜의 검토 행을 SW·PM별 현황으로 구성한다.
+
+        param
+        - tx: 묶음 전체를 저장하는 공통 트랜잭션.
+        - rows: 같은 호기·날짜의 원문·출처·명시 연결을 가진 저장 요청 행.
+        - batch_id: 이번 Excel 입력 작업 ID.
+
+        return
+        - 모든 행의 출처와 확인된 릴리즈 연결을 보존한 현황 입력.
+
+        raises
+        - StorageValidationError: 기존 현황이 있거나 모델·계열·릴리즈 연결이 상충하는 경우.
+        """
         first = rows[0].values
         code = first["equipment_code"]
         existing = self.repository.find_equipment(tx, code)
@@ -132,9 +148,12 @@ class DatabaseImportSaver:
             family = self._family(tx, model, values, row)
             version = values.get("version_raw")
             _require(bool(version), f"{_where(row)}: SW 버전이 필요합니다.")
-            entry = software.setdefault((family["family_id"], version), {
-                "release": self._release_id(tx, family["family_id"], version),
-                "sources": _sources(row, SOFTWARE_FIELDS), "pms": []})
+            release_id = self._release_id(tx, family["family_id"], version, row.release_version_id)
+            key = family["family_id"], version
+            entry = software.setdefault(key, {"release": release_id, "sources": None, "pms": []})
+            _require(entry["release"] == release_id,
+                     f"{_where(row)}: 같은 적용 SW의 릴리즈 연결이 상충합니다.")
+            entry["sources"] = merge_sources(entry["sources"], _sources(row, SOFTWARE_FIELDS))
             if values.get("pm_name"):
                 entry["pms"].append(PmInput(pm_name=values["pm_name"], group_id=model["group_id"],
                                             model_name_raw=values.get("model_name"),
@@ -152,7 +171,7 @@ class DatabaseImportSaver:
             structure_type=first.get("structure_type"),
             geometry_type=first.get("geometry_type"),
             modification_type=first.get("modification_type"),
-            source_reference=_sources(rows[0], SNAPSHOT_FIELDS),
+            source_reference=merge_sources(*(_sources(row, SNAPSHOT_FIELDS) for row in rows)),
             software=tuple(SoftwareInput(family_id=family_id, version_raw=version, release_version_id=entry["release"],
                                          source_reference=entry["sources"], pms=tuple(entry["pms"]))
                            for (family_id, version), entry in software.items()),
@@ -161,6 +180,19 @@ class DatabaseImportSaver:
     # --- 릴리즈 노트 ---------------------------------------------------------------
 
     def _releases(self, tx, rows: Sequence[SaveRow], batch_id: int):
+        """계열·버전별 검토 행을 릴리즈와 Item 등록 입력으로 구성한다.
+
+        param
+        - tx: 묶음 전체를 저장하는 공통 트랜잭션.
+        - rows: 원문·출처·명시 연결을 가진 릴리즈 저장 요청 행.
+        - batch_id: 이번 Excel 입력 작업 ID.
+
+        return
+        - 모든 출처와 수정 항목을 보존한 릴리즈·Item 등록 입력 목록.
+
+        raises
+        - StorageValidationError: 명시 연결이 상충하거나 같은 계열의 릴리즈가 이미 존재하는 경우.
+        """
         groups: dict[tuple[int, str], list[SaveRow]] = {}
         for row in rows:
             version = row.values.get("version_raw")
@@ -172,26 +204,32 @@ class DatabaseImportSaver:
             groups.setdefault((family["family_id"], version), []).append(row)
         result = []
         for (family_id, version), group in groups.items():
-            _require(self._release_id(tx, family_id, version) is None,
+            linked_ids = {self._release_id(tx, family_id, version, row.release_version_id) for row in group}
+            _require(len(linked_ids) == 1, f"{version}: 같은 릴리즈의 검토 연결이 상충합니다.")
+            _require(next(iter(linked_ids)) is None,
                      f"{version}: 같은 계열에 이미 저장된 릴리즈입니다. 릴리즈 교체는 아직 지원하지 않습니다.")
-            first = group[0]
             dates = {r.values.get("release_date") for r in group} - {None}
             _require(len(dates) <= 1, f"{version}: 출시일이 행마다 다릅니다.")
             release = ReleaseInput(
                 family_id=family_id, version_raw=version, batch_id=batch_id,
                 released_at=date.fromisoformat(dates.pop()) if dates else None,
-                source_reference=_sources(first, RELEASE_FIELDS),
-                edited_fields=_edited(first, RELEASE_EDITED),
+                source_reference=merge_sources(*(_sources(row, RELEASE_FIELDS) for row in group)),
+                edited_fields=tuple(dict.fromkeys(name for row in group for name in _edited(row, RELEASE_EDITED))),
             )
-            items, seen = [], set()
+            items, seen = [], {}
             for row in group:
                 content = row.values.get("content")
                 if not content:
                     continue
                 key = (row.values.get("item_no"), content)
                 if key in seen:
+                    index = seen[key]
+                    previous = items[index]
+                    items[index] = replace(previous,
+                        source_reference=merge_sources(previous.source_reference, _sources(row, ITEM_FIELDS)),
+                        edited_fields=tuple(dict.fromkeys((*previous.edited_fields, *_edited(row, ITEM_EDITED)))))
                     continue
-                seen.add(key)
+                seen[key] = len(items)
                 items.append(ItemInput(content=content, batch_id=batch_id, item_no=row.values.get("item_no"),
                                        source_reference=_sources(row, ITEM_FIELDS),
                                        edited_fields=_edited(row, ITEM_EDITED)))
@@ -210,6 +248,20 @@ class DatabaseImportSaver:
         return matches[0]
 
     def _family(self, tx, model: dict, values: Mapping[str, Any], row: SaveRow) -> dict:
+        """모델 소유 범위·계열명·UI와 명시한 검토 ID가 모두 일치하는 계열을 찾는다.
+
+        param
+        - tx: 현재 저장 트랜잭션.
+        - model: 입력 모델에 대응하는 등록 모델 행.
+        - values: 계열명·UI 등 정규화한 저장값.
+        - row: 선택한 계열 ID를 포함한 저장 요청 행. ID가 없으면 이름으로만 확인.
+
+        return
+        - 입력 모델 또는 부모 모델이 관리하는 유일한 일치 계열.
+
+        raises
+        - StorageValidationError: UI·소유 범위·계열명·명시 ID가 불일치하거나 후보가 여러 개인 경우.
+        """
         name = (values.get("family_name") or "").strip()
         _require(bool(name), f"{_where(row)}: SW 계열이 필요합니다.")
         ui_raw = values.get("ui_type")
@@ -217,17 +269,44 @@ class DatabaseImportSaver:
         _require(not ui_raw or ui is not None, f"{_where(row)}: UI 구분 '{ui_raw}'을(를) 확인해 주세요.")
         owners = {model["group_id"]} | ({model["parent_group_id"]} if model.get("parent_group_id") else set())
         families = [f for owner in sorted(owners) for f in self.repository.rows(tx, "version_family", group_id=owner)]
+        # 정확한 계열명이 다른 UI의 후보를 가리켜도 올바른 UI의 접두 이름 후보를 버리지 않는다.
+        if ui:
+            families = [family for family in families if family["ui_type"] == ui]
         candidates = [f for f in families if f["family_name"] == name] or [
             f for f in families if f["family_name"].startswith(name + " ")]
-        if len(candidates) > 1 and ui:
-            candidates = [f for f in candidates if f["ui_type"] == ui]
         _require(len(candidates) == 1,
                  f"{_where(row)}: 모델 '{model['group_name']}'의 SW 계열 '{name}'"
                  + (f"({ui_raw})" if ui_raw else "") + "을(를) 하나로 정할 수 없습니다.")
+        if row.family_id is not None:
+            identifier(row.family_id, "family_id")
+            _require(candidates[0]["family_id"] == row.family_id,
+                     f"{_where(row)}: 검토한 계열 ID와 현재 모델·계열·UI의 대응이 다릅니다.")
         return candidates[0]
 
-    def _release_id(self, tx, family_id: int, version: str) -> int | None:
-        # version_raw는 대소문자·공백까지 구분하는 이진 열이라 계열로 읽은 뒤 원문을 그대로 비교한다.
+    def _release_id(self, tx, family_id: int, version: str, release_version_id: int | None = None) -> int | None:
+        """명시적인 검토 연결을 확인하거나 같은 계열의 정확한 원문 릴리즈를 찾는다.
+
+        param
+        - tx: 현재 저장 트랜잭션.
+        - family_id: 적용 SW 또는 릴리즈의 계열 ID.
+        - version: 그대로 보존할 버전 원문.
+        - release_version_id: 검토에서 확인한 연결 ID. None이면 정확한 원문만 조회.
+
+        return
+        - 같은 계열에서 확인한 릴리즈 ID. 명시 ID와 정확한 원문 대응이 모두 없으면 None.
+
+        raises
+        - StorageValidationError: 명시 ID가 잘못됐거나 없거나 다른 계열을 가리키는 경우.
+        """
+        if release_version_id is not None:
+            identifier(release_version_id, "release_version_id")
+            try:
+                release = tx.get("release_version", {"release_version_id": release_version_id})
+            except LookupError as exc:
+                raise StorageValidationError("검토한 릴리즈 ID가 현재 등록 자료에 없습니다.") from exc
+            _require(release["family_id"] == family_id, "검토한 릴리즈 ID의 버전 계열이 적용 SW와 다릅니다.")
+            return release_version_id
+        # 원문은 대소문자·공백까지 구분하며 확인되지 않은 별칭을 추정하지 않는다.
         rows = [r for r in self.repository.rows(tx, "release_version", family_id=family_id) if r["version_raw"] == version]
         return rows[0]["release_version_id"] if rows else None
 
@@ -245,13 +324,32 @@ def batch_raw_data(raw: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _sources(row: SaveRow, names: Sequence[str]) -> dict | None:
-    """필드별 ``{sheet, cells: "A1,B2"}`` 출처를 저장 형식 ``{sheet, cells: [...]}``으로 바꾼다."""
+    """새 목록형·기존 CSV형 출처를 공통 검증을 거친 저장 형식으로 변환한다.
+
+    param
+    - row: 필드별 원본 위치를 가진 저장 요청 행.
+    - names: 이번 저장 대상에 연결할 공통 항목 이름.
+
+    return
+    - 시트별 셀 주소를 모두 보존한 공통 출처 객체. 출처가 없으면 None.
+
+    raises
+    - StorageValidationError: 시트·셀 목록의 형식이 잘못된 경우.
+    """
     result = {}
     for name in names:
         ref = (row.source_reference or {}).get(name)
-        if ref:
-            result[name] = {"sheet": ref["sheet"], "cells": [c for c in str(ref["cells"]).split(",") if c]}
-    return result or None
+        if ref is not None:
+            locations = ref if isinstance(ref, list) else [ref]
+            converted = []
+            for location in locations:
+                _require(isinstance(location, dict), f"{name}: 원본 위치 객체가 필요합니다.")
+                cells = location.get("cells")
+                if isinstance(cells, str):
+                    cells = [cell.strip() for cell in cells.split(",") if cell.strip()]
+                converted.append({**location, "cells": cells})
+            result[name] = converted
+    return merge_sources(result or None)
 
 
 def _edited(row: SaveRow, columns: Mapping[str, str]) -> tuple[str, ...]:
