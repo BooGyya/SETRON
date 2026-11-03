@@ -577,11 +577,19 @@ class ImportPage(QWidget):
         return True
 
     def apply_edits(self):
+        """사용자가 바꾸거나 직접 편집한 칸만 검토 초안에 반영한다.
+
+        return
+        - 현재 값 또는 미해결 추출 오류의 보완 기록이 바뀌면 True. 변경이 없으면 False.
+        """
         if self.draft is None or self.locked or self.selected_row_id is None:
             return False
         draft = self.draft
+        row = draft.row(self.selected_row_id)
         for name, field in self.inputs.items():
-            draft = edit_value(draft, self.selected_row_id, name, field.text())
+            # 다른 칸의 수정만으로 자동 공란에 남은 추출 오류가 해제되지 않게 한다.
+            if field.isModified() or field.text() != (row.value(name) or ""):
+                draft = edit_value(draft, self.selected_row_id, name, field.text())
         if draft == self.draft:
             return False
         self.draft = draft

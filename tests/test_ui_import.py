@@ -14,13 +14,14 @@ from PySide6.QtWidgets import QApplication
 from setron.features.ai.examples import example_client
 from setron.features.ai.schemas import AITask, ExtractKind
 from setron.features.ai.service import extract_sheet
-from setron.features.excel_import.service import MemoryImportSaver
+from setron.features.excel_import.service import MemoryImportSaver, draft_from_review
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseSaveError
 from setron.infrastructure import excel_reader
 from setron.infrastructure.excel_reader import ExcelNotRunningError, NOT_RUNNING_MESSAGE, SheetData, WorkbookInfo
 from setron.ui.app import create_window
 from setron.ui.import_demo import EQUIPMENT_BOOK, RELEASE_BOOK, DemoExcel
 from setron.ui.theme import install_theme
+from test_import_validation import extraction_review
 
 
 class CountingExcel(DemoExcel):
@@ -240,6 +241,42 @@ def test_example_extract_is_labelled_and_blocked_until_reviewed(page, saver):
     assert saver.saved == []
 
 
+def test_unrelated_edit_does_not_confirm_automatic_blank_but_explicit_clear_does(page):
+    """다른 칸 수정은 오류를 유지하고 자동 공란을 직접 편집한 경우에만 해당 오류를 해제한다.
+
+    param
+    - page: 원문과 정규값을 분리한 검토 초안을 표시하는 가져오기 화면.
+    """
+    review = extraction_review(production_area="잘못된 생산 영역")
+    source = draft_from_review(review)
+    page.draft = source
+    page._changed(initial=True)
+    page.select_row(1)
+    assert page.inputs["production_area"].text() == ""
+    assert not page.inputs["production_area"].isModified()
+    page.inputs["base_date"].setText("2026-11-03")
+    assert page.apply_edits()
+    assert page.draft.row(1).edited_fields == ("base_date",)
+    assert any(i.field == "production_area" and i.blocks_save for i in page.issues)
+    assert not page.save_button.isEnabled()
+
+    field = page.inputs["production_area"]
+    field.setFocus()
+    QTest.keyClicks(field, "x")
+    QTest.keyClick(field, Qt.Key.Key_Backspace)
+    assert field.text() == "" and field.isModified()
+    assert page.apply_edits()
+    assert page.draft.row(1).edits["production_area"] is None
+    assert not any(i.blocks_save for i in page.issues)
+    assert page.save_button.isEnabled()
+    assert page.draft.row(1).original["production_area"] == "잘못된 생산 영역"
+
+    assert page.revert_selected()
+    assert page.draft == source
+    assert any(i.field == "production_area" and i.blocks_save for i in page.issues)
+    assert not page.save_button.isEnabled()
+
+
 def test_cancelled_confirmation_saves_nothing(page, saver):
     extracted(page)
     page.inputs["base_date"].setText("2026-10-21")
@@ -324,6 +361,12 @@ def test_issue_selects_row_and_highlights_source_cell(page):
 
 
 def test_release_note_flow_saves_items_without_equipment_fields(page, saver):
+    """릴리즈 전용 행을 저장 요청으로 만들고 공통 저장 계약의 셀 목록을 보존한다.
+
+    param
+    - page: 검토·저장할 가져오기 화면.
+    - saver: 저장 요청을 기록하는 메모리 저장소.
+    """
     page.kind_combo.setCurrentIndex(page.kind_combo.findData(ExtractKind.RELEASE_NOTE.value))
     extracted(page, book=RELEASE_BOOK, sheet="Release")
     assert page.row_model.headings[2:] == (
@@ -335,7 +378,7 @@ def test_release_note_flow_saves_items_without_equipment_fields(page, saver):
     page.save()
     QTest.qWait(10)
     assert [r.values["item_no"] for r in saver.saved[0].rows] == [1, 2]
-    assert saver.saved[0].rows[0].source_reference["content"] == {"sheet": "Release", "cells": "D2"}
+    assert saver.saved[0].rows[0].source_reference["content"] == {"sheet": "Release", "cells": ["D2"]}
 
 
 def test_kind_change_discards_draft_and_inputs_lock_while_extracting(page):

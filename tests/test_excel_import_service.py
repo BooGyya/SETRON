@@ -109,6 +109,7 @@ def test_format_errors_block(field, value):
 
 
 def test_ai_value_is_checked_against_original_cell():
+    """AI 값의 원본 대조와 수정 후 목록형 셀 출처 보존을 검증한다."""
     data = sheet(LINE2)
     draft = draft_for(data, [eq_row(2, site="평택")])
     review = levels(validate(draft), IssueLevel.REVIEW)
@@ -116,7 +117,7 @@ def test_ai_value_is_checked_against_original_cell():
     # 사용자가 고친 값은 원본과 다를 수 있다. 원래 셀 위치는 그대로 남는다.
     fixed = edit_value(draft, 1, "site", "평택시")
     assert not any(i.field == "site" for i in validate(fixed))
-    assert build_save_request(fixed, "r").rows[0].source_reference["site"] == {"sheet": "Memory", "cells": "B2"}
+    assert build_save_request(fixed, "r").rows[0].source_reference["site"] == {"sheet": "Memory", "cells": ["B2"]}
     outside = draft_for(data, [ExtractedRow(eq_row(2).values, {**eq_row(2).sources, "pm_name": "Z99"})])
     assert any(i.field == "pm_name" and "범위 밖" in i.message for i in validate(outside))
     no_source = draft_for(data, [ExtractedRow(eq_row(2).values, {})])
@@ -131,6 +132,7 @@ def test_merged_cell_source_uses_top_left_value():
 
 
 def test_same_pm_conflict_blocks_but_exact_duplicate_merges_with_sources():
+    """동일 PM 상충은 차단하고 정확한 중복의 원본 위치는 목록으로 함께 보존한다."""
     data = sheet(LINE2, LINE2, LINE3)
     conflict = draft_for(data, [eq_row(2), eq_row(3, version_raw="v4.56.6.42")])
     errors = levels(validate(conflict), IssueLevel.ERROR)
@@ -140,7 +142,7 @@ def test_same_pm_conflict_blocks_but_exact_duplicate_merges_with_sources():
     assert not has_errors(issues) and any(i.row_id == 2 and "정확히 같은 행" in i.message for i in issues)
     request = build_save_request(duplicate, "r")
     assert len(request.rows) == 1 and request.rows[0].row_ids == (1, 2)
-    assert request.rows[0].source_reference["version_raw"]["cells"] == "G2,G3"
+    assert request.rows[0].source_reference["version_raw"]["cells"] == ["G2", "G3"]
 
 
 def test_different_pm_version_is_non_blocking_exception():
