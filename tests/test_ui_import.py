@@ -468,3 +468,26 @@ def test_responsive_without_main_horizontal_scroll(window, page, size):
     QTest.qWait(60)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert page.row_table.width() <= page.width() and page.grid.width() <= page.width()
+
+
+def test_model_candidates_are_applied_only_after_confirmation(page):
+    """데이터 파트 번역표 후보는 확인창 승인 후에만 적용되고 사용자 수정으로 기록된다."""
+    from test_excel_import_service import draft_for, eq_row, sheet
+
+    data = sheet(["2026-10-21", "화성", "E1", "PM1", "M-C3 (6각) (통합UI)", None, "v3", None])
+    page.draft = draft_for(data, [eq_row(2, equipment_code="E1", model_name="M-C3 (6각) (통합UI)",
+                                         family_name=None, version_raw="v3")])
+    page._changed(initial=True)
+    assert page.candidate_button.isEnabled() and "(1행)" in page.candidate_button.text()
+
+    page.confirm = lambda text: False
+    assert not page.apply_model_candidates()
+    assert page.draft.row(1).value("model_name") == "M-C3 (6각) (통합UI)"
+
+    page.confirm = lambda text: page.confirms.append(text) or True
+    assert page.apply_model_candidates()
+    assert "번역표" in page.confirms[-1]
+    row = page.draft.row(1)
+    assert (row.value("model_name"), row.value("family_name"), row.value("ui_type")) == ("M-C3", "C3", "통합UI")
+    assert "model_name" in row.edits and row.original["model_name"] == "M-C3 (6각) (통합UI)"
+    assert not page.candidate_button.isEnabled()

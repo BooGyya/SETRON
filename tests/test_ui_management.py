@@ -444,3 +444,29 @@ def test_large_record_table_is_bounded_and_status_column_stays_in_view(page, app
     assert page.record_table.height() <= 340
     assert page.record_table.verticalScrollBar().maximum() > 0
     assert page.record_table.columnViewportPosition(1) + page.record_table.columnWidth(1) <= page.record_table.viewport().width() + 1
+
+
+def test_version_order_candidates_are_staged_for_review(page, app):
+    """버전 순서 후보는 수정 목록에만 들어가고, 묶음 검토·저장을 거쳐야 반영된다."""
+    from setron.features.release.order_candidates import suggest_version_orders
+
+    rows = (record("release_version", {"release_version_id": 2}, {
+        "family_id": 1, "version_raw": "v2", "version_suffix": None, "released_at": None, "version_order": None,
+        "item_mapping_status": "UNKNOWN", "batch_id": 5,
+        "source_reference": {"version_raw": {"sheet": "Release", "cells": ["A9"]}},
+    }, ("version_order",)), record("release_version", {"release_version_id": 3}, {
+        "family_id": 1, "version_raw": "v1", "version_suffix": None, "released_at": None, "version_order": None,
+        "item_mapping_status": "UNKNOWN", "batch_id": 5,
+        "source_reference": {"version_raw": {"sheet": "Release", "cells": ["A2"]}},
+    }, ("version_order",)))
+    page.gateway.version_order_candidates = lambda family: (rows, suggest_version_orders(
+        family, [r.current for r in rows]))
+    page.family_choice.setCurrentIndex(page.family_choice.findData(1))
+
+    assert page._load_order_candidates()
+    wait_for(app, lambda: not page.busy)
+
+    staged = {record.key["release_version_id"]: changes for record, changes in page.pending.values()}
+    assert staged == {3: {"version_order": 10}, 2: {"version_order": 20}}
+    assert "2건" in page.applicability_notice.text()
+    assert not page.gateway.saves

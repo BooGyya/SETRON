@@ -356,6 +356,8 @@ class ManagementPage(QWidget):
             self.saved.emit(value)
             self.notice.setText("수정 묶음을 저장했습니다. 최신값을 다시 조회합니다.")
             self.refresh()
+        elif operation == "orders":
+            self._stage_order_candidates(value)
         elif operation == "applicability":
             self.applicability_view = value
             self.candidate_list.clear()
@@ -575,6 +577,11 @@ class ManagementPage(QWidget):
         card.body.addWidget(self.applicability_notice)
         self.add_candidates_button = button("적용 후보를 수정 목록에 추가")
         card.body.addWidget(self.add_candidates_button)
+        self.order_candidates_button = button("선택 계열의 버전 순서 후보를 수정 목록에 추가")
+        self.order_candidates_button.setToolTip("릴리즈노트에 나열된 순서로 10, 20, 30 …을 제안합니다(데이터 파트 규칙). "
+                                                "순서가 확인된 릴리즈가 있는 계열은 제안하지 않습니다.")
+        card.body.addWidget(self.order_candidates_button)
+        self.order_candidates_button.clicked.connect(self._load_order_candidates)
         self.load_candidates_button.clicked.connect(self._load_applicability)
         self.add_candidates_button.clicked.connect(self._stage_applicability)
         self.applicability_view = None
@@ -606,6 +613,28 @@ class ManagementPage(QWidget):
         model, family = self.model_choice.currentData(), self.family_choice.currentData()
         if model is not None and family is not None:
             self._start("applicability", lambda: self.gateway.get_applicability(model, family))
+
+    def _load_order_candidates(self):
+        if self.busy or self.locked or self.state == "review" or self.gateway is None:
+            return False
+        family = self.family_choice.currentData()
+        if family is None:
+            return False
+        return self._start("orders", lambda: self.gateway.version_order_candidates(family))
+
+    def _stage_order_candidates(self, value):
+        records, suggestion = value
+        if suggestion.reason:
+            self.applicability_notice.setText(suggestion.reason)
+            return
+        by_id = {record.key["release_version_id"]: record for record in records}
+        for candidate in suggestion.candidates:
+            record = by_id[candidate.release_version_id]
+            self.pending[_identity(record.table, record.key)] = (record, {"version_order": candidate.version_order})
+        self._reviewed = None
+        self.applicability_notice.setText(
+            f"버전 순서 후보 {len(suggestion.candidates)}건을 수정 목록에 추가했습니다. 묶음 검토에서 확인한 뒤 저장하세요."
+            + "".join(f"\n· {warning}" for warning in suggestion.warnings))
 
     def _stage_applicability(self):
         if self.busy or self.locked or self.state == "review" or self.applicability_view is None:

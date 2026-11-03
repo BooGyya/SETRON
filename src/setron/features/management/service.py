@@ -9,8 +9,9 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from setron.features.aging.schemas import DEFAULT_THRESHOLDS, SETTING_KEY
-from setron.features.aging.service import equipment_age, parse_thresholds, threshold_problems
+from setron.features.aging.repository import thresholds_in
+from setron.features.aging.schemas import SETTING_KEY
+from setron.features.aging.service import equipment_age, parse_thresholds
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.schemas import EquipmentSourceCell
 from setron.features.export.schemas import StatusReport, TargetRow
@@ -475,8 +476,4 @@ class ManagementService:
 
     @staticmethod
     def _thresholds(tx):
-        try:
-            value = tx.get("app_setting", {"setting_key": SETTING_KEY})["setting_value"]
-        except LookupError:
-            return DEFAULT_THRESHOLDS
-        return None if threshold_problems(value) else parse_thresholds(value)
+        return thresholds_in(tx).thresholds

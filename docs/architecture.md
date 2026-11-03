@@ -345,7 +345,7 @@ Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디�
 
 `features/report/`는 AI 분석 보고서를 Word(docx)로 저장합니다. 이미 받은 설명 결과(`features/analysis/`, `features/forecast/`)만 쓰고 AI를 다시 호출하지 않습니다. 자료 출처(예제 응답·회사 AI), 질문과 조회 조건, 답변의 근거·추정·미확인, AI에 보낸 자료를 그대로 옮긴 수치 표, 참고 예측의 계산 방법·가정·한계, 자료에 없는 숫자 경고를 차례로 넣으므로 보고서 숫자가 화면 집계와 같습니다. AI 호출이 실패해도 수치 표는 남깁니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. `tests/test_report_service.py`가 검증합니다.
 
-`features/export/`는 현황 보고서를 Excel(xlsx)로 저장합니다. 화면에서 계산한 집계·위험·노후도·우선순위 결과를 다시 계산하지 않고 표로 옮기므로 같은 조건이면 화면과 숫자가 같습니다. 조회 조건과 모델·계열별 목표 N을 첫 시트에 남기고, 계열별 막대·상태 구성비 원형·날짜별 적용률 꺾은선 차트는 같은 시트의 표 셀을 참조해 Excel에서 편집할 수 있습니다. 적용률을 계산할 수 없으면 0%가 아니라 빈 셀과 '계산 불가'로 적습니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. 트리맵 차트는 아직 포함하지 않습니다. 관리 데이터 전체 내보내기는 `features/export/management.py`의 `save_management_data(storage, path)`가 맡습니다. DB의 현재 관리값을 한 트랜잭션에서 읽어 모델·계열, 설비 현황(PM·적용 SW마다 한 줄), 릴리즈, Item, 위험 기준, 관리 설정 시트로 정리하고 ID 대신 이름을 함께 적습니다. 원본 셀 위치·원문 값은 넣지 않으며(원문은 DB 전체 SQL 내보내기), `=` 등으로 시작하는 글자는 수식으로 실행되지 않게 글자로 저장합니다. `tests/test_management_export_mysql.py`가 검증합니다. `tests/test_export_service.py`가 검증합니다.
+`features/export/`는 현황 보고서를 Excel(xlsx)로 저장합니다. 화면에서 계산한 집계·위험·노후도·우선순위 결과를 다시 계산하지 않고 표로 옮기므로 같은 조건이면 화면과 숫자가 같습니다. 조회 조건과 모델·계열별 목표 N을 첫 시트에 남기고, 계열별 막대·상태 구성비 원형·날짜별 적용률 꺾은선 차트는 같은 시트의 표 셀을 참조해 Excel에서 편집할 수 있습니다. 적용률을 계산할 수 없으면 0%가 아니라 빈 셀과 '계산 불가'로 적습니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. 트리맵 차트는 아직 포함하지 않습니다. 관리값 요약 내보내기(상단 내보내기 메뉴 '관리값 요약 Excel')는 `features/export/management.py`의 `save_management_summary(storage, path)`가 맡습니다. 13개 관리 테이블과 보관 원본을 그대로 옮기는 '관리 자료 XLSX'(`features/export/management_tables.py`의 `save_management_data`)와 다른 출력입니다. DB의 현재 관리값을 한 트랜잭션에서 읽어 모델·계열, 설비 현황(PM·적용 SW마다 한 줄), 릴리즈, Item, 위험 기준, 관리 설정 시트로 정리하고 ID 대신 이름을 함께 적습니다. 원본 셀 위치·원문 값은 넣지 않으며(원문은 DB 전체 SQL 내보내기), `=` 등으로 시작하는 글자는 수식으로 실행되지 않게 글자로 저장합니다. `tests/test_management_export_mysql.py`가 검증합니다. `tests/test_export_service.py`가 검증합니다.
 
 데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
 
@@ -577,12 +577,40 @@ DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 
 - 같은 호기·기준일 현황이 이미 있으면 `load_reference()`로 기존값을 불러와 검토한 요청만, 검토 당시 값과 DB 값이 같을 때 갱신한다. 검토 없이 보냈거나 검토 후 DB 값이 바뀌었으면 묶음 전체를 보류한다. 재가져오기 규칙(PM 위치별 갱신, 사업장 고정, 공통정보 출처 등)은 README의 "날짜별 현황 저장·재가져오기 갱신 (BE-009)"에 있다.
 - 같은 계열·버전 릴리즈가 이미 있으면 묶음 전체를 저장하지 않는다. 릴리즈 교체(BE-010), 저장 후 직접 수정(BE-025), 릴리즈 노트 문서 등록, Item 대상 모델 범위 지정은 이 저장소 범위가 아니다.
 - 앱(`python -m setron`)은 `SETRON_DB_NAME`이 설정돼 있으면 `ui/import_page.saver_from_env()`로 이 저장소를 쓰고, 없으면 메모리 저장소를 쓴다. DB 접속은 첫 저장 때 한다.
-- 같은 설정이면 조회 화면도 `ui/database_source.py`의 `DatabaseDashboardSource`로 DB 자료를 읽는다. '조회 적용'마다 DB를 다시 읽으므로 저장 후 조회 적용을 누르면 반영된다. 조회 선택지는 VER3 선택지를 유지하고, Site는 이름이 같을 때만, 설비군은 `GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않거나 PM·HPA 연결을 확인해야 하는 현황은 빼고 건수를 안내한다. 목표 N·위험 기준은 DB에 없어 지정하지 않으므로 적용률은 계산 불가, 위험은 미확인으로 나온다. 목표 초안은 다시 읽은 모델·계열 목록에 맞춘다(고른 값 유지, 새 항목 미지정). 시작할 때 DB를 읽지 못하면 합성 예시로 시작하고 안내한다.
-- 위험은 `features/risk/repository.py`의 `RiskRepository`가 DB의 `risk_rule`과 `release_version_item`을 읽어 만든 `RiskAssessor`로 판정한다. 사용 중인 위험 지정이 없으면 '위험 없음'으로 단정하지 않고 모두 미확인으로 둔다. 목표 N은 DB에 저장하지 않으므로 화면에서 고른다.
+- 같은 설정이면 조회 화면도 `ui/database_source.py`의 `DatabaseDashboardSource`로 DB 자료를 읽는다. '조회 적용'마다 DB를 다시 읽으므로 저장 후 조회 적용을 누르면 반영된다. 조회 선택지는 DB 저장 현황으로 만든다(아래 '조회 선택지 DB 연결'). 설비군은 `GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않거나 PM·HPA 연결을 확인해야 하는 현황은 빼고 건수를 안내한다. 목표 N·위험 기준은 DB에 없어 지정하지 않으므로 적용률은 계산 불가, 위험은 미확인으로 나온다. 목표 초안은 다시 읽은 모델·계열 목록에 맞춘다(고른 값 유지, 새 항목 미지정). 시작할 때 DB를 읽지 못하면 합성 예시로 시작하고 안내한다.
+- 위험은 DB의 `risk_rule`과 `release_version_item`으로 만든 `RiskAssessor`로 판정한다. 규칙 변환은 릴리즈 교체 재판정과 같은 `features/release/refresh.py`의 `rule_from_row()`(잘못된 연결은 미확인)·`families_from_rows()`를 쓴다. 사용 중인 위험 지정이 없으면 '위험 없음'으로 단정하지 않고 모두 미확인으로 둔다. 목표 N은 DB에 저장하지 않으므로 화면에서 고른다.
 - 상단 '데이터 내보내기'는 `SETRON_DB_*` 설정이 있을 때 관리 데이터 Excel(`data_exporter_from_env`)과 DB 전체 SQL(`sql_exporter_from_env`) 중 하나를 골라 실행한다.
 - `SETRON_AI_*` 설정이 있으면 `ui/ai_connection.py`의 `ai_providers_from_env()`가 회사 AI 클라이언트 하나로 가져오기 추출·질문 해석·분석 공급자를 만들어 화면에 넘긴다. 설정이 없으면 예제 응답, 잘못되면 예제 응답으로 시작하고 이유를 안내한다. 클라이언트는 앱을 닫을 때 정리한다. AI 호출은 아직 화면 스레드에서 실행된다.
 - `database/reset_demo_db.py`는 시연·확인용 DB의 관리 테이블을 지우고 스키마와 시연용 기준 자료를 다시 넣는다. `--confirm`에 접속 설정의 DB 이름을 다시 적어야 실행되고, 관리 테이블 외의 테이블은 건드리지 않는다.
 - `database/seed_demo_catalog.sql`은 교육용 자료의 모델 표기로 만든 시연용 모델 9개·계열 9개다. 확정 기준 자료가 아니며 개발 DB에만 적용한다.
+
+### AI 화면의 원인 설명·예측·Word 보고서 연결 (BE-018·019·020·022)
+
+`ui/analysis_data.py`가 대시보드 스냅샷과 공급자 자료를 분석 입력으로 바꾼다. 화면과 같은 숫자를 쓰도록 선택 설비·계산에 쓴 목표 N·날짜별 관측을 그대로 옮기고, DB 공급자가 함께 둔 위험 판정기(`source.assessor`)·Item 자료(`source.item_catalog`, 릴리즈 목록의 Item)를 넘긴다. 합성 예시 공급자에는 위험·Item 자료가 없어 '미계산'으로 보낸다.
+
+- 분석: `analysis_hooks()`의 `explainer`가 `features.analysis.explain()`을 불러 사업장별·버전 분포·위험·통일 지연 근거·날짜별 추이를 AI에 보내고, 답변 숫자를 보낸 자료와 대조해 AI 화면 '숫자 확인'에 보여 준다. 분석 공급자(`ai_analyzer`)를 직접 넘기면 기존 방식(`facts_from_snapshot` + `analyze`)으로 분석한다.
+- 예측: '통일 예측 (참고)'가 같은 조회 조건의 모든 관측일(`DashboardSource.scoped_records`)로 `forecast()`를 계산하고 `explain_forecast()`로 설명을 받는다. 기간 끝은 스냅샷 기준일이다.
+- 보고서: 'Word 보고서 저장'이 마지막 분석·예측 결과로 `save_word_report()`를 부른다. AI를 다시 호출하지 않는다.
+- 질문 해석: AI 클라이언트가 있으면 `choice_parser()`가 현재 화면의 Site·Line·설비군 선택지를 `QueryChoices`로 함께 보낸다.
+- 앱(`main`)은 `ai_client`를 넘기고, 설정이 없으면 예제 응답 클라이언트로 같은 흐름을 쓴다. AI 호출은 아직 화면 스레드에서 실행된다.
+
+### 조회 선택지 DB 연결
+
+DB 공급자는 `ui/database_source.py`의 `database_catalog()`로 저장 현황의 실제 Site·Line을 조회 선택지로 만든다.
+
+- Site: VER3 선택지(평택·화성·기흥)는 키를 그대로 두고, DB에만 있는 Site를 이름 그대로(키 = 이름) 뒤에 붙인다.
+- Line: 관측된 (Site, Line) 조합. 키는 `Site 키:Line`이고 Fab 매핑 자료가 없어 Fab은 지정하지 않는다.
+- 설비군: VER3 선택지 그대로.
+- 조회 중에는 선택지를 고정한다(`refresh()`는 지금 선택지로 다시 읽는다). 선택지에 없는 Site의 현황은 빼고 건수를 안내한다.
+- 가져오기 저장이나 관리 저장이 끝나면 앱이 `reload_catalog()`로 선택지를 다시 만든다. 선택지가 바뀌면 적용 조건이 무효가 된다. 관리 저장 뒤에는 적용 조건·목표 N이 초안과 같고 새 선택지에서도 유효할 때 같은 조건을 자동으로 다시 적용한다. 그렇지 않으면 조회 적용을 안내한다.
+- 선택지를 받지 않는 로더(`lambda: load_dashboard_source(storage)`, 테스트용)는 읽을 때마다 로더가 만든 선택지를 쓴다.
+
+### 데이터 파트 후보 연동 (번역표·버전 순서)
+
+데이터 파트(`ai/svhm`)의 결정적 규칙 두 가지를 **후보로만** 가져왔다(팀 결정 2026-11-03). 사용자가 확인해야 값이 바뀐다.
+
+- 모델명 번역표: `features/extraction/model_candidates.py`가 `ai/svhm/core/refdata.py`의 원문 모델 표기 대응을 시연용 시드 모델 이름(M-C3·M-C4 등, 9계열)으로 옮긴 표다. `features/excel_import/candidates.py`의 `apply_model_candidates(draft)`가 모델명은 등록 모델 이름으로 바꾸고 빈 설비군·계열·UI·구조·개조만 채운다. 가져오기 화면의 '번역표 후보 적용 (n행)' 버튼이 확인창 승인 후 적용하며, 바뀐 값은 사용자 수정으로 기록되고 원문은 그대로 남는다. 시드에 없는 모델(KCTC Inline Ox·Cluster Ox)은 후보를 내지 않고, C3 UI 미표기의 '통합UI'처럼 확정 사항에 없는 값은 확인창에 주의 문구로 보여 준다.
+- 버전 순서: `features/release/order_candidates.py`의 `suggest_version_orders()`가 저장된 릴리즈의 버전 셀 행 순서(릴리즈노트 나열 순서)로 10, 20, 30 …을 제안하고 출시일이 거꾸로 가면 경고한다(`ai/svhm/excel/release_parser.py`와 같은 규칙). 순서가 확인된 릴리즈가 있거나, 원본 위치가 없거나, 여러 입력 작업·시트에서 온 계열은 제안하지 않는다. 관리 화면의 '선택 계열의 버전 순서 후보를 수정 목록에 추가'가 후보를 수정 목록에 넣고, 기존 묶음 검토·저장(`ManagementService.save`)을 거쳐야 반영된다.
 
 ### DB 전체 SQL 내보내기 (Jira S15P31B106-76)
 

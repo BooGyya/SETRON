@@ -88,6 +88,15 @@ class ManagementGateway:
         with self._storage() as storage:
             return ManagementService(storage).get_applicability(model_id, family_id)
 
+    def version_order_candidates(self, family_id):
+        """계열의 릴리즈 기록과 릴리즈노트 나열 순서 후보(데이터 파트 규칙)를 함께 돌려준다. 저장하지 않는다."""
+        from setron.features.release.order_candidates import suggest_version_orders
+
+        with self._storage() as storage:
+            records = ManagementService(storage).list_records("release_version", limit=1000,
+                                                              filters={"family_id": family_id})
+        return records, suggest_version_orders(family_id, [record.current for record in records])
+
     def export_management(self, path):
         from setron.features.export.management_tables import save_management_data
         from setron.features.export.schemas import ExportResult, ExportStatus

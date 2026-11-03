@@ -72,7 +72,7 @@ def build_management_workbook(storage, *, now=datetime.now) -> Workbook:
     return book
 
 
-def save_management_data(storage, path: str | Path) -> ExportResult:
+def save_management_summary(storage, path: str | Path) -> ExportResult:
     """관리 데이터를 xlsx 파일로 저장한다. 실패해도 예외 대신 원인을 담은 결과를 돌려준다."""
     path = Path(path)
     if path.suffix.lower() != ".xlsx":

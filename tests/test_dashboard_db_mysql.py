@@ -7,14 +7,15 @@ import pytest
 
 from setron.features.ai.schemas import ExtractKind
 from setron.features.import_save.service import DatabaseImportSaver
-from setron.features.risk.repository import RiskRepository
+from setron.features.equipment.repository import EquipmentRepository
 from setron.features.risk.schemas import MappingStatus, RiskStatus, RuleType
 from setron.ui.database_source import (
     DatabaseDashboardSource,
     dashboard_source_from_env,
     load_dashboard_source,
 )
-from setron.ui.query_state import AppliedQuery, QuerySelection, TargetN
+from setron.ui.dashboard_data import EquipmentLocation
+from setron.ui.query_state import AppliedQuery, QuerySelection, TargetN, preview_catalog
 from test_import_save_mysql import EQUIPMENT, request, row, storage  # noqa: F401  시드 적용 fixture 재사용
 from test_schema_mysql import schema_database  # noqa: F401
 
@@ -41,26 +42,53 @@ def test_empty_db_has_no_observation(storage):  # noqa: F811
         source.snapshot(ALL)
 
 
-def test_saved_equipment_feeds_dashboard_and_unknown_site_is_skipped(storage):  # noqa: F811
+def test_saved_equipment_feeds_dashboard_and_db_only_site_becomes_choice(storage):  # noqa: F811
     save(storage, "dash-1-hwaseong",
          equipment(1, "D-C4", "M-C4", "C4"),
          equipment(3, "D-HPA", "HPA", "HPA", group_name="HPA"))
     save(storage, "dash-1-pyeongtaek",
          equipment(2, "D-O2", "M-O2", "O2", site="평택", line="P1"))
-    save(storage, "dash-1-unknown-site",
-         equipment(4, "D-BUSAN", "M-O2", "O2", site="부산"))
+    save(storage, "dash-1-db-only-site",
+         equipment(4, "D-BUSAN", "M-O2", "O2", site="부산", line="B1"))
 
     source = load_dashboard_source(storage)
     snapshot = source.snapshot(ALL)
 
-    assert {r.equipment_code for r in source.records} == {"D-C4", "D-O2", "D-HPA"}
-    assert "미연결 또는 확인 필요 1건 제외" in source.source_label
+    assert {r.equipment_code for r in source.records} == {"D-C4", "D-O2", "D-HPA", "D-BUSAN"}
+    assert "제외" not in source.source_label
     assert snapshot.base_date == date(2026, 10, 21)
-    assert (snapshot.summary.equipment_count, snapshot.summary.hpa_excluded) == (2, 1)
+    assert (snapshot.summary.equipment_count, snapshot.summary.hpa_excluded) == (3, 1)
     by_code = {r.equipment_code: r for r in source.records}
-    assert source.locations[by_code["D-O2"].equipment_id].site_key == "pyeongtaek"
-    assert source.locations[by_code["D-O2"].equipment_id].raw_area == "P1"
+    assert source.locations[by_code["D-O2"].equipment_id] == EquipmentLocation("pyeongtaek", "P1", None, "pyeongtaek:P1")
+    assert source.locations[by_code["D-BUSAN"].equipment_id].site_key == "부산"
     assert by_code["D-HPA"].is_hpa
+    # 선택지: VER3 Site 키는 유지하고 DB에만 있는 Site·관측된 Line을 덧붙인다.
+    assert [o.key for o in source.catalog.sites][:3] == [o.key for o in preview_catalog().sites]
+    assert ("부산", "부산") in {(o.key, o.label) for o in source.catalog.sites}
+    assert {("pyeongtaek:P1", "pyeongtaek"), ("부산:B1", "부산")} <= {(o.key, o.site_key) for o in source.catalog.lines}
+    assert all(o.fab_key is None for o in source.catalog.lines)
+    busan = AppliedQuery(QuerySelection(site_key="부산", line_key="부산:B1"), 2, 0, "부산 B1")
+    assert source.snapshot(busan).summary.equipment_count == 1
+
+
+def test_catalog_stays_fixed_until_reload(storage):  # noqa: F811
+    # storage는 모듈 단위로 공유되므로 이 테스트만의 설비 코드·Site를 쓴다.
+    live = DatabaseDashboardSource(lambda catalog=None: load_dashboard_source(storage, catalog))
+    before = live.catalog
+    assert "울산" not in {o.key for o in before.sites}
+
+    save(storage, "catalog-new-site", equipment(1, "D-ULSAN", "M-O2", "O2", site="울산", line="U1"))
+    live.refresh()
+
+    assert live.catalog == before  # 조회 중 선택지 고정: 새 Site 현황은 아직 연결하지 않는다
+    assert "D-ULSAN" not in {r.equipment_code for r in live.records}
+    assert "제외" in live.source_label
+
+    reloaded = live.reload_catalog()
+
+    assert reloaded is live.catalog and "울산" in {o.key for o in reloaded.sites}
+    assert "울산:U1" in {o.key for o in reloaded.lines}
+    assert "D-ULSAN" in {r.equipment_code for r in live.records}
 
 
 def test_groups_bind_to_registered_models(storage):  # noqa: F811
@@ -110,20 +138,19 @@ def test_risk_rules_in_db_decide_dashboard_risk(storage):  # noqa: F811
     save(storage, "release-o3", row(1, {"version_raw": "A2", "content": "D2"}, version_raw="v1", content="결함 버전",
                                     model_name="M-O3", family_name="O3"), kind=ExtractKind.RELEASE_NOTE)
     with storage.transaction() as tx:
-        o3 = [f for f in RiskRepository(storage)._rows(tx, "version_family") if f["family_name"] == "O3"][0]
-        release = [r for r in RiskRepository(storage)._rows(tx, "release_version", family_id=o3["family_id"])
+        rows = EquipmentRepository().rows
+        o3 = [f for f in rows(tx, "version_family") if f["family_name"] == "O3"][0]
+        release = [r for r in rows(tx, "release_version", family_id=o3["family_id"])
                    if r["version_raw"] == "v1"][0]
         base = {"family_id": o3["family_id"], "risk_reason": "가상 결함", "target_reference": {"family": "O3"},
                 "release_version_id": release["release_version_id"], "mapping_status": "VERIFIED"}
         tx.insert("risk_rule", {**base, "rule_type": "DIRECT_VERSION"})
         tx.insert("risk_rule", {**base, "rule_type": "DIRECT_VERSION", "is_enabled": False, "risk_reason": "끈 지정"})
 
-    rules = RiskRepository(storage).load_rules()
-    assert [(r.rule_type, r.is_enabled, r.mapping_status) for r in rules] == [
-        (RuleType.DIRECT_VERSION, True, MappingStatus.VERIFIED), (RuleType.DIRECT_VERSION, False, MappingStatus.VERIFIED)]
-    assert RiskRepository(storage).load_version_items()
-
     after = load_dashboard_source(storage)
+    # 판정기는 사용 중인 지정만 쓴다 (끈 지정은 판정에서 뺀다).
+    assert [(r.rule_type, r.is_enabled, r.mapping_status) for r in after.assessor.rules] == [
+        (RuleType.DIRECT_VERSION, True, MappingStatus.VERIFIED)]
     by_code = {r.equipment_code: r.equipment_id for r in after.records}
     assert "위험 기준 1건" in after.source_label
     assert after.risks[by_code["D-O3"]] is RiskStatus.RISK
