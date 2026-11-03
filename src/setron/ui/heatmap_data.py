@@ -6,7 +6,7 @@ from enum import Enum
 
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
-from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource
+from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource, family_name
 from setron.ui.query_state import AppliedQuery
 
 
@@ -135,7 +135,7 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                 target = comparison.target.version_raw if comparison.target else "미확인"
                 explanations.append(f"{p.pm.pm_name or '공통'} 목표 N: {target}"
                                     + (f" · {comparison.message}" if comparison.message else ""))
-            items.append(TileFamily(family.family_id, f"{names} · 계열 {family.family_id}", family.status,
+            items.append(TileFamily(family.family_id, f"{names} · 계열 {family_name(source, family.family_id)}", family.status,
                                     tuple(versions), tuple(explanations)))
         raw_area = record.line if record.is_hpa else loc.raw_area
         location = (f"{sites[loc.site_key]} · Fab {fabs.get(loc.fab_key, '미지정')} · "

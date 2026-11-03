@@ -95,7 +95,10 @@ def test_groups_bind_to_registered_models(storage):  # noqa: F811
     source = load_dashboard_source(storage)
 
     assert len(source.bindings["o5"]) == 2  # M-O5와 M-O5 Prime
-    assert source.bindings["inline-ox"] == () and source.bindings["cluster-ox"] == ()
+    # 등록 모델이 없는 설비군은 골라도 항상 0대라 DB 선택지에서 뺀다.
+    assert "inline-ox" not in source.bindings and "cluster-ox" not in source.bindings
+    assert {o.key for o in source.catalog.groups} == set(source.bindings)
+    assert {"c3", "c4", "o2", "o3", "o5", "inline-o2", "cluster-o2"} <= set(source.bindings)
     c4 = next(cell for cell in source.snapshot(ALL).groups if cell.group_keys == ("c4",))
     assert len(c4.equipment_ids) == 1
 

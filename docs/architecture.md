@@ -605,6 +605,14 @@ DB 공급자는 `ui/database_source.py`의 `database_catalog()`로 저장 현황
 - 가져오기 저장이나 관리 저장이 끝나면 앱이 `reload_catalog()`로 선택지를 다시 만든다. 선택지가 바뀌면 적용 조건이 무효가 된다. 관리 저장 뒤에는 적용 조건·목표 N이 초안과 같고 새 선택지에서도 유효할 때 같은 조건을 자동으로 다시 적용한다. 그렇지 않으면 조회 적용을 안내한다.
 - 선택지를 받지 않는 로더(`lambda: load_dashboard_source(storage)`, 테스트용)는 읽을 때마다 로더가 만든 선택지를 쓴다.
 
+### 화면 표시 공통 규칙 (2차 점검 반영)
+
+- 결과 배지: 공급자의 `result_label`을 쓴다. 합성 공급자(`DashboardSource`)는 "예시 결과", DB 공급자(`DatabaseDashboardSource`)는 "DB 자료".
+- 계열·모델 이름: `ui/dashboard_data.py`의 `family_name(source, id)`·`model_name(source, id)`로 찾는다. DB 공급자는 `family_names`·`model_names`를 갖고, 이름이 없는 합성 자료는 번호를 그대로 쓴다.
+- 요약 카드: `count_value(count, unknown, label)`로 0대인데 판단하지 못한 대상이 있으면 큰 숫자를 '미확인'(위험)·'판단 불가'(업그레이드 필요)로 보인다. 1대 이상이면 확인된 대수를 보이고 미확인 수는 설명 줄에 적는다.
+- DB 모드 설비군 선택지는 `GROUP_MODELS`의 모델이 DB에 등록된 것만 둔다.
+- HeatMap 타일 격자는 세로로 내용 높이만 쓴다(큰 창에서 타일이 늘어나지 않음).
+
 ### 데이터 파트 후보 연동 (번역표·버전 순서)
 
 데이터 파트(`ai/svhm`)의 결정적 규칙 두 가지를 **후보로만** 가져왔다(팀 결정 2026-11-03). 사용자가 확인해야 값이 바뀐다.

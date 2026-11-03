@@ -325,13 +325,15 @@ class ItemsPage(QWidget):
         site = self.site_filter.currentData()
         rows = [e for e in self.equipment if (state is None or e.application == state)
                 and (site is None or e.record.site == site)]
+        family_names = {p.family_id: p.family_name for p in self.data.versions.pairs} if self.data else {}
         heatmap = self.distribution_view.currentData() == "heatmap"
         self.distribution.set_results(self.equipment if heatmap else (), rows if heatmap else (), self.selected_equipment_id)
         self.distribution.set_scope(site, state)
         self.distribution.setVisible(heatmap)
         self.equipment_model.set_rows(tuple((f"{e.record.equipment_code} · ID {e.record.equipment_id}",
             e.record.site, e.record.model_name, e.label,
-            "\n".join(f"{p.pm.pm_name or '일반 SW'} · 계열 {p.pm.family_id} · {p.pm.version_raw or '버전 미확인'} · "
+            "\n".join(f"{p.pm.pm_name or '일반 SW'} · 계열 {family_names.get(p.pm.family_id, p.pm.family_id)} · "
+                      f"{p.pm.version_raw or '버전 미확인'} · "
                       f"{APPLICATION_LABELS[p.application]} ({BASIS_LABELS[p.basis]})" for p in e.pms)
             or "PM/SW 관측 없음 · 업무 규칙상 대상 외") for e in rows), tuple(e.record.equipment_id for e in rows))
         self.scope_count.setText(f"표시 범위: {site if site is not None else '전체 Site'} · "

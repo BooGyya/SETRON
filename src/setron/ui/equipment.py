@@ -11,7 +11,7 @@ from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard import MetricCard
-from setron.ui.dashboard_data import missing_sw_count
+from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
 from setron.ui.heatmap_data import EquipmentSelection, GoalState
 from setron.ui.target_data import target_map
@@ -314,7 +314,7 @@ class EquipmentPage(QWidget):
             self.clear("설비 결과 표시 실패 · 재조회 필요")
             return False
         self.snapshot, self.data = snapshot, data
-        self.result_status.setText("예시 결과 · 조회 적용됨")
+        self.result_status.setText(f"{getattr(self.source, 'result_label', '예시 결과')} · 조회 적용됨")
         self.result_status.set_tone("info")
         self.selected_id = None
         self.open_all(self.origin)
@@ -376,10 +376,11 @@ class EquipmentPage(QWidget):
         unknown = sum(t.risk is RiskStatus.UNKNOWN and t.goal is not GoalState.EXCLUDED for t in tiles)
         hpa_count = sum(t.goal is GoalState.EXCLUDED for t in tiles)
         values = {"total": (f"{len(ids)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {hpa_count}대"),
-                  "risk": (f"{candidates}대", f"목표 달성과 별도 · 위험 미확인 {unknown}대"),
+                  "risk": (count_value(candidates, unknown, "미확인"), f"목표 달성과 별도 · 위험 미확인 {unknown}대"),
                   "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
                            f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건 · SW 미등록 {missing_sw_count(summary)}대\n단위: 설비·계열 건 · 판단 불가는 분모 제외"),
-                  "upgrade": (f"{summary.upgrade_needed}대", "전달 범위 내 N 미만인 물리 설비 · 중복 제거")}
+                  "upgrade": (count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
+                              upgrade_caption("전달 범위 내 N 미만인 물리 설비 · 중복 제거", summary.undetermined))}
         for key, (value, caption) in values.items():
             self.metrics[key].value.setText(value)
             self.metrics[key].caption.setText(caption)
@@ -462,12 +463,14 @@ class EquipmentPage(QWidget):
             for family in detail.status.families:
                 for item in family.pms:
                     pm, comparison = item.pm, item.comparison
-                    rows.append((pm.pm_name or "모듈 미확정 · 공통 SW", f"{models[pm.group_id]} · 계열 {family.family_id}",
+                    rows.append((pm.pm_name or "모듈 미확정 · 공통 SW",
+                                 f"{models[pm.group_id]} · 계열 {family_name(self.source, family.family_id)}",
                                  pm.version_raw if pm.version_raw is not None else "미입력",
                                  comparison.target.version_raw if comparison.target else "목표 미확인", comparison.label,
                                  comparison.message or "확인된 릴리즈 순서로 비교"))
         elif detail.record.is_hpa:
-            rows = [(pm.pm_name or "모듈 미확정 · 공통 SW", f"{models.get(pm.group_id, detail.record.model_name)} · 계열 {pm.family_id}",
+            rows = [(pm.pm_name or "모듈 미확정 · 공통 SW",
+                     f"{models.get(pm.group_id, detail.record.model_name)} · 계열 {family_name(self.source, pm.family_id)}",
                      pm.version_raw if pm.version_raw is not None else "미입력", "—", "분석 제외", "HPA는 N 비교에서 제외")
                     for pm in detail.record.pms]
         self.detail_model.set_rows(rows)
@@ -501,8 +504,9 @@ class EquipmentPage(QWidget):
         self.scope_note.setText(f"Item 표시 범위: {request.site if request.site is not None else '전체 Site'} · "
                                f"{APPLICATION_LABELS[request.state] if request.state else '전체 상태'}\n"
                                "Item 화면의 같은 기준일 관측입니다. 공통 조회 범위·목표 N은 변경하지 않으며 이 보기에서는 N 비교를 수행하지 않습니다.")
-        self.detail_model.headings = ("모듈 / SW 관측", "모델 ID · 계열", "설치 버전 원문", "대응 릴리즈", "Item 적용", "적용 근거")
-        self.detail_model.set_rows(tuple((p.pm.pm_name or "공통 SW", f"모델 {p.pm.group_id} · 계열 {p.pm.family_id}",
+        self.detail_model.headings = ("모듈 / SW 관측", "모델 · 계열", "설치 버전 원문", "대응 릴리즈", "Item 적용", "적용 근거")
+        self.detail_model.set_rows(tuple((p.pm.pm_name or "공통 SW",
+            f"{model_name(self.source, p.pm.group_id)} · 계열 {family_name(self.source, p.pm.family_id)}",
             p.pm.version_raw if p.pm.version_raw is not None else "미입력",
             f"{p.release.version_raw} · ID {p.release.release_version_id}" if p.release else "대응 미확인 / 대상 외",
             APPLICATION_LABELS[p.application], BASIS_LABELS[p.basis]) for p in application.pms))
