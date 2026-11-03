@@ -13,6 +13,7 @@ from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource
 from setron.ui.dashboard_demo import demo_dashboard_source
+from setron.ui.database_source import dashboard_source_from_env
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
 from setron.ui.target_data import describe_targets, initial_targets
@@ -51,12 +52,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
     window.setWindowTitle("SETRON · 설비 현황 미리보기")
-    window.notice.setText("작업 단위 7 · 목표 N 편집 · 합성 예시 데이터 · DB 미연결 · 임시 선택")
+    window.notice.setText("작업 단위 7 · 목표 N 편집 · 합성 예시 데이터 · DB 미연결 · 임시 선택" if demo
+                          else f"{getattr(source, 'notice', source.source_label)} · 목표 N 임시 선택")
     window.query_panel.set_target_describer(lambda targets: describe_targets(source, targets))
     window.query_panel.set_target_draft(initial_targets(source))
     window.query_panel.goal_button.setEnabled(True)
     window.query_panel.goal_button.setToolTip("모델·계열별 목표 N 임시 선택 · 새 계산은 조회 적용 후 · DB 저장 없음")
-    window.query_panel.apply_button.setToolTip("선택한 위치·설비군·목표 N으로 합성 예시 결과를 함께 다시 계산합니다. DB 미연결.")
+    window.query_panel.apply_button.setToolTip("선택한 위치·설비군·목표 N으로 합성 예시 결과를 함께 다시 계산합니다. DB 미연결." if demo
+                                              else "선택한 위치·설비군·목표 N으로 저장된 자료를 다시 읽어 계산합니다.")
     window.target_dialog = None
 
     def open_targets():
@@ -67,6 +70,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         state = window.query_state
         generation = state.catalog_revision
         current = lambda: state.catalog_revision == generation and state.catalog == source.catalog
+        if hasattr(source, "align_targets"):
+            # DB 공급자는 조회 때마다 다시 읽으므로 새로 저장된 모델·계열을 목표 초안에 맞춘다.
+            try:
+                source.refresh()
+                window.query_panel.set_target_draft(source.align_targets(state.target_draft))
+            except RuntimeError as error:
+                window.notice.setText(str(error))
+                return
         dialog = TargetDialog(source, state.target_draft, group_key=state.draft.group_key, is_current=current, parent=window)
         window.target_dialog = dialog
 
@@ -254,9 +265,12 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("SETRON")
     install_theme(app)
-    # SETRON_DB_* 접속 설정이 있으면 가져오기 저장을 DB로 한다. 대시보드 등 조회 화면은 아직 합성 자료다.
-    window = create_window(excel=DemoExcel() if args.demo_excel else None,
+    # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
+    source, problem = dashboard_source_from_env()
+    window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
                            import_saver=saver_from_env())
+    if problem:
+        window.notice.setText(problem)
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
