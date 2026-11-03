@@ -177,7 +177,7 @@ def _equipment(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -
             age = _age_cells(ages.get(record.equipment_id) if ages is not None else None, family.family_id,
                              ages is not None)
             rows.append([
-                record.equipment_code, record.site, record.line or "", record.model_name,
+                record.equipment_code, record.site, record.line, record.model_name,
                 _family_name(report, family.family_id), _versions(family), _target(family),
                 _family_label(family), _reason(family), "예" if family.pm_mismatch else "", *risk, *age,
             ])

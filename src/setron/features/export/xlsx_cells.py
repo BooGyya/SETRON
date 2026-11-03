@@ -4,6 +4,7 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.cell.rich_text import CellRichText
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
+from itertools import chain
 
 MAX_ROWS = 1_048_576
 MAX_CELL_CHARACTERS = 32_767
@@ -16,6 +17,8 @@ REPORT_OVERFLOW_COLUMNS = (
 
 def write_literal_cell(cell, value):
     """문자열은 빈 값·수식·오류 표기도 그대로 텍스트 셀로 보존한다."""
+    if isinstance(value, str) and len(value) > MAX_CELL_CHARACTERS:
+        raise ValueError(f"{cell.parent.title}!{cell.coordinate}: 긴 문자열을 먼저 분할해야 합니다.")
     cell.value = CellRichText([""]) if isinstance(value, str) and value == "" else value
     if isinstance(value, str):
         cell.data_type = "s"
@@ -58,7 +61,7 @@ class ReportTextWriter:
         sheet = self.book.create_sheet(OVERFLOW_SHEET)
         sheet.freeze_panes = "A2"
         sheet.sheet_view.showGridLines = False
-        for number, row in enumerate((REPORT_OVERFLOW_COLUMNS, *self.parts), 1):
+        for number, row in enumerate(chain((REPORT_OVERFLOW_COLUMNS,), self.parts), 1):
             for column, value in enumerate(row, 1):
                 cell = sheet.cell(number, column)
                 write_literal_cell(cell, value)

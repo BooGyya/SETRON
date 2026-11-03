@@ -405,8 +405,10 @@ class ManagementService:
             software = self.rows.rows(tx, "equipment_version", snapshot_id=snapshot_id)
             by_id = {row["equipment_version_id"]: row for row in software}
             by_identity = {(row["family_id"], row["version_raw"]): row for row in software}
+            pms = self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot_id)
+            referenced = {pm["equipment_version_id"] for pm in pms}
             groups = {}
-            for pm in self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot_id):
+            for pm in pms:
                 old = by_id[pm["equipment_version_id"]]
                 changes = selected.get(pm["pm_id"], {})
                 final = {**old, **self._software_changes(old, {k: v for k, v in changes.items() if k in _SOFTWARE})}
@@ -416,8 +418,12 @@ class ManagementService:
                 groups.setdefault(identity, []).append((pm["pm_id"], final, fixed))
             for identity, members in groups.items():
                 links = {final["release_version_id"] for _, final, fixed in members if fixed}
-                require(len(links) <= 1, "최종 SW를 공유하는 PM의 릴리즈 연결이 다릅니다. 연결을 함께 검토해 주세요.")
                 existing = by_identity.get(identity)
+                # 기존 비-PM SW도 선택하지 않은 관리값이다. 비정상 혼재 자료를
+                # 수정하는 경우에도 이 행의 명시적 연결을 덮어쓰지 않는다.
+                if existing and existing["equipment_version_id"] not in referenced:
+                    links.add(existing["release_version_id"])
+                require(len(links) <= 1, "최종 SW를 공유하는 PM의 릴리즈 연결이 다릅니다. 연결을 함께 검토해 주세요.")
                 release_id = next(iter(links)) if links else existing["release_version_id"] if existing else None
                 for pm_id, final, _ in members:
                     if pm_id in selected:

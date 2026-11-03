@@ -1,6 +1,7 @@
 """현황 보고서 Excel 출력을 검증한다 (BE-021 완료 조건 중 현황·표·그래프 부분)."""
 
 from datetime import date, datetime
+from dataclasses import replace
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -11,6 +12,7 @@ from setron.features.aging.schemas import DEFAULT_THRESHOLDS
 from setron.features.aging.service import equipment_age
 from setron.features.export.schemas import StatusReport, TargetRow
 from setron.features.export.service import build_status_report, save_status_report
+from setron.features.export.xlsx_cells import OVERFLOW_MARKER, OVERFLOW_SHEET, ReportTextWriter
 from setron.features.item.service import ItemCatalog
 from setron.features.priority.service import prioritize
 from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
@@ -189,3 +191,108 @@ def test_non_xlsx_name_is_rejected(tmp_path):
     result = save_status_report(report(), tmp_path / "현황.xls")
 
     assert not result.saved and ".xlsx" in result.message
+
+
+def test_report_text_is_literal_in_conditions_equipment_targets_and_family_labels(tmp_path):
+    """보고서의 모든 사용자 문자열을 수식·오류가 아닌 원문 텍스트로 재조회한다."""
+    record = replace(RECORDS[0], equipment_code="=1+1", site="=2+2", line="",
+                     model_name="=3+3", pms=(o2("=4+4"),))
+    missing_line = replace(record, equipment_id=2, equipment_code="EQ-2", line=None)
+    value = report(summary=summarize((record, missing_line), FAMILIES, TARGETS),
+                   scope=(("=5+5", "=6+6"),), family_names={F_O2: "#N/A"},
+                   targets=(TargetRow("=7+7", "=8+8", "=9+9"),))
+    path = tmp_path / "원문현황.xlsx"
+    assert save_status_report(value, path).saved
+    saved = load_workbook(path)
+    try:
+        assert [saved["설비별 판정"].cell(2, c).value for c in range(1, 7)] == [
+            "=1+1", "=2+2", "", "=3+3", "#N/A", "=4+4",
+        ]
+        assert saved["조회 조건"]["A3"].value == "=5+5"
+        assert saved["조회 조건"]["B3"].value == "=6+6"
+        assert saved["설비별 판정"]["C3"].value is None
+        assert saved["계열별 현황"]["A2"].value == "#N/A"
+        assert any(tuple(cell.value for cell in row) == ("=7+7", "=8+8", "=9+9")
+                   for row in saved["조회 조건"])
+        assert not any(cell.data_type in {"f", "e"} for sheet in saved for row in sheet for cell in row)
+    finally:
+        saved.close()
+
+
+def test_report_long_scope_splits_only_above_cell_limit_and_keeps_chart_layout(tmp_path):
+    """표·차트 참조를 유지하고 실제 참조 문구와 긴 값 분할을 좌표로 구분한다."""
+    exact = "=" + "가" * 32766
+    long = exact + "=1+2END"
+    marker = OVERFLOW_MARKER + "조회 조건!B4"
+    value = report(scope=(("한도", exact), ("긴 값", long), ("참조 문구 원문", marker)))
+    path = tmp_path / "긴현황.xlsx"
+    assert save_status_report(value, path).saved
+    saved = load_workbook(path)
+    try:
+        assert saved.sheetnames == ["조회 조건", "요약", "계열별 현황", "상태 구성비", "설비별 판정",
+                                    "우선순위", "날짜별 추이", OVERFLOW_SHEET]
+        assert saved["조회 조건"]["B3"].value == exact
+        assert saved["조회 조건"]["B4"].value == saved["조회 조건"]["B5"].value == marker
+        parts = list(saved[OVERFLOW_SHEET].iter_rows(min_row=2, values_only=True))
+        assert [row[:6] for row in parts] == [
+            ("조회 조건!B4", "조회 조건", 4, "값", 1, 2),
+            ("조회 조건!B4", "조회 조건", 4, "값", 2, 2),
+        ]
+        assert "".join(row[6] for row in parts) == long
+        assert all(cell.data_type == "s" for cell in saved[OVERFLOW_SHEET]["G"][1:])
+        assert saved["요약"]["B4"].number_format == "0.0%"
+        assert saved["날짜별 추이"]["A2"].number_format == "yyyy-mm-dd"
+        assert saved["계열별 현황"]._charts[0].series[0].val.numRef.f == "'계열별 현황'!$B$2:$B$3"
+        assert saved["날짜별 추이"]._charts[0].series[0].val.numRef.f == "'날짜별 추이'!$E$2:$E$3"
+    finally:
+        saved.close()
+
+
+def test_overflow_sheet_name_collision_preserves_source_and_uses_unique_destination(tmp_path):
+    """분할 시트와 이름이 같은 원본 시트도 덮어쓰거나 잘못 참조하지 않는다."""
+    book = Workbook()
+    book.active.title = OVERFLOW_SHEET
+    text = ReportTextWriter(book)
+    original = "=" + "A" * 40000
+    text.write(book.active["B2"], original, "원문")
+    text.finish()
+    path = tmp_path / "이름충돌.xlsx"
+    book.save(path)
+    book.close()
+    saved = load_workbook(path)
+    try:
+        assert saved.sheetnames == [OVERFLOW_SHEET, OVERFLOW_SHEET + "1"]
+        assert saved[OVERFLOW_SHEET]["B2"].value == OVERFLOW_MARKER + OVERFLOW_SHEET + "!B2"
+        parts = list(saved[OVERFLOW_SHEET + "1"].iter_rows(min_row=2, values_only=True))
+        assert all(row[:4] == (OVERFLOW_SHEET + "!B2", OVERFLOW_SHEET, 2, "원문") for row in parts)
+        assert "".join(row[6] for row in parts) == original
+    finally:
+        saved.close()
+
+
+def test_unpreservable_report_text_returns_failure_without_replacing_existing_file(tmp_path):
+    """원문을 담을 수 없으면 성공으로 잘라 저장하지 않고 기존 파일을 보존한다."""
+    path = tmp_path / "현황.xlsx"
+    path.write_bytes(b"existing workbook")
+    result = save_status_report(report(scope=(("원문", "긴 값" * 20000 + "\x00"),)), path)
+    assert not result.saved and "제어 문자" in result.message
+    assert path.read_bytes() == b"existing workbook"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_failed_status_workbook_write_preserves_destination_and_cleans_own_temp(tmp_path, monkeypatch):
+    """부분 XLSX 기록 실패에도 기존 출력과 무관한 임시파일을 유지한다."""
+    path = tmp_path / "현황.xlsx"
+    path.write_bytes(b"existing workbook")
+    unrelated = tmp_path / ".현황.xlsx.other.tmp"
+    unrelated.write_bytes(b"keep")
+
+    def fail_save(book, temporary):
+        temporary.write_bytes(b"partial workbook")
+        raise OSError("검증용 기록 실패")
+
+    monkeypatch.setattr(Workbook, "save", fail_save)
+    result = save_status_report(report(), path)
+    assert not result.saved and "기록 실패" in result.message
+    assert path.read_bytes() == b"existing workbook"
+    assert set(tmp_path.iterdir()) == {path, unrelated}
