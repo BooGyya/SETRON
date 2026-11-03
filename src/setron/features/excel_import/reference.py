@@ -72,6 +72,7 @@ class ReferenceData:
     - stored_releases: 기존 릴리즈와 연결 Item의 현재 관리값.
     - catalog_loaded: DB 계열 조회 완료 여부. 빈 조회 결과와 미연결을 구분.
     - models: 별도로 조회한 등록 모델 목록. None은 미연결, 빈 튜플은 조회한 모델이 없음.
+    - equipment_sites: 입력 호기의 모든 날짜에 저장된 고정 소속 사업장. 정확한 날짜 현황과 별도로 검사.
     """
 
     equipment_codes: frozenset[str]
@@ -81,6 +82,7 @@ class ReferenceData:
     stored_releases: tuple[StoredRelease, ...] = ()
     catalog_loaded: bool = False
     models: tuple[ModelReference, ...] | None = None
+    equipment_sites: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 def _matching_models(row, kind: ExtractKind, reference: ReferenceData) -> tuple[ModelReference, ...]:

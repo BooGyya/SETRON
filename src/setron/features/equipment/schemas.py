@@ -48,7 +48,7 @@ class SnapshotInput:
     ivar
     - equipment_code: 전체 사업장에서 실제 설비를 식별하는 호기 코드.
     - base_date: 현황의 기준 날짜.
-    - site: 기준 날짜의 사업장.
+    - site: 설비의 고정 소속 사업장. 다른 날짜의 입력으로도 변경할 수 없음.
     - model_name: 원본에 기록된 설비 모델명. 혼합형 표기도 그대로 보관.
     - batch_id: 원본 자료를 등록한 입력 작업 ID.
     - software: 계열별 적용 SW와 연결된 PM 목록.
@@ -114,6 +114,18 @@ class StoredSoftware(SoftwareInput):
     equipment_version_id: int
     batch_id: int
     pms: tuple[StoredPm, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
+class EquipmentSourceCell:
+    """현황 또는 PM 필드의 실제 입력 작업과 원본 셀 조회 결과."""
+
+    field: str
+    batch_id: int
+    sheet: str
+    address: str
+    value: object
+    available: bool
 
 
 @dataclass(frozen=True, kw_only=True)

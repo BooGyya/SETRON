@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from setron.features.ai.schemas import EQUIPMENT_STATUS_FIELDS, RELEASE_NOTE_FIELDS, ExtractKind, ReviewNote
 from setron.infrastructure.ai_client import ResponseSource
 from setron.features.version.schemas import VersionComparison
+from setron.features.equipment.schemas import SnapshotInput
 
 FIELDS = {ExtractKind.EQUIPMENT_STATUS: EQUIPMENT_STATUS_FIELDS, ExtractKind.RELEASE_NOTE: RELEASE_NOTE_FIELDS}
 
@@ -53,6 +54,7 @@ class Issue:
     - code: 화면 문구와 독립적인 검증 결과 코드.
     - previous_value, current_value: 기존 저장값과 가져온 값. 변경 비교가 아니면 None.
     - comparison: 등록 릴리즈에 근거한 N 비교 결과. 비교 대상이 아니면 None.
+    - workbook_id: 동명 통합문서를 구분할 임시 식별자. DB에 저장하지 않음.
     """
 
     level: IssueLevel
@@ -66,6 +68,7 @@ class Issue:
     previous_value: Any = None
     current_value: Any = None
     comparison: VersionComparison | None = None
+    workbook_id: str | None = None
 
     @property
     def excel_position(self) -> tuple[int, int] | None:
@@ -153,6 +156,7 @@ class ImportDraft:
     - notes: 기존 AI 추출기의 전체 확인 메모.
     - ai_source: 예제·실제 AI 응답 구분. 미확인은 None.
     - extraction_issues: BE-007 원본 대조 결과. 현재 수정값과 함께 재검증.
+    - workbook_id: 경로·Excel 프로세스가 다른 동명 파일을 구분할 임시 식별자. DB에 저장하지 않음.
     """
 
     kind: ExtractKind
@@ -162,6 +166,7 @@ class ImportDraft:
     notes: tuple[ReviewNote, ...] = ()
     ai_source: ResponseSource | None = None
     extraction_issues: tuple[Issue, ...] = ()
+    workbook_id: str | None = None
 
     @property
     def fields(self) -> tuple[str, ...]:
@@ -210,6 +215,10 @@ class SaveRequest:
     rows: tuple[SaveRow, ...]
     review_count: int
     ai_source: ResponseSource | None
+    # None은 DB 기존값 검토 전, 빈 튜플은 검토 당시 해당 날짜 현황이 없었음을 뜻한다.
+    expected_snapshots: tuple[SnapshotInput, ...] | None = None
+    # 파일명과 별도로 같은 통합문서의 시트들을 묶는 임시 식별자. DB 원본에는 넣지 않는다.
+    workbook_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from .schemas import SnapshotInput, StoredPm, StoredSnapshot, StoredSoftware
 class EquipmentRepository:
     """설비 테이블 레포지토리."""
 
-    def rows(self, tx, name, **filters):
+    def rows(self, tx, name, *, lock=False, **filters):
         """검색 조건에 맞는 테이블 행을 조회하고 저장 형식을 파이썬 값으로 복원한다.
 
         param
@@ -28,6 +28,8 @@ class EquipmentRepository:
         """
         table = tx.repository.table(name)
         query = select(table).filter_by(**filters).order_by(*table.primary_key.columns)
+        if lock:
+            query = query.with_for_update()
         return [decode_record(name, dict(row)) for row in tx.session.execute(query).mappings()]
 
     def find_equipment(self, tx, code, *, lock=False):
@@ -48,7 +50,7 @@ class EquipmentRepository:
         row = tx.session.execute(query).mappings().one_or_none()
         return decode_record("equipment", dict(row)) if row is not None else None
 
-    def load(self, tx, equipment, snapshot):
+    def load(self, tx, equipment, snapshot, *, lock=False):
         """설비 현황에 적용 SW와 PM 기록을 연결해 조회 결과를 구성한다.
 
         param
@@ -62,8 +64,8 @@ class EquipmentRepository:
         raises
         - StorageValidationError: PM에 연결된 SW 기록이 없거나 저장된 JSON을 읽을 수 없는 경우.
         """
-        versions = self.rows(tx, "equipment_version", snapshot_id=snapshot["snapshot_id"])
-        pms = self.rows(tx, "equipment_pm", snapshot_id=snapshot["snapshot_id"])
+        versions = self.rows(tx, "equipment_version", lock=lock, snapshot_id=snapshot["snapshot_id"])
+        pms = self.rows(tx, "equipment_pm", lock=lock, snapshot_id=snapshot["snapshot_id"])
         # NULL 연결의 PM을 조용히 버려 정상 현황처럼 반환하지 않는다.
         version_ids = {version["equipment_version_id"] for version in versions}
         if any(pm["equipment_version_id"] not in version_ids for pm in pms):

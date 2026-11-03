@@ -145,7 +145,8 @@ def value_at(snapshot: SheetSnapshot, address: str) -> Any:
 
 # --- 검토 초안 ------------------------------------------------------------
 
-def draft_from_extract(workbook_name: str, snapshot: SheetSnapshot, result: AIResult[ExtractResult]) -> ImportDraft:
+def draft_from_extract(workbook_name: str, snapshot: SheetSnapshot, result: AIResult[ExtractResult],
+                       *, workbook_id: str | None = None) -> ImportDraft:
     """정상 AI 결과로 검토 초안을 만든다. 실패한 결과는 초안으로 만들지 않는다."""
     if not result.ok or result.data is None:
         raise ValueError("정상 AI 추출 결과만 검토 초안으로 만들 수 있습니다.")
@@ -156,10 +157,12 @@ def draft_from_extract(workbook_name: str, snapshot: SheetSnapshot, result: AIRe
         ReviewRow(row_id=index, original=dict(row.values), sources=dict(row.sources))
         for index, row in enumerate(extract.rows, 1)
     )
-    return ImportDraft(extract.kind, workbook_name, snapshot, rows, extract.review_notes, result.source)
+    return ImportDraft(extract.kind, workbook_name, snapshot, rows, extract.review_notes, result.source,
+                       workbook_id=workbook_id)
 
 
-def draft_from_review(review: ExtractionReview, *, source: ResponseSource | None = None) -> ImportDraft:
+def draft_from_review(review: ExtractionReview, *, source: ResponseSource | None = None,
+                      workbook_id: str | None = None) -> ImportDraft:
     """BE-007의 원본 대조·정규화 결과를 수정·재검증할 초안으로 연결한다.
 
     param
@@ -187,7 +190,8 @@ def draft_from_review(review: ExtractionReview, *, source: ResponseSource | None
     notes = tuple(Issue(IssueLevel.ERROR if note.row_number is not None else IssueLevel.REVIEW,
                         note.reason, note.row_number, note.field, note.address,
                         code="EXTRACTION_UNRESOLVED") for note in review.issues)
-    return ImportDraft(review.kind, review.workbook_name, snapshot, rows, ai_source=source, extraction_issues=notes)
+    return ImportDraft(review.kind, review.workbook_name, snapshot, rows, ai_source=source, extraction_issues=notes,
+                       workbook_id=workbook_id)
 
 
 def _replace_row(draft: ImportDraft, row: ReviewRow) -> ImportDraft:
@@ -434,6 +438,14 @@ def _group(rows: Iterable[ReviewRow], names: tuple[str, ...]) -> dict[tuple, lis
     return groups
 
 
+def _workbook_site_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
+    """사업장 단위로 관리하는 현황 통합문서에 다른 사업장이 섞였는지 검사한다."""
+    if len({_safe(row, "site") for row in rows} - {None}) <= 1:
+        return []
+    return [Issue(IssueLevel.ERROR, "설비 현황 통합문서에 서로 다른 사업장이 섞여 있습니다. 사업장별 파일과 내용을 확인하세요.",
+                  row.row_id, "site", row.sources.get("site"), code="SITE_CONFLICT") for row in rows]
+
+
 def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
     """같은 호기·날짜의 기준정보와 고정 PM 위치의 충돌을 검사한다.
 
@@ -444,7 +456,16 @@ def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
     - 차단 충돌, 정확한 중복, 비차단 PM 버전 불일치 목록.
     """
     issues = []
-    snapshot_fields = ("site", "line", "group_name", "production_area")
+    # 사업장은 날짜별 변경값이 아니라 호기의 고정 소속이다.
+    for (code,), members in _group(rows, ("equipment_code",)).items():
+        sites = {_safe(row, "site") for row in members} - {None}
+        if len(sites) > 1:
+            for row in members:
+                issues.append(Issue(IssueLevel.ERROR,
+                                    f"같은 설비({code})의 사업장이 서로 다릅니다. 고정 소속 사업장을 확인하세요.",
+                                    row.row_id, "site", row.sources.get("site"), code="SITE_CONFLICT"))
+    snapshot_fields = ("line", "group_name", "production_area",
+                       "structure_type", "geometry_type", "modification_type")
     for (_, code), members in _group(rows, ("base_date", "equipment_code")).items():
         differing = [FIELD_LABELS[n] for n in snapshot_fields if len({_safe(r, n) for r in members} - {None}) > 1]
         if differing:
@@ -573,6 +594,18 @@ def _reference_issues(draft: ImportDraft, reference: ReferenceData | None) -> li
         return issues
     for row in draft.active_rows:
         code, family, version = (_safe(row, n) for n in ("equipment_code", "family_name", "version_raw"))
+        if draft.kind is ExtractKind.EQUIPMENT_STATUS and code is not None:
+            sites = set(reference.equipment_sites.get(code, ()))
+            # 순수 계산 호출자가 정확한 날짜 현황만 주입한 기존 계약도 지원한다.
+            sites.update(snapshot.site for snapshot in reference.snapshots if snapshot.equipment_code == code)
+            site = _safe(row, "site")
+            if len(sites) > 1 or sites and site is not None and site not in sites:
+                previous = next(iter(sites)) if len(sites) == 1 else tuple(sorted(sites))
+                reason = (f"설비({code})의 기존 기록에 서로 다른 사업장이 있습니다. 고정 소속 사업장을 확인해야 합니다."
+                          if len(sites) > 1 else
+                          f"설비({code})의 고정 소속 사업장은 {previous!r}입니다. 다른 사업장으로 변경할 수 없습니다.")
+                issues.append(Issue(IssueLevel.ERROR, reason, row.row_id, "site", row.sources.get("site"),
+                                    code="SITE_CONFLICT", previous_value=previous, current_value=site))
         if draft.kind is ExtractKind.EQUIPMENT_STATUS and code is not None and code not in reference.equipment_codes:
             issues.append(Issue(IssueLevel.REVIEW, f"등록되지 않은 설비 호기({code})입니다. 저장하면 새 설비로 등록됩니다.",
                                 row.row_id, "equipment_code", row.sources.get("equipment_code"), code="NEW_EQUIPMENT"))
@@ -653,7 +686,7 @@ def _stored_equipment_issues(draft, row, family_id, reference) -> list[Issue]:
                               and any(p.pm_name != pm for p in sw.pms) for sw in old.software):
         issues.append(Issue(IssueLevel.INFO, "기존 다른 PM의 같은 계열 버전과 차이가 있습니다. PM별 원문을 보존하며 이 차이만으로 저장을 막지 않습니다.",
                             row.row_id, "pm_name", row.sources.get("pm_name"), code="STORED_PM_VERSION_DIFFERENCE"))
-    for name in ("site", "line", "production_area"):
+    for name in ("line", "production_area", "structure_type", "geometry_type", "modification_type"):
         if getattr(old, name) != _safe(row, name):
             issues.append(_change(row, name, getattr(old, name), _safe(row, name)))
     software = [sw for sw in old.software if (
@@ -672,7 +705,7 @@ def _stored_equipment_issues(draft, row, family_id, reference) -> list[Issue]:
     if previous.version_raw != _safe(row, "version_raw"):
         issues.append(_change(row, "version_raw", previous.version_raw, _safe(row, "version_raw")))
     old_model = next((p.model_name_raw for p in previous.pms if p.pm_name == pm), old.model_name)
-    if old_model is not None and old_model != _safe(row, "model_name"):
+    if old_model != _safe(row, "model_name"):
         issues.append(_change(row, "model_name", old_model, _safe(row, "model_name")))
     if not any(issue.code in {"STORED_VALUE_CHANGED", "NEW_SOFTWARE_LINK"} for issue in issues):
         issues.append(Issue(IssueLevel.INFO, "기존 같은 호기·날짜·PM·계열의 값과 같습니다. 기존값 유지 대상입니다.",
@@ -730,10 +763,15 @@ def validate(draft: ImportDraft, reference: ReferenceData | None = None) -> tupl
         issues.append(Issue(IssueLevel.ERROR, "저장할 행이 없습니다. 제외한 행을 다시 포함하거나 다시 추출하세요."))
     for row in rows:
         issues.extend(_row_issues(draft, row))
-    issues.extend(_equipment_issues(rows) if draft.kind is ExtractKind.EQUIPMENT_STATUS else _release_issues(rows))
+    if draft.kind is ExtractKind.EQUIPMENT_STATUS:
+        issues.extend(_workbook_site_issues(rows))
+        issues.extend(_equipment_issues(rows))
+    else:
+        issues.extend(_release_issues(rows))
     issues.extend(_reference_issues(draft, reference))
     order = {IssueLevel.ERROR: 0, IssueLevel.REVIEW: 1, IssueLevel.INFO: 2}
-    return tuple(replace(issue, workbook_name=draft.workbook_name, sheet_name=draft.sheet.sheet_name)
+    return tuple(replace(issue, workbook_name=draft.workbook_name, sheet_name=draft.sheet.sheet_name,
+                         workbook_id=draft.workbook_id)
                  for issue in sorted(issues, key=lambda i: (order[i.level], i.row_id is None, i.row_id or 0)))
 
 
@@ -754,19 +792,28 @@ def validate_batch(drafts: tuple[ImportDraft, ...], reference: ReferenceData | N
     issues = [issue for draft in drafts for issue in validate(draft, reference)]
     lookup = {}
     rows_by_kind = defaultdict(list)
+    equipment_by_workbook = defaultdict(list)
     for draft in drafts:
         for row in draft.active_rows:
             index = len(lookup) + 1
             lookup[index] = (draft, row)
             rows_by_kind[draft.kind].append(replace(row, row_id=index))
+            if draft.kind is ExtractKind.EQUIPMENT_STATUS:
+                workbook = ("id", draft.workbook_id) if draft.workbook_id is not None else ("name", draft.workbook_name)
+                equipment_by_workbook[workbook].append(replace(row, row_id=index))
+    for rows in equipment_by_workbook.values():
+        for issue in _workbook_site_issues(tuple(rows)):
+            draft, row = lookup[issue.row_id]
+            issues.append(replace(issue, row_id=row.row_id, workbook_name=draft.workbook_name,
+                                  sheet_name=draft.sheet.sheet_name, workbook_id=draft.workbook_id))
     for kind, rows in rows_by_kind.items():
         for issue in (_equipment_issues(tuple(rows)) if kind is ExtractKind.EQUIPMENT_STATUS else _release_issues(tuple(rows))):
             draft, row = lookup[issue.row_id]
             issues.append(replace(issue, row_id=row.row_id, workbook_name=draft.workbook_name,
-                                  sheet_name=draft.sheet.sheet_name))
+                                  sheet_name=draft.sheet.sheet_name, workbook_id=draft.workbook_id))
     unique = {}
     for issue in issues:
-        key = (issue.workbook_name, issue.sheet_name, issue.row_id, issue.field, issue.address, issue.message)
+        key = (issue.workbook_id, issue.workbook_name, issue.sheet_name, issue.row_id, issue.field, issue.address, issue.message)
         unique.setdefault(key, issue)
     return tuple(sorted(unique.values(), key=lambda issue: (
         {IssueLevel.ERROR: 0, IssueLevel.REVIEW: 1, IssueLevel.INFO: 2}[issue.level],
@@ -834,6 +881,11 @@ def build_save_request(draft: ImportDraft, request_id: str, reference: Reference
         rows=tuple(merged.values()),
         review_count=sum(issue.level is IssueLevel.REVIEW for issue in issues),
         ai_source=draft.ai_source,
+        workbook_id=draft.workbook_id,
+        expected_snapshots=deepcopy(tuple(snapshot for snapshot in reference.snapshots
+            if (snapshot.equipment_code, snapshot.base_date.isoformat()) in {
+                (row.values.get("equipment_code"), row.values.get("base_date")) for row in merged.values()
+            })) if reference is not None and draft.kind is ExtractKind.EQUIPMENT_STATUS else None,
     )
 
 
@@ -889,8 +941,10 @@ class ImportValidationService:
         """
         with self.storage.transaction() as tx:
             reference = self.repository.load(tx, drafts, targets=targets, aliases=aliases)
-            if has_errors(validate_batch(drafts, reference)):
-                raise ImportBlockedError("오류가 남아 있어 이번 묶음 전체의 저장을 보류합니다.")
+            errors = [issue for issue in validate_batch(drafts, reference) if issue.blocks_save]
+            if errors:
+                raise ImportBlockedError("오류가 남아 있어 이번 묶음 전체의 저장을 보류합니다. "
+                                         + " / ".join(issue.message for issue in errors[:5]))
             return tuple(build_save_request(draft, f"{request_id}:{index}", reference)
                          for index, draft in enumerate(drafts, 1))
 

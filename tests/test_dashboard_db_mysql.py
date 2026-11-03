@@ -40,10 +40,12 @@ def test_empty_db_has_no_observation(storage):  # noqa: F811
 
 
 def test_saved_equipment_feeds_dashboard_and_unknown_site_is_skipped(storage):  # noqa: F811
-    save(storage, "dash-1",
+    save(storage, "dash-1-hwaseong",
          equipment(1, "D-C4", "M-C4", "C4"),
-         equipment(2, "D-O2", "M-O2", "O2", site="평택", line="P1"),
-         equipment(3, "D-HPA", "HPA", "HPA", group_name="HPA"),
+         equipment(3, "D-HPA", "HPA", "HPA", group_name="HPA"))
+    save(storage, "dash-1-pyeongtaek",
+         equipment(2, "D-O2", "M-O2", "O2", site="평택", line="P1"))
+    save(storage, "dash-1-unknown-site",
          equipment(4, "D-BUSAN", "M-O2", "O2", site="부산"))
 
     source = load_dashboard_source(storage)

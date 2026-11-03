@@ -40,7 +40,7 @@ def test_actual_schema_validation_is_read_only_and_holds_all_sheets(schema_datab
     target_id = target.release.current["release_version_id"]
     equipment_service = EquipmentService(storage)
     equipment_service.save_snapshots((SnapshotInput(
-        equipment_code="E-1", base_date=date(2026, 11, 2), site="평택", model_name="M-O2", batch_id=batch["batch_id"],
+        equipment_code="E-1", base_date=date(2026, 11, 2), site="화성", line="기존 라인", model_name="M-O2", batch_id=batch["batch_id"],
         software=(SoftwareInput(family_id=family["family_id"], version_raw="v2", release_version_id=target_id,
             pms=(PmInput(pm_name="PM1", group_id=model["group_id"], model_name_raw="M-O2"),)),),
     ),))
@@ -57,12 +57,12 @@ def test_actual_schema_validation_is_read_only_and_holds_all_sheets(schema_datab
     event.listen(schema_database.engine, "before_cursor_execute", record)
     try:
         service = ImportValidationService(storage)
-        source = draft(row(version_raw="v1_자유 핫픽스"))
+        source = draft(row(version_raw="v1_자유 핫픽스", line="새 라인"))
         targets = {(model["group_id"], family["family_id"]): target_id}
         issues = service.validate((source,), targets=targets)
         assert not has_errors(issues)
         assert next(i.comparison for i in issues if i.comparison).reason is CompareReason.ORDER_UNKNOWN
-        assert any(i.previous_value == "평택" and i.current_value == "화성" for i in issues)
+        assert any(i.field == "line" and i.previous_value == "기존 라인" and i.current_value == "새 라인" for i in issues)
         assert len(service.prepare((source,), "r", targets=targets)) == 1
         with pytest.raises(ImportBlockedError):
             service.prepare((source, draft(row(version_raw="v2"), sheet="다른 시트")), "conflict", targets=targets)
@@ -73,7 +73,7 @@ def test_actual_schema_validation_is_read_only_and_holds_all_sheets(schema_datab
     finally:
         event.remove(schema_database.engine, "before_cursor_execute", record)
     stored = equipment_service.get_snapshot("E-1", date(2026, 11, 2))
-    assert stored.site == "평택" and stored.software[0].version_raw == "v2"
+    assert stored.site == "화성" and stored.line == "기존 라인" and stored.software[0].version_raw == "v2"
 
 
 def test_actual_schema_validates_models_before_shared_family_and_allows_confirmed_alias(schema_database):

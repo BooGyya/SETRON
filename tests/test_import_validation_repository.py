@@ -13,7 +13,13 @@ from setron.features.storage.validation import TABLE_NAMES
 from setron.features.version.schemas import CompareReason
 from setron.infrastructure.database import Database, DatabaseConnectionError
 
-from test_import_validation import draft, row
+from test_import_validation import draft, row as review_row
+
+
+def row(*args, **changes):
+    """DB 기존 호기의 고정 사업장과 같은 검토 행을 만들고 시험할 변경만 지정한다."""
+    changes.setdefault("site", "평택")
+    return review_row(*args, **changes)
 
 
 @pytest.fixture
@@ -61,7 +67,7 @@ def database():
         ])
         connection.execute(tables["equipment"].insert(), dict(equipment_id=1, equipment_code=b"E-1"))
         connection.execute(tables["equipment_snapshot"].insert(), dict(
-            snapshot_id=1, equipment_id=1, base_date=date(2026, 11, 2), site="평택", model_name="M-O2", group_id=1, batch_id=1,
+            snapshot_id=1, equipment_id=1, base_date=date(2026, 11, 2), site="평택", line="기존 라인", model_name="M-O2", group_id=1, batch_id=1,
         ))
         connection.execute(tables["equipment_version"].insert(), dict(
             equipment_version_id=1, snapshot_id=1, family_id=1, version_raw=b"v2", release_version_id=2, batch_id=1,
@@ -96,13 +102,13 @@ def test_db_values_are_compared_read_only_and_missing_dates_are_not_filled(datab
     """
     storage, engine, tables, commands = database
     service = ImportValidationService(storage)
-    issues = service.validate((draft(row()),), targets={(1, 1): 2})
-    assert {(i.field, i.previous_value) for i in issues if i.code == "STORED_VALUE_CHANGED"} == {("site", "평택"), ("version_raw", "v2")}
+    issues = service.validate((draft(row(line="새 라인")),), targets={(1, 1): 2})
+    assert {(i.field, i.previous_value) for i in issues if i.code == "STORED_VALUE_CHANGED"} == {("line", "기존 라인"), ("version_raw", "v2")}
     assert next(i.comparison for i in issues if i.comparison).label == "N-1"
     other_day = service.validate((draft(row(base_date="2026-11-01")),), targets={(1, 1): 2})
     assert not any(i.code == "STORED_VALUE_CHANGED" for i in other_day)
     assert not any(i.code == "NEW_EQUIPMENT" for i in other_day)
-    requests = service.prepare((draft(row()),), "r", targets={(1, 1): 2}, aliases={2: {"확정 별칭": "다른 계열 원문"}})
+    requests = service.prepare((draft(row(line="새 라인")),), "r", targets={(1, 1): 2}, aliases={2: {"확정 별칭": "다른 계열 원문"}})
     assert len(requests) == 1 and requests[0].request_id == "r:1"
     assert all(command == "SELECT" for command in commands)
     with engine.connect() as connection:

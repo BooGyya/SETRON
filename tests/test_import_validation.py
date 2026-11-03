@@ -216,13 +216,13 @@ def test_cross_sheet_conflict_has_both_file_locations_and_is_revalidated():
 
 def test_existing_same_date_same_pm_reports_old_and_new_without_mutation():
     """전체 사업장의 동일 호기를 연결하고 같은 날짜·PM의 관리값만 비교한다."""
-    old = SnapshotInput(equipment_code="E-1", base_date=date(2026, 11, 2), site="평택", model_name="M-O2", batch_id=1,
+    old = SnapshotInput(equipment_code="E-1", base_date=date(2026, 11, 2), site="화성", line="기존 라인", model_name="M-O2", batch_id=1,
                         software=(SoftwareInput(family_id=1, version_raw="v2", pms=(PmInput(pm_name="PM1", group_id=1),)),))
-    source = draft(row())
+    source = draft(row(line="새 라인"))
     before = deepcopy((source, old))
     issues = validate(source, reference(family(), snapshots=(old,)))
     changes = {i.field: (i.previous_value, i.current_value) for i in issues if i.code == "STORED_VALUE_CHANGED"}
-    assert changes["site"] == ("평택", "화성") and changes["version_raw"] == ("v2", "v1")
+    assert changes["line"] == ("기존 라인", "새 라인") and changes["version_raw"] == ("v2", "v1")
     assert not has_errors(issues) and not any(i.code == "NEW_EQUIPMENT" for i in issues)
     assert (source, old) == before
     other_date = replace(old, base_date=date(2026, 11, 1))

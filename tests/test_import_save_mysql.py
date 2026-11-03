@@ -140,12 +140,12 @@ def test_c3_family_is_chosen_by_ui_and_m5_alias(storage):
 
 
 @pytest.mark.parametrize("changes, message", [
-    ({"model_name": "M-C9", "group_name": "Poly"}, "등록 모델이 없거나"),
-    ({"model_name": "M-C9"}, "분류를 정할 수 없습니다"),
+    ({"model_name": "M-C9", "group_name": "Poly"}, "등록 모델이 없습니다"),
+    ({"model_name": "M-C9"}, "등록 모델이 없습니다"),
     ({"group_name": "Etch"}, "설비군"),
     ({"group_name": "Poly", "model_name": "M-O2", "family_name": "O2"}, "소속이 다릅니다"),
-    ({"model_name": "M-C3", "family_name": "C3"}, "하나로 정할 수 없습니다"),
-    ({"family_name": "O9"}, "하나로 정할 수 없습니다"),
+    ({"model_name": "M-C3", "family_name": "C3"}, "UI"),
+    ({"family_name": "O9"}, "SW 계열이 없거나 여러 개"),
 ])
 def test_unresolved_links_cancel_whole_batch(storage, changes, message):
     batches = count(storage, "import_batch")
@@ -162,12 +162,12 @@ def test_unresolved_links_cancel_whole_batch(storage, changes, message):
     assert EquipmentService(storage).get_snapshot("QA-OK", date(2026, 10, 21)) is None
 
 
-def test_existing_snapshot_and_release_are_not_replaced(storage):
+def test_unreviewed_snapshot_and_existing_release_are_not_replaced(storage):
     saver = DatabaseImportSaver(storage)
     first = row(1, {"equipment_code": "C5", "version_raw": "F5"}, **EQUIPMENT, equipment_code="QA-AGAIN",
                 model_name="M-O2", family_name="O2", version_raw="v1")
     saver.save(request(ExtractKind.EQUIPMENT_STATUS, [first], "req-again-1"))
-    with pytest.raises(StorageValidationError, match="이미 저장돼 있습니다"):
+    with pytest.raises(StorageValidationError, match="기존값을 불러와 검토"):
         saver.save(request(ExtractKind.EQUIPMENT_STATUS, [first], "req-again-2"))
 
     release = row(1, {"version_raw": "A2", "content": "D2"}, version_raw="v9", content="내용",
@@ -193,7 +193,7 @@ def test_edited_fields_keep_only_release_and_item_columns(storage):
 
 def test_release_without_family_is_rejected_with_guidance(storage):
     rows = [row(1, {"version_raw": "A2", "content": "D2"}, version_raw="v1.0.3", content="Recipe 승인 상태 확인")]
-    with pytest.raises(StorageValidationError, match="SW 계열이 없어"):
+    with pytest.raises(StorageValidationError, match="모델명이 필요"):
         DatabaseImportSaver(storage).save(request(ExtractKind.RELEASE_NOTE, rows, "req-no-family"))
 
 
@@ -285,7 +285,7 @@ def test_single_c3_candidate_of_another_ui_is_rejected(storage):
     built = build_save_request(source, "pipeline-c3-wrong-ui")
     assert built.rows[0].values["ui_type"] == "INTEGRATED"
     batches = count(storage, "import_batch")
-    with pytest.raises(StorageValidationError, match="하나로 정할 수 없습니다"):
+    with pytest.raises(StorageValidationError, match="SW 계열이 없거나 여러 개"):
         DatabaseImportSaver(storage).save(built)
     assert count(storage, "import_batch") == batches
     assert EquipmentService(storage).get_snapshot("QA-PIPE-C3-WRONG", date(2026, 11, 2)) is None
