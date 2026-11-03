@@ -58,6 +58,7 @@ CANDIDATES: tuple[ModelCandidate, ...] = (
     _c3("M-C3(6각) / 구UI", LEGACY),
     _c3("M-C3", INTEGRATED, "UI 표기가 없어 데이터 파트 번역표대로 통합UI로 둠 (확정 사항 아님, 원본 확인 필요)"),
     _c4("M-C4"),
+    _c4("C4", note="계열 이름만 적힌 표기(릴리즈노트 모델 칸 등). 데이터 파트 설비군 이름 C4를 등록 모델 M-C4로 둠"),
     _c4("M-C4 / Smart UI"),
     _c4("M-C4/C4+ / Smart UI", note="C4와 C4+가 섞인 표기. 시드에 C4+ 모델이 없어 M-C4로 둠"),
     _c4("M-C4(DFB)", note=NO_DFB_MODEL),
