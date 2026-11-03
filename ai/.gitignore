@@ -1,0 +1,9 @@
+.env
+logs/
+parsed/
+parsed_release/
+parsed_match/
+parsed_risk/
+parsed_ai/
+__pycache__/
+.pytest_cache/

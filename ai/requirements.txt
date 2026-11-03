@@ -1,0 +1,6 @@
+openpyxl
+pydantic
+openai
+python-dotenv
+pytest
+# xlwings   # 회사 PC에서 열린 Excel 창 읽기 (Windows + Excel)
