@@ -360,6 +360,8 @@ uv run --locked python -m setron
 .\.venv\Scripts\python.exe -m setron
 ```
 
+`uv run --locked --env-file .env python -m setron`처럼 `SETRON_DB_*` 설정을 넣어 실행하면 조회 화면은 DB 자료를 읽고, 가져오기 저장과 DB 전체 SQL 내보내기도 DB를 사용합니다. Python 없이 실행하는 Windows 실행 파일 만들기와 `setron.env` 설정은 [docs/windows-package.md](docs/windows-package.md)를 봅니다.
+
 ### 작업 단위 2·3·4·5·6·7 확인 범위
 
 - 224px 사이드바, 원본 SEMES 로고·메뉴 아이콘·폰트, 공통 헤더·카드·버튼·배지를 제공합니다.
