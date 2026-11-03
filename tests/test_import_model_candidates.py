@@ -80,3 +80,11 @@ def test_mixed_c4_label_is_resolved_by_version_suffix():
     base = candidate_changes({"model_name": "M-C4/C4+ / Smart UI", "version_raw": "v4.56.7.1_f1"}, fields)
     assert plus["model_name"] == "M-C4+" and plus["modification_type"] == "C4+"
     assert base["model_name"] == "M-C4" and "modification_type" not in base
+
+
+def test_kctc_model_listed_under_oxide_becomes_kctc():
+    """현황표는 KCTC 설비를 Oxide 묶음 아래 적는다. KCTC 모델이면 설비군을 KCTC로 바꾼다 (다른 모델의 Oxide는 유지)."""
+    fields = ("model_name", "group_name", "family_name", "structure_type")
+    kctc = candidate_changes({"model_name": "Inline Ox (CIP)", "group_name": "Oxide"}, fields)
+    assert kctc["model_name"] == "Inline Ox" and kctc["group_name"] == "KCTC" and kctc["structure_type"] == "INLINE"
+    assert "group_name" not in candidate_changes({"model_name": "M-O2", "group_name": "Oxide"}, fields)

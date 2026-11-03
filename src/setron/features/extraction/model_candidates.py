@@ -58,6 +58,7 @@ _NOTES = {
     "M-C4+": "C4+ 개조형. 릴리즈노트는 C4와 같고 _DEX 버전 줄기를 씀 (멘토 확정 2026-10-29)",
     "Inline Ox (CIP)": "CIP 개조형. 릴리즈노트는 Inline Ox와 같음 (멘토 확정 2026-10-21)",
 }
+KCTC_NOTE = "현황표에 Oxide 묶음으로 적힌 KCTC 설비를 KCTC로 둠 (최상위 설비군 Poly/Oxide/KCTC, 멘토 확정)"
 
 
 def _build_candidates() -> tuple[ModelCandidate, ...]:
@@ -113,6 +114,10 @@ def candidate_changes(current: Mapping[str, str | None], fields) -> dict[str, st
         if name == "model_name":
             if existing != value:
                 changes[name] = value
+        elif (name == "group_name" and candidate.group_name == KCTC
+              and str(existing or "").strip().casefold() == "oxide"):
+            # 현황표는 KCTC 설비를 Oxide 묶음 아래 적는다. 최상위 분류는 KCTC (멘토 확정: Poly/Oxide/KCTC 3개).
+            changes[name] = value
         elif existing is None or not str(existing).strip():
             changes[name] = value
     return changes

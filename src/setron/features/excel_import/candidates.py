@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from setron.features.extraction.model_candidates import candidate_changes, find_candidate
+from setron.features.extraction.model_candidates import KCTC, KCTC_NOTE, candidate_changes, find_candidate
 
 from .schemas import ImportDraft
 from .service import edit_value
@@ -42,4 +42,7 @@ def candidate_notes(draft: ImportDraft) -> tuple[str, ...]:
         candidate = find_candidate(row.value("model_name")) if row.row_id in targets else None
         if candidate and candidate.note and candidate.note not in notes:
             notes.append(candidate.note)
+        if (row.row_id in targets and targets[row.row_id].get("group_name") == KCTC
+                and str(row.value("group_name") or "").strip().casefold() == "oxide" and KCTC_NOTE not in notes):
+            notes.append(KCTC_NOTE)
     return tuple(notes)

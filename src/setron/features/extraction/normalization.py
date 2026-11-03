@@ -92,8 +92,9 @@ def normalize(values, kind, row_number, sources):
         else:
             normalized_ui = normalized_ui or family_ui
         family = "C3"
-        if normalized_ui is None and result.get("model_name") in {"C3", "M-C3"}:
+        if normalized_ui is None and not (ui or "").strip() and result.get("model_name") in {"C3", "M-C3"}:
             # 멘토 확정(2026-10-28 회신, 4차 멘토링 일지): 구UI/통합UI 표기가 없는 M-C3는 모두 통합UI. 구UI가 특별한 설비다.
+            # UI 칸에 알 수 없는 글자가 있으면 기본값을 쓰지 않고 확인을 요청한다(표기 '없음'일 때만).
             normalized_ui = "INTEGRATED"
         result["ui_type"] = normalized_ui
         if normalized_ui is None:

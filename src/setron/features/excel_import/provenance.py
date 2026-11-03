@@ -15,7 +15,18 @@ from .schemas import FIELD_LABELS
 
 _ADDRESS = re.compile(r"^\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})$")
 _DATES = re.compile(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}")
-_DERIVED = {"group_name", "ui_type", "structure_type"}
+# 출처가 확인된 모델명에서 정규화로 확정되는 항목. family_name 은 'M-C3' → 'C3' 처럼 모델이 계열을 정하는 경우
+# (UI 미표기 M-C3는 통합UI, 멘토 확정 2026-10-28). 정규화 결과와 같을 때만 허용하므로 임의 값은 통과하지 않는다.
+_DERIVED = {"group_name", "ui_type", "structure_type", "family_name"}
+_SPELLINGS = {
+    ("ui_type", "LEGACY"): ("구UI", "구 UI", "Legacy", "legacy"),
+    ("ui_type", "INTEGRATED"): ("통합UI", "통합 UI", "Integrated", "integrated"),
+    ("structure_type", "INLINE"): ("Inline", "inline", "INLINE"),
+    ("structure_type", "CLUSTER"): ("Cluster", "cluster", "CLUSTER"),
+    ("group_name", "POLY"): ("Poly", "poly"),
+    ("group_name", "OXIDE"): ("Oxide", "oxide"),
+    ("group_name", "KCTC"): ("kctc",),
+}
 _CLASSIFIERS = {"model_name", "group_name", "family_name"}
 _IDENTIFIERS = {"equipment_code", "version_raw"}
 
@@ -94,6 +105,9 @@ def _matches_saved(field, value, original, values, kind, address):
         candidates.append(current[2:])
     if field == "model_name" and current.startswith("M-O"):
         candidates.append(current[2:])
+    # 정규화된 분류·UI·구조값(LEGACY·CLUSTER 등)은 원본 셀의 원래 표기로도 대조한다.
+    # 예: 'M-C3 (구UI)' 셀에서 읽은 UI → LEGACY. 원래 표기가 셀에 있고 다시 정규화한 값이 같을 때만 통과한다.
+    candidates.extend(_SPELLINGS.get((field, current), ()))
     context = {name: _text(item) if item is not None else None for name, item in values.items()}
     for candidate in dict.fromkeys(candidates):
         if not candidate or not (candidate.strip() == text.strip() or _matches(field, candidate, text, context)):
