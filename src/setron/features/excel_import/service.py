@@ -376,9 +376,10 @@ def _is_hpa_row(draft: ImportDraft, row: ReviewRow, locations=()) -> bool:
                if isinstance(address, str) and _has_source_position(draft, row, name)}
     # AI가 분류 항목을 전부 빠뜨려도 호기·SW·PM의 실제 위치가 속한 HPA 레코드는 남는다.
     identity_fields = ("equipment_code", "version_raw", "pm_name")
-    if any(location.is_hpa and any(name in location.fields and sources.get(name) == location.fields[name].address
-                                  for name in identity_fields) for location in locations):
-        return True
+    matched = [location for location in locations
+               if any(name in location.fields and sources.get(name) == location.fields[name].address for name in identity_fields)]
+    if matched:
+        return any(location.is_hpa for location in matched)
     # 머리글 없는 수동 검토도 같은 원본 행의 HPA 분류 출처는 보존한다.
     # 별도의 HPA 제목만으로 다른 행의 일반 설비까지 HPA로 간주하지 않는다.
     identity_rows = {parse_address(sources[name])[0] for name in identity_fields if name in sources}

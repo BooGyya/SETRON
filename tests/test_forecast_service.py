@@ -165,3 +165,24 @@ def test_explain_forecast_failure_is_returned_without_exception():
     report = explain_forecast(example_client(AITask.ANALYSIS, "connection"), "질문", forecast(RECORDS, FAMILIES, TARGETS))
 
     assert report.result.status is AIStatus.FAILED and report.unmatched_numbers == ()
+
+
+def test_hpa_only_dates_do_not_change_forecast_period_or_results():
+    """HPA만 관측된 날짜는 예측 기간과 일반 설비의 패치·이탈 판정을 바꾸지 않는다."""
+    expected = forecast(RECORDS, FAMILIES, TARGETS)
+    hpa_dates = (date(2026, 8, 1), date(2026, 9, 15), DAY3)
+    records = RECORDS + tuple(equipment(99, day, o2("v1"), hpa=True) for day in hpa_dates)
+
+    assert forecast(records, FAMILIES, TARGETS) == expected
+    assert forecast(records, FAMILIES, TARGETS, start=DAY2) == forecast(
+        RECORDS, FAMILIES, TARGETS, start=DAY2)
+
+
+def test_only_hpa_observations_give_no_forecast_period():
+    """HPA 관측만으로 분석 기간이나 계열별 예측을 만들지 않는다."""
+    records = (equipment(99, DAY1, o2("v1"), hpa=True), equipment(99, DAY3, o2("v3"), hpa=True))
+
+    result = forecast(records, FAMILIES, TARGETS)
+
+    assert result.start_date is result.end_date is None
+    assert result.families == ()

@@ -267,6 +267,7 @@ class EquipmentService:
                 if not existing:
                     self._save(tx, value)
                     continue
+                self._check_site(tx, equipment, value.site)
                 update_metadata = metadata_keys is None or (value.equipment_code, value.base_date) in metadata_keys
                 self._merge(tx, equipment, existing[0], value, update_metadata=update_metadata)
         final = {}

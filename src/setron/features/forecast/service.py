@@ -48,9 +48,11 @@ def forecast(
     start: date | None = None,
     end: date | None = None,
 ) -> ForecastResult:
-    """기간 안의 현황으로 계열별 참고 예측을 만든다. 기간을 주지 않으면 자료의 첫 날짜~마지막 날짜다."""
+    """HPA를 제외한 기간 안의 현황으로 계열별 참고 예측을 만든다. 기간이 없으면 일반 설비 자료의 첫 날짜~마지막 날짜다."""
     by_date: dict[date, list[EquipmentRecord]] = {}
     for record in records:
+        if record.is_hpa:
+            continue
         if (start is None or record.base_date >= start) and (end is None or record.base_date <= end):
             by_date.setdefault(record.base_date, []).append(record)
     if not by_date:
