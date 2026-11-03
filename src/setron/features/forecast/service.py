@@ -1,13 +1,13 @@
 """버전 통일 참고 예측 자료를 만들고 AI 설명을 요청한다 (명세 BE-020, FUN-040).
 
-계산 (멘토링 3차의 단순 비례)
-- 계열마다 기간의 처음과 끝 현황을 설비 1대 × 계열 1건 단위로 비교한다.
-- 패치 속도 = 기존 설비 패치 건수 ÷ 기간 일수
-- 예상 잔여 기간 = 기간 끝의 N 미만 건수 ÷ 패치 속도. 참고 완료일 = 기간 끝 날짜 + 잔여 기간(올림)
+계산 (멘토링 3차의 단순 비례, 데이터 파트 `ai/svhm/core/forecast.py`와 같은 규칙)
+- 계열마다 기간 안의 저장 날짜별로 N 이상·N 미만·판단 불가 대수를 센다 (설비 1대 × 계열 1건, HPA 제외).
+- 증가 속도 = (끝 날짜 N 이상 대수 − 처음 날짜 N 이상 대수) ÷ 기간 일수. 신규·전입 설비도 포함한다.
+- 예상 잔여 기간 = 끝 날짜 N 미만 대수 ÷ 증가 속도 (일 단위 반올림). 참고 완료일 = 끝 날짜 + 잔여 기간
 
 정한 규칙
 - 목표 N은 호출하는 쪽이 정해 기간 내내 같은 값으로 쓴다. 목표가 없는 계열은 예측하지 않는다.
-- 신규·전입(처음에 없던 건)과 이탈(끝에 없는 건)은 패치 실적에서 뺀다.
+- 이 계열의 날짜가 하나뿐이거나 N 이상 대수가 늘지 않았으면 예측하지 않는다.
 - 판단 불가가 남으면 N 미만이 없어도 완료로 단정하지 않는다. N 미만이 있으면 예측은 하되 함께 알린다.
 - 자료가 바뀌어도 자동으로 다시 계산하지 않는다. 요청할 때 받은 자료로만 계산한다.
 - 숫자는 모두 여기서 계산하고, AI에는 이 결과를 설명만 맡긴다.
@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-import math
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from datetime import date, timedelta
 from typing import Any
@@ -37,8 +37,6 @@ from setron.features.version.schemas import CompareStatus
 from setron.features.version.service import FamilyReleases
 from setron.infrastructure.ai_client import ChatClient
 
-Units = dict[tuple[int, int], CompareStatus]  # (설비 ID, 계열 ID) → 상태
-
 
 def forecast(
     records: Iterable[EquipmentRecord],
@@ -56,12 +54,11 @@ def forecast(
     if not by_date:
         return ForecastResult(None, None, ())
 
-    first, last = min(by_date), max(by_date)
-    before, after = _units(by_date[first], families, targets), _units(by_date[last], families, targets)
+    counts = {day: _counts(day_records, families, targets) for day, day_records in sorted(by_date.items())}
     target_families = {family_id for _, family_id in targets}
-    family_ids = sorted({f for _, f in before} | {f for _, f in after})
-    return ForecastResult(first, last, tuple(
-        _family(f, first, last, before, after, f in target_families) for f in family_ids
+    family_ids = sorted({f for day_counts in counts.values() for f in day_counts})
+    return ForecastResult(min(by_date), max(by_date), tuple(
+        _family(f, {day: c[f] for day, c in counts.items() if f in c}, f in target_families) for f in family_ids
     ))
 
 
@@ -70,21 +67,21 @@ def forecast_facts(result: ForecastResult, family_names: Mapping[int, str] | Non
     names = family_names or {}
     return {
         "분석 기간": {"시작": _iso(result.start_date), "끝": _iso(result.end_date)},
-        "계산 방법": "패치 속도 = 기존 설비 패치 건수 ÷ 기간 일수, 예상 잔여 기간 = 남은 N 미만 건수 ÷ 패치 속도",
+        "계산 방법": "증가 속도 = (끝 N 이상 대수 − 처음 N 이상 대수) ÷ 기간 일수, "
+                     "예상 잔여 기간 = 끝 N 미만 대수 ÷ 증가 속도 (일 단위 반올림)",
         "계산 단위": "설비 1대 × 계열 1건",
         "계열별 예측": [
             {
                 "계열": names.get(f.family_id, f"계열 {f.family_id}"),
                 "상태": f.label,
+                "표시": f.note,
+                "데이터 수(장)": f.points,
                 "기간 일수": f.period_days,
-                "시작 N 미만": f.start_below,
-                "기존 설비 패치": f.patched,
-                "기존 설비 N 미만으로 내려감": f.regressed,
-                "신규·전입": f.new_units,
-                "신규·전입 중 N 이상": f.new_compliant,
-                "이탈": f.removed,
-                "끝 N 이상": f.end_compliant,
-                "끝 N 미만": f.end_below,
+                "처음 N 이상": f.start_applied,
+                "끝 N 이상": f.end_applied,
+                "N 이상 증가": f.gained,
+                "하루 증가(대/일)": None if f.rate_per_day is None else round(f.rate_per_day, 2),
+                "끝 N 미만(남은 대수)": f.end_below,
                 "끝 판단 불가": f.end_undetermined,
                 "예상 잔여 기간(일)": f.remaining_days,
                 "참고 완료일": _iso(f.completion_date),
@@ -111,55 +108,45 @@ def explain_forecast(
 
 # --- 내부 ----------------------------------------------------------------------
 
-def _units(records: Iterable[EquipmentRecord], families: Mapping[int, FamilyReleases], targets: Targets) -> Units:
-    units: Units = {}
+def _counts(records: Iterable[EquipmentRecord], families: Mapping[int, FamilyReleases],
+            targets: Targets) -> dict[int, Counter]:
+    """한 날짜의 계열별 상태 대수 (설비 1대 × 계열 1건, HPA 제외)."""
+    result: dict[int, Counter] = {}
     for record in records:
         if record.is_hpa:
             continue
         for family in equipment_status(record, families, targets).families:
-            units[(record.equipment_id, family.family_id)] = family.status
-    return units
+            result.setdefault(family.family_id, Counter())[family.status] += 1
+    return result
 
 
-def _family(family_id: int, first: date, last: date, before: Units, after: Units, has_target: bool) -> FamilyForecast:
-    start = {e: s for (e, f), s in before.items() if f == family_id}
-    end = {e: s for (e, f), s in after.items() if f == family_id}
-    kept = start.keys() & end.keys()
-    new = end.keys() - start.keys()
-    below, above = CompareStatus.BELOW, CompareStatus.AT_OR_ABOVE
-    counts = dict(
-        family_id=family_id, start_date=first, end_date=last,
-        start_below=sum(s is below for s in start.values()),
-        end_compliant=sum(s is above for s in end.values()),
-        end_below=sum(s is below for s in end.values()),
-        end_undetermined=sum(s is CompareStatus.UNDETERMINED for s in end.values()),
-        patched=sum(start[e] is below and end[e] is above for e in kept),
-        regressed=sum(start[e] is above and end[e] is below for e in kept),
-        new_units=len(new),
-        new_compliant=sum(end[e] is above for e in new),
-        removed=len(start.keys() - end.keys()),
-    )
+def _family(family_id: int, counts: Mapping[date, Counter], has_target: bool) -> FamilyForecast:
+    first, last = min(counts), max(counts)
+    above, below = CompareStatus.AT_OR_ABOVE, CompareStatus.BELOW
+    end = counts[last]
+    values = dict(family_id=family_id, start_date=first, end_date=last, points=len(counts),
+                  start_applied=counts[first][above], end_applied=end[above], end_below=end[below],
+                  end_undetermined=end[CompareStatus.UNDETERMINED])
 
-    def result(status, *reasons, days=None):
-        completion = last + timedelta(days=math.ceil(days)) if days is not None else None
-        return FamilyForecast(**counts, status=status, remaining_days=days, completion_date=completion,
-                              reasons=tuple(reasons))
+    def result(status, *reasons, rate=None, days=None):
+        completion = last + timedelta(days=days) if days is not None else None
+        return FamilyForecast(**values, status=status, rate_per_day=rate, remaining_days=days,
+                              completion_date=completion, reasons=tuple(reasons))
 
-    undetermined = (ForecastReason.UNDETERMINED_LEFT,) if counts["end_undetermined"] else ()
+    undetermined = (ForecastReason.UNDETERMINED_LEFT,) if values["end_undetermined"] else ()
     if not has_target:
         return result(ForecastStatus.NOT_ESTIMABLE, ForecastReason.TARGET_NOT_SET)
-    if counts["end_below"] == 0:
+    if values["end_below"] == 0:
         if undetermined:
             return result(ForecastStatus.NOT_CONFIRMED, *undetermined)
-        return result(ForecastStatus.COMPLETE, days=0.0)
+        return result(ForecastStatus.COMPLETE, days=0)
     if first == last:
         return result(ForecastStatus.NOT_ESTIMABLE, ForecastReason.SINGLE_DATE, *undetermined)
-    if not start:
-        return result(ForecastStatus.NOT_ESTIMABLE, ForecastReason.NOT_AT_START, *undetermined)
-    if counts["patched"] == 0:
-        return result(ForecastStatus.NOT_ESTIMABLE, ForecastReason.NO_PATCH, *undetermined)
-    days = round(counts["end_below"] * (last - first).days / counts["patched"], 1)
-    return result(ForecastStatus.ESTIMATED, *undetermined, days=days)
+    gained = values["end_applied"] - values["start_applied"]
+    if gained <= 0:
+        return result(ForecastStatus.NOT_ESTIMABLE, ForecastReason.NO_PROGRESS, *undetermined)
+    rate = gained / (last - first).days
+    return result(ForecastStatus.ESTIMATED, *undetermined, rate=rate, days=round(values["end_below"] / rate))
 
 
 def _iso(value: date | None) -> str | None:

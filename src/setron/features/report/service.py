@@ -144,7 +144,8 @@ def _forecast(document: DocxDocument, report: AnalysisReport) -> None:
     period = facts.get("분석 기간", {})
     document.add_paragraph(f"분석 기간: {period.get('시작') or EMPTY} ~ {period.get('끝') or EMPTY}")
     document.add_paragraph(f"계산 방법: {facts.get('계산 방법', EMPTY)} (단위: {facts.get('계산 단위', EMPTY)})")
-    columns = ["계열", "상태", "기존 설비 패치", "신규·전입", "끝 N 미만", "끝 판단 불가", "예상 잔여 기간(일)", "참고 완료일"]
+    columns = ["계열", "상태", "데이터 수(장)", "N 이상 증가", "하루 증가(대/일)", "끝 N 미만(남은 대수)",
+               "끝 판단 불가", "예상 잔여 기간(일)", "참고 완료일"]
     families = facts.get("계열별 예측", [])
     _table(document, columns, [[_value(f.get(c), EMPTY) for c in columns] for f in families])
     for family in families:
