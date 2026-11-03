@@ -1,8 +1,9 @@
 """UI 시작점. 대시보드·히트맵·목록/상세는 같은 관측 공급자를 쓴다.
 
 `SETRON_DB_*` 설정이 없으면 합성 관측·메모리 저장을 쓰고 DB에 연결하지 않는다. 설정이 있으면 조회 화면은 DB 자료를
-읽고, 가져오기 저장과 DB 전체 SQL 내보내기도 DB를 쓴다.
-데이터 가져오기는 사용자가 불러오기를 누를 때만 실행 중인 Excel에 연결하고, AI는 예제 응답을 사용한다.
+읽고, 가져오기 저장과 내보내기(관리 데이터 Excel, DB 전체 SQL)도 DB를 쓴다. `SETRON_AI_*` 설정이 있으면 가져오기
+추출과 AI 분석이 회사 AI를 쓰고, 없으면 예제 응답을 쓴다.
+데이터 가져오기는 사용자가 불러오기를 누를 때만 실행 중인 Excel에 연결한다.
 """
 
 import argparse
@@ -11,13 +12,13 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource
 from setron.ui.dashboard_demo import demo_dashboard_source
-from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env
+from setron.ui.database_source import dashboard_source_from_env, data_exporter_from_env, sql_exporter_from_env
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
 from setron.ui.target_data import describe_targets, initial_targets
@@ -29,6 +30,7 @@ from setron.ui.versions import VersionsPage
 from setron.ui.item_data import ItemManagerData, item_data_from_source
 from setron.ui.items import ItemsPage
 from setron.ui.ai_data import facts_from_snapshot
+from setron.ui.ai_connection import ai_providers_from_env
 from setron.ui.ai_page import AIPage
 from setron.ui.import_demo import DemoExcel
 from setron.ui.import_page import ImportPage, saver_from_env
@@ -37,7 +39,7 @@ from setron.ui.read_worker import BackgroundRead
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
-                  db_exporter=None) -> MainWindow:
+                  db_exporter=None, data_exporter=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -49,7 +51,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - import_saver: Import 저장 공급자. None이면 메모리 저장.
     - ai_parser: 질문 해석 공급자. None이면 예제 응답.
     - ai_analyzer: 분석 공급자. None이면 예제 응답.
-    - db_exporter: ``path``를 받아 DB 전체를 .sql로 저장하고 ExportResult를 돌려주는 함수. None이면 내보내기 비활성.
+    - db_exporter: ``path``를 받아 DB 전체를 .sql로 저장하고 ExportResult를 돌려주는 함수.
+    - data_exporter: ``path``를 받아 관리 데이터를 .xlsx로 저장하는 함수. 둘 다 None이면 내보내기 비활성.
 
     return
     - 실제 DB 연결을 자동 생성하지 않는 MainWindow.
@@ -115,6 +118,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     items = ItemsPage(item_loader)
     # 저장 서비스·회사 AI 연결 전: 각 화면의 기본값은 메모리 저장소와 예제 응답이며 출처를 표시한다.
     importer = ImportPage(excel, extractor, import_saver)
+    ai_label = "회사 AI 추출" if extractor is not None else "AI 예제 응답"
 
     def apply_ai_selection(selection):
         window.query_panel.set_draft(selection)
@@ -145,7 +149,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
             list_action.setEnabled(False)
         elif window.route == "import":
-            window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · AI 예제 응답 · 저장 위치: {importer.saver.target_label}")
+            window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · {ai_label} · 저장 위치: {importer.saver.target_label}")
             list_action.setEnabled(False)
         elif window.route == "ai":
             window.notice.setText("AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음")
@@ -181,34 +185,50 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.navigate("equipment")
 
     export_action = window.header.actions["export"]
-    if db_exporter is not None:
+    exporters = {kind: (exporter, *info) for kind, exporter, *info in (
+        ("data", data_exporter, "관리 데이터 Excel 내보내기", "xlsx", "Excel 통합문서 (*.xlsx)", "setron_data",
+         "앱에서 수정·저장한 현재 관리값을 데이터 종류별 시트로 정리했습니다."),
+        ("sql", db_exporter, "DB 전체 SQL 내보내기", "sql", "SQL 파일 (*.sql)", "setron_db",
+         "받은 사람은 빈 DB에서 이 파일을 실행하면 됩니다."),
+    ) if exporter is not None}
+    if exporters:
         export_action.setEnabled(True)
-        export_action.setToolTip("DB 전체를 SQL 파일로 내보냅니다. 받은 사람은 빈 DB에서 실행하면 같은 자료를 볼 수 있습니다.")
+        export_action.setToolTip("관리 데이터를 Excel로, 또는 DB 전체를 SQL 파일로 내보냅니다.")
 
-    def export_sql(path=None):
-        """DB 전체를 .sql로 내보낸다. ``path``가 없으면 저장 위치를 묻고 결과를 알림창으로 알린다."""
+    def export(kind, path=None):
+        """``kind``(data·sql)로 내보낸다. ``path``가 없으면 저장 위치를 묻고 결과를 알림창으로 알린다."""
+        exporter, title, suffix, file_filter, stem, guide = exporters[kind]
         interactive = path is None
         if interactive:
-            default = Path.home() / f"setron_db_{datetime.now():%Y%m%d_%H%M}.sql"
-            path, _ = QFileDialog.getSaveFileName(window, "DB 전체 SQL 내보내기", str(default), "SQL 파일 (*.sql)")
+            default = Path.home() / f"{stem}_{datetime.now():%Y%m%d_%H%M}.{suffix}"
+            path, _ = QFileDialog.getSaveFileName(window, title, str(default), file_filter)
             if not path:
                 return None
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result = db_exporter(path)
+            result = exporter(path)
         finally:
             QApplication.restoreOverrideCursor()
-        text = (f"{result.path} 에 저장했습니다 ({result.message}).\n받은 사람은 빈 DB에서 이 파일을 실행하면 됩니다."
+        text = (f"{result.path} 에 저장했습니다 ({result.message}).\n{guide}"
                 if result.saved else f"내보내지 못했습니다. {result.message}")
         if interactive:
-            (QMessageBox.information if result.saved else QMessageBox.warning)(window, "DB 전체 SQL 내보내기", text)
+            (QMessageBox.information if result.saved else QMessageBox.warning)(window, title, text)
         return result
 
-    window.export_sql = export_sql
+    def choose_export():
+        if len(exporters) == 1:
+            return export(next(iter(exporters)))
+        menu = QMenu(export_action)
+        for kind, (_, title, *_rest) in exporters.items():
+            menu.addAction(title, lambda kind=kind: export(kind))
+        menu.exec(export_action.mapToGlobal(export_action.rect().bottomLeft()))
+
+    window.export_sql = lambda path=None: export("sql", path)
+    window.export_data = lambda path=None: export("data", path)
 
     def open_all(action):
-        if action == "export" and db_exporter is not None:
-            export_sql()
+        if action == "export" and exporters:
+            choose_export()
             return
         if action == "equipment_list":
             remember_origin()
@@ -302,10 +322,15 @@ def main(argv: list[str] | None = None) -> int:
     install_theme(app)
     # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
     source, problem = dashboard_source_from_env()
+    # SETRON_AI_* 설정이 있으면 가져오기 추출과 AI 분석이 회사 AI를 쓴다. 없으면 예제 응답이다.
+    ai = ai_providers_from_env()
+    app.aboutToQuit.connect(ai.close)
     window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
-                           import_saver=saver_from_env(), db_exporter=sql_exporter_from_env())
-    if problem:
-        window.notice.setText(problem)
+                           import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
+                           data_exporter=data_exporter_from_env(),
+                           extractor=ai.extractor, ai_parser=ai.parser, ai_analyzer=ai.analyzer)
+    if problem or ai.problem:
+        window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))

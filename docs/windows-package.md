@@ -35,7 +35,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 | `SETRON_DB_HOST`, `SETRON_DB_PORT` | MySQL 주소와 포트 (보통 `127.0.0.1`, `3306`) |
 | `SETRON_DB_NAME`, `SETRON_DB_USER`, `SETRON_DB_PASSWORD` | SETRON용 DB 이름과 계정 |
 | `SETRON_DB_CONNECT_TIMEOUT` | 접속 대기 초. 비우면 5초 |
-| `SETRON_AI_*` | 회사 AI 접속 정보. 아직 화면에 연결하지 않았다 (예제 응답 사용) |
+| `SETRON_AI_*` | 회사 AI 접속 정보. 있으면 데이터 가져오기 추출과 AI 분석이 회사 AI를 쓰고, 없으면 예제 응답을 쓴다 |
 
 - 한 줄에 `이름=값` 하나. `#`로 시작하는 줄은 주석이다. 비밀번호의 `#`·공백은 그대로 쓴다.
 - 실행 파일은 시작할 때만 `setron.env`를 읽는다. 이미 Windows 환경변수에 같은 이름이 있으면 그 값을 쓴다.
@@ -48,7 +48,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 | 상황 | 화면 |
 | --- | --- |
 | `setron.env`가 없거나 `SETRON_DB_NAME`이 없음 | 합성 예시 자료로 시작. 가져오기 저장은 메모리, 내보내기 버튼 비활성 |
-| DB 접속 성공 | 상단 안내 "MySQL DB 저장 자료". 가져오기 저장·조회·DB 전체 SQL 내보내기가 DB를 사용 |
+| DB 접속 성공 | 상단 안내 "MySQL DB 저장 자료". 가져오기 저장·조회·위험 판정·내보내기(관리 데이터 Excel, DB 전체 SQL)가 DB를 사용 |
 | DB 접속 실패 | 합성 예시 자료로 시작하고 상단에 "DB 자료를 읽지 못해…" 안내 |
 
 ## 5. 설치형 MySQL 실사용 확인

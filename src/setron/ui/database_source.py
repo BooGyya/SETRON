@@ -7,8 +7,10 @@ DB 자료를 본다. '조회 적용'을 누를 때마다 DB를 다시 읽어 가
 - 조회 선택지(Site·설비군)는 앱 시작 시의 VER3 선택지를 그대로 쓴다. Site는 이름이 같을 때만, 설비군은
   :data:`GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않는 현황은 빼고 건수를 안내한다.
 - HPA는 모델의 analysis_enabled = false로만 판단한다 (:func:`read_equipment_records`).
-- 목표 N과 위험 기준은 아직 DB에 저장하지 않으므로 지정하지 않는다. 적용률은 '목표 미지정'으로 계산 불가,
-  위험은 미확인으로 표시된다. 목표 N은 화면의 '목표 기준 편집'에서 순서가 확인된 릴리즈로 정할 수 있다.
+- 목표 N은 DB에 저장하지 않으므로 지정하지 않는다. 적용률은 '목표 미지정'으로 계산 불가이며, 화면의
+  '목표 기준 편집'에서 순서가 확인된 릴리즈로 정할 수 있다.
+- 위험은 DB의 위험 지정(`risk_rule`)과 버전별 Item 상태로 판정한다 (BE-015). 사용 중인 지정이 하나도 없으면
+  '위험 없음'으로 단정하지 않고 모두 미확인으로 둔다.
 - 원본 구역(raw_area)은 기준일의 Line 원문을 쓴다. Fab/Line 선택지로는 추정하지 않는다.
 """
 
@@ -18,7 +20,10 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from setron.features.equipment.repository import EquipmentRepository
+from setron.features.item.service import ItemCatalog
+from setron.features.risk.repository import RiskRepository
 from setron.features.risk.schemas import RiskStatus
+from setron.features.risk.service import RiskAssessor
 from setron.features.version.schemas import ReleaseVersion
 from setron.features.version.service import FamilyReleases
 from setron.features.storage.validation import StorageValidationError
@@ -33,7 +38,7 @@ GROUP_MODELS = {
     "c3": ("M-C3",), "c4": ("M-C4",), "o2": ("M-O2",), "o3": ("M-O3",), "o5": ("M-O5", "M-O5 Prime"),
     "inline-ox": (), "inline-o2": ("Inline O2",), "cluster-ox": (), "cluster-o2": ("Cluster O2",),
 }
-SOURCE_LABEL = "MySQL DB 저장 자료 · 목표 N·위험 기준 미등록"
+SOURCE_LABEL = "MySQL DB 저장 자료 · 목표 N 미저장"
 
 
 def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> DashboardSource:
@@ -47,6 +52,9 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         equipment = {row["equipment_id"]: row for row in repository.rows(tx, "equipment")}
         stored = tuple(repository.load(tx, equipment[row["equipment_id"]], row)
                        for row in repository.rows(tx, "equipment_snapshot"))
+        risk_repository = RiskRepository(storage)
+        rules = risk_repository.load_rules(tx)
+        version_items = risk_repository.load_version_items(tx)
 
     by_name = {}
     for group in groups:
@@ -76,12 +84,18 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         ReleaseVersion(r["release_version_id"], r["family_id"], r["version_raw"], r["version_order"], r["released_at"])
         for r in releases if r["family_id"] == f["family_id"])) for f in families}
 
-    label = f"{SOURCE_LABEL} · 현황 {len(records)}건"
+    assessor = RiskAssessor(family_releases, ItemCatalog(family_releases, version_items), rules)
+    if assessor.rules:
+        risks = {r.equipment_id: assessor.equipment_risk(r).status for r in records}
+    else:
+        risks = {r.equipment_id: RiskStatus.UNKNOWN for r in records}
+
+    label = f"{SOURCE_LABEL} · 현황 {len(records)}건 · " + (
+        f"위험 기준 {len(assessor.rules)}건" if assessor.rules else "위험 기준 미등록")
     if skipped:
         label += f" · Site·설비군 미연결 또는 확인 필요 {skipped}건 제외"
     return DashboardSource(catalog=catalog, bindings=bindings, records=tuple(records), locations=locations,
-                           families=family_releases, targets={},
-                           risks={r.equipment_id: RiskStatus.UNKNOWN for r in records}, source_label=label)
+                           families=family_releases, targets={}, risks=risks, source_label=label)
 
 
 class DatabaseDashboardSource(DashboardSource):
@@ -167,6 +181,37 @@ def sql_exporter_from_env(environ=None):
         try:
             database = Database.from_env(values)
             return export_database(database, path)
+        except DatabaseError as error:
+            return ExportResult(ExportStatus.FAILED, Path(path), f"DB 자료를 읽지 못했습니다: {error}")
+        finally:
+            if database is not None:
+                database.dispose()
+
+    return exporter
+
+
+def data_exporter_from_env(environ=None):
+    """``SETRON_DB_*`` 설정이 있으면 ``path``를 받아 관리 데이터를 .xlsx로 저장하는 함수를, 없으면 None을 돌려준다.
+
+    DB 접속은 내보낼 때 하고, 내보내기가 끝나면 연결 풀을 정리한다.
+    """
+    import os
+    from pathlib import Path
+
+    from setron.features.export.management import save_management_data
+    from setron.features.export.schemas import ExportResult, ExportStatus
+    from setron.features.storage.service import StorageService
+    from setron.infrastructure.database import Database
+
+    values = os.environ if environ is None else environ
+    if not values.get("SETRON_DB_NAME"):
+        return None
+
+    def exporter(path):
+        database = None
+        try:
+            database = Database.from_env(values)
+            return save_management_data(StorageService(database), path)
         except DatabaseError as error:
             return ExportResult(ExportStatus.FAILED, Path(path), f"DB 자료를 읽지 못했습니다: {error}")
         finally:
