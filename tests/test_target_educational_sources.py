@@ -145,3 +145,96 @@ def test_preserved_educational_sources_do_not_establish_missing_modified_model_s
     explicit = target_service.read((pair_key,), targets={pair_key: releases[-1]}).pairs[0]
     assert explicit.selected_release_id == releases[-1]
     assert not explicit.selection_valid and explicit.candidates == () and explicit.reason
+
+
+def test_preserved_c4_o_items_supply_model_candidates_and_latest_confirmed_branch(educational_catalog):
+    """교육용 실제 O 셀에서 후보를 생성한다. 업무용 원본의 분기 순서를 확정하지 않는다."""
+    source = SOURCE_DIRECTORY / "P_PJT_M-C4_SW_정기_Release_List_교육용.xlsx"
+    if not source.is_file():
+        pytest.skip(f"선택적 교육용 원본이 없습니다: {source.name}")
+    openpyxl = pytest.importorskip("openpyxl")
+    from setron.features.release.schemas import ItemInput
+    from setron.features.release.shared_models import SharedNoteItemService, read_item_model_marks
+    from setron.infrastructure.excel_reader import SheetData, cell_address
+
+    workbook = openpyxl.load_workbook(source, read_only=True, data_only=False)
+    try:
+        raw_rows = [list(row) for row in workbook["Release List"].iter_rows(values_only=True)]
+    finally:
+        workbook.close()
+    width = max(map(len, raw_rows))
+    values = [row + [None] * (width - len(row)) for row in raw_rows]
+    assert (values[1][6], values[1][7]) == ("NormalC4", "DFB")
+    sheet = SheetData(source.name, "Release List", 1, 1, values)
+    starts = [number for number, row in enumerate(values, 1) if number >= 3 and row[0] is not None]
+    samples = ((3, "M-C4", 1), (118, "M-C4 DFB", 1), (436, "M-C4 DFB", 2))
+    selected_rows = {
+        first: tuple(number for number in range(first, next((value for value in starts if value > first), len(values) + 1))
+                     if type(values[number - 1][1]) is int)
+        for first, _, _ in samples
+    }
+    # 이 교육용 사본의 A3 블록에는 DFB O가 없다. 첨부된 업무 화면의 값으로 채우지 않는다.
+    assert not any(values[number - 1][7] == "O" for number in selected_rows[3])
+    storage, models, families = educational_catalog
+    with storage.transaction() as tx:
+        dfb_family = tx.insert("version_family", {
+            "group_id": models["M-C4 DFB"], "family_name": "교육용 검증 C4 DFB 분기", "ui_type": "SMART",
+        })["family_id"]
+        raw_cells = {"G2": values[1][6], "H2": values[1][7]}
+        for rows in selected_rows.values():
+            for number in rows:
+                raw_cells.update({cell_address(number, column): value
+                                  for column, value in enumerate(values[number - 1], 1)})
+        batch = tx.insert("import_batch", {"source_type": "EXCEL", "raw_data": {"Release List": raw_cells}})["batch_id"]
+        note = tx.insert("release_note", {"group_id": models["M-C4"], "batch_id": batch})["release_note_id"]
+    branch_families = {"M-C4": families["M-C4"], "M-C4 DFB": dfb_family}
+    expected = {(models[name], family_id): []
+                for family_id in branch_families.values() for name in ("M-C4", "M-C4 DFB")}
+    saved = {}
+    services = ReleaseService(storage), SharedNoteItemService(storage)
+    dfb_dates = []
+    for first, branch, order in samples:
+        match = re.fullmatch(r"(.+?)\s*\((\d{4}-\d{2}-\d{2})\)", values[first - 1][0])
+        assert match is not None
+        raw, released_at = match[1].rstrip(), date.fromisoformat(match[2])
+        if branch == "M-C4 DFB":
+            assert raw.endswith("_DFB")
+            dfb_dates.append(released_at)
+        family_id = branch_families[branch]
+        # 같은 교육용 DFB 분기의 A118→A436를 확인한 시험 입력이다.
+        # 날짜만으로 전체 업무 릴리즈나 다른 분기 사이의 비교 순서를 추정하지 않는다.
+        detail = services[0].register_release(ReleaseInput(
+            family_id=family_id, version_raw=raw, released_at=released_at, version_order=order,
+            batch_id=batch, release_note_id=note,
+            source_reference={field: {"sheet": "Release List", "cells": [f"A{first}"]}
+                              for field in ("version_raw", "released_at", "version_order")},
+        ))
+        release_id = detail.release.current["release_version_id"]
+        saved[first] = release_id
+        applied = set()
+        for number in selected_rows[first]:
+            item = services[0].register_item(release_id, ItemInput(
+                item_no=values[number - 1][1], content=values[number - 1][3],
+                batch_id=batch, release_note_id=note,
+                source_reference={"item_no": {"sheet": "Release List", "cells": [f"B{number}"]},
+                                  "content": {"sheet": "Release List", "cells": [f"D{number}"]}},
+            ))
+            marks = read_item_model_marks(sheet, note_model="M-C4", header_row=2, item_row=number)
+            assert {mark.model_name for mark in marks} == {"M-C4", "M-C4 DFB"}
+            services[1].save(release_id, item.current["item_id"], marks)
+            applied.update(mark.model_name for mark in marks if mark.mark_raw == "O")
+        for name in applied:
+            expected[models[name], family_id].append(release_id)
+    assert dfb_dates == sorted(dfb_dates)
+    before = all_rows(storage, "app_setting")
+    catalog = TargetService(storage).read(tuple(expected))
+    for result in catalog.pairs:
+        assert [candidate.release_id for candidate in result.candidates] == expected[result.key]
+        assert result.recommended_release_id == (expected[result.key][-1] if expected[result.key] else None)
+        for candidate in result.candidates:
+            assert candidate.confirmation.source_reference["model_applicability"]["sheet"] == "Release List"
+    assert catalog.targets[models["M-C4"], branch_families["M-C4"]] == saved[3]
+    assert catalog.targets[models["M-C4 DFB"], dfb_family] == saved[436]
+    absent_dex = TargetService(storage).read(((models["M-C4 Plus"], dfb_family),)).pairs[0]
+    assert not absent_dex.candidates and not absent_dex.applicability_confirmed
+    assert all_rows(storage, "app_setting") == before
