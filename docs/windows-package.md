@@ -24,7 +24,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 | 스키마 | 빈 DB에 `database\schema_mysql5619.sql`을 HeidiSQL 등으로 실행한다 |
 | 기준 자료 | 시연·확인 때만 `database\seed_demo_catalog.sql`을 실행한다 (확정 기준 자료 아님) |
 
-다른 사용자에게 받은 DB 내보내기 파일(.sql)이 있으면 스키마 대신 그 파일을 빈 DB에서 실행한다. 내보내기 파일에 구조와 자료가 모두 들어 있다.
+다른 사용자에게 받은 DB 내보내기 파일(.sql)이 있으면 스키마 대신 그 파일을 빈 DB에서 실행한다. 내보내기 파일에 구조와 자료가 모두 들어 있다. HeidiSQL에서는 빈 DB를 선택한 뒤 파일을 불러와 실행한다(9.2에서 확인).
 
 ## 3. 설정 파일
 
@@ -65,8 +65,10 @@ S15P31B106-31, -63의 남은 확인 항목이다. 2026-11-03 개발 PC에서 공
 | 저장 실패 시 전체 취소 | 실패한 저장 2번의 입력 작업이 DB에 남지 않음 |
 | MySQL 통합 테스트 | `tests/*_mysql.py` 9개 파일 94개를 설치형 서버의 빈 테스트 DB에서 실행, 모두 통과 |
 | SQL 내보내기 → 빈 DB 복원 | 테이블 13개 · 32행 내보내기 → 새 빈 DB에서 `mysql.exe`로 실행 → 테이블별 행 수·`CHECKSUM TABLE` 일치. 같은 DB에 다시 실행하면 첫 `CREATE TABLE`에서 멈춤 |
+| HeidiSQL 9.2로 복원 | 공식 포터블 `HeidiSQL_9.2_Portable.zip`. 빈 DB를 선택하고 SQL 파일을 불러와 실행(인코딩 기본값) → 27개 문장 · 36행 · 경고 0. 한글·이모지·작은따옴표·역슬래시가 든 값까지 테이블별 행 수·`CHECKSUM TABLE`과 AUTO_INCREMENT가 원본과 일치 |
+| HeidiSQL로 같은 DB에 다시 실행 | "SQL 오류 (1050): Table 'import_batch' already exists" 창(확인 버튼만 있음)을 띄우고 멈춤. 자료 변화 없음 |
 
-남은 확인: 회사에서 쓰는 HeidiSQL 9.2로 내보내기 파일을 실행하는 것은 HeidiSQL이 없어 확인하지 못했다.
+받은 파일은 HeidiSQL에서 **빈 DB를 먼저 선택한 뒤** 실행하도록 안내한다. 다른 DB가 선택된 상태면 그 DB에 테이블이 만들어진다.
 
 설치형 서버를 띄운 방법 (확인용, Windows 서비스로 등록하지 않음):
 
