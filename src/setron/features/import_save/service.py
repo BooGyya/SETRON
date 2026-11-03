@@ -12,7 +12,7 @@
   같은 버전 원문만 연결하며, 대응이 없으면 미등록으로 둔다. 원문은 연결 ID와 별도로 보존한다.
 
 이번 범위에서 하지 않는 것
-- 같은 호기·기준일 현황이나 같은 계열·버전 릴리즈가 이미 있을 때의 교체·재가져오기 (BE-009·010·025)
+- 같은 계열·버전 릴리즈 교체 (BE-010)와 저장 후 직접 수정 (BE-025)
 - 릴리즈 노트 문서(`release_note`) 등록과 Item 대상 모델 범위 지정. Item은 APPLIED·범위 미확인으로 연결한다.
 """
 
@@ -23,12 +23,17 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
+from threading import Lock
 
 from setron.features.ai.schemas import ExtractKind
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.schemas import PmInput, SnapshotInput, SoftwareInput
 from setron.features.equipment.service import EquipmentService
-from setron.features.excel_import.schemas import DuplicateSaveError, SaveReceipt, SaveRequest, SaveRow
+from setron.features.excel_import.schemas import (
+    DuplicateSaveError, ImportDraft, ReviewRow, SaveReceipt, SaveRequest, SaveRow, SheetSnapshot,
+)
+from setron.features.excel_import.repository import ImportValidationRepository
+from setron.features.excel_import.service import validate_batch
 from setron.features.release.schemas import ItemInput, ReleaseInput
 from setron.features.release.service import ReleaseService
 from setron.features.storage.service import StorageService
@@ -47,6 +52,7 @@ MODEL_ALIASES = {"M5": "M-O5"}
 
 SNAPSHOT_FIELDS = ("base_date", "site", "line", "model_name", "equipment_code", "production_area",
                    "structure_type", "geometry_type", "modification_type", "group_name")
+SNAPSHOT_METADATA_FIELDS = ("line", "production_area", "structure_type", "geometry_type", "modification_type")
 SOFTWARE_FIELDS = ("family_name", "version_raw", "ui_type")
 PM_FIELDS = ("pm_name", "model_name")
 RELEASE_FIELDS = ("version_raw", "release_date", "family_name", "model_name", "group_name", "ui_type")
@@ -67,6 +73,7 @@ class DatabaseImportSaver:
         """``storage``를 바로 주거나, 첫 저장 때 ``connect()``로 만든다 (앱 시작 시 DB에 접속하지 않기 위함)."""
         _require(storage is not None or connect is not None, "저장 서비스 또는 접속 방법이 필요합니다.")
         self._storage, self._connect = storage, connect
+        self._storage_lock = Lock()
         self.repository = EquipmentRepository()
         self._saved_requests: set[str] = set()
 
@@ -81,32 +88,90 @@ class DatabaseImportSaver:
     @property
     def storage(self):
         if self._storage is None:
-            self._storage = self._connect()
+            with self._storage_lock:
+                if self._storage is None:
+                    self._storage = self._connect()
         return self._storage
 
     def save(self, request: SaveRequest) -> SaveReceipt:
-        """묶음 전체를 저장하고 입력 작업 번호를 돌려준다.
+        """검토·파일명 확인을 마친 한 시트의 묶음을 원자적으로 저장한다."""
+        return self.save_many((request,))[0]
 
-        raises
-        - DuplicateSaveError: 같은 요청 번호를 이 화면에서 이미 저장한 경우.
-        - StorageValidationError: 모델·계열 연결이 정해지지 않았거나 이미 저장된 현황·릴리즈가 있는 경우.
-        - DatabaseConnectionError·DatabaseSaveError·DatabaseCommitUnknownError: DB 오류.
+    def load_reference(self, drafts):
+        """쓰기 없이 최신 DB 기존값을 읽어 검토 화면에 전달한다."""
+        with self.storage.transaction() as tx:
+            return ImportValidationRepository().load(tx, drafts)
+
+    def save_many(self, requests: tuple[SaveRequest, ...]) -> tuple[SaveReceipt, ...]:
+        """전체 검토 요청을 한 번에 저장한다. 후속 시트 실패도 앞선 변경과 함께 취소한다.
+
+        기존 현황은 검토 당시의 값과 같은 경우에만 갱신한다. 검토 후 변경되었거나
+        DB 기존값 검토 없이 보낸 재가져오기는 전체를 보류하고 재검토를 요청한다.
         """
-        if request.request_id in self._saved_requests:
-            raise DuplicateSaveError("이미 저장한 요청입니다.")
-        _require(bool(request.rows), "저장할 행이 없습니다.")
+        _require(isinstance(requests, tuple) and bool(requests), "저장할 요청 묶음이 필요합니다.")
+        ids = [request.request_id for request in requests]
+        if len(set(ids)) != len(ids) or self._saved_requests.intersection(ids):
+            raise DuplicateSaveError("이미 저장했거나 중복된 요청입니다.")
+        _require(all(request.rows for request in requests), "저장할 행이 없습니다.")
         storage = self.storage
         equipment, releases = EquipmentService(storage), ReleaseService(storage)
+        receipts = []
         with storage.transaction() as tx:
-            batch = tx.insert("import_batch", {"source_type": "EXCEL", "raw_data": batch_raw_data(request.raw_data)})
-            if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS:
-                snapshots = self._snapshots(tx, request.rows, batch["batch_id"])
-                equipment.save_snapshots_in(tx, snapshots)
-            else:
-                for release, items in self._releases(tx, request.rows, batch["batch_id"]):
-                    releases.register_release_in(tx, release, items)
-        self._saved_requests.add(request.request_id)
-        return SaveReceipt(batch["batch_id"], len(request.rows), datetime.now(), self.target_label)
+            # 전체 요청의 검토 기준을 쓰기 전에 확인한다. 같은 설비 잠금 순서도 일정하게 유지한다.
+            codes = sorted({row.values["equipment_code"] for request in requests
+                            if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS for row in request.rows
+                            if isinstance(row.values.get("equipment_code"), str)})
+            for code in codes:
+                self.repository.find_equipment(tx, code, lock=True)
+            for request in requests:
+                self._check_review(tx, request)
+            drafts = tuple(_validation_draft(request) for request in requests)
+            reference = ImportValidationRepository().load(tx, drafts)
+            errors = [issue for issue in validate_batch(drafts, reference) if issue.blocks_save]
+            _require(not errors, "이번 저장 묶음 전체를 보류합니다. " + " / ".join(i.message for i in errors[:5]))
+            prepared = []
+            for request in requests:
+                batch = tx.insert("import_batch", {"source_type": "EXCEL", "raw_data": batch_raw_data(request.raw_data)})
+                snapshots = (self._snapshots(tx, request.rows, batch["batch_id"])
+                             if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS else ())
+                prepared.append((request, batch, snapshots))
+            metadata_anchors = _metadata_anchors(tuple(snapshots for _, _, snapshots in prepared))
+            _check_release_links(tuple(snapshots for _, _, snapshots in prepared))
+            for index, (request, batch, snapshots) in enumerate(prepared):
+                if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS:
+                    # 앞선 요청이 새 릴리즈를 등록했다면 원문이 정확히 같은 연결도 확인한다.
+                    snapshots = tuple(replace(value, software=tuple(replace(sw,
+                        release_version_id=self._release_id(tx, sw.family_id, sw.version_raw, sw.release_version_id))
+                        for sw in value.software)) for value in snapshots)
+                    equipment.import_snapshots_in(tx, snapshots, metadata_keys={
+                        key for key, owner in metadata_anchors.items() if owner == index
+                    })
+                else:
+                    for release, items in self._releases(tx, request.rows, batch["batch_id"]):
+                        releases.register_release_in(tx, release, items)
+                receipts.append(SaveReceipt(batch["batch_id"], len(request.rows), datetime.now(), self.target_label))
+        self._saved_requests.update(ids)
+        return tuple(receipts)
+
+    def _check_review(self, tx, request):
+        if ExtractKind(request.kind) is not ExtractKind.EQUIPMENT_STATUS:
+            return
+        expected = {(s.equipment_code, s.base_date): s for s in request.expected_snapshots or ()}
+        keys = {(r.values.get("equipment_code"), r.values.get("base_date")) for r in request.rows}
+        for code, base in sorted(keys, key=str):
+            try:
+                base_date = date.fromisoformat(base)
+            except (TypeError, ValueError):
+                raise StorageValidationError("기준 날짜를 확인해 주세요.") from None
+            equipment = self.repository.find_equipment(tx, code, lock=True) if isinstance(code, str) else None
+            rows = self.repository.rows(tx, "equipment_snapshot", lock=True,
+                equipment_id=equipment["equipment_id"], base_date=base_date) if equipment else []
+            current = self.repository.load(tx, equipment, rows[0], lock=True) if rows else None
+            _require(current is None or request.expected_snapshots is not None,
+                     "이미 저장된 현황입니다. 기존값을 불러와 검토한 뒤 다시 저장해 주세요.")
+            if request.expected_snapshots is not None:
+                _require(current == expected.get((code, base_date)),
+                         "검토 후 기존 현황이 변경되었습니다. 최신 기존값을 다시 불러와 검토해 주세요.")
 
     # --- 설비 현황 -----------------------------------------------------------------
 
@@ -134,11 +199,11 @@ class DatabaseImportSaver:
         """
         first = rows[0].values
         code = first["equipment_code"]
-        existing = self.repository.find_equipment(tx, code)
-        if existing is not None:
-            _require(not self.repository.rows(tx, "equipment_snapshot", equipment_id=existing["equipment_id"],
-                                              base_date=date.fromisoformat(first["base_date"])),
-                     f"{code}: {first['base_date']} 현황이 이미 저장돼 있습니다. 재가져오기는 아직 지원하지 않습니다.")
+        metadata = {}
+        for name in SNAPSHOT_METADATA_FIELDS:
+            values = {row.values.get(name) for row in rows} - {None}
+            _require(len(values) <= 1, f"{code}: 같은 날짜 현황의 {name} 값이 상충합니다.")
+            metadata[name] = next(iter(values), None)
         models: dict[str, dict] = {}
         software: dict[tuple[int, str], dict[str, Any]] = {}
         for row in rows:
@@ -157,7 +222,7 @@ class DatabaseImportSaver:
             if values.get("pm_name"):
                 entry["pms"].append(PmInput(pm_name=values["pm_name"], group_id=model["group_id"],
                                             model_name_raw=values.get("model_name"),
-                                            source_reference=_sources(row, PM_FIELDS)))
+                                            source_reference=_sources(row, (*PM_FIELDS, *SOFTWARE_FIELDS))))
         representative = next(iter(models.values()))["group_id"] if len(models) == 1 else None
         return SnapshotInput(
             equipment_code=code,
@@ -165,12 +230,8 @@ class DatabaseImportSaver:
             site=first.get("site"),
             model_name=first.get("model_name"),
             batch_id=batch_id,
-            line=first.get("line"),
             group_id=representative,
-            production_area=first.get("production_area"),
-            structure_type=first.get("structure_type"),
-            geometry_type=first.get("geometry_type"),
-            modification_type=first.get("modification_type"),
+            **metadata,
             source_reference=merge_sources(*(_sources(row, SNAPSHOT_FIELDS) for row in rows)),
             software=tuple(SoftwareInput(family_id=family_id, version_raw=version, release_version_id=entry["release"],
                                          source_reference=entry["sources"], pms=tuple(entry["pms"]))
@@ -350,6 +411,65 @@ def _sources(row: SaveRow, names: Sequence[str]) -> dict | None:
                 converted.append({**location, "cells": cells})
             result[name] = converted
     return merge_sources(result or None)
+
+
+def _check_release_links(groups: tuple[tuple[SnapshotInput, ...], ...]) -> None:
+    """같은 현황·SW의 확정 릴리즈 연결이 요청 사이에서 상충하면 전체를 보류한다."""
+    links = {}
+    for snapshots in groups:
+        for snapshot in snapshots:
+            for software in snapshot.software:
+                if software.release_version_id is None:
+                    continue
+                key = (snapshot.equipment_code, snapshot.base_date, software.family_id, software.version_raw)
+                previous = links.setdefault(key, software.release_version_id)
+                _require(previous == software.release_version_id,
+                         f"{snapshot.equipment_code}: 같은 적용 SW의 릴리즈 연결이 요청 사이에서 상충합니다. "
+                         "확인한 릴리즈를 하나로 맞춘 뒤 다시 저장해 주세요.")
+
+
+def _metadata_anchors(groups: tuple[tuple[SnapshotInput, ...], ...]) -> dict[tuple[str, date], int]:
+    """날짜별 공통정보가 모두 있는 한 시트의 입력 작업을 현황의 출처로 선택한다.
+
+    다른 시트의 원본을 한 batch_id에 섞지 않는다. 공통정보가 여러 시트에 나뉘어
+    어느 한 시트도 전체 값을 갖지 않으면 전체 저장을 보류한다.
+    """
+    members: dict[tuple[str, date], list[tuple[int, SnapshotInput]]] = {}
+    for index, snapshots in enumerate(groups):
+        for snapshot in snapshots:
+            members.setdefault((snapshot.equipment_code, snapshot.base_date), []).append((index, snapshot))
+    anchors = {}
+    for key, snapshots in members.items():
+        metadata = {}
+        for name in SNAPSHOT_METADATA_FIELDS:
+            values = {getattr(snapshot, name) for _, snapshot in snapshots} - {None}
+            _require(len(values) <= 1, f"{key[0]}: 같은 날짜 현황의 {name} 값이 상충합니다.")
+            metadata[name] = next(iter(values), None)
+        candidates = [index for index, snapshot in snapshots
+                      if all(getattr(snapshot, name) == value for name, value in metadata.items())]
+        _require(bool(candidates),
+                 f"{key[0]}: 같은 날짜의 공통 정보가 여러 시트에 나뉘어 있습니다. "
+                 "라인·생산 영역·구조·형상·개조 정보를 한 시트에서 함께 확인한 뒤 다시 저장해 주세요.")
+        anchors[key] = candidates[-1]
+    return anchors
+
+
+def _validation_draft(request: SaveRequest) -> ImportDraft:
+    """저장 경계에서도 BE-008의 형식·필수값·행간 충돌 규칙을 다시 적용한다.
+
+    현재값은 이미 검토·정규화한 값이다. 보관할 원본은 request.raw_data를 그대로 사용하며
+    검증을 위해 만든 문자열 값으로 원본 셀을 덮어쓰지 않는다.
+    """
+    rows = []
+    for index, row in enumerate(request.rows, 1):
+        values = dict(row.values)
+        if type(values.get("item_no")) is int:
+            values["item_no"] = str(values["item_no"])
+        rows.append(ReviewRow(index, {}, normalized=values))
+    raw = request.raw_data
+    sheet = SheetSnapshot(raw.get("sheet", ""), 1, 1, 1, 1, raw.get("cells", {}))
+    return ImportDraft(ExtractKind(request.kind), request.workbook_name, sheet, tuple(rows),
+                       workbook_id=request.workbook_id)
 
 
 def _edited(row: SaveRow, columns: Mapping[str, str]) -> tuple[str, ...]:

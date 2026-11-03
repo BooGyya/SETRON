@@ -155,7 +155,7 @@ def test_different_pm_version_is_non_blocking_exception():
 def test_same_equipment_and_date_must_share_site_and_model():
     draft = draft_for(sheet(LINE2, LINE3), [eq_row(2), eq_row(3, pm_name="PM2", site="평택")])
     errors = levels(validate(draft), IssueLevel.ERROR)
-    assert {e.row_id for e in errors} == {1, 2} and "Site" in errors[0].message
+    assert {e.row_id for e in errors} == {1, 2} and all(e.code == "SITE_CONFLICT" for e in errors)
 
 
 def test_release_note_rules():

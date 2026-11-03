@@ -133,7 +133,7 @@ def test_same_equipment_and_pm_positions_connect_across_dates_without_filling_ga
     storage, _, _, _, releases = catalog
     value = mixed(catalog, "BE002-HISTORY")
     next_sw = replace(value.software[0], version_raw="v3", release_version_id=releases["O3", "v3"])
-    later = replace(value, base_date=date(2026, 10, 29), site="평택", line="P57", model_name="개조 후 원문",
+    later = replace(value, base_date=date(2026, 10, 29), site="화성", line="P57", model_name="개조 후 원문",
                     modification_type="CIP", software=(next_sw, value.software[1]))
     service = EquipmentService(storage)
     first, second = service.save_snapshots((value, later))
@@ -142,7 +142,7 @@ def test_same_equipment_and_pm_positions_connect_across_dates_without_filling_ga
     before = service.get_snapshot(value.equipment_code, value.base_date)
     after = service.get_snapshot(value.equipment_code, later.base_date)
     assert (before.site, before.line, before.modification_type) == ("화성", "C57", None)
-    assert (after.site, after.line, after.model_name, after.modification_type) == ("평택", "P57", "개조 후 원문", "CIP")
+    assert (after.site, after.line, after.model_name, after.modification_type) == ("화성", "P57", "개조 후 원문", "CIP")
     assert before.software[0].pms[0].pm_name == after.software[0].pms[0].pm_name == "PM1"
     assert before.software[0].version_raw == "v1" and after.software[0].version_raw == "v3"
     assert service.get_snapshot(value.equipment_code, date(2026, 10, 28)) is None
@@ -224,7 +224,7 @@ def test_existing_equipment_date_requires_review_and_keeps_original_data(catalog
     value = mixed(catalog, "BE002-EXISTING")
     saved, = service.save_snapshots((value,))
     with pytest.raises(StorageValidationError, match="이미"):
-        service.save_snapshots((replace(value, site="평택"),))
+        service.save_snapshots((replace(value, line="P57"),))
     assert service.get_snapshot(value.equipment_code, value.base_date) == saved
     with pytest.raises(DatabaseSaveError):
         with storage.transaction() as tx:

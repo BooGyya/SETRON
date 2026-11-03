@@ -78,6 +78,7 @@ class ImportValidationRepository:
                         "content": item["content"],
                     }))
         equipment = {}
+        equipment_sites = {}
         snapshots = {}
         for draft in drafts:
             if draft.kind is not ExtractKind.EQUIPMENT_STATUS:
@@ -88,6 +89,9 @@ class ImportValidationRepository:
                     continue
                 if code not in equipment:
                     equipment[code] = repository.find_equipment(tx, code)
+                    if equipment[code] is not None:
+                        history = repository.rows(tx, "equipment_snapshot", equipment_id=equipment[code]["equipment_id"])
+                        equipment_sites[code] = frozenset(snapshot["site"] for snapshot in history)
                 if equipment[code] is None:
                     continue
                 normalized_date = _safe(row, "base_date")
@@ -101,4 +105,5 @@ class ImportValidationRepository:
                 snapshots[key] = repository.load(tx, equipment[code], rows[0]) if rows else None
         return ReferenceData(frozenset(code for code, value in equipment.items() if value is not None),
                              families=tuple(families), snapshots=tuple(value for value in snapshots.values() if value is not None),
-                             stored_releases=tuple(stored), catalog_loaded=True, models=models)
+                             stored_releases=tuple(stored), catalog_loaded=True, models=models,
+                             equipment_sites=equipment_sites)

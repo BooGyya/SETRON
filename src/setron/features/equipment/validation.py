@@ -70,9 +70,11 @@ def prepare_snapshot(value: SnapshotInput) -> SnapshotInput:
             old = pms.get(pm.pm_name)
             pms[pm.pm_name] = replace(pm, source_reference=merge_sources(
                 old.source_reference if old else None, pm.source_reference,
+                allow_batch=True,
             ))
         software_by_key[key] = replace(software, pms=tuple(pms.values()), source_reference=merge_sources(
             previous.source_reference if previous else None, software.source_reference,
+            allow_batch=True,
         ))
     normalized = tuple(software_by_key.values())
     # PM 정보가 일부만 있으면 나머지 SW의 적용 위치를 추정하지 않고 확인을 요청한다.
@@ -82,4 +84,4 @@ def prepare_snapshot(value: SnapshotInput) -> SnapshotInput:
         require(value.group_id is not None, "PM 구분이 없는 설비에는 확인된 대표 모델이 필요합니다.")
         require(len({software.family_id for software in normalized}) == len(normalized),
                 "PM 구분 없이 같은 계열의 여러 SW 버전을 저장할 수 없습니다.")
-    return replace(value, software=normalized, source_reference=merge_sources(value.source_reference))
+    return replace(value, software=normalized, source_reference=merge_sources(value.source_reference, allow_batch=True))
