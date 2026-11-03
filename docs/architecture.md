@@ -582,7 +582,7 @@ DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 
 - 상단 '데이터 내보내기'는 `SETRON_DB_*` 설정이 있을 때 관리 데이터 Excel(`data_exporter_from_env`)과 DB 전체 SQL(`sql_exporter_from_env`) 중 하나를 골라 실행한다.
 - `SETRON_AI_*` 설정이 있으면 `ui/ai_connection.py`의 `ai_providers_from_env()`가 회사 AI 클라이언트 하나로 가져오기 추출·질문 해석·분석 공급자를 만들어 화면에 넘긴다. 설정이 없으면 예제 응답, 잘못되면 예제 응답으로 시작하고 이유를 안내한다. 클라이언트는 앱을 닫을 때 정리한다. AI 호출은 아직 화면 스레드에서 실행된다.
 - `database/reset_demo_db.py`는 시연·확인용 DB의 관리 테이블을 지우고 스키마와 시연용 기준 자료를 다시 넣는다. `--confirm`에 접속 설정의 DB 이름을 다시 적어야 실행되고, 관리 테이블 외의 테이블은 건드리지 않는다.
-- `database/seed_demo_catalog.sql`은 교육용 자료의 모델 표기로 만든 시연용 모델 9개·계열 9개다. 확정 기준 자료가 아니며 개발 DB에만 적용한다.
+- `database/seed_demo_catalog.sql`은 멘토 확정 분류표(`docs/mentor-confirmations.md`)의 모델 14개·계열 15개다(v2). 파운드리용 릴리즈노트가 따로 있는 O2·C3·C4는 ' (파운드리)' 계열을 두고, `features/reference_data.py`의 장소표(사이트·라인 → 메모리/파운드리)로 저장 시 계열을 고른다. 번역표(원문 설비군 글자 → 등록 모델)도 같은 파일이 기준이며 `extraction/model_candidates.py`는 그것으로 후보를 만든다.
 
 ### AI 화면의 원인 설명·예측·Word 보고서 연결 (BE-018·019·020·022)
 

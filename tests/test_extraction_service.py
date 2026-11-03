@@ -210,7 +210,8 @@ def test_c3_keys_ignore_geometry_and_area_but_separate_ui():
     unknown = family_row("M-C3", "C3", "Poly", geometry="5각")
     assert first.family_key == second.family_key
     assert first.family_key != legacy.family_key
-    assert unknown.family_key is None
+    # 멘토 확정(2026-10-28): 구UI/통합UI 표기가 없는 M-C3는 통합UI. 확인을 요구하지 않고 기본값을 쓴다.
+    assert unknown.family_key == first.family_key and unknown.values["ui_type"] == "INTEGRATED"
     assert first.values["geometry_type"] == "5각" and second.raw_values["geometry_type"] == "6각"
 
 

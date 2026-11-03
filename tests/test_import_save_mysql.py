@@ -113,8 +113,10 @@ def mixed_rows(code="QA-MIXED"):
 
 
 def test_seed_catalog_has_models_and_families_once(storage):
-    assert count(storage, "equipment_group") == 9
-    assert count(storage, "version_family") == 9
+    # 시드 v2: 멘토 확정 분류표의 모델 14개·계열 15개 (docs/mentor-confirmations.md)
+    assert count(storage, "equipment_group") == 14
+    assert count(storage, "version_family") == 15
+    assert count(storage, "version_family", family_name="O2 (파운드리)") == 1
     assert count(storage, "equipment_group", group_name="HPA", analysis_enabled=0) == 1
 
 
@@ -170,12 +172,51 @@ def test_c3_family_is_chosen_by_ui_and_m5_alias(storage):
     assert m5_saved.group_id == _group_id(storage, "M-O5") and m5_saved.model_name == "M5"
 
 
+def test_foundry_line_uses_foundry_family_and_kctc_ox_is_saved(storage):
+    """파운드리 라인의 C3·O2는 ' (파운드리)' 계열, O3는 공통 계열, KCTC Cluster Ox는 등록 모델로 저장한다.
+
+    근거: 멘토 확정 10/14·10/27(파운드리용 릴리즈노트는 O2·C3·C4만 별도), 10/29(KCTC 4개 분리).
+    """
+    saver = DatabaseImportSaver(storage)
+    foundry = dict(base_date="2026-10-21", site="평택", line="S5")       # production_area 를 비워 장소표 기본값을 쓴다
+    c3 = row(1, {"equipment_code": "C5", "version_raw": "F5"}, **foundry, equipment_code="QA-S5-C3",
+             model_name="M-C3", family_name="C3", ui_type="통합UI", version_raw="v3.52_F15")
+    o2 = row(2, {"equipment_code": "C6", "version_raw": "F6"}, **foundry, equipment_code="QA-S5-O2",
+             model_name="M-O2", family_name="O2", version_raw="v3.53_F1")
+    o3 = row(3, {"equipment_code": "C7", "version_raw": "F7"}, **foundry, equipment_code="QA-S5-O3",
+             model_name="M-O3", family_name="O3", version_raw="v4.50.1.2")
+    # 한 통합문서는 한 사업장이어야 하므로(사업장 혼재 검사) Cluster Ox도 평택 S5로 둔다. KCTC는 메모리/파운드리 공통 계열.
+    ox = row(4, {"equipment_code": "C8", "version_raw": "F8"}, **foundry, equipment_code="QA-CLUSTER-OX",
+             group_name="KCTC", model_name="Cluster Ox", family_name="Cluster Ox", structure_type="CLUSTER",
+             version_raw="v999.3_7")
+    saver.save(request(ExtractKind.EQUIPMENT_STATUS, [c3, o2, o3, ox], "req-foundry"))
+
+    service = EquipmentService(storage)
+    day = date(2026, 10, 21)
+    assert service.get_snapshot("QA-S5-C3", day).software[0].family_id == _family_id(storage, "C3 통합UI (파운드리)")
+    assert service.get_snapshot("QA-S5-O2", day).software[0].family_id == _family_id(storage, "O2 (파운드리)")
+    assert service.get_snapshot("QA-S5-O3", day).software[0].family_id == _family_id(storage, "O3")
+    saved_ox = service.get_snapshot("QA-CLUSTER-OX", day)
+    assert saved_ox.group_id == _group_id(storage, "Cluster Ox")
+    assert saved_ox.software[0].family_id == _family_id(storage, "Cluster Ox")
+
+
+def test_c3_without_ui_is_saved_as_integrated(storage):
+    """UI 표기가 없는 M-C3는 통합UI 계열로 저장한다 (멘토 확정 2026-10-28)."""
+    saver = DatabaseImportSaver(storage)
+    c3 = row(1, {"equipment_code": "C5", "version_raw": "F5"}, **EQUIPMENT, equipment_code="QA-C3-NOUI",
+             model_name="M-C3", family_name="C3", version_raw="v3.52_22")
+    saver.save(request(ExtractKind.EQUIPMENT_STATUS, [c3], "req-c3-noui"))
+    saved = EquipmentService(storage).get_snapshot("QA-C3-NOUI", date(2026, 10, 21))
+    assert saved.software[0].family_id == _family_id(storage, "C3 통합UI")
+
+
 @pytest.mark.parametrize("changes, message", [
     ({"model_name": "M-C9", "group_name": "Poly"}, "등록 모델이 없습니다"),
     ({"model_name": "M-C9"}, "등록 모델이 없습니다"),
     ({"group_name": "Etch"}, "설비군"),
     ({"group_name": "Poly", "model_name": "M-O2", "family_name": "O2"}, "소속이 다릅니다"),
-    ({"model_name": "M-C3", "family_name": "C3"}, "UI"),
+    ({"model_name": "M-C3", "family_name": "C3", "ui_type": "신UI"}, "UI"),   # 미표기는 통합UI 기본값(10/28), 잘못된 UI 값만 막는다
     ({"family_name": "O9"}, "SW 계열이 없거나 여러 개"),
 ])
 def test_unresolved_links_cancel_whole_batch(storage, changes, message):
