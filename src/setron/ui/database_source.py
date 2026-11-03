@@ -37,8 +37,8 @@ from setron.ui.version_data import ItemEntry, ModelFamily, ReleaseEntry, SourceR
 
 # UI 설비군 키 → 등록 모델 이름. 시연용 기준 자료(database/seed_demo_catalog.sql)의 이름과 같다.
 GROUP_MODELS = {
-    "c3": ("M-C3",), "c4": ("M-C4",), "o2": ("M-O2",), "o3": ("M-O3",), "o5": ("M-O5", "M-O5 Prime"),
-    "inline-ox": (), "inline-o2": ("Inline O2",), "cluster-ox": (), "cluster-o2": ("Cluster O2",),
+    "c3": ("M-C3",), "c4": ("M-C4", "M-C4 DFB", "M-C4+"), "o2": ("M-O2",), "o3": ("M-O3", "XMO3"), "o5": ("M-O5", "M-O5 Prime"),
+    "inline-ox": ("Inline Ox",), "inline-o2": ("Inline O2",), "cluster-ox": ("Cluster Ox",), "cluster-o2": ("Cluster O2",),
 }
 SOURCE_LABEL = "MySQL DB 저장 자료 · 조회 적용 시 목표 N·위험 기준 재확인"
 

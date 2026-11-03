@@ -1,5 +1,6 @@
 """BE-008 검증에 필요한 관리 자료를 같은 트랜잭션에서 읽는다."""
 
+from setron.features.reference_data import strip_foundry
 from datetime import date
 
 from setron.features.equipment.repository import EquipmentRepository
@@ -39,17 +40,21 @@ class ImportValidationRepository:
         references = []
         for row in family_rows:
             group = groups[row["group_id"]]
+            # 'O2 (파운드리)' 같은 파운드리용 계열은 같은 구분 키에 영역 표시를 따로 둔다 (reference_data.area_of 로 선택).
+            plain, foundry = strip_foundry(row["family_name"])
             key = family_key(ReviewRow(1, {
                 "group_name": group["category"], "model_name": group["group_name"],
-                "family_name": row["family_name"], "ui_type": row["ui_type"],
+                "family_name": plain, "ui_type": row["ui_type"],
             }), ExtractKind.EQUIPMENT_STATUS)
             if key is not None:
-                references.append(FamilyReference(key, FamilyReleases(row["family_id"], ()), owner_group_id=row["group_id"]))
+                references.append(FamilyReference(key, FamilyReleases(row["family_id"], ()), owner_group_id=row["group_id"],
+                                                  production_area="FOUNDRY" if foundry else None))
         catalog = ReferenceData(frozenset(), families=tuple(references), catalog_loaded=True, models=models)
         needed = set()
         for draft in drafts:
             for row in draft.active_rows:
-                family = resolve_family(row, draft.kind, catalog)
+                family = resolve_family(row, draft.kind, catalog, sheet_name=draft.sheet.sheet_name,
+                                        workbook_name=draft.workbook_name)
                 if family is not None:
                     needed.add(family.releases.family_id)
         stored = []
@@ -65,7 +70,7 @@ class ImportValidationRepository:
             families.append(FamilyReference(family.key,
                 FamilyReleases(family_id, versions, (aliases or {}).get(family_id) if family_id in needed else None,
                                exact_raw=True),
-                target_values, family.owner_group_id))
+                target_values, family.owner_group_id, family.production_area))
             if not any(d.kind is ExtractKind.RELEASE_NOTE for d in drafts):
                 continue
             for release in releases:

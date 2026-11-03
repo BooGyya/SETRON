@@ -26,6 +26,10 @@ from typing import Any
 from threading import Lock
 
 from setron.features.ai.schemas import ExtractKind
+from setron.features.reference_data import (
+    FOUNDRY_FAMILY_MODELS, FOUNDRY_SUFFIX, MODEL_CATEGORIES as _REFERENCE_CATEGORIES, area_of, resolve_model_text,
+    strip_foundry,
+)
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.schemas import PmInput, SnapshotInput, SoftwareInput
 from setron.features.equipment.service import EquipmentService
@@ -51,11 +55,7 @@ from setron.infrastructure.database import Database
 
 CATEGORIES = {"poly": "POLY", "oxide": "OXIDE", "kctc": "KCTC", "hpa": "HPA"}
 UI_TYPES = {"구ui": "LEGACY", "legacy": "LEGACY", "통합ui": "INTEGRATED", "integrated": "INTEGRATED"}
-MODEL_CATEGORIES = {
-    "C3": "POLY", "M-C3": "POLY", "C4": "POLY", "M-C4": "POLY",
-    "M-O2": "OXIDE", "M-O3": "OXIDE", "M-O5": "OXIDE", "M-O5 Prime": "OXIDE",
-    "Inline O2": "KCTC", "Cluster O2": "KCTC", "HPA": "HPA",
-}
+MODEL_CATEGORIES = dict(_REFERENCE_CATEGORIES)
 MODEL_ALIASES = {"M5": "M-O5"}
 
 SNAPSHOT_FIELDS = ("base_date", "site", "line", "model_name", "equipment_code", "production_area",
@@ -143,6 +143,7 @@ class DatabaseImportSaver:
         - 계열 ID 순서의 ReleaseImportPlan 튜플.
         """
         requests = request if isinstance(request, tuple) else (request,)
+        self._remember_workbooks(requests)
         _check_confirmations(requests)
         for value in requests:
             validate_save_request_sources(value)
@@ -274,6 +275,7 @@ class DatabaseImportSaver:
         DB 기존값 검토 없이 보낸 재가져오기는 전체를 보류하고 재검토를 요청한다.
         """
         _require(isinstance(requests, tuple) and bool(requests), "저장할 요청 묶음이 필요합니다.")
+        self._remember_workbooks(requests)
         _check_confirmations(requests)
         ids = [request.request_id for request in requests]
         if len(set(ids)) != len(ids) or self._saved_requests.intersection(ids):
@@ -522,9 +524,16 @@ class DatabaseImportSaver:
 
     # --- 연결 ----------------------------------------------------------------------
 
+    def _remember_workbooks(self, requests) -> None:
+        """저장 행마다 통합문서 이름을 기억한다. 릴리즈노트는 사이트·라인 칸이 없어 파일명으로 파운드리를 가른다."""
+        self._row_workbooks = {id(row): request.workbook_name for request in requests for row in request.rows}
+
     def _model(self, tx, values: Mapping[str, Any], row: SaveRow) -> dict:
         raw = (values.get("model_name") or "").strip()
         name = MODEL_ALIASES.get(raw, raw)
+        alias = resolve_model_text(raw, values.get("version_raw"))
+        if alias is not None:
+            name = alias[0]          # 번역표(멘토 확정 분류표)의 표기는 등록 모델명으로 푼다
         _require(bool(name), f"{_where(row)}: 모델명이 필요합니다.")
         category = _category(values.get("group_name"), name, row)
         matches = [g for g in self.repository.rows(tx, "equipment_group", category=category) if g["group_name"] == name]
@@ -551,13 +560,26 @@ class DatabaseImportSaver:
         ui_raw = values.get("ui_type")
         ui = UI_TYPES.get((ui_raw or "").replace(" ", "").casefold())
         _require(not ui_raw or ui is not None, f"{_where(row)}: UI 구분 '{ui_raw}'을(를) 확인해 주세요.")
+        if not ui_raw and model["group_name"] == "M-C3":
+            # 멘토 확정(2026-10-28): UI 표기가 없는 M-C3는 통합UI. 저장 전 검증(normalization)과 같은 기본값.
+            ui = "INTEGRATED"
         owners = {model["group_id"]} | ({model["parent_group_id"]} if model.get("parent_group_id") else set())
         families = [f for owner in sorted(owners) for f in self.repository.rows(tx, "version_family", group_id=owner)]
         # 정확한 계열명이 다른 UI의 후보를 가리켜도 올바른 UI의 접두 이름 후보를 버리지 않는다.
         if ui:
             families = [family for family in families if family["ui_type"] == ui]
-        candidates = [f for f in families if f["family_name"] == name] or [
-            f for f in families if f["family_name"].startswith(name + " ")]
+        # 메모리/파운드리: 파운드리 라인의 O2·C3·C4는 ' (파운드리)' 계열(별도 릴리즈노트, 10/27).
+        # 값이 없으면 사이트·라인·시트명으로 기본값을 정한다(장소표). 그래도 모르면 메모리 계열.
+        area = area_of(values, _sheet_of(row), getattr(self, "_row_workbooks", {}).get(id(row)))
+        base_model = model["group_name"] if not model.get("parent_group_id") else next(
+            (g["group_name"] for g in self.repository.rows(tx, "equipment_group") if g["group_id"] == model["parent_group_id"]),
+            model["group_name"])
+        is_foundry = area == "FOUNDRY" and base_model in FOUNDRY_FAMILY_MODELS
+        families = [f for f in families if strip_foundry(f["family_name"])[1] == is_foundry]
+        plain = strip_foundry(name)[0]
+        target = plain + FOUNDRY_SUFFIX if is_foundry else plain
+        candidates = [f for f in families if f["family_name"] == target] or [
+            f for f in families if f["family_name"].startswith(plain + " ")]
         _require(len(candidates) == 1,
                  f"{_where(row)}: 모델 '{model['group_name']}'의 SW 계열 '{name}'"
                  + (f"({ui_raw})" if ui_raw else "") + "을(를) 하나로 정할 수 없습니다.")
@@ -753,6 +775,15 @@ def _category(raw: str | None, model: str, row: SaveRow) -> str:
 
 def _where(row: SaveRow) -> str:
     return "검토 행 " + ", ".join(str(i) for i in row.row_ids)
+
+
+def _sheet_of(row: SaveRow) -> str | None:
+    """행의 원본 출처에서 시트명을 하나 찾는다(메모리/파운드리 기본값 판정용). 없으면 None."""
+    for value in (row.source_reference or {}).values():
+        for location in value if isinstance(value, list) else [value]:
+            if isinstance(location, dict) and location.get("sheet"):
+                return str(location["sheet"])
+    return None
 
 
 def _require(condition: bool, message: str) -> None:

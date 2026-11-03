@@ -14,6 +14,7 @@ import warnings
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QMessageBox, QSizePolicy, QTableView, QVBoxLayout, QWidget,
 )
 
@@ -23,7 +24,7 @@ from setron.features.excel_import.reference import ReferenceData
 from setron.features.excel_import.candidates import apply_model_candidates, candidate_notes, model_candidate_rows
 from setron.features.excel_import.schemas import FIELD_LABELS, ISSUE_LABELS, KIND_LABELS, Issue, IssueLevel
 from setron.features.excel_import.service import (
-    build_save_request, cell_text, describe_save_error, draft_from_review, edit_value,
+    build_save_request, cell_text, describe_save_error, draft_from_review, edit_value, parse_date,
     MemoryImportSaver, has_errors, parse_address, revert_row, set_excluded, snapshot_sheet, validate,
 )
 from setron.infrastructure import excel_reader
@@ -225,6 +226,31 @@ class ImportPage(QWidget):
         review.body.addLayout(actions)
         review.body.addWidget(label("AI 추출값은 원본과 따로 보관합니다. 수정한 값은 ‘수정됨’으로 표시되고 원본 값·셀 위치는 바뀌지 않습니다. "
                                     "AI 결과는 검토 없이 저장하지 않습니다.", 13, color=SECONDARY, wrap=True))
+        # 시트 공통 정보: 교육용 현황표에는 기준일·사업장 셀이 없어 한 번 입력해 모든 행에 적용한다 (1차 점검 6번).
+        common = QWidget()
+        common_layout = QVBoxLayout(common)
+        common_layout.setContentsMargins(0, 0, 0, 0)
+        common_layout.setSpacing(6)
+        common_layout.addWidget(label("시트 공통 정보 · 설비 현황표", 16, medium=True))
+        common_layout.addWidget(label("기준일·사업장이 시트에 없으면 여기 입력하고 ‘모든 행에 적용’을 누르세요. 비어 있는 행만 채우고, "
+                                      "메모리/파운드리를 비우면 라인에 따라 기본값(장소표)을 씁니다.", 13, color=SECONDARY, wrap=True))
+        self.common_date, self.common_site = QLineEdit(), QLineEdit()
+        self.common_date.setPlaceholderText("기준일 YYYY-MM-DD")
+        self.common_site.setPlaceholderText("사업장 (예: 화성, 평택)")
+        self.common_area = QComboBox()
+        for text, value in (("메모리/파운드리 · 라인 기준 자동", ""), ("MEMORY", "MEMORY"), ("FOUNDRY", "FOUNDRY")):
+            self.common_area.addItem(text, value)
+        for widget, name in ((self.common_date, "공통 기준일"), (self.common_site, "공통 사업장"), (self.common_area, "공통 메모리/파운드리")):
+            widget.setAccessibleName(name)
+            widget.setProperty("queryField", True)
+            widget.setFixedHeight(38)
+        self.common_apply_button = button("모든 행에 적용")
+        self.common_overwrite = QCheckBox("이미 있는 값도 덮어쓰기")
+        common_layout.addWidget(_WrapRow([_field("기준일", self.common_date), _field("사업장", self.common_site),
+                                          _field("메모리/파운드리", self.common_area)], 230, fields=True))
+        common_layout.addWidget(_WrapRow([self.common_apply_button, self.common_overwrite], 220))
+        self.common_box = common
+        review.body.addWidget(common)
         self.row_model = ReadTableModel(("행", "상태"))
         self.row_table = read_table(self.row_model, "추출 행 목록", (70, 150))
         self.row_table.clicked.connect(lambda index: self.select_row(self.row_model.ids[index.row()]))
@@ -281,6 +307,7 @@ class ImportPage(QWidget):
         self.list_button.clicked.connect(self.load_workbooks)
         self.read_button.clicked.connect(self.read_selected)
         self.extract_button.clicked.connect(self.extract)
+        self.common_apply_button.clicked.connect(self.apply_common)
         self.save_button.clicked.connect(self.save)
         self.candidate_button.clicked.connect(self.apply_model_candidates)
         self.revalidate_button.clicked.connect(self.revalidate)
@@ -352,6 +379,9 @@ class ImportPage(QWidget):
         if self.selected_row_id in ids:
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
+        self.common_box.setVisible(self.kind is ExtractKind.EQUIPMENT_STATUS)
+        for widget in (self.common_date, self.common_site, self.common_area, self.common_apply_button, self.common_overwrite):
+            widget.setEnabled(draft is not None and not self.busy and not self.locked)
         self.issue_model.set_rows(tuple((ISSUE_LABELS[i.level], str(i.row_id) if i.row_id else "전체",
                                          FIELD_LABELS.get(i.field, "-") if i.field else "-", i.address or "위치 확인 필요", i.message,
                                          i.workbook_name or (draft.workbook_name if draft else "-"),
@@ -795,6 +825,44 @@ class ImportPage(QWidget):
         for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):
             widget.setEnabled(not self.busy and not self.locked)
         self._render()
+        return True
+
+    def apply_common(self):
+        """시트 공통 정보(기준일·사업장·메모리/파운드리)를 설비 현황 초안의 모든 행에 적용한다.
+
+        빈 행만 채우고, ‘덮어쓰기’를 켜면 기존 값도 바꾼다. 원본 추출값은 수정값과 따로 보존된다.
+
+        return
+        - 적용했으면 True. 초안이 없거나 입력이 없거나 날짜 형식이 틀리면 False.
+        """
+        if self.draft is None or self.busy or self.locked or self.kind is not ExtractKind.EQUIPMENT_STATUS:
+            return False
+        values = {"base_date": self.common_date.text().strip(), "site": self.common_site.text().strip(),
+                  "production_area": self.common_area.currentData() or ""}
+        values = {name: text for name, text in values.items() if text}
+        if not values:
+            self._set_status("공통 정보 없음", "warning", "기준일·사업장·메모리/파운드리 중 하나 이상을 입력해 주세요.")
+            return False
+        if "base_date" in values:
+            try:
+                parse_date(values["base_date"])
+            except ValueError:
+                self._set_status("기준일 형식 확인", "warning", "기준일은 YYYY-MM-DD 형식으로 입력해 주세요.")
+                return False
+        draft, changed = self.draft, 0
+        overwrite = self.common_overwrite.isChecked()
+        for row in draft.rows:
+            if row.excluded:
+                continue
+            for name, text in values.items():
+                if overwrite or not (row.value(name) or "").strip():
+                    draft = edit_value(draft, row.row_id, name, text)
+                    changed += 1
+        self.draft = draft
+        self._changed()
+        self._set_status("공통 정보 적용", "info", f"{len(values)}개 항목을 {changed}칸에 적용했습니다. 검토 항목을 다시 확인해 주세요.")
+        if self.selected_row_id is not None:
+            self.select_row(self.selected_row_id)
         return True
 
     def apply_edits(self):

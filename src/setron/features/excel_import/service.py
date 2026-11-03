@@ -658,7 +658,8 @@ def _reference_issues(draft: ImportDraft, reference: ReferenceData | None) -> li
         if (problem := model_issue(row, draft.kind, reference)) is not None:
             issues.append(problem)
             continue
-        resolved = resolve_family(row, draft.kind, reference)
+        resolved = resolve_family(row, draft.kind, reference, sheet_name=draft.sheet.sheet_name,
+                                  workbook_name=draft.workbook_name)
         if resolved is not None:
             if version is None:
                 continue
@@ -965,7 +966,8 @@ def build_save_request(draft: ImportDraft, request_id: str, reference: Reference
     for row in draft.active_rows:
         context = _normalized_context(row)
         values = {name: _normalized(row, name, context=context) for name in draft.fields}
-        family = resolve_family(row, draft.kind, reference) if reference is not None else None
+        family = (resolve_family(row, draft.kind, reference, sheet_name=draft.sheet.sheet_name,
+                                 workbook_name=draft.workbook_name) if reference is not None else None)
         release = family.releases.match(values.get("version_raw")) if family is not None else None
         sources = {
             name: {"sheet": draft.sheet.sheet_name, "cells": [address]}

@@ -95,10 +95,12 @@ def test_groups_bind_to_registered_models(storage):  # noqa: F811
     source = load_dashboard_source(storage)
 
     assert len(source.bindings["o5"]) == 2  # M-O5와 M-O5 Prime
-    # 등록 모델이 없는 설비군은 골라도 항상 0대라 DB 선택지에서 뺀다.
-    assert "inline-ox" not in source.bindings and "cluster-ox" not in source.bindings
+    assert len(source.bindings["c4"]) == 3  # M-C4·M-C4 DFB·M-C4+ (개조형은 원 설비군, 멘토 확정 10/21·10/29)
+    assert len(source.bindings["o3"]) == 2  # M-O3·XMO3
+    # 시드 v2 에는 KCTC 4종이 모두 등록돼 있다 (멘토 확정 10/29). 등록 모델이 없는 설비군만 선택지에서 뺀다.
+    assert len(source.bindings["inline-ox"]) == 1 and len(source.bindings["cluster-ox"]) == 1
     assert {o.key for o in source.catalog.groups} == set(source.bindings)
-    assert {"c3", "c4", "o2", "o3", "o5", "inline-o2", "cluster-o2"} <= set(source.bindings)
+    assert {"c3", "c4", "o2", "o3", "o5", "inline-ox", "inline-o2", "cluster-ox", "cluster-o2"} <= set(source.bindings)
     c4 = next(cell for cell in source.snapshot(ALL).groups if cell.group_keys == ("c4",))
     assert len(c4.equipment_ids) == 1
 

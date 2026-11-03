@@ -1,5 +1,6 @@
 """가져오기 검증에 사용하는 저장 자료와 명시적인 계열 대응."""
 
+from setron.features.reference_data import area_of
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -40,12 +41,14 @@ class FamilyReference:
     - releases: 같은 계열의 원문·확정 별칭·확인된 순서.
     - targets: 모델명별 목표 릴리즈 ID. 미지정 모델을 다른 모델의 N으로 채우지 않음.
     - owner_group_id: 계열을 관리하는 등록 모델 ID. 모델 자료가 미연결인 순수 계산은 None 허용.
+    - production_area: 'FOUNDRY'면 파운드리용 릴리즈노트 계열(' (파운드리)'). None은 메모리·공통 계열.
     """
 
     key: FamilyKey
     releases: FamilyReleases
     targets: Mapping[str, int | None] = field(default_factory=dict)
     owner_group_id: int | None = None
+    production_area: str | None = None
 
 
 @dataclass(frozen=True)
@@ -181,13 +184,18 @@ def identity(key: FamilyKey) -> tuple:
     return key.category, key.family_name, key.ui_type, key.structure_type
 
 
-def resolve_family(row, kind: ExtractKind, reference: ReferenceData) -> FamilyReference | None:
+def resolve_family(row, kind: ExtractKind, reference: ReferenceData, *,
+                   sheet_name: str | None = None, workbook_name: str | None = None) -> FamilyReference | None:
     """현재 모델 또는 직계 기본 모델이 관리하는 유일한 저장 계열을 찾는다.
+
+    같은 구분의 메모리·파운드리 계열이 함께 있으면(O2·C3·C4) 행의 영역으로 고른다.
+    영역은 저장(import_save)과 같은 :func:`reference_data.area_of` 로 정한다.
 
     param
     - row: 사용자의 수정값을 포함한 검토 행.
     - kind: 가져오는 자료 종류.
     - reference: 이번 검증에서 읽은 저장 자료.
+    - sheet_name, workbook_name: 원본 시트명·통합문서 이름. 영역 기본값 판정에 쓴다.
 
     return
     - 구분값과 소유 범위가 일치하는 유일한 계열. 없거나 여러 개면 None.
@@ -206,4 +214,8 @@ def resolve_family(row, kind: ExtractKind, reference: ReferenceData) -> FamilyRe
         if model.parent_group_id is not None:
             owners.add(model.parent_group_id)
         matches = [family for family in matches if family.owner_group_id in owners]
+    if any(family.production_area == "FOUNDRY" for family in matches):
+        values = {name: row.value(name) for name in ("production_area", "site", "line")}
+        want = "FOUNDRY" if area_of(values, sheet_name, workbook_name) == "FOUNDRY" else None
+        matches = [family for family in matches if family.production_area == want]
     return matches[0] if len(matches) == 1 else None

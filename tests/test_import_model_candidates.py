@@ -5,7 +5,9 @@ from setron.features.excel_import.service import set_excluded
 from setron.features.extraction.model_candidates import CANDIDATES, candidate_changes, find_candidate
 from test_excel_import_service import draft_for, eq_row, sheet
 
-SEED_MODELS = {"M-C3", "M-C4", "M-O2", "M-O3", "M-O5", "M-O5 Prime", "Inline O2", "Cluster O2", "HPA"}
+# 시드 v2 (database/seed_demo_catalog.sql): 멘토 확정 분류표의 14개 모델
+SEED_MODELS = {"M-C3", "M-C4", "M-C4 DFB", "M-C4+", "M-O2", "M-O3", "XMO3", "M-O5", "M-O5 Prime",
+               "Inline Ox", "Inline O2", "Cluster Ox", "Cluster O2", "HPA"}
 
 
 def test_every_candidate_points_to_a_seed_model():
@@ -17,7 +19,8 @@ def test_raw_names_match_ignoring_spaces_and_case():
     candidate = find_candidate("m-c3(6각)(통합ui)")
     assert (candidate.model_name, candidate.ui_type, candidate.family_name) == ("M-C3", "통합UI", "C3")
     assert find_candidate("M-C3 (구UI)").ui_type == "구UI"
-    assert find_candidate("Ox(inline)") is None  # 시드에 KCTC Inline Ox 모델이 없다
+    assert find_candidate("Ox(inline)").model_name == "Inline Ox"  # KCTC 4개 분리 (멘토 확정 2026-10-29)
+    assert find_candidate("M-C4(DFB)").model_name == "M-C4 DFB" and find_candidate("XMO3").model_name == "XMO3"
     assert find_candidate(None) is None and find_candidate(" ") is None
 
 
@@ -68,3 +71,12 @@ def test_notes_explain_uncertain_candidates():
     draft = draft_for(data, [eq_row(2, equipment_code="E1", model_name="M-C3", family_name=None, version_raw="v3")])
 
     assert any("통합UI" in note for note in candidate_notes(draft))
+
+
+def test_mixed_c4_label_is_resolved_by_version_suffix():
+    """'M-C4/C4+' 표기는 같은 행의 SW 버전에 _DEX 가 있을 때만 C4+ (멘토 확정 2026-10-29)."""
+    fields = ("model_name", "group_name", "family_name", "modification_type")
+    plus = candidate_changes({"model_name": "M-C4/C4+ / Smart UI", "version_raw": "v4.56.8.1_f1_DEX"}, fields)
+    base = candidate_changes({"model_name": "M-C4/C4+ / Smart UI", "version_raw": "v4.56.7.1_f1"}, fields)
+    assert plus["model_name"] == "M-C4+" and plus["modification_type"] == "C4+"
+    assert base["model_name"] == "M-C4" and "modification_type" not in base

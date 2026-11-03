@@ -4,17 +4,15 @@ from datetime import datetime
 import re
 
 from setron.features.ai.schemas import ExtractKind
+from setron.features.reference_data import MODEL_CATEGORIES as _REFERENCE_CATEGORIES, MODEL_STRUCTURES
 
 from .schemas import ExtractionIssue, FamilyKey
 
 
 CATEGORIES = {"poly": "POLY", "oxide": "OXIDE", "kctc": "KCTC", "hpa": "HPA"}
 UI_TYPES = {"구ui": "LEGACY", "legacy": "LEGACY", "통합ui": "INTEGRATED", "integrated": "INTEGRATED"}
-MODEL_CATEGORIES = {
-    "C3": "POLY", "M-C3": "POLY", "C4": "POLY", "M-C4": "POLY",
-    "M-O2": "OXIDE", "M-O3": "OXIDE", "M-O5": "OXIDE", "M-O5 Prime": "OXIDE",
-    "Inline O2": "KCTC", "Cluster O2": "KCTC", "HPA": "HPA",
-}
+# 등록 모델 14개(멘토 확정 분류표, database/seed_demo_catalog.sql v2)와 계열 이름만 적힌 표기
+MODEL_CATEGORIES = {"C3": "POLY", "C4": "POLY", **_REFERENCE_CATEGORIES}
 
 
 def normalize(values, kind, row_number, sources):
@@ -93,16 +91,19 @@ def normalize(values, kind, row_number, sources):
             normalized_ui = None
         else:
             normalized_ui = normalized_ui or family_ui
-        result["ui_type"] = normalized_ui
         family = "C3"
+        if normalized_ui is None and result.get("model_name") in {"C3", "M-C3"}:
+            # 멘토 확정(2026-10-28 회신, 4차 멘토링 일지): 구UI/통합UI 표기가 없는 M-C3는 모두 통합UI. 구UI가 특별한 설비다.
+            normalized_ui = "INTEGRATED"
+        result["ui_type"] = normalized_ui
         if normalized_ui is None:
-            issue("ui_type", "C3 구UI·통합UI를 확인하세요. 형상·버전 번호로 추정하지 않습니다.")
+            issue("ui_type", "C3 구UI·통합UI를 확인하세요.")
     result["family_name"] = family
 
     structure = result.get("structure_type")
     if structure and structure.casefold() in {"inline", "cluster"}:
         structure = result["structure_type"] = structure.upper()
-    model_structure = {"Inline O2": "INLINE", "Cluster O2": "CLUSTER"}.get(model)
+    model_structure = MODEL_STRUCTURES.get(model)
     if model_structure:
         if structure and structure != model_structure:
             issue("structure_type", "모델과 Inline/Cluster 구조 표기가 상충합니다.")
