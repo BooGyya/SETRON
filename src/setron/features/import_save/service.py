@@ -52,7 +52,7 @@ ITEM_FIELDS = ("item_no", "content")
 RELEASE_EDITED = {"version_raw": "version_raw", "release_date": "released_at"}
 ITEM_EDITED = {"item_no": "item_no", "content": "content"}
 
-TARGET_LABEL = "MySQL DB · 조회 화면에는 아직 반영되지 않음"
+TARGET_LABEL = "MySQL DB · 대시보드에서 조회 적용 후 반영"
 
 
 class DatabaseImportSaver:
