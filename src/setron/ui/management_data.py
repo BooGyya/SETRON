@@ -89,7 +89,7 @@ class ManagementGateway:
             return ManagementService(storage).get_applicability(model_id, family_id)
 
     def export_management(self, path):
-        from setron.features.export.management import save_management_data
+        from setron.features.export.management_tables import save_management_data
         from setron.features.export.schemas import ExportResult, ExportStatus
         from setron.infrastructure.database import DatabaseError
         try:

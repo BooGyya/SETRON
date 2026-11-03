@@ -56,15 +56,46 @@ def count(storage, table, **filters):
 
 
 def row(row_id, cells, edited=(), **values):
-    """검토 행 하나. ``cells``는 필드별 원본 셀 주소("A1" 또는 "A1,A2")다."""
+    """원본 출처와 사용자가 직접 보완한 메타데이터를 구분한 합성 검토 행을 만든다.
+
+    param
+    - row_id, cells: 검토 행 ID와 항목별 실제 원본 셀 주소.
+    - edited: 원본과 다르게 명시적으로 수정한 항목.
+    - values: 검토를 마친 현재 값. 출처가 없는 메타데이터는 사용자가 직접 입력한 값.
+
+    return
+    - 원본 대조 또는 명시적 보완 근거를 가진 SaveRow.
+    """
     sources = {name: {"sheet": SHEET, "cells": address} for name, address in cells.items()}
-    return SaveRow((row_id,), values, sources or None, tuple(edited))
+    manual = {name for name, value in values.items() if value is not None and name not in cells}
+    return SaveRow((row_id,), values, sources or None, tuple(sorted(set(edited) | manual)))
 
 
 def request(kind, rows, request_id, cells=None):
-    used = {a for r in rows for ref in (r.source_reference or {}).values() for a in ref["cells"].split(",")}
-    raw = {"sheet": SHEET, "cells": cells or {a: f"원문 {a}" for a in used}, "merged": ["A1:A2"]}
-    return SaveRequest(request_id, kind, "가상.xlsx", raw, tuple(rows), 0, ResponseSource.EXAMPLE)
+    """현재 값에 실제로 대응하는 합성 원본을 만들되 명시한 원본은 그대로 보존한다.
+
+    param
+    - kind, rows, request_id: 자료 종류·검토 행·요청 식별자.
+    - cells: 별도 원본. None이면 출처가 지정된 실제 시험값으로 구성.
+
+    return
+    - 원문과 보완 항목을 구분한 저장 요청.
+    """
+    raw_cells, prepared = ({} if cells is None else dict(cells)), []
+    for value in rows:
+        edited = set(value.edited_fields)
+        for name, source in (value.source_reference or {}).items():
+            addresses = source["cells"] if isinstance(source["cells"], list) else source["cells"].split(",")
+            for address in addresses:
+                if cells is None:
+                    if address not in raw_cells:
+                        raw_cells[address] = value.values.get(name)
+                    elif raw_cells[address] != value.values.get(name):
+                        # 같은 원본 셀에 다른 관리값을 준 합성 사례는 명시적 보완으로 구분한다.
+                        edited.add(name)
+        prepared.append(replace(value, edited_fields=tuple(sorted(edited))))
+    raw = {"sheet": SHEET, "cells": raw_cells, "merged": ["A1:A2"]}
+    return SaveRequest(request_id, kind, "가상.xlsx", raw, tuple(prepared), 0, ResponseSource.EXAMPLE)
 
 
 EQUIPMENT = dict(base_date="2026-10-21", site="화성", line="13L", production_area="MEMORY")

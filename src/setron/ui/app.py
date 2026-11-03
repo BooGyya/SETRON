@@ -17,7 +17,7 @@ from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource
 from setron.ui.dashboard_demo import demo_dashboard_source
-from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env
+from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env, data_exporter_from_env
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
 from setron.ui.target_data import describe_targets, initial_targets
@@ -30,6 +30,7 @@ from setron.ui.item_data import ItemManagerData, item_data_from_source
 from setron.ui.items import ItemsPage
 from setron.ui.ai_data import FreshAnalysisData, facts_from_snapshot
 from setron.ui.ai_page import AIPage
+from setron.ui.ai_connection import ai_providers_from_env
 from setron.ui.import_demo import DemoExcel, example_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -41,7 +42,7 @@ from setron.ui.management_integration import export_failure, report_filter
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
-                  db_exporter=None, sheet_extractor=None, management_gateway=None) -> MainWindow:
+                  db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -55,6 +56,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - ai_parser: 질문 해석 공급자. None이면 예제 응답.
     - ai_analyzer: 분석 공급자. None이면 예제 응답.
     - db_exporter: ``path``를 받아 DB 전체를 .sql로 저장하고 ExportResult를 돌려주는 함수. None이면 내보내기 비활성.
+    - data_exporter: 현재 관리값을 읽기 쉬운 Excel로 내보내는 공급자.
     - management_gateway: 워커에서 관리 기록 조회·묶음 저장·XLSX 출력을 실행하는 공급자.
 
     return
@@ -253,7 +255,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.navigate("equipment")
 
     export_action = window.header.actions["export"]
-    if db_exporter is not None or management_gateway is not None:
+    if db_exporter is not None or management_gateway is not None or data_exporter is not None:
         export_action.setEnabled(True)
         export_action.setToolTip("DB 전체 SQL · 관리 자료 XLSX · 현재 조회 현황 XLSX 내보내기")
 
@@ -277,6 +279,26 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         return result
 
     window.export_sql = export_sql
+    def export_data(path=None):
+        """현재 관리값을 원격 develop의 요약 Excel 형식으로 내보낸다."""
+        interactive = path is None
+        if interactive:
+            default = Path.home() / f"setron_data_{datetime.now():%Y%m%d_%H%M}.xlsx"
+            path, _ = QFileDialog.getSaveFileName(window, "관리 데이터 Excel 내보내기", str(default), "Excel 통합문서 (*.xlsx)")
+            if not path:
+                return None
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = data_exporter(path)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if interactive:
+            text = (f"{result.path}에 저장했습니다. {result.message}" if result.saved
+                    else f"내보내지 못했습니다. {result.message}")
+            (QMessageBox.information if result.saved else QMessageBox.warning)(window, "관리 데이터 Excel 내보내기", text)
+        return result
+
+    window.export_data = export_data
     window.export_request = ReadRequest(window)
     window.export_title = None
 
@@ -333,22 +355,28 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.export_current_xlsx = lambda path=None: management_export("status", path)
 
     def choose_export():
+        if management_gateway is None and db_exporter is None and data_exporter is not None:
+            return export_data()
         menu = QMenu(window)
         sql = menu.addAction("DB 전체 SQL")
         sql.setEnabled(db_exporter is not None)
+        summary = menu.addAction("관리값 요약 Excel") if data_exporter is not None else None
         managed = menu.addAction("관리 자료 XLSX")
+        managed.setEnabled(management_gateway is not None)
         current = menu.addAction("현재 조회 현황 XLSX")
-        current.setEnabled(window.query_state.applied_is_current)
+        current.setEnabled(management_gateway is not None and window.query_state.applied_is_current)
         selected = menu.exec(export_action.mapToGlobal(export_action.rect().bottomLeft()))
         if selected is sql:
             export_sql()
+        elif summary is not None and selected is summary:
+            export_data()
         elif selected is managed:
             window.export_management_xlsx()
         elif selected is current:
             window.export_current_xlsx()
 
     def open_all(action):
-        if action == "export" and management_gateway is not None:
+        if action == "export" and (management_gateway is not None or data_exporter is not None):
             choose_export()
             return
         if action == "export" and db_exporter is not None:
@@ -564,11 +592,15 @@ def main(argv: list[str] | None = None) -> int:
     install_theme(app)
     # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
     source, problem = dashboard_source_from_env()
+    ai = ai_providers_from_env()
+    app.aboutToQuit.connect(ai.close)
     window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
                            import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
-                           management_gateway=gateway_from_env() if source is not None else None)
-    if problem:
-        window.notice.setText(problem)
+                           management_gateway=gateway_from_env() if source is not None else None,
+                           data_exporter=data_exporter_from_env(), extractor=ai.extractor,
+                           ai_parser=ai.parser, ai_analyzer=ai.analyzer)
+    if problem or ai.problem:
+        window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))

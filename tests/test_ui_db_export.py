@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.infrastructure.database import Database, DatabaseConnectionError
 from setron.ui.app import create_window
-from setron.ui.database_source import sql_exporter_from_env
+from setron.ui.database_source import data_exporter_from_env, sql_exporter_from_env
 
 
 @pytest.fixture(scope="module")
@@ -96,3 +96,44 @@ def test_exporter_reports_db_error_and_disposes_database(monkeypatch, tmp_path):
     assert result.status is ExportStatus.FAILED
     assert result.message == "DB 자료를 읽지 못했습니다: MySQL 연결을 확인하세요."
     assert disposed == [True]
+
+
+def test_export_action_runs_data_exporter(qapp, tmp_path):
+    """관리 데이터 Excel 내보내기도 같은 버튼으로 실행한다 (BE-021)."""
+    calls = []
+
+    def exporter(path):
+        calls.append(path)
+        return ExportResult(ExportStatus.SAVED, Path(path), "설비 현황 0행")
+
+    window = create_window(data_exporter=exporter)
+    result = window.export_data(tmp_path / "관리데이터.xlsx")
+
+    assert window.header.actions["export"].isEnabled()
+    assert calls == [tmp_path / "관리데이터.xlsx"] and result.saved
+    window.close()
+
+
+def test_data_exporter_exists_only_with_db_settings(tmp_path):
+    assert data_exporter_from_env({}) is None
+    result = data_exporter_from_env({"SETRON_DB_NAME": "setron"})(tmp_path / "관리데이터.xlsx")
+    assert not result.saved and result.message.startswith("DB 자료를 읽지 못했습니다")
+
+
+def test_summary_and_full_management_exports_coexist(qapp, tmp_path):
+    """원격 요약 Excel과 로컬 전체 관리 내보내기가 같은 창에서 각각 유지된다."""
+    from test_ui_management import FakeGateway
+    calls = []
+    def summary(path):
+        calls.append(path)
+        return ExportResult(ExportStatus.SAVED, Path(path), "설비 현황 0행")
+    window = create_window(management_gateway=FakeGateway(), data_exporter=summary)
+    try:
+        full = []
+        window.management_gateway.export_management = lambda path: full.append(path) or ExportResult(
+            ExportStatus.SAVED, Path(path), "관리 테이블")
+        assert window.export_data(tmp_path / "요약.xlsx").saved
+        assert window.export_management_xlsx(tmp_path / "전체.xlsx").saved
+        assert calls == [tmp_path / "요약.xlsx"] and full == [tmp_path / "전체.xlsx"]
+    finally:
+        window.close()

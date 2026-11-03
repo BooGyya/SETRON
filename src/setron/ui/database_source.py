@@ -112,7 +112,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         risks[record.equipment_id] = status
         risks_by_date[record.base_date, record.equipment_id] = status
 
-    label = f"MySQL DB 저장 자료 · 모델별 목표 근거 확인 · 위험 기준 {'반영' if assessor.rules else '미등록'} · 현황 {len(records)}건"
+    label = f"MySQL DB 저장 자료 · 모델별 목표 근거 확인 · 위험 기준 {str(len(assessor.rules)) + '건 반영' if assessor.rules else '미등록'} · 현황 {len(records)}건"
     if skipped:
         label += f" · Site·설비군 미연결 또는 확인 필요 {skipped}건 제외"
     source = DashboardSource(catalog=catalog, bindings=bindings, records=tuple(records), locations=locations,
@@ -293,6 +293,37 @@ def sql_exporter_from_env(environ=None):
         try:
             database = Database.from_env(values)
             return export_database(database, path)
+        except DatabaseError as error:
+            return ExportResult(ExportStatus.FAILED, Path(path), f"DB 자료를 읽지 못했습니다: {error}")
+        finally:
+            if database is not None:
+                database.dispose()
+
+    return exporter
+
+
+def data_exporter_from_env(environ=None):
+    """``SETRON_DB_*`` 설정이 있으면 ``path``를 받아 관리 데이터를 .xlsx로 저장하는 함수를, 없으면 None을 돌려준다.
+
+    DB 접속은 내보낼 때 하고, 내보내기가 끝나면 연결 풀을 정리한다.
+    """
+    import os
+    from pathlib import Path
+
+    from setron.features.export.management import save_management_data
+    from setron.features.export.schemas import ExportResult, ExportStatus
+    from setron.features.storage.service import StorageService
+    from setron.infrastructure.database import Database
+
+    values = os.environ if environ is None else environ
+    if not values.get("SETRON_DB_NAME"):
+        return None
+
+    def exporter(path):
+        database = None
+        try:
+            database = Database.from_env(values)
+            return save_management_data(StorageService(database), path)
         except DatabaseError as error:
             return ExportResult(ExportStatus.FAILED, Path(path), f"DB 자료를 읽지 못했습니다: {error}")
         finally:

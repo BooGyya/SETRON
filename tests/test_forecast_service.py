@@ -3,6 +3,8 @@
 import json
 from datetime import date
 
+import pytest
+
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.ai.examples import example_client
 from setron.features.ai.schemas import AIStatus, AITask
@@ -54,27 +56,48 @@ def by_family(result):
     return {f.family_id: f for f in result.families}
 
 
-def test_existing_patches_are_separated_from_new_and_removed_equipment():
+def test_counts_applied_units_at_first_and_last_date_including_new_equipment():
+    """O2: 처음 N 이상 1대(3번) → 끝 N 이상 2대(1번 패치 + 6번 신규). 3번이 내려간 것도 그대로 반영된다."""
     o2_result = by_family(forecast(RECORDS, FAMILIES, TARGETS))[F_O2]
 
-    assert (o2_result.start_below, o2_result.end_below) == (3, 3)
-    assert (o2_result.patched, o2_result.regressed) == (1, 1)
-    assert (o2_result.new_units, o2_result.new_compliant, o2_result.removed) == (2, 1, 1)
+    assert (o2_result.start_applied, o2_result.end_applied, o2_result.gained) == (1, 2, 1)
+    assert (o2_result.end_below, o2_result.points, o2_result.period_days) == (3, 2, 30)
+    assert o2_result.note == "참고용 · 데이터 2장"
 
 
-def test_remaining_period_is_proportional_to_existing_patch_speed():
-    """30일 동안 기존 설비 1건 패치, 남은 N 미만 3건 → 90일."""
+def test_remaining_period_is_proportional_to_applied_increase():
+    """30일 동안 N 이상 1대 증가, 남은 N 미만 3대 → 90일."""
     o2_result = by_family(forecast(RECORDS, FAMILIES, TARGETS))[F_O2]
 
     assert o2_result.status is ForecastStatus.ESTIMATED
-    assert o2_result.remaining_days == 90.0
-    assert o2_result.completion_date == date(2026, 12, 30)
+    assert o2_result.rate_per_day == 1 / 30
+    assert (o2_result.remaining_days, o2_result.completion_date) == (90, date(2026, 12, 30))
+
+
+def test_new_equipment_at_or_above_counts_as_progress():
+    """기존 설비가 그대로여도 N 이상 신규 설비가 들어오면 증가로 센다 (멘토링 3차 단순 비례)."""
+    records = (equipment(1, DAY1, o2("v1")), equipment(1, DAY2, o2("v1")), equipment(2, DAY2, o2("v3")))
+
+    o2_result = by_family(forecast(records, FAMILIES, TARGETS))[F_O2]
+
+    assert (o2_result.gained, o2_result.end_below) == (1, 1)
+    assert (o2_result.status, o2_result.remaining_days) == (ForecastStatus.ESTIMATED, 30)
+
+
+def test_remaining_days_are_rounded_to_whole_days():
+    """20일 동안 3대 증가, 남은 2대 → 2 ÷ 0.15 = 13.3 → 13일."""
+    records = tuple(equipment(i, DAY1, o2("v1")) for i in range(1, 6)) + tuple(
+        equipment(i, DAY1.replace(day=21), o2("v3" if i <= 3 else "v1")) for i in range(1, 6))
+
+    o2_result = by_family(forecast(records, FAMILIES, TARGETS))[F_O2]
+
+    assert (o2_result.remaining_days, o2_result.completion_date) == (13, date(2026, 10, 4))
 
 
 def test_all_at_or_above_is_complete_with_zero_days():
     o3_result = by_family(forecast(RECORDS, FAMILIES, TARGETS))[F_O3]
 
-    assert (o3_result.status, o3_result.remaining_days) == (ForecastStatus.COMPLETE, 0.0)
+    assert (o3_result.status, o3_result.remaining_days) == (ForecastStatus.COMPLETE, 0)
 
 
 def test_undetermined_left_is_not_reported_as_complete():
@@ -110,19 +133,23 @@ def test_single_date_cannot_give_speed():
     assert by_family(result)[F_O2].reasons == (ForecastReason.SINGLE_DATE,)
 
 
-def test_no_existing_patch_cannot_give_speed_even_if_new_equipment_is_at_or_above():
-    records = (equipment(1, DAY1, o2("v1")), equipment(1, DAY2, o2("v1")), equipment(2, DAY2, o2("v3")))
+def test_family_seen_on_one_date_only_is_single_date():
+    records = (equipment(5, DAY1, o3("v3.1")), equipment(1, DAY2, o2("v1")))
 
     o2_result = by_family(forecast(records, FAMILIES, TARGETS))[F_O2]
 
-    assert o2_result.new_compliant == 1
-    assert (o2_result.status, o2_result.reasons) == (ForecastStatus.NOT_ESTIMABLE, (ForecastReason.NO_PATCH,))
+    assert (o2_result.points, o2_result.reasons) == (1, (ForecastReason.SINGLE_DATE,))
 
 
-def test_family_missing_at_start_is_not_estimated():
-    records = (equipment(5, DAY1, o3("v3.1")), equipment(1, DAY2, o2("v1")))
+@pytest.mark.parametrize("later", ["v1", "v2"])
+def test_no_increase_cannot_give_speed(later):
+    """N 이상 대수가 그대로이거나 줄면 예측하지 않는다."""
+    records = (equipment(1, DAY1, o2("v3")), equipment(2, DAY1, o2("v1")),
+               equipment(1, DAY2, o2(later)), equipment(2, DAY2, o2("v1")))
 
-    assert by_family(forecast(records, FAMILIES, TARGETS))[F_O2].reasons == (ForecastReason.NOT_AT_START,)
+    o2_result = by_family(forecast(records, FAMILIES, TARGETS))[F_O2]
+
+    assert (o2_result.status, o2_result.reasons) == (ForecastStatus.NOT_ESTIMABLE, (ForecastReason.NO_PROGRESS,))
 
 
 def test_period_can_be_selected():
@@ -131,7 +158,7 @@ def test_period_can_be_selected():
     result = forecast(later, FAMILIES, TARGETS, start=DAY2)
 
     assert (result.start_date, result.end_date) == (DAY2, DAY3)
-    assert by_family(result)[F_O2].patched == 1
+    assert (by_family(result)[F_O2].start_applied, by_family(result)[F_O2].end_applied) == (2, 1)
 
 
 def test_no_records_gives_empty_result():
@@ -144,8 +171,9 @@ def test_facts_include_method_assumptions_and_limits_as_json():
     facts = forecast_facts(forecast(RECORDS, FAMILIES, TARGETS), {F_O2: "O2", F_O3: "O3"})
 
     o2_fact = facts["계열별 예측"][0]
-    assert (o2_fact["계열"], o2_fact["예상 잔여 기간(일)"], o2_fact["참고 완료일"]) == ("O2", 90.0, "2026-12-30")
-    assert facts["가정"] and facts["한계"] and "패치 속도" in facts["계산 방법"]
+    assert (o2_fact["계열"], o2_fact["예상 잔여 기간(일)"], o2_fact["참고 완료일"]) == ("O2", 90, "2026-12-30")
+    assert (o2_fact["N 이상 증가"], o2_fact["하루 증가(대/일)"], o2_fact["표시"]) == (1, 0.03, "참고용 · 데이터 2장")
+    assert facts["가정"] and facts["한계"] and "증가 속도" in facts["계산 방법"]
     assert json.loads(json.dumps(facts, ensure_ascii=False)) == facts
 
 

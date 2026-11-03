@@ -7,6 +7,8 @@ import pytest
 
 from setron.features.ai.schemas import ExtractKind
 from setron.features.import_save.service import DatabaseImportSaver
+from setron.features.risk.repository import RiskRepository
+from setron.features.risk.schemas import MappingStatus, RiskStatus, RuleType
 from setron.ui.database_source import (
     DatabaseDashboardSource,
     dashboard_source_from_env,
@@ -24,7 +26,7 @@ ALL = AppliedQuery(QuerySelection(), 1, 0, "전체")
 def equipment(row_id, code, model, family, version="v1", **changes):
     values = {**EQUIPMENT, "equipment_code": code, "model_name": model, "family_name": family,
               "version_raw": version, **changes}
-    return row(row_id, {"equipment_code": f"C{row_id}", "version_raw": f"F{row_id}"}, **values)
+    return row(row_id, {"equipment_code": f"C{row_id}", "model_name": f"D{row_id}", "version_raw": f"F{row_id}"}, **values)
 
 
 def save(storage, request_id, *rows, kind=ExtractKind.EQUIPMENT_STATUS):  # noqa: F811
@@ -97,3 +99,33 @@ def test_source_from_env():
         "SETRON_DB_HOST": "127.0.0.1", "SETRON_DB_PORT": "1", "SETRON_DB_NAME": "setron",
         "SETRON_DB_USER": "u", "SETRON_DB_PASSWORD": "p", "SETRON_DB_CONNECT_TIMEOUT": "1"})
     assert source is None and problem.startswith("DB 자료를 읽지 못해")
+
+
+def test_risk_rules_in_db_decide_dashboard_risk(storage):  # noqa: F811
+    """위험 지정이 없으면 미확인, 사용 중인 지정이 있으면 DB 기준으로 판정한다 (BE-015)."""
+    before = load_dashboard_source(storage)
+    assert "위험 기준 미등록" in before.source_label
+    assert set(before.risks.values()) == {RiskStatus.UNKNOWN}
+
+    save(storage, "release-o3", row(1, {"version_raw": "A2", "content": "D2"}, version_raw="v1", content="결함 버전",
+                                    model_name="M-O3", family_name="O3"), kind=ExtractKind.RELEASE_NOTE)
+    with storage.transaction() as tx:
+        o3 = [f for f in RiskRepository(storage)._rows(tx, "version_family") if f["family_name"] == "O3"][0]
+        release = [r for r in RiskRepository(storage)._rows(tx, "release_version", family_id=o3["family_id"])
+                   if r["version_raw"] == "v1"][0]
+        base = {"family_id": o3["family_id"], "risk_reason": "가상 결함", "target_reference": {"family": "O3"},
+                "release_version_id": release["release_version_id"], "mapping_status": "VERIFIED"}
+        tx.insert("risk_rule", {**base, "rule_type": "DIRECT_VERSION"})
+        tx.insert("risk_rule", {**base, "rule_type": "DIRECT_VERSION", "is_enabled": False, "risk_reason": "끈 지정"})
+
+    rules = RiskRepository(storage).load_rules()
+    assert [(r.rule_type, r.is_enabled, r.mapping_status) for r in rules] == [
+        (RuleType.DIRECT_VERSION, True, MappingStatus.VERIFIED), (RuleType.DIRECT_VERSION, False, MappingStatus.VERIFIED)]
+    assert RiskRepository(storage).load_version_items()
+
+    after = load_dashboard_source(storage)
+    by_code = {r.equipment_code: r.equipment_id for r in after.records}
+    assert "위험 기준 1건" in after.source_label
+    assert after.risks[by_code["D-O3"]] is RiskStatus.RISK
+    assert after.risks[by_code["D-O2"]] is RiskStatus.NO_RISK
+    assert len(after.snapshot(ALL).risky_ids) == 1

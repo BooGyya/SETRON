@@ -8,7 +8,7 @@ import pytest
 from openpyxl import load_workbook
 
 from setron.features.db_export.service import export_database
-from setron.features.export.management import save_management_data
+from setron.features.export.management_tables import save_management_data
 from setron.features.management import ReportFilter
 from setron.features.storage.validation import TABLE_NAMES
 

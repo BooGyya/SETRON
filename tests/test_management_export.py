@@ -7,8 +7,8 @@ from datetime import date, datetime
 import pytest
 from openpyxl import load_workbook
 
-from setron.features.export import management
-from setron.features.export.management import (
+from setron.features.export import management_tables as management
+from setron.features.export.management_tables import (
     ManagementTable,
     build_management_workbook,
     read_management_data,
