@@ -7,6 +7,7 @@ Excel 읽기·AI 추출·저장은 주입받은 객체에 요청한다. 화면�
 from collections import Counter
 import json
 import uuid
+import warnings
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
@@ -23,7 +24,7 @@ from setron.features.excel_import.service import (
 )
 from setron.infrastructure import excel_reader
 from setron.infrastructure.ai_client import ResponseSource
-from setron.infrastructure.excel_reader import ExcelReadError, cell_address
+from setron.infrastructure.excel_reader import ExcelDiscoveryWarning, ExcelReadError, cell_address
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.import_demo import example_extractor
@@ -344,7 +345,9 @@ class ImportPage(QWidget):
         - 선택 가능한 통합문서가 있으면 True.
         """
         try:
-            self.workbooks = tuple(self.excel.list_open_workbooks())
+            with warnings.catch_warnings(record=True) as notices:
+                warnings.simplefilter("always", ExcelDiscoveryWarning)
+                self.workbooks = tuple(self.excel.list_open_workbooks())
         except ExcelReadError as exc:
             self.workbooks = ()
             self._set_status("Excel 연결 실패", "danger", str(exc))
@@ -352,8 +355,11 @@ class ImportPage(QWidget):
             self.workbooks = ()
             self._set_status("Excel 연결 실패", "danger", "Excel에서 통합문서 목록을 읽지 못했습니다. Excel 상태를 확인하고 다시 시도하세요.")
         else:
-            self._set_status(f"열린 통합문서 {len(self.workbooks)}개", "info",
-                             "통합문서와 시트를 고른 뒤 시트 읽기를 눌러 주세요.")
+            messages = [str(notice.message) for notice in notices
+                        if issubclass(notice.category, ExcelDiscoveryWarning)]
+            self._set_status(f"열린 통합문서 {len(self.workbooks)}개", "warning" if messages else "info",
+                             "통합문서와 시트를 고른 뒤 시트 읽기를 눌러 주세요."
+                             + ("\n" + "\n".join(messages) if messages else ""))
         previous = self.workbook_combo.currentData()
         self.workbook_combo.blockSignals(True)
         self.workbook_combo.clear()

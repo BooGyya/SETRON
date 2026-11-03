@@ -1,6 +1,7 @@
 """C-1~C-3 Qt: 사용자 요청 시에만 Excel 연결, 원본 미리보기, 검토·수정, 확인 후 저장과 실패·중복 방지."""
 
 import os
+import warnings
 from types import SimpleNamespace
 from unittest.mock import create_autospec
 
@@ -212,6 +213,47 @@ def test_excel_not_running_is_reported_without_preview(window, page):
     assert not page.load_workbooks()
     assert page.status.tone == "danger" and page.notice.text() == NOT_RUNNING_MESSAGE
     assert not page.read_button.isEnabled() and page.snapshot is None
+
+
+def test_partial_discovery_warning_is_visible_with_usable_books(page):
+    """일부 창 조회에 실패해도 정상 파일을 읽고 화면에서 경고를 확인한다."""
+    selected = WorkbookInfo("정상.xlsx", "C:/data/정상.xlsx", ["P1"], 7001)
+    reader = identity_reader([selected])
+
+    def discover():
+        warnings.warn("일부 Excel 파일을 목록에서 확인하지 못했습니다. 제한된 보기 창을 확인하세요.",
+                      excel_reader.ExcelDiscoveryWarning)
+        return [selected]
+
+    reader.list_open_workbooks = discover
+    page.excel = reader
+    assert page.load_workbooks()
+    assert page.workbook_combo.count() == 1 and page.read_button.isEnabled()
+    assert page.status.tone == "warning" and "제한된 보기" in page.notice.text()
+    assert page.read_selected()
+    QTest.qWait(10)
+    assert page.snapshot is not None
+    reader.read_sheet.assert_called_once_with(selected.name, "P1", app_pid=7001, full_name=selected.full_name)
+
+    reader.list_open_workbooks = lambda: [selected]
+    assert page.load_workbooks()
+    assert page.status.tone == "info" and "제한된 보기" not in page.notice.text()
+
+
+def test_changed_workbook_selection_clears_preview_and_reports_error(page):
+    """선택한 경로가 바뀌면 이전 미리보기를 지우고 재선택을 안내한다."""
+    selected = WorkbookInfo("원본.xlsx", "C:/data/원본.xlsx", ["P1"], 7001)
+    reader = identity_reader([selected])
+    page.excel = reader
+    page.load_workbooks()
+    assert page.read_selected()
+    QTest.qWait(10)
+    assert page.snapshot is not None
+    reader.read_sheet.side_effect = excel_reader.WorkbookSelectionChangedError("파일 경로가 바뀌었습니다. 다시 선택하세요.")
+    assert page.read_selected()
+    QTest.qWait(10)
+    assert page.snapshot is None and page.status.tone == "danger"
+    assert "다시 선택" in page.notice.text() and not page.extract_button.isEnabled()
 
 
 def test_preview_shows_raw_cells_addresses_and_merged_ranges(page):
