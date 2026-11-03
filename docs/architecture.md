@@ -114,9 +114,15 @@ S15P31B106/
 │           ├── __init__.py
 │           ├── ai_client.py
 │           ├── database.py
+│           ├── env_file.py
 │           └── excel_reader.py
 ├── database/
-│   └── schema_mysql5619.sql
+│   ├── schema_mysql5619.sql
+│   └── seed_demo_catalog.sql
+├── packaging/
+│   ├── build_windows.ps1
+│   ├── run_setron.py
+│   └── setron.spec
 ├── tests/
 │   ├── test_aggregation_service.py
 │   ├── test_aging_mysql.py
@@ -577,6 +583,10 @@ DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 
 `features/db_export/service.py`의 `export_database(database, path)`가 관리 테이블(`TABLE_NAMES`) 13개의 구조(`SHOW CREATE TABLE`)와 모든 행을 한 트랜잭션에서 읽어 .sql 파일로 저장한다(멘토링 2차, REQ-054). 받은 사람이 빈 DB에서 실행하면 같은 자료와 AUTO_INCREMENT 값이 들어간다. `DROP TABLE`을 넣지 않으므로 같은 테이블이 있는 DB에서는 첫 `CREATE TABLE`에서 멈추고 기존 자료를 바꾸지 않는다. 다른 PC 자료의 가져오기·병합은 보류(REQ-055)다. 실행 중에만 외래키 검사를 끄고, 임시 파일에 다 쓴 뒤 이름을 바꿔 실패해도 반쯤 쓴 파일이 남지 않는다. 값은 pymysql의 `escape`로 적는다. 실패는 예외 대신 `ExportResult`로 돌려준다.
 
 화면에서는 상단 '데이터 내보내기' 버튼으로 실행한다. `SETRON_DB_*` 설정이 있을 때만 `ui/database_source.sql_exporter_from_env()`가 내보내기 함수를 만들고 버튼을 켠다. 저장 위치를 묻고 결과를 알림창으로 알린다. `tests/test_db_export_mysql.py`가 실제 MySQL에서 내보내기 → 테이블 삭제 → 파일 실행 → 내용·AUTO_INCREMENT 일치를 확인한다.
+
+### Windows 실행 파일 (Jira S15P31B106-77)
+
+`packaging/setron.spec`(PyInstaller)이 `dist/SETRON/` 폴더 형태의 실행 파일을 만든다. 시작 처리는 `setron.__main__.run()` 하나로, 실행 파일일 때만 `infrastructure/env_file.py`의 `load_env_file()`로 실행 파일 옆 `setron.env`를 읽어 아직 없는 환경변수를 채운다. 개발 실행(`uv run --env-file`)은 그대로다. 빌드·설치·설정 방법은 `docs/windows-package.md`에 있다.
 
 ## B 읽기 변환 공통 기반
 
