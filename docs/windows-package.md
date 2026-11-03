@@ -24,6 +24,12 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 | 스키마 | 빈 DB에 `database\schema_mysql5619.sql`을 HeidiSQL 등으로 실행한다 |
 | 기준 자료 | 시연·확인 때만 `database\seed_demo_catalog.sql`을 실행한다 (확정 기준 자료 아님) |
 
+시연·확인 전에 DB를 빈 상태로 다시 만들려면 개발 PC에서 아래를 실행한다. 관리 테이블 13개를 지우고 스키마와 시연용 기준 자료를 다시 넣는다. 대상 DB의 SETRON 자료가 모두 지워지므로 `--confirm`에 접속 설정의 DB 이름을 한 번 더 적어야 실행된다.
+
+```powershell
+uv run --locked --env-file .env python database/reset_demo_db.py --confirm <SETRON_DB_NAME 값>
+```
+
 다른 사용자에게 받은 DB 내보내기 파일(.sql)이 있으면 스키마 대신 그 파일을 빈 DB에서 실행한다. 내보내기 파일에 구조와 자료가 모두 들어 있다. HeidiSQL에서는 빈 DB를 선택한 뒤 파일을 불러와 실행한다(9.2에서 확인).
 
 ## 3. 설정 파일
