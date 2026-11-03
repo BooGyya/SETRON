@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
-from setron.ui.dashboard_data import DashboardSource
+from setron.ui.dashboard_data import DashboardSource, family_name, model_name
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env, data_exporter_from_env
 from setron.ui.heatmap import HeatmapPage
@@ -456,7 +456,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def apply_query(query):
         if not heatmap.begin_query(query):
             return
-        equipment.clear("예시 결과 계산 중")
+        equipment.clear(f"{getattr(source, 'result_label', '예시 결과')} 계산 중")
         list_action.setEnabled(False)
         if dashboard.apply_query(query):
             # 한 번 계산한 같은 불변 결과를 두 화면에서 공유한다.
@@ -608,7 +608,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         judgments = getattr(receipt, "refresh", None)
         invalid = tuple(target for target in judgments.targets if not target.valid) if judgments else ()
         if invalid:
-            details = " / ".join(f"모델 {target.model_id}·계열 {target.family_id}: {target.reason}" for target in invalid)
+            details = " / ".join(f"{model_name(source, target.model_id)}·계열 {family_name(source, target.family_id)}: "
+                                 f"{target.reason}" for target in invalid)
             importer.result_label.setText(importer.result_label.text() + "\n목표 N 재선택·적용 근거 확인 필요: " + details)
         unresolved = judgments.unresolved_risk_ids if judgments else ()
         if unresolved:

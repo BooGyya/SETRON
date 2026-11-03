@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from setron.features.version.schemas import ReleaseVersion
+from setron.ui.dashboard_data import family_name, model_name
 from setron.ui.query_state import TargetN
 
 
@@ -50,7 +51,9 @@ def target_pairs(source) -> tuple[TargetPair, ...]:
         options.sort(key=lambda o: (o.unavailable_reason is not None,
                                    o.release.version_order is None, o.release.version_order or 0, o.release.release_version_id))
         group = groups[model_id]
-        result.append(TargetPair(model_id, family_id, group.key, f"{group.label} · 모델 {model_id} · 계열 {family_id}",
+        result.append(TargetPair(model_id, family_id, group.key,
+                                 f"{group.label} · {(getattr(source, 'model_names', None) or {}).get(model_id, f'모델 {model_id}')}"
+                                 f" · 계열 {family_name(source, family_id)}",
                                  source.targets.get((model_id, family_id)), tuple(options)))
     return tuple(result)
 
@@ -92,6 +95,7 @@ def describe_targets(source, targets):
         family = source.families.get(target.family_id)
         release = family.get(target.release_id) if family is not None and target.release_id is not None else None
         raw = "미지정" if target.release_id is None else release.version_raw if release is not None else "릴리즈 미확인"
-        caption = (names[pair.group_key] if counts[pair.group_key] == 1 else pair.label) if pair else f"모델 {target.model_id} · 계열 {target.family_id}"
+        caption = ((names[pair.group_key] if counts[pair.group_key] == 1 else pair.label) if pair else
+                   f"{model_name(source, target.model_id)} · 계열 {family_name(source, target.family_id)}")
         parts.append(f"{caption}: {raw}")
     return f"{len(parts)}개 모델·계열 · " + " / ".join(parts) if parts else "설정 가능한 모델·계열 없음"

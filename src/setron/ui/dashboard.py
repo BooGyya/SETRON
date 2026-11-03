@@ -9,7 +9,9 @@ from PySide6.QtWidgets import (
 
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import DashboardChart, series_color
-from setron.ui.dashboard_data import DashboardDrilldown, DashboardSource, HpaClassificationConflict, missing_sw_count
+from setron.ui.dashboard_data import (
+    DashboardDrilldown, DashboardSource, HpaClassificationConflict, count_value, missing_sw_count, upgrade_caption,
+)
 from setron.ui.theme import INK, PRIMARY, SECONDARY, TONES, font, icon, svg_size
 
 
@@ -99,7 +101,8 @@ class DashboardPage(QWidget):
             cards.append(card)
         self.kpi_grid = DashboardGrid(cards)
         body.addWidget(self.kpi_grid)
-        self.context = label("조회 적용을 누르면 선택 범위의 예시 결과를 표시합니다. 실제 회사 자료가 아닙니다.",
+        self.context = label("조회 적용을 누르면 선택 범위의 예시 결과를 표시합니다. 실제 회사 자료가 아닙니다."
+                             if self._result_label() == "예시 결과" else "조회 적용을 누르면 선택 범위의 저장 자료를 표시합니다.",
                              13, color=SECONDARY, wrap=True)
         body.addWidget(self.context)
         self.tabs = QTabBar()
@@ -189,12 +192,15 @@ class DashboardPage(QWidget):
         self.observations.setText("표시할 결과가 없습니다.")
         self._render_view()
 
+    def _result_label(self):
+        return getattr(self.source, "result_label", "예시 결과")
+
     def apply_query(self, query):
         if not self.state.is_current(query):
             return False
         self.snapshot = None
         self._clear_values()
-        self.result_status.setText("예시 결과 계산 중")
+        self.result_status.setText(f"{self._result_label()} 계산 중")
         self.context.setText("적용 #" + str(query.revision) + " · " + query.description)
         try:
             if self.state.catalog != self.source.catalog:
@@ -219,7 +225,7 @@ class DashboardPage(QWidget):
         self.snapshot = result
         summary = result.summary
         no_sw = missing_sw_count(summary)
-        self.result_status.setText("예시 결과 · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))
+        self.result_status.setText(f"{self._result_label()} · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))
         self.result_status.set_tone("info")
         self.context.setText(f"적용 #{query.revision} · 기준 관측일 {result.base_date} · {query.description}\n{result.source_label}")
         values = {
@@ -228,8 +234,10 @@ class DashboardPage(QWidget):
                      f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건"
                      + f" · SW 미등록 {no_sw}대"
                      + (" · 확인 필요" if summary.rate == 1 and (not summary.complete or no_sw) else "")),
-            "risk": (f"{len(result.risky_ids)}대", f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
-            "upgrade": (f"{summary.upgrade_needed}대", "한 계열이라도 N 미만인 물리 설비 · 중복 제거"),
+            "risk": (count_value(len(result.risky_ids), result.risk_unknown, "미확인"),
+                     f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
+            "upgrade": (count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
+                        upgrade_caption("한 계열이라도 N 미만인 물리 설비 · 중복 제거", summary.undetermined)),
         }
         for key, (value, caption) in values.items():
             self.metrics[key].value.setText(value)

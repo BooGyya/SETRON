@@ -30,7 +30,7 @@ from setron.features.risk.service import RiskAssessor
 from setron.features.targets.service import TargetService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import DatabaseError
-from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding
+from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, family_name, model_name
 from setron.ui.query_state import LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
 from setron.ui.target_data import target_pairs
 from setron.ui.version_data import ItemEntry, ModelFamily, ReleaseEntry, SourceReference, VersionCatalog
@@ -43,12 +43,13 @@ GROUP_MODELS = {
 SOURCE_LABEL = "MySQL DB 저장 자료 · 조회 적용 시 목표 N·위험 기준 재확인"
 
 
-def database_catalog(snapshots) -> QueryCatalog:
+def database_catalog(snapshots, model_names=None) -> QueryCatalog:
     """저장된 현황의 실제 Site·Line으로 조회 선택지를 만든다.
 
     - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site를 이름 그대로 덧붙인다.
     - Line: 관측된 (Site, Line) 조합. 키는 "Site 키:Line"이며 Fab은 매핑 자료가 없어 지정하지 않는다.
-    - 설비군: VER3 선택지 그대로 (:data:`GROUP_MODELS`로 등록 모델에 연결).
+    - 설비군: VER3 선택지 중 :data:`GROUP_MODELS`의 모델이 DB에 등록된 것만 둔다 (``model_names``).
+      등록 모델이 없는 설비군(예: Inline Ox·Cluster Ox)은 골라도 항상 0대라 빼고, ``model_names``가 없으면 모두 둔다.
     """
     base = preview_catalog()
     known = {option.label for option in base.sites}
@@ -59,7 +60,8 @@ def database_catalog(snapshots) -> QueryCatalog:
     return QueryCatalog(
         sites=sites,
         lines=tuple(LineOption(f"{site}:{line}", line, site, None) for site, line in lines),
-        groups=base.groups,
+        groups=tuple(option for option in base.groups if model_names is None
+                     or any(name in model_names for name in GROUP_MODELS.get(option.key, ()))),
         source_label="DB 저장 현황의 Site·Line · Fab 매핑 미등록",
     )
 
@@ -84,7 +86,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
                               for model_id in ([pm.group_id for pm in sw.pms] if sw.pms else [value.group_id])
                               if model_id is not None}))
         target_catalog = TargetService(None).read_in(tx, pairs, {pair: None for pair in pairs})
-    catalog = catalog or database_catalog(stored)
+    catalog = catalog or database_catalog(stored, {group["group_name"] for group in groups})
 
     by_name = {}
     for group in groups:
@@ -154,6 +156,9 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
     source.risks_by_date = risks_by_date
     # AI 분석·예측 입력(ui/analysis_data.py)이 대시보드와 같은 위험 판정·Item 자료를 쓰도록 함께 둔다.
     source.assessor, source.item_catalog = assessor, item_catalog
+    # 화면이 번호 대신 이름을 보이도록 계열·모델 이름을 둔다 (dashboard_data.family_name·model_name).
+    source.family_names = {row["family_id"]: row["family_name"] for row in families}
+    source.model_names = {row["group_id"]: row["group_name"] for row in groups}
     source.version_catalog = _version_catalog(groups, families, releases, items, links, stored,
                                              target_catalog.applicability, label)
     return source
@@ -213,6 +218,7 @@ class DatabaseDashboardSource(DashboardSource):
     """
 
     notice = SOURCE_LABEL  # 상단 안내용. 건수는 조회 결과마다 source_label에 다시 적힌다.
+    result_label = "DB 자료"  # 화면 결과 배지 (합성 공급자는 "예시 결과")
 
     def __init__(self, loader: Callable[..., DashboardSource]) -> None:
         self._lock = RLock()
@@ -283,7 +289,8 @@ class DatabaseDashboardSource(DashboardSource):
                               else target for target in selected)
             result = super().snapshot(replace(query, targets=effective))
             if invalid:
-                notice = " / ".join(f"모델 {target.model_id}·계열 {target.family_id}" for target in invalid)
+                notice = " / ".join(f"{model_name(self, target.model_id)}·계열 {family_name(self, target.family_id)}"
+                                    for target in invalid)
                 result = replace(result, source_label=f"{result.source_label} · 목표 N 재선택·적용 근거 재확인 필요: {notice}")
             # 화면은 요청한 조회 객체와 결과를 비교하므로 원래 조회 객체를 돌려준다.
             return replace(result, query=query)

@@ -225,7 +225,10 @@ class VersionsPage(QWidget):
             for mid, name in models.items():
                 self.model_filter.addItem(name, mid)
             index = self.model_filter.findData(old_model)
-            self.model_filter.setCurrentIndex(index if index >= 0 else 0 if models else -1)
+            if index < 0 and models:
+                # 처음 열 때는 릴리즈가 있는 첫 모델을 고른다. 없으면 목록 첫 모델.
+                index = next((self.model_filter.findData(mid) for mid in models if self._has_releases(mid)), 0)
+            self.model_filter.setCurrentIndex(index)
         self._model_changed(preferred_family=old_family)
 
     def hideEvent(self, event):
@@ -251,9 +254,19 @@ class VersionsPage(QWidget):
                     if pair.model_id == self.model_filter.currentData():
                         self.family_filter.addItem(pair.family_name, pair.family_id)
             index = self.family_filter.findData(preferred_family)
+            if index < 0:
+                model = self.model_filter.currentData()
+                index = next((i for i in range(self.family_filter.count())
+                              if self._has_releases(model, self.family_filter.itemData(i))), -1)
             if index >= 0:
                 self.family_filter.setCurrentIndex(index)
         self._filter_changed()
+
+    def _has_releases(self, model_id, family_id=None):
+        """모델(과 계열)에 적용된 릴리즈가 하나라도 있는지. 기본 선택에만 쓴다."""
+        return self.catalog is not None and any(
+            model_id in entry.model_ids and (family_id is None or entry.release.family_id == family_id)
+            for entry in self.catalog.releases)
 
     def _filter_changed(self, *_):
         self.page_index, self.selected_id = 0, None

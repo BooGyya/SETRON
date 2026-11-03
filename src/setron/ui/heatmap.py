@@ -10,7 +10,7 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard import MetricCard
-from setron.ui.dashboard_data import missing_sw_count
+from setron.ui.dashboard_data import count_value, missing_sw_count, upgrade_caption
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
 from setron.ui.theme import PRIMARY, SECONDARY, TONES
 
@@ -95,6 +95,8 @@ class TileGrid(QWidget):
         self.grid.setHorizontalSpacing(8)
         self.grid.setVerticalSpacing(14)
         self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        # 세로는 내용 높이만 쓴다. 창이 내용보다 크면(4K 등) 남는 높이로 타일이 늘어났다. 같은 행 타일 높이는 맞춘다.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._arrange(1)
 
     def minimumSizeHint(self):
@@ -232,7 +234,7 @@ class HeatmapPage(QWidget):
             return False
         self._clear()
         self.context.setText(f"적용 #{query.revision} · {query.description}")
-        self.result_status.setText("예시 결과 계산 중")
+        self.result_status.setText(f"{getattr(self.source, 'result_label', '예시 결과')} 계산 중")
         self.result_status.set_tone("info")
         self.message.setText("결과를 계산하고 있습니다.")
         return True
@@ -258,7 +260,8 @@ class HeatmapPage(QWidget):
         self.tiles = equipment_tiles(result, self.source)
         self.snapshot, self.selected_id = result, None
         self.selection_notice.setText(self.selection_hint)
-        self.result_status.setText("예시 결과 · " + ("조회 적용됨" if self.tiles else "조건에 맞는 설비 없음"))
+        self.result_status.setText(f"{getattr(self.source, 'result_label', '예시 결과')} · "
+                                   + ("조회 적용됨" if self.tiles else "조건에 맞는 설비 없음"))
         self.result_status.set_tone("info")
         self.context.setText(f"적용 #{query.revision} · 일반 분석 기준일 {result.base_date} · {query.description}\n"
                              f"{result.source_label}\nHPA는 조건에 맞는 최신 자료와 기존 전달 범위의 관측이며 실제 관측일을 표시합니다.")
@@ -270,8 +273,10 @@ class HeatmapPage(QWidget):
             "total": (f"{len(self.tiles)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {sum(t.goal is GoalState.EXCLUDED for t in self.tiles)}대"),
             "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
                      f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건 · SW 미등록 {missing_sw_count(summary)}대"),
-            "risk": (f"{len(result.risky_ids)}대", f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
-            "upgrade": (f"{summary.upgrade_needed}대", "하나라도 N 미만인 물리 설비 · 중복 제거"),
+            "risk": (count_value(len(result.risky_ids), result.risk_unknown, "미확인"),
+                     f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
+            "upgrade": (count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
+                        upgrade_caption("하나라도 N 미만인 물리 설비 · 중복 제거", summary.undetermined)),
         }
         for key, (value, caption) in values.items():
             self.metrics[key].value.setText(value)

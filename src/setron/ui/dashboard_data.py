@@ -101,8 +101,45 @@ def missing_sw_count(summary: Summary) -> int:
     return sum(not equipment.families for equipment in summary.equipment)
 
 
+def count_value(count: int, unknown: int, unknown_label: str) -> str:
+    """요약 카드의 큰 숫자. 0대인데 판단하지 못한 대상이 있으면 '0대' 대신 ``unknown_label``을 보인다.
+
+    0대가 '문제 없음'으로 읽히지 않게 한다. 1대 이상이면 확인된 대수를 그대로 보인다(미확인 수는 설명 줄에 적는다).
+    """
+    return unknown_label if count == 0 and unknown > 0 else f"{count}대"
+
+
+def upgrade_caption(base: str, undetermined: int) -> str:
+    return base + (f" · 판단 불가 {undetermined}건" if undetermined else "")
+
+
+def family_name(source, family_id) -> str:
+    """화면 표시용 계열 이름. DB 공급자는 이름을 갖고, 이름이 없는 합성 자료는 번호를 그대로 쓴다."""
+    names = getattr(source, "family_names", None) or {}
+    if family_id in names:
+        return names[family_id]
+    for pair in getattr(getattr(source, "version_catalog", None), "pairs", ()):
+        if pair.family_id == family_id:
+            return pair.family_name
+    return str(family_id)
+
+
+def model_name(source, model_id) -> str:
+    """화면 표시용 모델 이름. 등록 모델 이름 → 연결된 설비군 이름 → '모델 n' 순서로 찾는다."""
+    names = getattr(source, "model_names", None) or {}
+    if model_id in names:
+        return names[model_id]
+    labels = {group.key: group.label for group in source.catalog.groups}
+    for key, model_ids in source.bindings.items():
+        if model_id in model_ids:
+            return labels.get(key, f"모델 {model_id}")
+    return f"모델 {model_id}"
+
+
 class DashboardSource:
     """기준일 위치로 선택한 설비 집합과 고정 N을 모든 보기·과거 관측에서 공유한다."""
+
+    result_label = "예시 결과"  # 화면 결과 배지. DB 공급자는 "DB 자료"로 바꾼다.
 
     def __init__(self, *, catalog: QueryCatalog, bindings: tuple[GroupBinding, ...],
                  records: tuple[EquipmentRecord, ...], locations: Mapping[int, EquipmentLocation],
