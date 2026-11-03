@@ -11,16 +11,16 @@
 - 검토에서 확인한 계열·릴리즈 ID는 저장 시 DB에서 다시 확인한다. 릴리즈 ID가 없으면 같은 계열의
   같은 버전 원문만 연결하며, 대응이 없으면 미등록으로 둔다. 원문은 연결 ID와 별도로 보존한다.
 
-이번 범위에서 하지 않는 것
-- 같은 계열·버전 릴리즈 교체 (BE-010)와 저장 후 직접 수정 (BE-025)
-- 릴리즈 노트 문서(`release_note`) 등록과 Item 대상 모델 범위 지정. Item은 APPLIED·범위 미확인으로 연결한다.
+릴리즈 전체 교체는 파일명·전체 누적 노트 확인과 기존값 검토를 마친 요청만 처리한다.
+원본 저장·기존 수동값 선택·위험 대상 보존·현재 목표 N 재검증은 같은 트랜잭션에 포함한다.
+신규 Item은 APPLIED·모델 범위 미확인으로 연결하며, 릴리즈 노트 문서(`release_note`) 등록은 별도 작업이다.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from typing import Any
 from threading import Lock
@@ -33,9 +33,17 @@ from setron.features.excel_import.schemas import (
     DuplicateSaveError, ImportDraft, ReviewRow, SaveReceipt, SaveRequest, SaveRow, SheetSnapshot,
 )
 from setron.features.excel_import.repository import ImportValidationRepository
-from setron.features.excel_import.service import validate_batch
+from setron.features.excel_import.service import parse_address, validate_batch
+from setron.features.excel_import.provenance import validate_save_request_sources
 from setron.features.release.schemas import ItemInput, ReleaseInput
 from setron.features.release.service import ReleaseService
+from setron.features.release.refresh import ReleaseRefreshService
+from setron.features.release.refresh_schemas import RefreshContext
+from setron.features.release.replacement import FamilyReplacementService
+from setron.features.release.replacement_schemas import (
+    ReplacementItem, ReplacementLink, ReplacementRelease, ReplacementRequest, ReplacementReview,
+    ReplacementPreview, ReplacementReviewRequired,
+)
 from setron.features.storage.service import StorageService
 from setron.features.storage.inputs import identifier, merge_sources
 from setron.features.storage.validation import StorageValidationError
@@ -62,6 +70,28 @@ RELEASE_EDITED = {"version_raw": "version_raw", "release_date": "released_at"}
 ITEM_EDITED = {"item_no": "item_no", "content": "content"}
 
 TARGET_LABEL = "MySQL DB · 대시보드에서 조회 적용 후 반영"
+
+
+@dataclass(frozen=True)
+class ReleaseImportPlan:
+    """실제 가져오기에서 표시할 계열 전체 교체 검토 데이터.
+
+    ivar
+    - request: 전체 누적 노트·파일명 확인을 마친 계열별 새 자료.
+    - preview: 원본 식별·수정값·포함 관계·위험 복원 검토 결과.
+    - family_name: 검토 화면에 표시할 계열 이름.
+    - release_labels, item_labels: 기존 항목 ID별 실제 버전 원문·Item 설명.
+    - risk_labels: 수동 위험 ID별 사유.
+    - model_labels: 적용 대상 모델 ID별 이름.
+    """
+
+    request: ReplacementRequest
+    preview: ReplacementPreview
+    family_name: str = ""
+    release_labels: dict[int, str] = field(default_factory=dict)
+    item_labels: dict[int, str] = field(default_factory=dict)
+    risk_labels: dict[int, str] = field(default_factory=dict)
+    model_labels: dict[int, str] = field(default_factory=dict)
 
 
 class DatabaseImportSaver:
@@ -102,6 +132,141 @@ class DatabaseImportSaver:
         with self.storage.transaction() as tx:
             return ImportValidationRepository().load(tx, drafts)
 
+    def preview_release_import(self, request, reviews=()):
+        """확인한 전체 릴리즈 노트의 계열별 충돌을 DB 쓰기 없이 조회한다.
+
+        param
+        - request: 한 SaveRequest 또는 함께 저장할 요청 튜플.
+        - reviews: 앞 단계에서 고른 계열 순서의 매칭·충돌 선택. 처음에는 빈 튜플.
+
+        return
+        - 계열 ID 순서의 ReleaseImportPlan 튜플.
+        """
+        requests = request if isinstance(request, tuple) else (request,)
+        _check_confirmations(requests)
+        for value in requests:
+            validate_save_request_sources(value)
+        with self.storage.transaction() as tx:
+            replacements = self._replacement_requests(tx, requests)
+            _require(not reviews or len(reviews) == len(replacements), "계열별 검토 선택 수가 다릅니다.")
+            service = FamilyReplacementService(self.storage, _refresh_context(requests))
+            result = []
+            for index, value in enumerate(replacements):
+                state = service._state(tx, value.family_id)
+                family = tx.get("version_family", {"family_id": value.family_id})
+                result.append(ReleaseImportPlan(value, service.preview_in(tx, value, reviews[index] if reviews else None),
+                    family["family_name"],
+                    {row["release_version_id"]: row["version_raw"] for row in state["releases"]},
+                    {row["item_id"]: f"Item {row['item_no']} · {row['content']}" for row in state["items"]},
+                    {row["risk_rule_id"]: row["risk_reason"] for row in state["risks"]},
+                    {row["group_id"]: row["group_name"] for row in self.repository.rows(tx, "equipment_group")}))
+            return tuple(result)
+
+    def _replacement_requests(self, tx, requests):
+        """여러 시트를 같은 계열의 전체 노트로 묶고 각 원본 셀 위치를 보존한다.
+
+        param
+        - tx: 현재 읽기 또는 저장 업무.
+        - requests: 전체 누적 노트·파일명 확인을 마친 SaveRequest 목록.
+
+        return
+        - 계열 ID 순서의 교체 요청. 같은 이름의 원본 셀 값이 다르면 저장하지 않음.
+        """
+        groups, raws = {}, {}
+        for request in requests:
+            if ExtractKind(request.kind) is not ExtractKind.RELEASE_NOTE or not request.release_note_confirmed:
+                continue
+            _require(request.filename_confirmed is True, "릴리즈 교체 전에 원본 파일명을 확인해 주세요.")
+            raw = batch_raw_data(request.raw_data)
+            for release, items in self._releases(tx, request.rows, None, allow_existing=True):
+                family = release.family_id
+                groups.setdefault(family, []).append((release, items))
+                target = raws.setdefault(family, {})
+                for sheet, cells in raw.items():
+                    destination = target.setdefault(sheet, {})
+                    _require(all(address not in destination or destination[address] == value
+                                 for address, value in cells.items()),
+                             "같은 시트명·셀 주소의 원본 값이 다릅니다. 한 계열의 전체 누적 노트를 같은 통합문서에서 검토해 주세요.")
+                    destination.update(cells)
+        for request in requests:
+            if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE and not request.release_note_confirmed:
+                for row in request.rows:
+                    family = self._family(tx, self._model(tx, row.values, row), row.values, row)["family_id"]
+                    _require(family not in groups, "같은 계열의 일부 시트만 전체 교체로 확인할 수 없습니다. 모든 시트를 함께 검토해 주세요.")
+        result = []
+        for family, entries in sorted(groups.items()):
+            matching = FamilyReplacementService(self.storage)
+            state = matching._state(tx, family)
+            merged = {}
+            for release, items in entries:
+                key = release.version_raw
+                if key in merged:
+                    previous, previous_items = merged[key]
+                    _require(previous.released_at == release.released_at, "같은 릴리즈의 출시일이 시트마다 다릅니다.")
+                    release = replace(previous, source_reference=merge_sources(previous.source_reference, release.source_reference),
+                        edited_fields=tuple(dict.fromkeys((*previous.edited_fields, *release.edited_fields))))
+                    items = (*previous_items, *items)
+                merged[key] = release, items
+            releases, all_items, shared = [], [], {}
+            for ri, (release, items) in enumerate(merged.values()):
+                seen, links = {}, []
+                for item in items:
+                    key = (item.item_no, item.content)
+                    if key in seen:
+                        index = seen[key]
+                        previous = all_items[index]
+                        all_items[index] = replace(previous, value=replace(previous.value,
+                            source_reference=merge_sources(previous.value.source_reference, item.source_reference),
+                            edited_fields=tuple(dict.fromkeys((*previous.value.edited_fields, *item.edited_fields)))))
+                        continue
+                    existing_item = self._confirmed_item_match(matching, state, raws[family], release, item)
+                    if existing_item is not None and existing_item in shared:
+                        index = shared[existing_item]
+                        previous = all_items[index]
+                        _require((previous.value.item_no, previous.value.content) == (item.item_no, item.content),
+                                 "같은 기존 Item에 대응하는 새 내용이 버전마다 다릅니다. 전체 노트에서 값을 확인해 주세요.")
+                        all_items[index] = replace(previous, value=replace(previous.value,
+                            source_reference=merge_sources(previous.value.source_reference, item.source_reference),
+                            edited_fields=tuple(dict.fromkeys((*previous.value.edited_fields, *item.edited_fields)))))
+                        seen[key] = index
+                        links.append(ReplacementLink(item_key=previous.key))
+                        continue
+                    item_key = f"release-{ri}-item-{len(links)}"
+                    seen[key] = len(all_items)
+                    if existing_item is not None:
+                        shared[existing_item] = len(all_items)
+                    all_items.append(ReplacementItem(key=item_key, value=item))
+                    links.append(ReplacementLink(item_key=item_key))
+                releases.append(ReplacementRelease(key=f"release-{ri}", value=release, links=tuple(links)))
+            result.append(ReplacementRequest(family_id=family, releases=tuple(releases), items=tuple(all_items),
+                raw_data=raws[family], complete_note_confirmed=True, filename_confirmed=True))
+        return tuple(result)
+
+    @staticmethod
+    def _confirmed_item_match(service, state, raw, release, item):
+        """원본 버전·번호가 하나의 기존 Item을 확인한 경우에만 공유 키를 유지한다.
+
+        param
+        - service, state: 교체의 원본 조회 함수와 현재 계열 자료.
+        - raw, release, item: 새 전체 노트 원본과 검토한 릴리즈·Item 값.
+
+        return
+        - 유일하게 확인한 기존 Item ID. 번호만 같거나 불확실하면 None.
+        """
+        batches = {row["batch_id"]: row["raw_data"] for row in state["batches"]}
+        version = service._source(raw, asdict(release), "version_raw")
+        number = service._number(service._source(raw, asdict(item), "item_no"))
+        if version is None or number is None:
+            return None
+        old = [row for row in state["releases"]
+               if service._source(batches[row["batch_id"]], row, "version_raw") == version]
+        if len(old) != 1:
+            return None
+        ids = {row["item_id"] for row in state["links"] if row["release_version_id"] == old[0]["release_version_id"]}
+        candidates = [row["item_id"] for row in state["items"] if row["item_id"] in ids
+            and service._number(service._source(batches[row["batch_id"]], row, "item_no")) == number]
+        return candidates[0] if len(candidates) == 1 else None
+
     def save_many(self, requests: tuple[SaveRequest, ...]) -> tuple[SaveReceipt, ...]:
         """전체 검토 요청을 한 번에 저장한다. 후속 시트 실패도 앞선 변경과 함께 취소한다.
 
@@ -109,14 +274,39 @@ class DatabaseImportSaver:
         DB 기존값 검토 없이 보낸 재가져오기는 전체를 보류하고 재검토를 요청한다.
         """
         _require(isinstance(requests, tuple) and bool(requests), "저장할 요청 묶음이 필요합니다.")
+        _check_confirmations(requests)
         ids = [request.request_id for request in requests]
         if len(set(ids)) != len(ids) or self._saved_requests.intersection(ids):
             raise DuplicateSaveError("이미 저장했거나 중복된 요청입니다.")
         _require(all(request.rows for request in requests), "저장할 행이 없습니다.")
+        for request in requests:
+            validate_save_request_sources(request)
         storage = self.storage
         equipment, releases = EquipmentService(storage), ReleaseService(storage)
-        receipts = []
+        context = _refresh_context(requests)
+        with storage.transaction() as discovery:
+            release_families = sorted({self._family(discovery, self._model(discovery, row.values, row), row.values, row)["family_id"]
+                for request in requests if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE for row in request.rows})
+        receipts, receipt_batches, changed_release_ids = [], {}, set()
         with storage.transaction() as tx:
+            for family_id in release_families:
+                releases.repository.get(tx, "version_family", {"family_id": family_id}, lock=True)
+            replacement_requests = self._replacement_requests(tx, requests)
+            selected_reviews = [request.release_reviews for request in requests if request.release_reviews]
+            _require(not selected_reviews or all(value == selected_reviews[0] for value in selected_reviews),
+                     "같은 저장 묶음의 계열별 충돌 선택이 다릅니다.")
+            reviews = selected_reviews[0] if selected_reviews else ()
+            replacement_service = FamilyReplacementService(storage, context)
+            if replacement_requests and len(reviews) != len(replacement_requests):
+                first = replacement_requests[0]
+                raise ReplacementReviewRequired(replacement_service.preview_in(tx, first))
+            states = []
+            for value, review in zip(replacement_requests, reviews):
+                state = replacement_service._state(tx, value.family_id, lock=True)
+                preview = replacement_service._preview(tx, value, state, review)
+                if preview.questions or preview.conflicts or preview.link_conflicts:
+                    raise ReplacementReviewRequired(preview)
+                states.append(state)
             # 전체 요청의 검토 기준을 쓰기 전에 확인한다. 같은 설비 잠금 순서도 일정하게 유지한다.
             codes = sorted({row.values["equipment_code"] for request in requests
                             if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS for row in request.rows
@@ -127,29 +317,62 @@ class DatabaseImportSaver:
                 self._check_review(tx, request)
             drafts = tuple(_validation_draft(request) for request in requests)
             reference = ImportValidationRepository().load(tx, drafts)
+            # 기존 번호 중복의 대응 선택은 전체 교체 검토에서 처리한다. 새 입력의 중복·필수값 오류는 유지한다.
+            if replacement_requests:
+                reference = replace(reference, stored_releases=())
             errors = [issue for issue in validate_batch(drafts, reference) if issue.blocks_save]
             _require(not errors, "이번 저장 묶음 전체를 보류합니다. " + " / ".join(i.message for i in errors[:5]))
             prepared = []
             for request in requests:
+                if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE and request.release_note_confirmed:
+                    continue
                 batch = tx.insert("import_batch", {"source_type": "EXCEL", "raw_data": batch_raw_data(request.raw_data)})
+                receipt_batches[request.request_id] = (batch["batch_id"],)
                 snapshots = (self._snapshots(tx, request.rows, batch["batch_id"])
                              if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS else ())
                 prepared.append((request, batch, snapshots))
+            for value, review, expected in zip(replacement_requests, reviews, states):
+                current = replacement_service._state(tx, value.family_id, lock=True)
+                _require(all(current[key] == expected[key] for key in ("releases", "items", "risk_items", "risks", "batches")),
+                         "검토 후 해당 계열의 관리값이 변경되었습니다. 다시 검토해 주세요.")
+                # 앞선 계열 교체가 공유 Item의 외부 연결만 바꾼 경우 검토한 동일 대상·값 선택을 유지한다.
+                current_preview = replacement_service.preview_in(tx, value)
+                current_review = replace(review, fingerprint=current_preview.fingerprint)
+                details, _ = replacement_service.replace_in(tx, value, current_review, refresh=False)
+                batch_ids = tuple(dict.fromkeys(detail.release.current["batch_id"] for detail in details))
+                changed_release_ids.update(detail.release.current["release_version_id"] for detail in details)
+                for request in requests:
+                    if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE and request.release_note_confirmed:
+                        own = {self._family(tx, self._model(tx, row.values, row), row.values, row)["family_id"] for row in request.rows}
+                        if value.family_id in own:
+                            receipt_batches[request.request_id] = tuple(dict.fromkeys((*receipt_batches.get(request.request_id, ()), *batch_ids)))
             metadata_anchors = _metadata_anchors(tuple(snapshots for _, _, snapshots in prepared))
             _check_release_links(tuple(snapshots for _, _, snapshots in prepared))
+            equipment_batches, equipment_metadata_keys = [], []
+            for request, batch, snapshots in prepared:
+                if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE:
+                    for release, items in self._releases(tx, request.rows, batch["batch_id"]):
+                        detail = releases.register_release_in(tx, release, items)
+                        changed_release_ids.add(detail.release.current["release_version_id"])
             for index, (request, batch, snapshots) in enumerate(prepared):
                 if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS:
-                    # 앞선 요청이 새 릴리즈를 등록했다면 원문이 정확히 같은 연결도 확인한다.
+                    # 함께 등록한 릴리즈를 확인한 뒤 원본 작업별 PM·출처를 유지해 적용한다.
                     snapshots = tuple(replace(value, software=tuple(replace(sw,
                         release_version_id=self._release_id(tx, sw.family_id, sw.version_raw, sw.release_version_id))
                         for sw in value.software)) for value in snapshots)
-                    equipment.import_snapshots_in(tx, snapshots, metadata_keys={
+                    equipment_batches.append(snapshots)
+                    equipment_metadata_keys.append({
                         key for key, owner in metadata_anchors.items() if owner == index
                     })
-                else:
-                    for release, items in self._releases(tx, request.rows, batch["batch_id"]):
-                        releases.register_release_in(tx, release, items)
-                receipts.append(SaveReceipt(batch["batch_id"], len(request.rows), datetime.now(), self.target_label))
+            if equipment_batches:
+                equipment.import_snapshot_batches_in(tx, tuple(equipment_batches),
+                    metadata_keys_by_batch=tuple(equipment_metadata_keys))
+            refreshed = (ReleaseRefreshService().refresh_in(tx, context=context,
+                family_ids=tuple(release_families), invalidated_applicability_release_ids=tuple(sorted(changed_release_ids)))
+                if release_families else None)
+            for request in requests:
+                batch_ids = receipt_batches[request.request_id]
+                receipts.append(SaveReceipt(batch_ids[0], len(request.rows), datetime.now(), self.target_label, refreshed))
         self._saved_requests.update(ids)
         return tuple(receipts)
 
@@ -240,7 +463,7 @@ class DatabaseImportSaver:
 
     # --- 릴리즈 노트 ---------------------------------------------------------------
 
-    def _releases(self, tx, rows: Sequence[SaveRow], batch_id: int):
+    def _releases(self, tx, rows: Sequence[SaveRow], batch_id: int | None, *, allow_existing=False):
         """계열·버전별 검토 행을 릴리즈와 Item 등록 입력으로 구성한다.
 
         param
@@ -267,8 +490,8 @@ class DatabaseImportSaver:
         for (family_id, version), group in groups.items():
             linked_ids = {self._release_id(tx, family_id, version, row.release_version_id) for row in group}
             _require(len(linked_ids) == 1, f"{version}: 같은 릴리즈의 검토 연결이 상충합니다.")
-            _require(next(iter(linked_ids)) is None,
-                     f"{version}: 같은 계열에 이미 저장된 릴리즈입니다. 릴리즈 교체는 아직 지원하지 않습니다.")
+            _require(allow_existing or next(iter(linked_ids)) is None,
+                     f"{version}: 이미 저장된 릴리즈입니다. 전체 누적 노트·파일명·충돌 선택을 확인한 뒤 교체해 주세요.")
             dates = {r.values.get("release_date") for r in group} - {None}
             _require(len(dates) <= 1, f"{version}: 출시일이 행마다 다릅니다.")
             release = ReleaseInput(
@@ -302,8 +525,8 @@ class DatabaseImportSaver:
     def _model(self, tx, values: Mapping[str, Any], row: SaveRow) -> dict:
         raw = (values.get("model_name") or "").strip()
         name = MODEL_ALIASES.get(raw, raw)
-        category = _category(values.get("group_name"), name, row)
         _require(bool(name), f"{_where(row)}: 모델명이 필요합니다.")
+        category = _category(values.get("group_name"), name, row)
         matches = [g for g in self.repository.rows(tx, "equipment_group", category=category) if g["group_name"] == name]
         _require(len(matches) == 1, f"{_where(row)}: 모델 '{raw}'({category})에 대응하는 등록 모델이 없거나 여러 개입니다.")
         return matches[0]
@@ -382,6 +605,35 @@ def batch_raw_data(raw: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     _require(isinstance(raw, Mapping) and isinstance(raw.get("sheet"), str) and isinstance(raw.get("cells"), Mapping),
              "원본 시트 자료가 올바르지 않습니다.")
     return {raw["sheet"]: dict(raw["cells"])}
+
+
+def _refresh_context(requests):
+    """GUI에서 미리 복사한 목표 조건을 저장 묶음 전체에 동일하게 적용한다.
+
+    param
+    - requests: 같은 저장 작업에 포함된 SaveRequest 목록.
+
+    return
+    - 요청의 RefreshContext. 조건이 없으면 목표를 추정하지 않음.
+    """
+    contexts = [request.refresh_context for request in requests if request.refresh_context is not None]
+    _require(not contexts or all(context == contexts[0] for context in contexts), "같은 저장 묶음의 목표 N 조건이 다릅니다.")
+    return contexts[0] if contexts else RefreshContext()
+
+
+def _check_confirmations(requests):
+    """사용자의 전체 노트·파일명 확인과 검토 결과의 형식을 검사한다.
+
+    param
+    - requests: 함께 저장하거나 미리 검토할 SaveRequest 목록.
+
+    raises
+    - StorageValidationError: 확인 값이 불리언이 아니거나 검토 결과가 튜플이 아닌 경우.
+    """
+    for request in requests:
+        _require(type(request.release_note_confirmed) is bool and type(request.filename_confirmed) is bool,
+                 "전체 누적 노트·파일명 확인 여부는 불리언이어야 합니다.")
+        _require(type(request.release_reviews) is tuple, "계열별 검토 결과는 튜플이어야 합니다.")
 
 
 def _sources(row: SaveRow, names: Sequence[str]) -> dict | None:
@@ -465,9 +717,19 @@ def _validation_draft(request: SaveRequest) -> ImportDraft:
         values = dict(row.values)
         if type(values.get("item_no")) is int:
             values["item_no"] = str(values["item_no"])
-        rows.append(ReviewRow(index, {}, normalized=values))
+        sources = {}
+        for name, locations in (_sources(row, tuple(row.values)) or {}).items():
+            for location in locations if isinstance(locations, list) else (locations,):
+                if location["sheet"] == request.raw_data.get("sheet") and location["cells"]:
+                    sources[name] = location["cells"][0]
+                    break
+        rows.append(ReviewRow(index, {}, sources=sources, normalized=values,
+                              edits={name: values.get(name) for name in row.edited_fields}))
     raw = request.raw_data
-    sheet = SheetSnapshot(raw.get("sheet", ""), 1, 1, 1, 1, raw.get("cells", {}))
+    positions = [parse_address(address) for address in raw.get("cells", {})]
+    sheet = SheetSnapshot(raw.get("sheet", ""), 1, 1,
+                          max((row for row, _ in positions), default=1),
+                          max((column for _, column in positions), default=1), raw.get("cells", {}))
     return ImportDraft(ExtractKind(request.kind), request.workbook_name, sheet, tuple(rows),
                        workbook_id=request.workbook_id)
 

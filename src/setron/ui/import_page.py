@@ -6,6 +6,7 @@ Excel 읽기·AI 추출·저장은 주입받은 객체에 요청한다. 화면�
 
 from collections import Counter
 from copy import deepcopy
+from dataclasses import replace
 import json
 import uuid
 import warnings
@@ -21,17 +22,21 @@ from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.excel_import.reference import ReferenceData
 from setron.features.excel_import.schemas import FIELD_LABELS, ISSUE_LABELS, KIND_LABELS, Issue, IssueLevel
 from setron.features.excel_import.service import (
-    build_save_request, cell_text, describe_save_error, draft_from_extract, edit_value, extract_cells,
+    build_save_request, cell_text, describe_save_error, draft_from_review, edit_value,
     MemoryImportSaver, has_errors, parse_address, revert_row, set_excluded, snapshot_sheet, validate,
 )
 from setron.infrastructure import excel_reader
-from setron.infrastructure.ai_client import ResponseSource
+from setron.infrastructure.ai_client import AIConfigError, ResponseSource
 from setron.infrastructure.excel_reader import ExcelDiscoveryWarning, ExcelReadError, cell_address
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.import_demo import example_extractor
+from setron.ui.import_extraction import LiveSheetExtractor, extract_for_review
+from setron.features.excel_import.review_locations import assign_source, refresh_hpa_coverage
+from setron.features.extraction.schemas import ExtractionReview
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
+from setron.ui.release_import_review import choose_release_reviews
 from setron.ui.theme import PRIMARY, SECONDARY, font
 from setron.ui.versions import _field, _fit
 
@@ -121,19 +126,24 @@ class ImportPage(QWidget):
 
     ``read_sheet``에는 선택 목록의 파일명·app_pid·full_name을 함께 전달한다.
     ``extractor(kind, sheet_name, cells)``는 :class:`AIResult`를, ``saver``는 :class:`ImportSaver`를 따른다.
-    None이면 회사 AI·저장 서비스 연결 전 기본값인 예제 응답과 메모리 저장소를 쓴다.
+    추출 공급자가 없으면 설정된 실제 AI를 사용한다. 기존 공급자 결과도 원본 검증을 거친다.
+    저장 공급자가 None이면 메모리 저장소를 쓴다.
     """
 
     saved = Signal(object)  # SaveReceipt
     requery_requested = Signal()
 
-    def __init__(self, excel=None, extractor=None, saver=None, *, reference=None, confirm=None):
+    def __init__(self, excel=None, extractor=None, saver=None, *, reference=None, confirm=None,
+                 refresh_context_provider=None, release_review_chooser=None, sheet_extractor=None):
         super().__init__()
         self.excel = excel if excel is not None else excel_reader
-        self.extractor = extractor or example_extractor
+        self.extractor = extractor
+        self.sheet_extractor = sheet_extractor or LiveSheetExtractor()
         self.saver = saver or MemoryImportSaver("메모리 저장소 · DB 미연결 · 조회 화면 자료에 반영되지 않음")
         self.reference = reference
         self.confirm = confirm or self._ask
+        self.refresh_context_provider = refresh_context_provider
+        self.release_review_chooser = release_review_chooser or choose_release_reviews
         self.workbooks, self.snapshot, self.workbook_name = (), None, None
         self.workbook_id = None
         self.draft, self.issues, self.selected_row_id = None, (), None
@@ -141,6 +151,13 @@ class ImportPage(QWidget):
         self.review_request = ReadRequest(self)
         self.review_request.completed.connect(self._review_completed)
         self._review_context = None
+        self.extraction_request = ReadRequest(self)
+        self.extraction_request.completed.connect(self._extraction_completed)
+        self._extraction_context = None
+        self.release_request = ReadRequest(self)
+        self.release_request.completed.connect(self._release_review_completed)
+        self._release_context = None
+        self._release_risk_decisions = set()
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
@@ -225,7 +242,7 @@ class ImportPage(QWidget):
         self.editor_grid.setVerticalSpacing(6)
         self.editor_grid.setColumnStretch(1, 1)
         editor.addLayout(self.editor_grid)
-        self.inputs, self.originals = {}, {}
+        self.inputs, self.originals, self.source_inputs = {}, {}, {}
         self.apply_edit_button = button("수정 반영", primary=True)
         self.revert_button = button("원래 값으로 되돌리기")
         self.exclude_button = button("이 행 제외")
@@ -235,8 +252,8 @@ class ImportPage(QWidget):
         editor.addWidget(_WrapRow([self.apply_edit_button, self.revert_button, self.exclude_button], 190))
         review.body.addWidget(self.editor)
         review.body.addWidget(label("검토 항목", 16, medium=True))
-        self.issue_model = ReadTableModel(("구분", "행", "항목", "셀", "내용"))
-        self.issue_table = read_table(self.issue_model, "검토 항목", (90, 60, 130, 80, 520))
+        self.issue_model = ReadTableModel(("구분", "추출 행", "항목", "셀", "내용", "파일", "시트", "Excel 행", "Excel 열"))
+        self.issue_table = read_table(self.issue_model, "검토 항목", (90, 70, 130, 100, 420, 200, 150, 85, 85))
         self.issue_table.clicked.connect(lambda index: self.open_issue(index.row()))
         self.issue_table.activated.connect(lambda index: self.open_issue(index.row()))
         review.body.addWidget(self.issue_table)
@@ -279,6 +296,17 @@ class ImportPage(QWidget):
         return ExtractKind(self.kind_combo.currentData())
 
     @property
+    def extraction_label(self):
+        """화면에서 사용하는 추출 공급자를 구분해 안내한다.
+
+        return
+        - 실제 연결 또는 명시적으로 주입한 예제·시험 공급자 안내.
+        """
+        if self.extractor is example_extractor:
+            return "AI 예제 응답"
+        return "AI 원본 대조 추출" if self.extractor is not None else "설정된 AI API · 원본 대조 추출"
+
+    @property
     def busy(self):
         return self.state in ("reading", "extracting", "validating", "saving")
 
@@ -319,12 +347,19 @@ class ImportPage(QWidget):
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
         self.issue_model.set_rows(tuple((ISSUE_LABELS[i.level], str(i.row_id) if i.row_id else "전체",
-                                         FIELD_LABELS.get(i.field, "-") if i.field else "-", i.address or "-", i.message)
+                                         FIELD_LABELS.get(i.field, "-") if i.field else "-", i.address or "위치 확인 필요", i.message,
+                                         i.workbook_name or (draft.workbook_name if draft else "-"),
+                                         i.sheet_name or (draft.sheet.sheet_name if draft else "-"),
+                                         str(i.excel_position[0]) if i.excel_position else "미확인",
+                                         str(i.excel_position[1]) if i.excel_position else "미확인")
                                         for i in self.issues))
         _fit(self.issue_table)
         editable = draft is not None and self.selected_row_id in ids and not self.busy and not self.locked
         for field in self.inputs.values():
             field.setReadOnly(self.busy or self.locked)
+        for name, field in self.source_inputs.items():
+            row = draft.row(self.selected_row_id) if draft and self.selected_row_id is not None else None
+            field.setReadOnly(self.busy or self.locked or bool(row and row.sources.get(name)))
         for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):
             widget.setEnabled(editable)
         self._render_save()
@@ -348,7 +383,7 @@ class ImportPage(QWidget):
             excluded = len(self.draft.rows) - active
             self.save_summary.setText(
                 f"저장 대상 {active}행 · 제외 {excluded}행 · 오류 {errors}건 · 확인 필요 {reviews}건\n"
-                + ("오류가 하나라도 남으면 묶음 전체를 저장하지 않습니다. 값을 수정하거나 행을 제외해 주세요." if errors else
+                + ("필수값 오류가 남으면 묶음 전체를 저장하지 않습니다. 값과 원본 위치를 보완하고 다시 검사해 주세요." if errors else
                    f"저장 위치: {self.saver.target_label}"))
 
     # --- C-1 Excel 선택·미리보기 ----------------------------------------------
@@ -417,6 +452,10 @@ class ImportPage(QWidget):
     def _reset_draft(self):
         self.review_request.cancel()
         self._review_context = None
+        self.extraction_request.cancel()
+        self._extraction_context = None
+        self.release_request.cancel()
+        self._release_context = None
         self.generation += 1
         self.draft, self.issues, self.selected_row_id = None, (), None
         self.state, self.request_id, self.receipt = "idle", None, None
@@ -525,7 +564,8 @@ class ImportPage(QWidget):
             return False
         self._reset_draft()
         self.state = "extracting"
-        self._set_status("AI 추출 중", "info", f"{self.snapshot.sheet_name}의 값이 있는 셀 {len(self.snapshot.cells)}개를 보냅니다.")
+        count = sum(value is not None and bool(cell_text(value).strip()) for value in self.snapshot.cells.values())
+        self._set_status("AI 추출 중", "info", f"{self.snapshot.sheet_name}의 값이 있는 셀 {count}개를 보냅니다.")
         self._render()
         generation, snapshot, workbook = self.generation, self.snapshot, self.workbook_name
         workbook_id = self.workbook_id
@@ -534,16 +574,45 @@ class ImportPage(QWidget):
         return True
 
     def _extract(self, generation, workbook, snapshot, kind, workbook_id=None):
-        if generation != self.generation or snapshot is not self.snapshot:
+        """화면을 참조하지 않는 워커에서 추출과 원본 검증을 시작한다.
+
+        param
+        - generation, workbook, snapshot, kind, workbook_id: 추출 예약 당시의 선택 정보.
+        """
+        if generation != self.generation or snapshot is not self.snapshot or self.state != "extracting" or kind is not self.kind:
+            return
+        self._extraction_context = (generation, workbook, snapshot, kind, workbook_id)
+        captured = deepcopy(snapshot)
+        extractor, sheet_extractor = self.extractor, self.sheet_extractor
+        self.extraction_request.start(BackgroundRead(lambda: extract_for_review(
+            kind, workbook, captured, extractor=extractor, sheet_extractor=sheet_extractor)))
+
+    def _extraction_completed(self, result, error):
+        """현재 파일·시트의 완료 결과만 화면에 반영한다.
+
+        param
+        - result, error: 원본 검증을 마친 추출 결과 또는 작업 예외.
+        """
+        context, self._extraction_context = self._extraction_context, None
+        if context is None:
+            return
+        generation, workbook, snapshot, kind, workbook_id = context
+        if generation != self.generation or snapshot is not self.snapshot or self.state != "extracting":
             return
         self.state = "idle"
-        try:
-            result = self.extractor(kind, snapshot.sheet_name, extract_cells(snapshot))
-            draft = draft_from_extract(workbook, snapshot, result, workbook_id=workbook_id) if result.ok else None
-        except Exception:
-            result, draft = None, None
+        draft = None
+        if error is None:
+            try:
+                if result.ok and isinstance(result.data, ExtractionReview):
+                    if result.data.workbook_name != workbook or result.data.sheet_name != snapshot.sheet_name:
+                        raise ValueError("추출 결과의 원본 파일·시트가 다릅니다.")
+                    draft = draft_from_review(result.data, source=result.source, workbook_id=workbook_id)
+                    draft = replace(draft, sheet=deepcopy(snapshot))
+            except Exception:
+                result, draft = None, None
         if draft is None:
             self._set_status("AI 추출 실패", "danger",
+                             str(error) if isinstance(error, AIConfigError) else
                              result.message if result is not None else "AI 추출 결과를 처리하지 못했습니다. 다시 시도하세요.")
             self._render()
             return
@@ -555,6 +624,7 @@ class ImportPage(QWidget):
             self.select_row(draft.rows[0].row_id)
 
     def _changed(self, *, initial=False):
+        self.draft = refresh_hpa_coverage(self.draft)
         # 내용이 바뀌면 새 저장 요청이다. 실패 후 그대로 재시도할 때만 같은 요청 번호를 쓴다.
         self.request_id = uuid.uuid4().hex
         if self.state == "failed":
@@ -590,7 +660,7 @@ class ImportPage(QWidget):
 
     def _finish_review(self, *, initial=False, error=None):
         """DB 또는 메모리 기준 자료로 현재 검토값 전체를 검사한다."""
-        self.issues = validate(self.draft, self.reference)
+        self.issues = validate(self.draft, self._validation_reference())
         if error is not None:
             self.issues = (Issue(
                 IssueLevel.ERROR,
@@ -618,6 +688,8 @@ class ImportPage(QWidget):
         if self.state != "validating":
             return
         self.review_request.cancel()
+        self.release_request.cancel()
+        self._release_context = None
         self._review_context = None
         self.reference = None
         self.state = "idle"
@@ -626,11 +698,23 @@ class ImportPage(QWidget):
         self._set_status("기존 자료 검사 취소", "warning", "검토한 값은 유지됩니다. ‘다시 검사’를 눌러 주세요.")
         self._render()
 
+    def _cancel_extraction(self):
+        """화면을 떠난 뒤 도착한 추출 결과를 폐기하고 재추출을 안내한다."""
+        if self.state != "extracting":
+            return
+        self.extraction_request.cancel()
+        self._extraction_context = None
+        self.state = "idle"
+        self._set_status("AI 추출 취소", "warning", "화면을 떠나 추출 결과 수신을 취소했습니다. 다시 추출해 주세요.")
+        self._render()
+
     def hideEvent(self, event):
+        self._cancel_extraction()
         self._cancel_review()
         super().hideEvent(event)
 
     def closeEvent(self, event):
+        self._cancel_extraction()
         self._cancel_review()
         super().closeEvent(event)
 
@@ -646,7 +730,7 @@ class ImportPage(QWidget):
             widget = self.editor_grid.takeAt(0).widget()
             if widget is not None:
                 widget.deleteLater()
-        self.inputs, self.originals = {}, {}
+        self.inputs, self.originals, self.source_inputs = {}, {}, {}
         for line, name in enumerate(self.draft.fields):
             title = label(FIELD_LABELS[name], 13, medium=True)
             field = QLineEdit(row.value(name) or "")
@@ -664,6 +748,14 @@ class ImportPage(QWidget):
             self.editor_grid.addWidget(field, line * 2, 1)
             self.editor_grid.addWidget(original, line * 2 + 1, 1)
             self.inputs[name], self.originals[name] = field, original
+            if name in {"equipment_code", "version_raw"}:
+                source_field = QLineEdit(address or "")
+                source_field.setAccessibleName(f"{row_id}행 {FIELD_LABELS[name]} 원본 셀")
+                source_field.setPlaceholderText("원본 셀 주소 · 예: C12")
+                source_field.setToolTip("위치를 확인할 수 없을 때 원본에서 확인한 셀을 지정하세요. 원본 값은 바꾸지 않습니다.")
+                source_field.setReadOnly(self.busy or self.locked or bool(address))
+                self.editor_grid.addWidget(source_field, line * 2, 2)
+                self.source_inputs[name] = source_field
         self.editor_title.setText(f"{row_id}행{' (제외됨)' if row.excluded else ''} 값 확인 · 수정")
         self.exclude_button.setText("이 행 다시 포함" if row.excluded else "이 행 제외")
         for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):
@@ -685,6 +777,13 @@ class ImportPage(QWidget):
             # 다른 칸의 수정만으로 자동 공란에 남은 추출 오류가 해제되지 않게 한다.
             if field.isModified() or field.text() != (row.value(name) or ""):
                 draft = edit_value(draft, self.selected_row_id, name, field.text())
+        try:
+            for name, field in self.source_inputs.items():
+                if field.text().strip() and field.text().strip() != (row.sources.get(name) or ""):
+                    draft = assign_source(draft, self.selected_row_id, name, field.text().strip())
+        except ValueError as error:
+            self._set_status("원본 위치 확인 필요", "warning", str(error))
+            return False
         if draft == self.draft:
             return False
         self.draft = draft
@@ -722,6 +821,17 @@ class ImportPage(QWidget):
 
     # --- C-3 저장 ----------------------------------------------------------
 
+    def _validation_reference(self):
+        """릴리즈의 기존 번호 매칭은 교체 검토에서 처리하고 나머지 검증 자료는 유지한다.
+
+        return
+        - 현재 초안의 형식·필수값·모델·계열 검증 자료.
+        """
+        if (self.draft is not None and self.draft.kind is ExtractKind.RELEASE_NOTE
+                and isinstance(self.saver, DatabaseImportSaver) and self.reference is not None):
+            return replace(self.reference, stored_releases=())
+        return self.reference
+
     def _ask(self, text):
         answer = QMessageBox.question(self, "가져오기 저장 확인", text,
                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -731,16 +841,88 @@ class ImportPage(QWidget):
     def save(self):
         if self.draft is None or self.busy or self.locked or has_errors(self.issues):
             return False
-        request = build_save_request(self.draft, self.request_id, self.reference)
+        request = build_save_request(self.draft, self.request_id, self._validation_reference())
         merged = len(self.draft.active_rows) - len(request.rows)
         text = (f"통합문서: {request.workbook_name}\n시트: {request.raw_data['sheet']}\n"
                 f"자료 종류: {KIND_LABELS[request.kind]}\n저장 행: {len(request.rows)}행"
                 + (f" (정확한 중복 {merged}행 합침)" if merged else "")
                 + f"\n확인 필요 항목: {request.review_count}건\nAI 응답: {SOURCE_LABELS.get(request.ai_source, SOURCE_LABELS[None])}\n"
-                f"저장 위치: {self.saver.target_label}\n\n원본 셀 값과 위치는 그대로 보존하고, 수정한 값은 따로 기록합니다.\n저장할까요?")
+                f"저장 위치: {self.saver.target_label}\n\n원본 셀 값과 위치는 그대로 보존하고, 수정한 값은 따로 기록합니다.\n"
+                + ("\n이 시트가 해당 계열의 전체 누적 릴리즈 노트인지 확인해 주세요.\n"
+                   "기존 자료 전체를 교체하며, 새 자료에 없는 버전·Item은 제외됩니다.\n"
+                   "개조형·Item 적용 범위와 포함·제외·분기 내용을 검토한 전체 노트가 맞습니까?\n"
+                   if request.kind is ExtractKind.RELEASE_NOTE and isinstance(self.saver, DatabaseImportSaver) else "")
+                + "저장할까요?")
         if not self.confirm(text):
             self._set_status("저장 취소 · 검토 계속", "info", "저장하지 않았습니다.")
             return False
+        if isinstance(self.saver, DatabaseImportSaver) and request.kind is ExtractKind.RELEASE_NOTE:
+            try:
+                context = self.refresh_context_provider() if self.refresh_context_provider else None
+            except Exception:
+                self._set_status("목표 기준 확인 실패", "danger", "현재 조회의 목표 N을 확인한 뒤 다시 저장해 주세요.")
+                return False
+            request = replace(request, release_note_confirmed=True, filename_confirmed=True,
+                              refresh_context=deepcopy(context))
+            self._release_risk_decisions = set()
+            self._begin_release_review(request)
+            return True
+        self._start_save(request)
+        return True
+
+    def _begin_release_review(self, request):
+        """DB에서 전체 교체 후보를 비동기로 읽고 현재 초안과 요청을 연결한다.
+
+        param
+        - request: 파일명과 전체 노트 확인을 마친 불변 저장 요청.
+        """
+        self.state = "validating"
+        self._release_context = (self.generation, self.draft, request)
+        self._set_status("릴리즈 교체 검토 중", "info", "기존 자료의 매칭·수정값·Item 범위·위험 복원을 확인합니다.")
+        self._render()
+        saver, snapshot = self.saver, deepcopy(request)
+        self.release_request.start(BackgroundRead(lambda: saver.preview_release_import(snapshot, snapshot.release_reviews)))
+
+    def _release_review_completed(self, plans, error):
+        """현재 검토 세대만 수락하고 명시 선택 후 저장하거나 검토를 계속한다.
+
+        param
+        - plans: 계열별 교체 검토 결과.
+        - error: 읽기 실패. 성공이면 None.
+        """
+        context, self._release_context = self._release_context, None
+        if context is None:
+            return
+        generation, draft, request = context
+        if generation != self.generation or draft is not self.draft or self.state != "validating":
+            return
+        self.state = "idle"
+        if error is not None:
+            self._set_status("릴리즈 교체 검토 실패", "danger", "최신 자료를 다시 검사한 뒤 저장해 주세요.")
+            self._render()
+            return
+        if not isinstance(plans, tuple):
+            self._set_status("릴리즈 교체 검토 실패", "danger", "교체 검토 결과의 형식을 확인한 뒤 다시 저장해 주세요.")
+            self._render()
+            return
+        selected, again = self.release_review_chooser(self, plans, request.release_reviews,
+                                                     risk_decisions=self._release_risk_decisions)
+        if selected is None:
+            self._set_status("교체 취소 · 검토 계속", "info", "DB를 변경하지 않았습니다. 검토값은 유지됩니다.")
+            self._render()
+            return
+        request = replace(request, release_reviews=selected)
+        if again:
+            self._begin_release_review(request)
+        else:
+            self._start_save(request)
+
+    def _start_save(self, request):
+        """확인·교체 검토를 마친 요청을 기존 저장 경로로 전달한다.
+
+        param
+        - request: 이번 화면에서 명시적으로 검토한 SaveRequest.
+        """
         self.state = "saving"
         self._set_status("저장 중", "info", "저장이 끝날 때까지 다시 저장할 수 없습니다.")
         self.result_label.setText("")
@@ -748,7 +930,6 @@ class ImportPage(QWidget):
         for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):
             widget.setEnabled(False)
         QTimer.singleShot(0, lambda: self._save(request))
-        return True
 
     def _save(self, request):
         try:

@@ -214,5 +214,6 @@ def test_operation_uses_captured_target_context_when_caller_changes_draft(revisi
     monkeypatch.setattr(service, "_discover_release_family", change_caller_draft)
     result = service.update_release(first, {"released_at": date(2026, 10, 3)})
     assert result.refresh.targets[0].selected_release_id == first
-    assert result.refresh.targets[0].valid
+    # 선택한 ID는 시작 시점 그대로지만, 변경 전 적용 근거는 재사용하지 않는다.
+    assert not result.refresh.targets[0].valid and result.refresh.targets[0].reason
     assert targets[(1, 1)] == second and applicability[(1, 1)] == ()

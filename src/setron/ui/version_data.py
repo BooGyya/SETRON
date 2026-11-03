@@ -108,7 +108,8 @@ class VersionCatalog:
         self.families()
 
     def families(self):
-        return {fid: FamilyReleases(fid, tuple(e.release for e in self.releases if e.release.family_id == fid))
+        return {fid: FamilyReleases(fid, tuple(e.release for e in self.releases if e.release.family_id == fid),
+                                    exact_raw=True)
                 for fid in sorted({p.family_id for p in self.pairs})}
 
     def entry(self, release_id):

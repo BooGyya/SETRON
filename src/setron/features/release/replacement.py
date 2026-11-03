@@ -23,6 +23,7 @@ from .refresh_schemas import RefreshContext
 from .replacement_schemas import (
     MatchQuestion, ReplacementPreview, ReplacementRequest, ReplacementReview,
     ReplacementReviewRequired, ValueConflict, ReplacementItem, ReplacementRelease, ReplacementLink, RiskReconnection,
+    LinkConflict,
 )
 from .schemas import ItemInput, ItemLinkInput, ReleaseInput
 from .service import ReleaseService
@@ -57,11 +58,27 @@ class FamilyReplacementService:
         raises
         - StorageValidationError: 입력 형식·선택·원본이 잘못됐거나 오래된 검토인 경우.
         """
+        with self.storage.transaction() as tx:
+            return self.preview_in(tx, request, review)
+
+    def preview_in(self, tx, request, review=None):
+        """호출자가 연 트랜잭션 안에서 교체 검토 내용을 쓰기 없이 구성한다.
+
+        param
+        - tx: 여러 시트·계열이 함께 사용하는 공통 트랜잭션.
+        - request: 계열 전체의 ReplacementRequest.
+        - review: 앞서 선택한 동일 항목·충돌값. None이면 초기 검토.
+
+        return
+        - 현재 DB·요청 지문과 미완료 질문·충돌을 담은 ReplacementPreview.
+
+        raises
+        - StorageValidationError: 입력·선택 형식이 잘못됐거나 오래된 검토인 경우.
+        """
         request, review = deepcopy((request, review))
         self._validate(request)
-        with self.storage.transaction() as tx:
-            state = self._state(tx, request.family_id)
-            return self._preview(tx, request, state, review)
+        state = self._state(tx, request.family_id)
+        return self._preview(tx, request, state, review)
 
     def replace(self, request, review):
         """검토한 계열 자료와 관련 판정을 한 트랜잭션으로 교체한다.
@@ -79,19 +96,40 @@ class FamilyReplacementService:
         - DatabaseSaveError: 교체 또는 판정 갱신 실패. 이번 묶음 전체를 취소.
         - DatabaseCommitUnknownError: 최종 저장 여부가 불명확한 경우. 자동 재시도하지 않음.
         """
+        with self.storage.transaction() as tx:
+            return self.replace_in(tx, request, review)
+
+    def replace_in(self, tx, request, review, *, refresh=True):
+        """호출자가 연 저장 업무에서 교체한다. 확정·취소는 호출자가 관리한다.
+
+        param
+        - tx: 여러 시트·계열의 변경을 모두 저장하거나 취소할 공통 트랜잭션.
+        - request: 전체 노트·파일명 검토를 마친 ReplacementRequest.
+        - review: 같은 DB·요청 지문에 대한 명시적인 사용자 선택.
+        - refresh: True이면 같은 업무에서 재판정. False이면 호출자가 전체 묶음 저장 후 재판정.
+
+        return
+        - 저장 후 릴리즈 상세 튜플과 ReleaseRefresh. refresh=False이면 두 번째 값은 None.
+
+        raises
+        - ReplacementReviewRequired: 항목·값·Item 연결의 충돌 선택이 남은 경우.
+        - StorageValidationError: 검토·파일명 미확인, 오래된 지문 또는 잘못된 입력인 경우.
+        """
         request, review = deepcopy((request, review))
         self._validate(request)
+        require(type(refresh) is bool, "재판정 여부는 불리언이어야 합니다.")
         require(type(review) is ReplacementReview, "저장 전에 교체 검토 결과가 필요합니다.")
         require(request.complete_note_confirmed is True, "전체 누적 노트·포함·제외·분기를 먼저 확인해 주세요.")
         require(request.filename_confirmed is True, "저장 전 원본 파일명을 확인해 주세요.")
-        with self.storage.transaction() as tx:
-            state = self._state(tx, request.family_id, lock=True)
-            preview = self._preview(tx, request, state, review)
-            if preview.questions or preview.conflicts:
-                raise ReplacementReviewRequired(preview)
-            values = self._apply(tx, request, state, preview, review)
-            refreshed = ReleaseRefreshService().refresh_in(tx, context=self.context, family_ids=(request.family_id,))
-            return values, refreshed
+        state = self._state(tx, request.family_id, lock=True)
+        preview = self._preview(tx, request, state, review)
+        if preview.questions or preview.conflicts or preview.link_conflicts:
+            raise ReplacementReviewRequired(preview)
+        values = self._apply(tx, request, state, preview, review)
+        refreshed = (ReleaseRefreshService().refresh_in(tx, context=self.context, family_ids=(request.family_id,),
+                     invalidated_applicability_release_ids=tuple(value.release.current["release_version_id"] for value in values))
+                     if refresh else None)
+        return values, refreshed
 
     def _validate(self, request):
         """새 원본 매칭에 필요한 식별자·출처와 전체 입력 형식을 검사한다.
@@ -240,7 +278,8 @@ class FamilyReplacementService:
             require(type(review) is ReplacementReview and review.fingerprint == fingerprint,
                     "검토 후 자료가 바뀌었습니다. 다시 조회·검토해 주세요.")
             require(type(review.release_matches) is dict and type(review.item_matches) is dict
-                    and type(review.choices) is dict, "매칭·값 선택 객체가 필요합니다.")
+                    and type(review.choices) is dict and type(review.link_choices) is dict,
+                    "매칭·값·Item 연결 선택 객체가 필요합니다.")
             require(type(review.risk_confirmations) is tuple, "위험 확인 ID 튜플이 필요합니다.")
             for rule_id in review.risk_confirmations:
                 identifier(rule_id, "risk_rule_id")
@@ -251,6 +290,9 @@ class FamilyReplacementService:
             require(all(all(type(part) is str for part in key) and type(choice) is str
                         and choice in {"CURRENT", "INCOMING"} for key, choice in review.choices.items()),
                     "충돌 선택 키·값 형식이 잘못됐습니다.")
+            require(all(type(key) is tuple and len(key) == 2 and all(type(part) is str for part in key)
+                        and type(choice) is str and choice in {"CURRENT", "INCOMING"}
+                        for key, choice in review.link_choices.items()), "Item 연결 선택 키·값 형식이 잘못됐습니다.")
         batches = {r["batch_id"]: r["raw_data"] for r in state["batches"]}
         old_releases = {r["release_version_id"]: r for r in state["releases"]}
         old_items = {r["item_id"]: r for r in state["items"]}
@@ -331,13 +373,57 @@ class FamilyReplacementService:
                         "요청에 없는 충돌 선택입니다.")
                 require(name in (RELEASE_EDITABLE if kind == "release" else ITEM_EDITABLE)
                         and choice in {"CURRENT", "INCOMING"}, "잘못된 충돌 선택입니다.")
+        link_conflicts, _ = self._review_links(request, state, release_matches, item_matches, review)
         risk_reconnections = self._risk_reconnections(request, state, release_matches, item_matches, review)
         if review:
             restorable = {proposal.risk_rule_id for proposal in risk_reconnections if proposal.can_restore}
             require(set(review.risk_confirmations) <= restorable,
                     "대상·해제 경계·순서를 확인할 수 없는 위험은 재연결을 확정할 수 없습니다.")
         return ReplacementPreview(fingerprint, release_matches, item_matches, tuple(questions), tuple(conflicts),
-                                  risk_reconnections)
+                                  risk_reconnections, link_conflicts)
+
+    @staticmethod
+    def _review_links(request, state, release_matches, item_matches, review):
+        """기존 포함 상태·모델 범위를 새 값과 비교하고 명시 선택을 반영한다.
+
+        저장된 연결에는 수동 편집 여부의 이력이 없으므로 서로 다른 값은 모두
+        선택 대상으로 제공한다. 상태·범위·모델 ID를 원자적인 한 묶음으로 선택한다.
+
+        param
+        - request, state: 새 전체 노트와 검토한 현재 연결 행.
+        - release_matches, item_matches: 새 요청 키별 확인된 기존 ID 또는 신규 None.
+        - review: 기존값 또는 새 값 선택. None이면 선택되지 않은 차이를 모두 반환.
+
+        return
+        - 미완료 LinkConflict 튜플과 (릴리즈 키, Item 키)별 선택한 ReplacementLink.
+
+        raises
+        - StorageValidationError: 기존 연결이 없는 항목의 값을 선택한 경우.
+        """
+        stored = {(row["release_version_id"], row["item_id"]): row for row in state["links"]}
+        choices = review.link_choices if review is not None else {}
+        selectable, resolved, conflicts = set(), {}, []
+        for release in request.releases:
+            for incoming in release.links:
+                pair = release.key, incoming.item_key
+                old = stored.get((release_matches[release.key], item_matches[incoming.item_key]))
+                chosen = incoming
+                if old is not None:
+                    selectable.add(pair)
+                    current = ReplacementLink(item_key=incoming.item_key,
+                        item_state=type(incoming.item_state)(old["item_state"]),
+                        target_scope=type(incoming.target_scope)(old["target_scope"]),
+                        target_group_ids=tuple(old["target_group_ids"] or ()))
+                    different = (current.item_state != incoming.item_state or current.target_scope != incoming.target_scope
+                                 or set(current.target_group_ids) != set(incoming.target_group_ids))
+                    choice = choices.get(pair)
+                    if different and choice is None:
+                        conflicts.append(LinkConflict(release.key, incoming.item_key, current, incoming))
+                    elif choice == "CURRENT":
+                        chosen = current
+                resolved[pair] = chosen
+        require(set(choices) <= selectable, "기존 연결이 없는 릴리즈·Item의 값을 선택할 수 없습니다.")
+        return tuple(conflicts), resolved
 
     def _risk_reconnections(self, request, state, release_matches, item_matches, review):
         """새 항목 키로 수동 위험의 복원 대상을 제안하고 근거·범위를 검증한다.
@@ -561,6 +647,9 @@ class FamilyReplacementService:
         batch = tx.insert("import_batch", {"source_type": "EXCEL", "raw_data": request.raw_data})
         old_releases = {r["release_version_id"]: r for r in state["releases"]}
         old_items = {r["item_id"]: r for r in state["items"]}
+        link_conflicts, resolved_links = self._review_links(request, state, preview.release_matches,
+                                                          preview.item_matches, review)
+        require(not link_conflicts, "Item 포함 상태·모델 범위의 충돌 선택이 필요합니다.")
         family_ids = set(old_releases)
         outside_items = {r["item_id"] for r in state["links"] if r["release_version_id"] not in family_ids}
         links = tx.repository.table("release_version_item")
@@ -602,8 +691,9 @@ class FamilyReplacementService:
             if old_id is not None:
                 release_map[old_id] = row["release_version_id"]
             for link in entry.links:
-                self.releases._link(tx, row, ItemLinkInput(item_id=item_ids[link.item_key], item_state=link.item_state,
-                    target_scope=link.target_scope, target_group_ids=link.target_group_ids))
+                selected = resolved_links[(entry.key, link.item_key)]
+                self.releases._link(tx, row, ItemLinkInput(item_id=item_ids[link.item_key], item_state=selected.item_state,
+                    target_scope=selected.target_scope, target_group_ids=selected.target_group_ids))
         for old_id in sorted(set(old_items) - set(item_ids.values()) - outside_items):
             tx.delete_release_item(old_id)
         self._reconnect_risks(tx, state, preview, release_ids, item_ids, review.risk_confirmations)

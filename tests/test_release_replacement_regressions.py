@@ -174,7 +174,8 @@ def test_retained_version_name_cycles_preserve_ids_sources_targets_and_risks(rev
         assert entry.release.current["edited_fields"] == []
         assert next(cell.value for cell in entry.release.original_cells if cell.field == "version_raw") == entry.release.current["version_raw"]
     assert all_rows(storage, "import_batch")[:len(batches)] == batches
-    assert all(target.valid for target in refreshed.targets)
+    # 선택한 N의 ID는 그대로지만 교체한 원본의 모델 적용 근거는 다시 확인해야 한다.
+    assert not any(target.valid for target in refreshed.targets)
     assert [target.selected_release_id for target in refreshed.targets] == [ids["v1"], ids["v2"]]
     saved_risk = all_rows(storage, "risk_rule")[0]
     assert saved_risk["release_version_id"] == ids["v1"] and saved_risk["mapping_status"] == "VERIFIED"

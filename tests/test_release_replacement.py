@@ -82,7 +82,13 @@ def reviewed(service, value, **kwargs):
     return
     - 현재 DB·요청에만 유효한 ReplacementReview.
     """
-    return ReplacementReview(fingerprint=service.preview(value).fingerprint, **kwargs)
+    initial = service.preview(value)
+    review = ReplacementReview(fingerprint=initial.fingerprint, **kwargs)
+    # 매칭 선택으로 새로 확인된 연결까지 표시한 뒤 명시적으로 새 값을 선택한다.
+    if "link_choices" not in kwargs:
+        preview = service.preview(value, review)
+        review = replace(review, link_choices={(c.release_key, c.item_key): "INCOMING" for c in preview.link_conflicts})
+    return review
 
 
 def snapshot(storage):
@@ -139,7 +145,7 @@ def test_whole_family_replacement_removes_absent_items_and_preserves_manual_risk
     assert rules[safety["risk_rule_id"]]["item_id"] is None
     assert all(row["mapping_status"] == "UNRESOLVED" for row in rules.values())
     assert set(result.unresolved_risk_ids) == set(rules)
-    assert [valid.valid for valid in result.targets] == [True, False]
+    assert [valid.valid for valid in result.targets] == [False, False]
     assert all_rows(storage, "equipment_snapshot") == preserved_observation
     assert all_rows(storage, "equipment_version")[0]["version_raw"] == "v2"
     assert all_rows(storage, "equipment_version")[0]["release_version_id"] is None

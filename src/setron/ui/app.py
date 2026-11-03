@@ -2,7 +2,7 @@
 
 `SETRON_DB_*` 설정이 없으면 합성 관측·메모리 저장을 쓰고 DB에 연결하지 않는다. 설정이 있으면 조회 화면은 DB 자료를
 읽고, 가져오기 저장과 DB 전체 SQL 내보내기도 DB를 쓴다.
-데이터 가져오기는 사용자가 불러오기를 누를 때만 실행 중인 Excel에 연결하고, AI는 예제 응답을 사용한다.
+데이터 가져오기는 요청 시에만 실행 중인 Excel과 설정된 AI API에 연결한다. 데모 Excel은 예제 응답을 사용한다.
 """
 
 import argparse
@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
@@ -28,16 +28,20 @@ from setron.ui.version_demo import demo_version_catalog
 from setron.ui.versions import VersionsPage
 from setron.ui.item_data import ItemManagerData, item_data_from_source
 from setron.ui.items import ItemsPage
-from setron.ui.ai_data import facts_from_snapshot
+from setron.ui.ai_data import FreshAnalysisData, facts_from_snapshot
 from setron.ui.ai_page import AIPage
-from setron.ui.import_demo import DemoExcel
+from setron.ui.import_demo import DemoExcel, example_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
-from setron.ui.read_worker import BackgroundRead
+from setron.ui.read_worker import BackgroundRead, ReadRequest
+from setron.ui.release_refresh import capture_release_context, is_database_import_saver
+from setron.ui.management_page import ManagementPage
+from setron.ui.management_data import gateway_from_env
+from setron.ui.management_integration import export_failure, report_filter
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
-                  db_exporter=None) -> MainWindow:
+                  db_exporter=None, sheet_extractor=None, management_gateway=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -45,11 +49,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - version_loader: 릴리즈 메모리 공급자 또는 BackgroundRead.
     - item_loader: Item 메모리 공급자 또는 BackgroundRead. 생략 시 릴리즈 공급자의 실행 방식을 따른다.
     - excel: 실행 중 Excel 읽기 객체 또는 기본 읽기 객체를 선택하는 None.
-    - extractor: 추출 공급자. None이면 예제 응답.
+    - extractor: 기존 형식의 추출 공급자. 결과도 원본 대조를 거침.
+    - sheet_extractor: SheetData 추출 공급자. 생략하면 설정된 실제 AI를 사용하며 DemoExcel만 예제 응답.
     - import_saver: Import 저장 공급자. None이면 메모리 저장.
     - ai_parser: 질문 해석 공급자. None이면 예제 응답.
     - ai_analyzer: 분석 공급자. None이면 예제 응답.
     - db_exporter: ``path``를 받아 DB 전체를 .sql로 저장하고 ExportResult를 돌려주는 함수. None이면 내보내기 비활성.
+    - management_gateway: 워커에서 관리 기록 조회·묶음 저장·XLSX 출력을 실행하는 공급자.
 
     return
     - 실제 DB 연결을 자동 생성하지 않는 MainWindow.
@@ -57,6 +63,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     demo = source is None
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
+    if management_gateway is not None:
+        window.connection_label.setText("관리 데이터 연결")
+        window.connection_detail.setText("검토 후 묶음 저장")
+    elif hasattr(source, "refresh"):
+        window.connection_label.setText("저장 자료 조회 연결")
+        window.connection_detail.setText("조회 요청마다 최신값 확인")
     window.setWindowTitle("SETRON · 설비 현황 미리보기")
     window.notice.setText("작업 단위 7 · 목표 N 편집 · 합성 예시 데이터 · DB 미연결 · 임시 선택" if demo
                           else f"{getattr(source, 'notice', source.source_label)} · 목표 N 임시 선택")
@@ -104,35 +116,88 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     equipment = EquipmentPage(window.query_state, source)
     custom_versions = version_loader is not None
     if version_loader is None:
-        version_loader = lambda: demo_version_catalog(source) if demo else catalog_from_dashboard(source)
+        def version_loader():
+            """기본 DB 화면은 저장 뒤나 수동 재조회 때 현재 자료를 읽는다."""
+            if demo:
+                return demo_version_catalog(source)
+            if hasattr(source, "load_version_catalog"):
+                return source.load_version_catalog()
+            if hasattr(source, "refresh"):
+                source.refresh()
+            return catalog_from_dashboard(source)
+        if hasattr(source, "load_version_catalog"):
+            version_loader = BackgroundRead(version_loader)
     versions = VersionsPage(version_loader)
     if item_loader is None:
         # 외부 릴리즈 ID를 기본 합성 설비 ID와 임의로 연결하지 않는다.
         item_loader = (lambda: ItemManagerData(version_loader())) if custom_versions else (
             lambda: item_data_from_source(version_loader(), source))
-        if isinstance(version_loader, BackgroundRead):
+        if not custom_versions and hasattr(source, "load_item_data"):
+            item_loader = BackgroundRead(source.load_item_data)
+        elif isinstance(version_loader, BackgroundRead):
             item_loader = BackgroundRead(item_loader)
     items = ItemsPage(item_loader)
     # 저장 서비스·회사 AI 연결 전: 각 화면의 기본값은 메모리 저장소와 예제 응답이며 출처를 표시한다.
-    importer = ImportPage(excel, extractor, import_saver)
+    def release_refresh_context():
+        """GUI 스레드에서 현재 적용 N을 불변 저장 요청용 조건으로 복사한다.
+
+        return
+        - DB 모델의 전체 선택 N. 초안만 바뀌었다면 기존 적용 N을 사용하고 자동 변경하지 않음.
+        """
+        return capture_release_context(source, window.query_state)
+
+    if extractor is None and sheet_extractor is None and isinstance(excel, DemoExcel):
+        extractor = example_extractor
+    importer = ImportPage(excel, extractor, import_saver, refresh_context_provider=release_refresh_context,
+                          sheet_extractor=sheet_extractor)
+    window.release_refresh_context = release_refresh_context
+    management = ManagementPage(management_gateway, context_provider=release_refresh_context)
+    window.management_gateway = management_gateway
+    window.management_refresh = ReadRequest(window)
+    window.management_refresh_query = None
+    window.management_saving = False
+    window.management_last_success = False
+
+    def open_management_release(release_id):
+        management.open_record("release_version", {"release_version_id": release_id})
+        window.navigate("management")
+
+    if management_gateway is not None:
+        versions.editor_opener = open_management_release
 
     def apply_ai_selection(selection):
         window.query_panel.set_draft(selection)
         return window.query_panel.apply_draft()
 
     def current_facts():
+        if management.busy or management.locked or window.management_saving or window.management_refresh.busy:
+            return None
         snapshot = dashboard.snapshot
         if snapshot is None or not window.query_state.is_current(snapshot.query):
             return None
         return facts_from_snapshot(snapshot)
 
-    ai = AIPage(window.query_state, ai_parser, ai_analyzer, apply_ai_selection, current_facts)
+    def fresh_analysis_loader():
+        query = window.query_state.applied
+        if (query is None or not window.query_state.is_current(query) or management.busy
+                or management.locked or window.management_saving or window.management_refresh.busy):
+            return None
+        def load():
+            snapshot = source.snapshot(query)
+            return FreshAnalysisData(facts_from_snapshot(snapshot), snapshot)
+        return BackgroundRead(load)
+
+    ai = AIPage(window.query_state, ai_parser, ai_analyzer, apply_ai_selection, current_facts,
+                fresh_loader=fresh_analysis_loader if hasattr(source, "refresh") else None,
+                analysis_allowed=lambda: not (management.busy or management.locked or window.management_saving
+                                               or window.management_refresh.busy))
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
     window.register_page("versions", versions, uses_query=False)
     window.register_page("items", items, uses_query=False)
     window.register_page("import", importer, uses_query=False)
     window.register_page("ai", ai, uses_query=False)
+    window.register_page("management", management, uses_query=False)
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
@@ -140,12 +205,16 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     overview_notice = window.notice.text()
 
     def sync_mode(*_):
+        if window.management_saving:
+            window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
+            list_action.setEnabled(False)
+            return
         if window.route == "items":
             window.header.title.setText("Item 상세" if items.mode == "detail" else "Item 매니저")
             window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
             list_action.setEnabled(False)
         elif window.route == "import":
-            window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · AI 예제 응답 · 저장 위치: {importer.saver.target_label}")
+            window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · {importer.extraction_label} · 저장 위치: {importer.saver.target_label}")
             list_action.setEnabled(False)
         elif window.route == "ai":
             window.notice.setText("AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음")
@@ -153,6 +222,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         elif window.route == "versions":
             window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
             window.notice.setText("릴리즈 조회 전용 · 자료 출처와 조회 상태는 본문 참조")
+            list_action.setEnabled(False)
+        elif window.route == "management":
+            window.notice.setText("관리 데이터 · 원본 보존 · 검토한 수정 묶음 저장")
             list_action.setEnabled(False)
         else:
             window.notice.setText(overview_notice)
@@ -181,9 +253,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.navigate("equipment")
 
     export_action = window.header.actions["export"]
-    if db_exporter is not None:
+    if db_exporter is not None or management_gateway is not None:
         export_action.setEnabled(True)
-        export_action.setToolTip("DB 전체를 SQL 파일로 내보냅니다. 받은 사람은 빈 DB에서 실행하면 같은 자료를 볼 수 있습니다.")
+        export_action.setToolTip("DB 전체 SQL · 관리 자료 XLSX · 현재 조회 현황 XLSX 내보내기")
 
     def export_sql(path=None):
         """DB 전체를 .sql로 내보낸다. ``path``가 없으면 저장 위치를 묻고 결과를 알림창으로 알린다."""
@@ -205,8 +277,80 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         return result
 
     window.export_sql = export_sql
+    window.export_request = ReadRequest(window)
+    window.export_title = None
+
+    def management_export(kind, path=None):
+        interactive = path is None
+        title = "관리 자료 XLSX 내보내기" if kind == "management" else "현재 조회 현황 XLSX 내보내기"
+        if interactive:
+            filename = f"setron_{kind}_{datetime.now():%Y%m%d_%H%M}.xlsx"
+            path, _ = QFileDialog.getSaveFileName(window, title, str(Path.home() / filename), "Excel 파일 (*.xlsx)")
+            if not path:
+                return None
+        path = Path(path)
+        def reject(message):
+            result = export_failure(path, message)
+            if interactive:
+                QMessageBox.warning(window, title, message)
+            return result
+        if management_gateway is None or management.busy or management.locked or window.management_saving:
+            return reject("DB 연결과 관리 저장 상태를 확인해 주세요.")
+        if window.export_request.busy:
+            return reject("다른 내보내기가 진행 중입니다.")
+        query = window.query_state.applied
+        if kind == "status" and (query is None or not window.query_state.is_current(query)):
+            return reject("조회 조건을 먼저 적용해 주세요.")
+        context = release_refresh_context()
+        def load():
+            if kind == "management":
+                return management_gateway.export_management(path)
+            snapshot = source.snapshot(query)
+            return management_gateway.export_status(path, snapshot.base_date, context, report_filter(snapshot, source))
+        if not interactive:
+            return load()
+        window.export_title = title
+        export_action.setEnabled(False)
+        management.setEnabled(False)
+        window.notice.setText(title + " · 저장 중")
+        window.export_request.start(BackgroundRead(load))
+        return None
+
+    def finish_management_export(result, error):
+        export_action.setEnabled(True)
+        management.setEnabled(True)
+        title, window.export_title = window.export_title, None
+        if error is not None or result is None:
+            QMessageBox.warning(window, title or "내보내기", "자료를 내보내지 못했습니다. DB 연결과 파일 저장 권한을 확인해 주세요.")
+        elif result.saved:
+            QMessageBox.information(window, title, f"{result.path}에 저장했습니다.")
+        else:
+            QMessageBox.warning(window, title, result.message or "자료를 내보내지 못했습니다.")
+        sync_mode()
+
+    window.export_request.completed.connect(finish_management_export)
+    window.export_management_xlsx = lambda path=None: management_export("management", path)
+    window.export_current_xlsx = lambda path=None: management_export("status", path)
+
+    def choose_export():
+        menu = QMenu(window)
+        sql = menu.addAction("DB 전체 SQL")
+        sql.setEnabled(db_exporter is not None)
+        managed = menu.addAction("관리 자료 XLSX")
+        current = menu.addAction("현재 조회 현황 XLSX")
+        current.setEnabled(window.query_state.applied_is_current)
+        selected = menu.exec(export_action.mapToGlobal(export_action.rect().bottomLeft()))
+        if selected is sql:
+            export_sql()
+        elif selected is managed:
+            window.export_management_xlsx()
+        elif selected is current:
+            window.export_current_xlsx()
 
     def open_all(action):
+        if action == "export" and management_gateway is not None:
+            choose_export()
+            return
         if action == "export" and db_exporter is not None:
             export_sql()
             return
@@ -260,6 +404,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     versions.mode_changed.connect(sync_mode)
     items.mode_changed.connect(sync_mode)
     window.page_changed.connect(sync_mode)
+    def ensure_loaded(key):
+        # 등록 과정에서 취소된 초기 워커 조회는 해당 화면 진입 시 다시 시작한다.
+        if key == "versions" and versions.catalog is None and not versions.read_request.busy:
+            versions.reload()
+        elif key == "items" and items.data is None and not items.read_request.busy:
+            items.reload()
+    window.page_changed.connect(ensure_loaded)
     window.header.action_requested.connect(open_all)
 
     def apply_query(query):
@@ -287,6 +438,117 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.catalog_changed.connect(heatmap.invalidate)
     window.query_panel.catalog_changed.connect(equipment.clear)
     window.query_panel.catalog_changed.connect(lambda *_: list_action.setEnabled(False))
+
+    def accept_current_snapshot(snapshot):
+        query = snapshot.query
+        if not window.query_state.is_current(query):
+            return False
+        if dashboard.accept_result(query, snapshot):
+            heatmap.begin_query(query)
+            heatmap.accept_result(query, snapshot)
+            list_action.setEnabled(equipment.accept_result(query, snapshot))
+            return True
+        return False
+
+    ai.fresh_data_ready.connect(lambda data: accept_current_snapshot(data.snapshot))
+
+    def cancel_management_refresh():
+        """저장 전 관리 재조회와 그 응답을 받을 조회 기준을 함께 폐기한다."""
+        window.management_refresh.cancel()
+        window.management_refresh_query = None
+
+    def begin_management_save():
+        window.management_saving = True
+        cancel_management_refresh()
+        dashboard.invalidate()
+        heatmap.invalidate()
+        equipment.clear("관리 데이터 저장 중 · 현재 자료 확인 대기")
+        list_action.setEnabled(False)
+        versions.setEnabled(False)
+        items.setEnabled(False)
+        ai.invalidate_data()
+        sync_mode()
+
+    def finish_saved_refresh(snapshot, error):
+        query = window.management_refresh_query
+        if query is None:
+            return
+        if not window.query_state.is_current(query):
+            ai.refresh()
+            return
+        if error is not None:
+            prefix = "저장은 완료됐지만" if window.management_last_success else "기존값을 유지했지만"
+            window.notice.setText(prefix + " 화면을 다시 읽지 못했습니다. 조회 적용으로 재시도해 주세요.")
+        elif snapshot is not None and query is not None and window.query_state.is_current(query):
+            accept_current_snapshot(snapshot)
+            prefix = "저장 완료" if window.management_last_success else "저장 실패 · 기존값 유지"
+            window.notice.setText(prefix + " · 같은 조회 조건으로 집계·위험 결과를 다시 읽었습니다. 목표 N 선택은 유지했습니다.")
+        ai.refresh()
+
+    def after_management_save(result):
+        window.management_saving = False
+        window.management_last_success = result is not None
+        versions.setEnabled(True)
+        items.setEnabled(True)
+        versions.refresh_after_save()
+        items.refresh_after_save()
+        ai.invalidate_data()
+        query = window.query_state.applied
+        cancel_management_refresh()
+        window.management_refresh_query = query
+        if query is not None and window.query_state.is_current(query):
+            window.management_refresh.start(BackgroundRead(lambda: source.snapshot(query)))
+        else:
+            prefix = "저장 완료" if window.management_last_success else "저장 실패 · 기존값 유지"
+            window.notice.setText(prefix + " · 조회 조건을 적용해 현재 저장된 현황을 확인해 주세요.")
+        judgments = getattr(result, "refresh", None)
+        if judgments and any(not target.valid for target in judgments.targets):
+            management.notice.setText(management.notice.text() + "\n목표 N의 적용 근거가 바뀌었습니다. 목표 기준에서 재선택해 주세요.")
+
+    def uncertain_management_save():
+        window.management_saving = False
+        ai.invalidate_data()
+        window.notice.setText("저장 결과 미확인 · 같은 수정 묶음을 다시 저장하지 말고 DB 기록을 확인해 주세요.")
+
+    management.save_started.connect(begin_management_save)
+    management.saved.connect(after_management_save)
+    management.save_uncertain.connect(uncertain_management_save)
+    management.save_failed.connect(lambda: after_management_save(None))
+    management.request.completed.connect(lambda *_: ai.refresh())
+    window.management_refresh.completed.connect(finish_saved_refresh)
+    window.after_management_save = after_management_save
+    window.close_guard = lambda: management.state != "saving"
+
+    def invalidate_saved_results(receipt):
+        """DB 저장 후 이전 판정·대기 중 AI 요청을 폐기하고 N 재확인을 안내한다.
+
+        param
+        - receipt: commit 성공 후에만 전달되는 저장 결과와 관련 판정.
+        """
+        if not is_database_import_saver(importer.saver):
+            return
+        cancel_management_refresh()
+        dashboard.invalidate()
+        ai.invalidate_data()
+        heatmap.invalidate()
+        equipment.clear("저장 자료 변경 · 조회 적용으로 다시 확인해 주세요.")
+        list_action.setEnabled(False)
+        versions.refresh_after_save()
+        items.refresh_after_save()
+        judgments = getattr(receipt, "refresh", None)
+        invalid = tuple(target for target in judgments.targets if not target.valid) if judgments else ()
+        if invalid:
+            details = " / ".join(f"모델 {target.model_id}·계열 {target.family_id}: {target.reason}" for target in invalid)
+            importer.result_label.setText(importer.result_label.text() + "\n목표 N 재선택·적용 근거 확인 필요: " + details)
+        unresolved = judgments.unresolved_risk_ids if judgments else ()
+        if unresolved:
+            identifiers = ", ".join(str(identifier) for identifier in unresolved)
+            importer.result_label.setText(importer.result_label.text() +
+                f"\n수동 위험 지정 {len(unresolved)}건이 미확인으로 유지되었습니다 (지정 번호: {identifiers}). "
+                "대상 버전·Item과 적용 범위를 확인해 주세요. 위험이 해제된 상태가 아닙니다.")
+        window.notice.setText("DB 저장 완료 · 기존 조회 결과 갱신 필요 · 목표 N 선택은 유지했습니다.")
+
+    importer.saved.connect(invalidate_saved_results)
     return window
 
 
@@ -303,7 +565,8 @@ def main(argv: list[str] | None = None) -> int:
     # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
     source, problem = dashboard_source_from_env()
     window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
-                           import_saver=saver_from_env(), db_exporter=sql_exporter_from_env())
+                           import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
+                           management_gateway=gateway_from_env() if source is not None else None)
     if problem:
         window.notice.setText(problem)
     if screen := app.primaryScreen():

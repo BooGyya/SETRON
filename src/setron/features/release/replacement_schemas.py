@@ -112,6 +112,22 @@ class ValueConflict:
 
 
 @dataclass(frozen=True)
+class LinkConflict:
+    """같은 릴리즈·Item 연결의 포함 상태와 적용 범위 충돌 데이터.
+
+    ivar
+    - release_key, item_key: 새 요청 안에서 연결을 구분하는 두 키.
+    - current: 현재 저장된 포함 상태·모델 범위의 전체 묶음.
+    - incoming: 새 노트에서 검토한 포함 상태·모델 범위의 전체 묶음.
+    """
+
+    release_key: str
+    item_key: str
+    current: ReplacementLink
+    incoming: ReplacementLink
+
+
+@dataclass(frozen=True)
 class RiskReconnection:
     """저장 전에 확인할 수 있는 수동 위험의 재연결 근거와 대상 키.
 
@@ -143,6 +159,7 @@ class ReplacementPreview:
     - questions: 명시적인 매칭 선택이 필요한 항목.
     - conflicts: CURRENT 또는 INCOMING 선택이 필요한 값.
     - risk_reconnections: 저장 전에 검토할 수동 위험의 복원 후보·근거·확인 필요 여부.
+    - link_conflicts: 사용자 선택이 남은 버전별 Item 포함 상태·모델 범위의 충돌.
     """
 
     fingerprint: str
@@ -151,6 +168,7 @@ class ReplacementPreview:
     questions: tuple[MatchQuestion, ...]
     conflicts: tuple[ValueConflict, ...]
     risk_reconnections: tuple[RiskReconnection, ...] = ()
+    link_conflicts: tuple[LinkConflict, ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -163,6 +181,8 @@ class ReplacementReview:
     - item_matches: 불확실한 Item의 기존 ID 또는 별개 신규 None 선택.
     - choices: (kind, key, field)별 CURRENT 또는 INCOMING 선택.
     - risk_confirmations: 복원 후보를 검토하고 재연결을 확인한 기존 미확인 위험 ID 튜플.
+    - link_choices: (릴리즈 키, Item 키)별 CURRENT 또는 INCOMING 선택. 포함 상태와
+      모델 범위·모델 ID를 한 묶음으로 선택해 서로 모순되는 범위를 만들지 않음.
     """
 
     fingerprint: str
@@ -170,6 +190,7 @@ class ReplacementReview:
     item_matches: dict[str, int | None] = field(default_factory=dict)
     choices: dict[tuple[str, str, str], str] = field(default_factory=dict)
     risk_confirmations: tuple[int, ...] = ()
+    link_choices: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 class ReplacementReviewRequired(StorageValidationError):
