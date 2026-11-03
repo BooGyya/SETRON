@@ -140,6 +140,15 @@ def compare_version(
     ``release_version_id``는 저장된 대응 릴리즈(ERD `equipment_version.release_version_id`)다.
     없으면 ``version_raw``로 릴리즈를 찾는다. PM마다 버전이 다르면 PM별로 각각 호출하며,
     계열 전체의 부합·미달 판단(BE-012)은 이 결과들을 모아서 한다.
+
+    param
+    - family: 같은 계열의 현재 릴리즈와 확정 별칭.
+    - version_raw: 설비 현황 원문. 비어 있으면 버전 누락으로 처리.
+    - target_id: 모델·계열에 지정한 N의 ID. None이면 목표 미지정.
+    - release_version_id: 확인된 대응 릴리즈 ID. 잘못된 ID를 원문으로 대신 연결하지 않음.
+
+    return
+    - N 대비 판정. N이 없거나 무효여도 확인한 설치 버전의 등록 정보는 유지.
     """
     duplicated = set(family.sorted.duplicated_orders)
 
@@ -148,20 +157,21 @@ def compare_version(
 
     if not family.releases:
         return result(CompareStatus.UNDETERMINED, reason=CompareReason.NO_RELEASE_DATA)
+    # 버전 등록 여부는 목표 N의 유무·유효성과 독립적이다.
+    release = (family.get(release_version_id) if release_version_id is not None
+               else family.match(version_raw) if (version_raw or "").strip() else None)
     if target_id is None:
-        return result(CompareStatus.UNDETERMINED, reason=CompareReason.TARGET_NOT_SET)
+        return result(CompareStatus.UNDETERMINED, release=release, reason=CompareReason.TARGET_NOT_SET)
     target = family.get(target_id)
     if target is None or target.version_order is None or target.version_order in duplicated:
-        return result(CompareStatus.UNDETERMINED, target=target, reason=CompareReason.TARGET_INVALID)
+        return result(CompareStatus.UNDETERMINED, release=release, target=target, reason=CompareReason.TARGET_INVALID)
 
     if release_version_id is not None:
-        release = family.get(release_version_id)
         if release is None:
             return result(CompareStatus.UNDETERMINED, target=target, reason=CompareReason.OTHER_FAMILY)
     elif not (version_raw or "").strip():
         return result(CompareStatus.UNDETERMINED, target=target, reason=CompareReason.MISSING_VERSION)
     else:
-        release = family.match(version_raw)
         if release is None:
             return result(CompareStatus.UNDETERMINED, target=target, reason=CompareReason.NOT_REGISTERED)
 
