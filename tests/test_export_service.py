@@ -65,7 +65,7 @@ def report(**overrides):
         risks=assessor.summarize(RECORDS),
         ages=tuple(equipment_age(r, FAMILIES, DEFAULT_THRESHOLDS) for r in RECORDS if not r.is_hpa),
         thresholds=DEFAULT_THRESHOLDS,
-        priority=prioritize(RECORDS, assessor, FAMILIES, DEFAULT_THRESHOLDS),
+        priority=prioritize(RECORDS, assessor, FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS),
         trend=summarize_by_date(EARLIER + RECORDS, FAMILIES, TARGETS),
         created_at=datetime(2026, 11, 2, 9, 30),
     )
@@ -145,10 +145,12 @@ def test_equipment_sheet_has_one_row_per_equipment_and_family(saved):
 def test_priority_sheet_lists_ranked_and_needs_check(saved):
     values = [r for r in saved["우선순위"].iter_rows(values_only=True)]
 
+    assert values[0][4:6] == ("기준 N까지(칸)", "가장 낮은 버전")
     assert values[1][:3] == (1, "DM-002", "위험")
-    needs_check = values[values.index(("확인 필요 (순위 없음)",) + (None,) * 6) + 2]
-    assert needs_check[:2] == ("DM-003", "미확인")  # 버전 없음 → 위험·기간 모두 확인 필요
-    assert "출시일" in needs_check[3]
+    assert values[1][4] == 2  # 위험 설비, N-2
+    needs_check = values[values.index(("확인 필요 (순위 없음)",) + (None,) * 8) + 2]
+    assert needs_check[:2] == ("DM-003", "미확인")  # 버전 없음 → 위험·버전 위치 모두 확인 필요
+    assert "버전 위치" in needs_check[3]
 
 
 def test_trend_sheet_has_line_chart_and_keeps_only_recorded_dates(saved):
