@@ -2,6 +2,7 @@
 
 import os
 import warnings
+from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import create_autospec
 
@@ -98,9 +99,22 @@ def extracted(page, **kwargs):
     page.load_workbooks()
     read(page, **kwargs)
     assert page.extract()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.draft is not None
     return page.draft
+
+
+def wait_for_extraction(page, *, timeout=5):
+    """추출 워커 완료를 기다리며 화면 이벤트를 처리한다.
+
+    param
+    - page: 추출 결과를 기다리는 가져오기 화면.
+    - timeout: 이벤트를 처리하며 기다릴 최대 초. 실제 SDK 최초 초기화는 별도로 여유를 둔다.
+    """
+    end = monotonic() + timeout
+    while page.busy and monotonic() < end:
+        QTest.qWait(10)
+    assert not page.busy
 
 
 def test_menu_enabled_but_excel_is_connected_only_on_request(window, excel, page):
@@ -271,8 +285,7 @@ def test_preview_shows_raw_cells_addresses_and_merged_ranges(page):
 def test_example_extract_is_labelled_and_blocked_until_reviewed(page, saver):
     draft = extracted(page)
     assert "EXAMPLE" in page.source_badge.text() and "실제 AI 결과 아님" in page.source_badge.text()
-    assert not page.save_button.isEnabled() and "오류 1건" in page.save_summary.text()
-    assert any("원본 셀 위치가 없습니다" in row[4] for row in page.issue_model.rows)
+    assert not page.save_button.isEnabled() and any(issue.field == "base_date" and issue.blocks_save for issue in page.issues)
     assert not page.save()
     page.inputs["base_date"].setText("2026-10-21")
     assert page.apply_edits()
@@ -431,7 +444,7 @@ def test_kind_change_discards_draft_and_inputs_lock_while_extracting(page):
     assert page.extract()
     # 결과가 오기 전에는 다른 시트를 읽거나 종류를 바꿔 결과가 섞이지 않게 한다.
     assert not page.read_selected() and not page.extract() and not page.kind_combo.isEnabled()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.draft is not None and page.kind_combo.isEnabled()
     read(page, RELEASE_BOOK, "Release")
     assert page.draft is None and page.snapshot.sheet_name == "Release"
@@ -443,7 +456,7 @@ def test_ai_failure_shows_message_and_no_draft(page):
     page.load_workbooks()
     read(page)
     page.extract()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.draft is None and page.status.tone == "danger" and "호출 제한" in page.notice.text()
     assert page.extract_button.isEnabled()
 

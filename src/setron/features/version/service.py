@@ -42,6 +42,7 @@ class FamilyReleases:
 
     ``aliases``는 같은 버전으로 확인된 다른 표기를 릴리즈 원문에 연결한다
     (예: ``{"v999.3_7": "v999.3.7"}``). 확인된 대응만 넣으며, 점·밑줄을 일괄 치환하지 않는다.
+    ``exact_raw=True``인 DB 원본 조회에서는 앞뒤 공백도 원문의 일부로 보존해 대응한다.
     """
 
     def __init__(
@@ -49,6 +50,8 @@ class FamilyReleases:
         family_id: int,
         releases: Iterable[ReleaseVersion],
         aliases: Mapping[str, str] | None = None,
+        *,
+        exact_raw: bool = False,
     ) -> None:
         releases = tuple(releases)
         others = [r.version_raw for r in releases if r.family_id != family_id]
@@ -56,27 +59,29 @@ class FamilyReleases:
             raise ValueError(f"계열 {family_id}가 아닌 릴리즈가 섞여 있습니다: {others}")
 
         self.family_id = family_id
+        self._exact_raw = exact_raw
         self.releases = releases
         self.sorted = sort_releases(releases)
         self._by_id = {r.release_version_id: r for r in releases}
         self._by_raw: dict[str, ReleaseVersion] = {}
         for release in releases:
-            key = release.version_raw.strip()
+            key = release.version_raw if exact_raw else release.version_raw.strip()
             if key in self._by_raw:
                 raise ValueError(f"계열 {family_id}에 같은 원문의 릴리즈가 두 개 있습니다: {key}")
             self._by_raw[key] = release
         self._aliases: dict[str, ReleaseVersion] = {}
         for alias, raw in (aliases or {}).items():
-            if raw.strip() not in self._by_raw:
+            target = raw if exact_raw else raw.strip()
+            if target not in self._by_raw:
                 raise ValueError(f"대응 표기 {alias}가 가리키는 릴리즈 {raw}가 계열 {family_id}에 없습니다.")
-            self._aliases[alias.strip()] = self._by_raw[raw.strip()]
+            self._aliases[alias if exact_raw else alias.strip()] = self._by_raw[target]
 
     def get(self, release_version_id: int) -> ReleaseVersion | None:
         return self._by_id.get(release_version_id)
 
     def match(self, version_raw: str | None) -> ReleaseVersion | None:
         """설비 현황의 버전 원문에 대응하는 릴리즈를 찾는다. 원문 일치 또는 확인된 대응 표기만 연결한다."""
-        key = (version_raw or "").strip()
+        key = (version_raw or "") if self._exact_raw else (version_raw or "").strip()
         if not key:
             return None
         return self._by_raw.get(key) or self._aliases.get(key)

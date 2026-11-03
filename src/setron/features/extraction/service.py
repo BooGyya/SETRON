@@ -6,13 +6,14 @@ from datetime import date, datetime
 import re
 
 from setron.features.ai.schemas import (
-    AIResult, AIStatus, AITask, EQUIPMENT_STATUS_FIELDS, RELEASE_NOTE_FIELDS, ExtractKind,
+    AIResult, AIStatus, AITask, EQUIPMENT_STATUS_FIELDS, RELEASE_NOTE_FIELDS, ExtractKind, ExtractResult,
 )
 from setron.features.ai.service import extract_sheet
 from setron.infrastructure.ai_client import ChatClient
 from setron.infrastructure.excel_reader import SheetData, cell_address
 
 from .normalization import normalize
+from .locations import hpa_coverage_issues, match_location, record_locations, restore_required_sources
 from .schemas import CellSource, ExtractionIssue, ExtractionReview, ReviewRow
 
 
@@ -22,6 +23,14 @@ def extract_sheet_data(client: ChatClient, kind: ExtractKind, sheet: SheetData) 
     한 번에 한 시트를 처리하므로 같은 통합문서의 C3 구UI·통합UI도 별개 결과로 유지한다.
     API 실패·제한·잘못된 JSON은 기존 AIResult 상태로 전달하며 자동 재시도하지 않는다.
     정상 응답은 검토 자료 생성 성공을 뜻한다. 저장 가능 판정은 BE-008에서 수행한다.
+
+    param
+    - client: 원본 시트 추출을 요청할 AI 호출 클라이언트.
+    - kind: 설비 현황 또는 릴리즈 노트.
+    - sheet: 파일·시트명과 실제 읽은 셀·병합 범위를 포함한 SheetData.
+
+    return
+    - 원본과 대조한 검토 자료 또는 AI 호출·응답 실패를 담은 AIResult.
     """
     kind = ExtractKind(kind)
     # AI 호출 도중 호출자가 SheetData를 수정해도 요청과 대조 대상이 달라지지 않는다.
@@ -31,13 +40,40 @@ def extract_sheet_data(client: ChatClient, kind: ExtractKind, sheet: SheetData) 
     if not cells:
         review = _review(sheet, kind, (), (ExtractionIssue("선택한 시트에 추출할 값이 없습니다."),), originals)
         return AIResult(AITask.EXCEL_EXTRACT, AIStatus.OK, "빈 시트를 확인했습니다.", data=review)
+    # 실제로 읽은 직사각형만 범위로 안내한다. 불완전한 합성 표의 미제공 셀을 빈칸으로 만들지 않는다.
+    width = max((len(row) for row in sheet.values), default=0)
+    used_range = None
+    if width and all(len(row) == width for row in sheet.values):
+        used_range = f"{sheet.address_of(0, 0)}:{sheet.address_of(sheet.row_count - 1, width - 1)}"
     response = extract_sheet(client, kind, sheet.sheet_name, cells,
-                             merged_ranges=[rng.address for rng in sheet.merged_ranges])
+                             merged_ranges=[rng.address for rng in sheet.merged_ranges], used_range=used_range)
+    return review_extraction_result(kind, sheet, response)
+
+
+def review_extraction_result(kind: ExtractKind, sheet: SheetData,
+                             response: AIResult[ExtractResult]) -> AIResult[ExtractionReview]:
+    """기본 AI와 주입한 추출 공급자 응답에 동일한 원본 대조·HPA 누락 검사를 적용한다.
+
+    param
+    - kind, sheet: 요청한 자료 종류와 읽은 시점의 원본 시트. 셀 값을 변경하지 않는다.
+    - response: 원본 시트에 대응하는 추출 결과. 실패 응답은 자료 없이 그대로 전달한다.
+
+    return
+    - 필드별 원문·출처와 위치 미확인·누락 차단 사유를 가진 검토 결과.
+    """
+    kind = ExtractKind(kind)
     if not response.ok:
         return replace(response, data=None)
+    if not isinstance(response.data, ExtractResult) or response.data.kind is not kind or response.data.sheet_name != sheet.sheet_name:
+        return replace(response, status=AIStatus.INVALID_RESPONSE, data=None,
+                       message="추출 결과의 자료 종류·시트가 읽은 원본과 다릅니다.")
+    sheet = deepcopy(sheet)
+    originals = {sheet.address_of(i, j): value for i, row in enumerate(sheet.values) for j, value in enumerate(row)}
 
     fields = EQUIPMENT_STATUS_FIELDS if kind is ExtractKind.EQUIPMENT_STATUS else RELEASE_NOTE_FIELDS
     components = _components(sheet) if kind is ExtractKind.EQUIPMENT_STATUS else {}
+    locations = record_locations(sheet) if kind is ExtractKind.EQUIPMENT_STATUS else ()
+    covered = set()
     issues = [ExtractionIssue(note.reason, note.field, note.address) for note in response.data.review_notes]
     rows = []
     for number, row in enumerate(response.data.rows, 1):
@@ -71,14 +107,45 @@ def extract_sheet_data(client: ChatClient, kind: ExtractKind, sheet: SheetData) 
                 row_issues.append(ExtractionIssue("Engine·EPD 열의 값은 SW 버전으로 사용할 수 없습니다.", field, source.address, number))
                 continue
             values[field] = extracted
+        if kind is ExtractKind.EQUIPMENT_STATUS:
+            sources, location, location_issues = restore_required_sources(values, sources, locations, number)
+            row_issues.extend(location_issues)
+            if location is not None:
+                covered.add(id(location))
         normalized, key, notes = normalize(values, kind, number, sources)
         row_issues.extend(notes)
         rows.append(ReviewRow(normalized, raw_values, sources, key, tuple(row_issues)))
         issues.extend(row_issues)
     if not rows:
         issues.append(ExtractionIssue("AI 응답에 추출된 행이 없습니다. 원본 양식과 응답을 확인하세요."))
+    if kind is ExtractKind.EQUIPMENT_STATUS:
+        issues.extend(hpa_coverage_issues(sheet, locations, covered, rows))
     review = _review(sheet, kind, tuple(rows), tuple(issues), originals)
     return replace(response, data=review, message="추출 결과를 원본과 대조했습니다. 검토 후 검증을 진행하세요.")
+
+
+def recheck_hpa_coverage(sheet: SheetData, rows) -> tuple[ExtractionIssue, ...]:
+    """사용자가 확정한 현재 원본 주소로 HPA 레코드 누락만 다시 검사한다.
+
+    param
+    - sheet: 최초에 읽은 원본 스냅샷. 현재값으로 원본을 덮어쓰지 않는다.
+    - rows: (현재 필드값 dict, 필드별 원본 주소 dict) 순서쌍 목록. PM은 현재값으로 구분한다.
+
+    return
+    - 아직 확인되지 않은 HPA 위치의 global 차단 사유. 행별 필수값 검증은 별도로 수행한다.
+    """
+    sheet = deepcopy(sheet)
+    originals = {sheet.address_of(i, j): value for i, row in enumerate(sheet.values) for j, value in enumerate(row)}
+    locations = record_locations(sheet)
+    covered, reviews = set(), []
+    for values, addresses in rows:
+        sources = {field: source for field, address in addresses.items()
+                   if (source := _source(sheet, originals, address)) is not None}
+        location = match_location(sources, locations, values)
+        if location is not None:
+            covered.add(id(location))
+        reviews.append(ReviewRow(dict(values), dict(values), sources, None))
+    return hpa_coverage_issues(sheet, locations, covered, reviews)
 
 
 def _text(value):

@@ -17,6 +17,11 @@ from setron.features.ai.schemas import EQUIPMENT_STATUS_FIELDS, RELEASE_NOTE_FIE
 from setron.infrastructure.ai_client import ResponseSource
 from setron.features.version.schemas import VersionComparison
 from setron.features.equipment.schemas import SnapshotInput
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from setron.features.release.refresh_schemas import RefreshContext, ReleaseRefresh
+    from setron.features.release.replacement_schemas import ReplacementReview
 
 FIELDS = {ExtractKind.EQUIPMENT_STATUS: EQUIPMENT_STATUS_FIELDS, ExtractKind.RELEASE_NOTE: RELEASE_NOTE_FIELDS}
 
@@ -70,6 +75,7 @@ class Issue:
     comparison: VersionComparison | None = None
     workbook_id: str | None = None
 
+
     @property
     def excel_position(self) -> tuple[int, int] | None:
         """원본 주소를 Excel의 행·열 번호로 변환한다.
@@ -97,7 +103,7 @@ class Issue:
 
 @dataclass(frozen=True)
 class SheetSnapshot:
-    """읽은 시점의 시트 원본. ``cells``는 빈 칸을 뺀 ``주소: 값``이며 병합 범위는 왼쪽 위 칸에만 값이 있다."""
+    """읽은 시점의 시트 원본. ``cells``는 읽은 빈칸도 None으로 보존하며 병합값은 왼쪽 위 칸에만 있다."""
 
     sheet_name: str
     first_row: int
@@ -219,6 +225,11 @@ class SaveRequest:
     expected_snapshots: tuple[SnapshotInput, ...] | None = None
     # 파일명과 별도로 같은 통합문서의 시트들을 묶는 임시 식별자. DB 원본에는 넣지 않는다.
     workbook_id: str | None = None
+    # 전체 누적 노트·파일명 확인과 계열별 충돌 선택은 이번 요청에만 사용한다.
+    release_note_confirmed: bool = False
+    filename_confirmed: bool = False
+    release_reviews: tuple[ReplacementReview, ...] = ()
+    refresh_context: RefreshContext | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +238,7 @@ class SaveReceipt:
     row_count: int
     saved_at: datetime
     target_label: str
+    refresh: ReleaseRefresh | None = None
 
 
 class ImportBlockedError(ValueError):

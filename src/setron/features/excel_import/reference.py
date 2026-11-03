@@ -21,12 +21,14 @@ class ModelReference:
     - model_name: DB의 등록 모델명. 확정 별칭은 입력값에서만 정규화해 비교.
     - category: POLY·OXIDE·KCTC·HPA 최상위 분류.
     - parent_group_id: 공유 계열을 관리하는 직계 기본 모델 ID. 기본형은 None.
+    - analysis_enabled: 해당 등록 모델의 공통 분석 포함 여부.
     """
 
     group_id: int
     model_name: str
     category: str
     parent_group_id: int | None = None
+    analysis_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,7 @@ class ReferenceData:
     - catalog_loaded: DB 계열 조회 완료 여부. 빈 조회 결과와 미연결을 구분.
     - models: 별도로 조회한 등록 모델 목록. None은 미연결, 빈 튜플은 조회한 모델이 없음.
     - equipment_sites: 입력 호기의 모든 날짜에 저장된 고정 소속 사업장. 정확한 날짜 현황과 별도로 검사.
+    - equipment_classifications: 입력 호기의 날짜별 HPA·공통 분석 제외(True) 또는 분석 포함(False) 분류.
     """
 
     equipment_codes: frozenset[str]
@@ -83,6 +86,7 @@ class ReferenceData:
     catalog_loaded: bool = False
     models: tuple[ModelReference, ...] | None = None
     equipment_sites: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    equipment_classifications: Mapping[str, Mapping[str, frozenset[bool]]] = field(default_factory=dict)
 
 
 def _matching_models(row, kind: ExtractKind, reference: ReferenceData) -> tuple[ModelReference, ...]:
@@ -154,6 +158,15 @@ def family_key(row, kind: ExtractKind) -> FamilyKey | None:
     if any(value is not None and not isinstance(value, str) for value in values.values()):
         return None
     return normalize(values, kind, row.row_id, {})[1]
+
+
+def analysis_excluded(row, kind: ExtractKind, reference: ReferenceData | None) -> bool | None:
+    """등록 모델의 분석 제외 설정과 HPA 분류를 저장 단계와 같은 기준으로 판정한다."""
+    key = family_key(row, kind)
+    if key is None:
+        return None
+    matches = _matching_models(row, kind, reference) if reference is not None else ()
+    return key.category == "HPA" or len(matches) == 1 and not matches[0].analysis_enabled
 
 
 def identity(key: FamilyKey) -> tuple:

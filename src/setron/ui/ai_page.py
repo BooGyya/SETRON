@@ -11,10 +11,11 @@ from setron.features.ai.examples import example_client
 from setron.features.ai.schemas import AITask
 from setron.features.ai.service import analyze, parse_question
 from setron.infrastructure.ai_client import ResponseSource
-from setron.ui.ai_data import VIEW_LABELS, VIEW_ROUTES, ConditionStatus, check_apply, interpret, selection_for
+from setron.ui.ai_data import FreshAnalysisData, VIEW_LABELS, VIEW_ROUTES, ConditionStatus, check_apply, interpret, selection_for
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import SECONDARY
+from setron.ui.read_worker import ReadRequest
 
 SOURCE_LABELS = {
     ResponseSource.EXAMPLE: "예제 응답(EXAMPLE) · 실제 AI 결과 아님 · 질문·자료와 무관한 고정 응답",
@@ -42,16 +43,26 @@ class AIPage(QWidget):
     ``applier(selection)``는 공통 조회 초안을 바꾸고 적용한 :class:`AppliedQuery`를 돌려주며,
     ``facts_provider()``는 현재 적용 조건의 대시보드 계산값(없으면 None)을 돌려준다.
     ``parser``·``analyzer``가 None이면 회사 AI 연결 전 기본값인 예제 응답을 쓴다.
+    ``fresh_loader``가 있으면 분석 요청마다 워커에서 최신 화면·AI 자료를 읽는다.
+    조회 실패나 조건 변경 시 이전 캐시로 분석하지 않는다.
     """
 
     navigate_requested = Signal(str)
+    fresh_data_ready = Signal(object)
 
-    def __init__(self, query_state, parser, analyzer, applier, facts_provider, *, confirm=None):
+    def __init__(self, query_state, parser, analyzer, applier, facts_provider, *, confirm=None, fresh_loader=None,
+                 analysis_allowed=None):
         super().__init__()
         self.state = query_state
         self.parser = parser or (lambda question: parse_question(example_client(AITask.QUERY_PARSE), question))
         self.analyzer = analyzer or (lambda question, facts: analyze(example_client(AITask.ANALYSIS), question, facts))
         self.applier, self.facts_provider = applier, facts_provider
+        self.fresh_loader = fresh_loader
+        self.analysis_allowed = analysis_allowed or (lambda: True)
+        self.fresh_request = ReadRequest(self)
+        self.fresh_request.completed.connect(self._fresh_loaded)
+        self.analysis_ticket = None
+        self.analysis_query = None
         self.confirm = confirm or self._ask
         self.conditions, self.rows, self.parsed_catalog_revision = None, (), None
         self.parse_source, self.applied_query, self.answer = None, None, None
@@ -141,7 +152,8 @@ class AIPage(QWidget):
                                  + "\n".join(f"{key}: {'계산 불가' if value is None else value}" for key, value in facts.items())
                                  if facts else "조회 적용으로 대시보드 결과를 계산한 뒤 분석할 수 있습니다.")
         self.parse_button.setEnabled(self.busy is None)
-        self.analyze_button.setEnabled(self.busy is None and facts is not None)
+        available = facts is not None or (self.fresh_loader is not None and self.state.applied_is_current)
+        self.analyze_button.setEnabled(self.busy is None and available and self.analysis_allowed())
         self._render_apply()
 
     # --- 질문 해석 ---------------------------------------------------------
@@ -251,28 +263,96 @@ class AIPage(QWidget):
 
     def analyze(self):
         question = self.question.text().strip() or "현재 조회 결과를 요약해 줘"
+        if self.busy is not None or not self.analysis_allowed():
+            return False
+        if self.fresh_loader is not None:
+            try:
+                loader = self.fresh_loader()
+            except Exception:
+                loader = None
+            if loader is None:
+                self._set_status("조회 확인 필요", "warning", "현재 적용 조건으로 자료를 다시 조회한 뒤 분석해 주세요.")
+                return False
+            self.generation += 1
+            self.analysis_ticket = (self.generation, self.state.applied, question)
+            self.busy = "facts"
+            self._clear_analysis()
+            self._set_status("최신 자료 조회 중", "info")
+            self.refresh()
+            return self.fresh_request.start(loader)
         facts = self.facts_provider()
-        if self.busy is not None or facts is None:
+        if facts is None:
             return False
         self.generation += 1
-        self.busy = "analysis"
+        self._begin_analysis(question, facts)
+        return True
+
+    def _clear_analysis(self):
         self.answer = None
         for widget in (self.answer_label, self.evidence_label, self.assumption_label, self.unconfirmed_label):
             widget.setText("")
+
+    def invalidate_data(self):
+        """저장 시작·성공 후 이전 자료와 실행 대기 중인 분석을 무효화한다. AI는 실행하지 않는다."""
+        self.generation += 1
+        self.fresh_request.cancel()
+        self.analysis_ticket = None
+        self.analysis_query = None
+        self.busy = None
+        self._clear_analysis()
+        self.analysis_badge.setText("자료 변경 · 다음 요청에서 최신값 확인")
+        self.analysis_badge.set_tone("info")
+        self.refresh()
+
+    def _fresh_loaded(self, data, error):
+        ticket, self.analysis_ticket = self.analysis_ticket, None
+        if ticket is None or self.busy != "facts":
+            return
+        generation, query, question = ticket
+        self.busy = None
+        if generation != self.generation or not self.state.is_current(query):
+            self._set_status("조회 조건 변경", "warning", "분석 요청 중 조회 조건이 바뀌었습니다. 다시 요청해 주세요.")
+            self.refresh()
+            return
+        if error is not None or not isinstance(data, FreshAnalysisData):
+            self._set_status("최신 자료 조회 실패", "danger", "최신 저장 자료를 읽지 못해 분석을 실행하지 않았습니다. DB 연결을 확인해 주세요.")
+            self.refresh()
+            return
+        self.fresh_data_ready.emit(data)
+        if generation != self.generation:
+            return
+        if not self.state.is_current(query):
+            self._set_status("조회 조건 변경", "warning", "분석 준비 중 조회 조건이 바뀌었습니다. 다시 요청해 주세요.")
+            self.refresh()
+            return
+        self._begin_analysis(question, data.facts, query=query)
+
+    def _begin_analysis(self, question, facts, *, query=None):
+        self.analysis_query = query if query is not None else self.state.applied
+        self.busy = "analysis"
+        self._clear_analysis()
         self._set_status("분석 중", "info")
         self.refresh()
         generation = self.generation
         QTimer.singleShot(0, lambda: self._analyze(generation, question, facts))
-        return True
 
     def _analyze(self, generation, question, facts):
         if generation != self.generation:
             return
         self.busy = None
+        query = self.analysis_query
+        if query is not None and not self.state.is_current(query):
+            self._set_status("조회 조건 변경", "warning", "조회 조건이 바뀌어 이전 자료의 분석을 실행하지 않았습니다.")
+            self.refresh()
+            return
         try:
             result = self.analyzer(question, facts)
         except Exception:
             result = None
+        if generation != self.generation or (query is not None and not self.state.is_current(query)):
+            self._set_status("자료 변경", "warning", "요청 후 자료나 조회 조건이 바뀌었습니다. 최신 자료로 다시 요청해 주세요.")
+            self.refresh()
+            return
         if result is None or not result.ok:
             self.analysis_badge.setText("분석 실패")
             self.analysis_badge.set_tone("danger")

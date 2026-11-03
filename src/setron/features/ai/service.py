@@ -82,13 +82,17 @@ EXTRACT_RULES = (
     "가로·세로·여러 표의 병렬 배치를 모두 읽고, 병합 범위는 왼쪽 위 원본 셀을 출처로 쓴다.\n"
     "values는 원본 셀의 표기 또는 그 안의 연속된 부분 문자열로 쓴다. "
     "모델명·날짜·분류 정규화는 프로그램이 하므로 여기서 바꾸지 않는다. "
-    "출처는 반드시 주어진 셀 주소 하나로 지정한다. 시트명만으로 아는 값은 추정하지 않는다.\n"
+    "값의 출처는 반드시 주어진 셀 주소 하나로 지정한다. 시트명만으로 아는 값은 추정하지 않는다.\n"
     "기준 날짜·사업장·라인을 찾고 없거나 충돌하면 review_notes에 위치와 이유를 적는다. "
     "Memory/Foundry는 선택 항목이며 빈 값은 null로 둔다.\n"
     "설비 현황은 한 호기·한 PM·한 SW 연결마다 행을 만든다. 혼합형의 PM별 모델과 버전을 합치지 않는다. "
     "SW/Version 열은 version_raw, Engine 열은 engine_version, EPD 열은 epd_version에 쓴다. "
     "Engine·EPD를 SW로 대체하지 않는다. SW 버전의 접미사·(H)·공백 등 원문을 보존한다.\n"
     "Poly·Oxide·KCTC·HPA 분류와 모델을 구분한다. KCTC Inline O2·Cluster O2는 Oxide O2와 별개다. "
+    "HPA도 호기나 SW 버전이 비어 있다는 이유로 행을 생략하지 않는다. "
+    "빈 필수값은 null로 남기고 값을 추정하거나 다른 행의 호기·버전을 대신 쓰지 않는다. "
+    "빈 필수값의 셀 위치는 읽은 범위와 표 구조로 확인될 때만 sources에 남기고, "
+    "확인할 수 없으면 위치 미확인과 보완 사유를 review_notes에 적는다.\n"
     "M5·M-O5 Prime 표기와 C3 구UI·통합UI 및 5각·6각 형상을 그대로 추출한다. "
     "C3 UI를 버전 번호나 형상에서 추측하지 않는다. C2를 관리 모델로 추가하지 않는다.\n"
     "릴리즈는 버전과 연결된 Item마다 행을 만든다. 버전·출시일이 같은 셀에 있으면 각각의 부분 문자열과 "
@@ -151,16 +155,33 @@ def extract_sheet(
     cells: Sequence[tuple[str, Any]],
     *,
     merged_ranges: Sequence[str] = (),
+    used_range: str | None = None,
 ) -> AIResult[ExtractResult]:
     """시트의 셀 값에서 원본 표기와 위치를 추출한다.
 
     ``cells``는 ``(셀 주소, 값)`` 목록이다. 출처 대조·공통 항목 정리는
     features.extraction.service.extract_sheet_data를 통해 수행한다.
+
+    param
+    - client: 이번 추출에 사용할 AI 호출 클라이언트.
+    - kind, sheet_name: 자료 종류와 읽은 원본 시트명.
+    - cells: 실제 읽은 셀 주소·값 목록.
+    - merged_ranges: 원본 병합 범위. 병합값 출처는 왼쪽 위 셀로 지정.
+    - used_range: 실제 읽은 직사각형 범위. None이면 생략된 셀이 빈칸이라고 안내하지 않음.
+
+    return
+    - 추출값·출처·검토 메모 또는 호출·응답 오류를 담은 AIResult.
     """
     kind = ExtractKind(kind)
     fields = EQUIPMENT_STATUS_FIELDS if kind is ExtractKind.EQUIPMENT_STATUS else RELEASE_NOTE_FIELDS
     prompt = EXTRACT_PROMPT.format(fields=", ".join(fields)) + EXTRACT_RULES
     body = "\n".join(f"{address}: {value}" for address, value in cells)
+    if used_range is not None:
+        body += (
+            f"\n읽은 범위: {used_range}. 이 범위 안에서 위 목록에 생략된 셀은 빈 칸이다. "
+            "필수값이 빈 칸이면 표 구조상 위치가 확인될 때만 그 주소를 sources에 적는다. "
+            "주소나 값을 추정하지 말고, 위치가 불명확하면 위치 미확인 메모를 review_notes에 남긴다."
+        )
     if merged_ranges:
         body += "\n병합 범위: " + ", ".join(merged_ranges)
     messages = [ChatMessage("system", prompt), ChatMessage("user", f"시트: {sheet_name}\n{body}")]

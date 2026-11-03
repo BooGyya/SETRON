@@ -12,6 +12,14 @@ from setron.features.ai.schemas import QueryConditions, TargetView
 from setron.ui.query_state import QueryCatalog, QuerySelection
 
 
+@dataclass(frozen=True)
+class FreshAnalysisData:
+    """요청 시 다시 읽은 동일 조회의 화면 스냅샷과 AI 전달 자료."""
+
+    facts: dict
+    snapshot: object
+
+
 class ConditionStatus(Enum):
     MATCHED = "적용 가능"
     NOT_FOUND = "선택지 없음"

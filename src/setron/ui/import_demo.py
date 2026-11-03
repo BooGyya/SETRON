@@ -91,4 +91,14 @@ class DemoExcel:
 def example_extractor(kind, sheet_name, cells):
     """실제 회사 AI 연결 전 예제 응답. 시트 내용과 관계없이 종류별 고정 응답을 EXAMPLE 출처로 돌려준다."""
     reply = EXTRACT_REPLY if kind is ExtractKind.EQUIPMENT_STATUS else RELEASE_EXTRACT_REPLY
+    if kind is ExtractKind.EQUIPMENT_STATUS:
+        payload = json.loads(reply)
+        payload["rows"][0]["sources"].update(model_name="D5", family_name="E5")
+        reply = json.dumps(payload, ensure_ascii=False)
+    else:
+        payload = json.loads(reply)
+        for index, row in enumerate(payload["rows"], 2):
+            row["values"].update(model_name="C4", family_name="C4")
+            row["sources"].update(model_name=f"E{index}", family_name=f"E{index}")
+        reply = json.dumps(payload, ensure_ascii=False)
     return extract_sheet(ExampleChatClient([reply]), kind, sheet_name, cells)

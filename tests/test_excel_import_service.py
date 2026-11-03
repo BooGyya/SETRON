@@ -51,7 +51,7 @@ def test_snapshot_preserves_raw_values_addresses_and_merged_ranges():
     data = SheetData("a.xlsx", "S", 3, 2, [["병합", None, 1.0], [None, datetime(2026, 1, 2), " 원문 "]],
                      [MergedRange(3, 2, 4, 2)])
     snapshot = snapshot_sheet(data)
-    assert snapshot.cells == {"B3": "병합", "D3": 1.0, "C4": "2026-01-02", "D4": " 원문 "}
+    assert snapshot.cells == {"B3": "병합", "C3": None, "D3": 1.0, "B4": None, "C4": "2026-01-02", "D4": " 원문 "}
     assert snapshot.merged == ("B3:B4",)
     assert value_at(snapshot, "B4") == "병합"  # 병합 범위 안 칸은 왼쪽 위 값
     assert extract_cells(snapshot) == [("B3", "병합"), ("D3", "1"), ("C4", "2026-01-02"), ("D4", " 원문 ")]
@@ -83,8 +83,14 @@ def test_edit_is_kept_apart_from_ai_original_and_can_be_reverted():
 
 @pytest.mark.parametrize("model", ["M-C4", "HPA"], ids=["일반 설비", "HPA도 같음"])
 def test_blank_required_value_blocks_whole_batch(model):
-    draft = draft_for(sheet(LINE2, LINE3), [eq_row(2, model_name=model), eq_row(3, pm_name="PM2", model_name=model,
-                                                                         version_raw=None)])
+    family = "HPA" if model == "HPA" else "C4"
+    normal, missing = list(LINE2), list(LINE3)
+    for original in (normal, missing):
+        original[4:6] = [model, family]
+    missing[6] = None
+    blank_row = eq_row(3, pm_name="PM2", model_name=model, family_name=family, version_raw=None)
+    blank_row = ExtractedRow(blank_row.values, {**blank_row.sources, "version_raw": "G3"})
+    draft = draft_for(sheet(normal, missing), [eq_row(2, model_name=model, family_name=family), blank_row])
     issues = validate(draft)
     errors = levels(issues, IssueLevel.ERROR)
     assert [(e.row_id, e.field) for e in errors] == [(2, "version_raw")]
@@ -112,14 +118,17 @@ def test_ai_value_is_checked_against_original_cell():
     """AI 값의 원본 대조와 수정 후 목록형 셀 출처 보존을 검증한다."""
     data = sheet(LINE2)
     draft = draft_for(data, [eq_row(2, site="평택")])
-    review = levels(validate(draft), IssueLevel.REVIEW)
-    assert any(i.field == "site" and "원본 B2: 화성" in i.message for i in review)
+    errors = levels(validate(draft), IssueLevel.ERROR)
+    assert any(i.field == "site" and i.code == "SOURCE_MISMATCH" and "원본 B2: 화성" in i.message for i in errors)
+    with pytest.raises(ImportBlockedError):
+        build_save_request(draft, "unreviewed-source-mismatch")
     # 사용자가 고친 값은 원본과 다를 수 있다. 원래 셀 위치는 그대로 남는다.
     fixed = edit_value(draft, 1, "site", "평택시")
     assert not any(i.field == "site" for i in validate(fixed))
     assert build_save_request(fixed, "r").rows[0].source_reference["site"] == {"sheet": "Memory", "cells": ["B2"]}
     outside = draft_for(data, [ExtractedRow(eq_row(2).values, {**eq_row(2).sources, "pm_name": "Z99"})])
-    assert any(i.field == "pm_name" and "범위 밖" in i.message for i in validate(outside))
+    assert any(i.field == "pm_name" and i.blocks_save and i.code == "SOURCE_OUTSIDE"
+               and "범위 밖" in i.message for i in validate(outside))
     no_source = draft_for(data, [ExtractedRow(eq_row(2).values, {})])
     assert len([i for i in validate(no_source) if "원본 셀 위치가 없습니다" in i.message]) == 7
 
@@ -128,13 +137,15 @@ def test_merged_cell_source_uses_top_left_value():
     data = SheetData("a.xlsx", "Memory", 1, 1, [["화성", None], ["E-1", "v1"]], [MergedRange(1, 1, 1, 2)])
     row = ExtractedRow({"site": "화성", "equipment_code": "E-1"}, {"site": "B1", "equipment_code": "A2"})
     issues = validate(draft_for(data, [row]))
-    assert not any(i.field in ("site", "equipment_code") and i.level is IssueLevel.REVIEW for i in issues)
+    assert not any(i.field in ("site", "equipment_code") and i.level in (IssueLevel.ERROR, IssueLevel.REVIEW) for i in issues)
 
 
 def test_same_pm_conflict_blocks_but_exact_duplicate_merges_with_sources():
     """동일 PM 상충은 차단하고 정확한 중복의 원본 위치는 목록으로 함께 보존한다."""
     data = sheet(LINE2, LINE2, LINE3)
-    conflict = draft_for(data, [eq_row(2), eq_row(3, version_raw="v4.56.6.42")])
+    conflicting_line = list(LINE2)
+    conflicting_line[6] = "v4.56.6.42"
+    conflict = draft_for(sheet(LINE2, conflicting_line), [eq_row(2), eq_row(3, version_raw="v4.56.6.42")])
     errors = levels(validate(conflict), IssueLevel.ERROR)
     assert {e.row_id for e in errors} == {1, 2} and all("같은 PM" in e.message for e in errors)
     duplicate = draft_for(data, [eq_row(2), eq_row(3)])
@@ -153,7 +164,9 @@ def test_different_pm_version_is_non_blocking_exception():
 
 
 def test_same_equipment_and_date_must_share_site_and_model():
-    draft = draft_for(sheet(LINE2, LINE3), [eq_row(2), eq_row(3, pm_name="PM2", site="평택")])
+    conflicting_site = list(LINE3)
+    conflicting_site[1] = "평택"
+    draft = draft_for(sheet(LINE2, conflicting_site), [eq_row(2), eq_row(3, pm_name="PM2", site="평택", version_raw="v4.56.6.42")])
     errors = levels(validate(draft), IssueLevel.ERROR)
     assert {e.row_id for e in errors} == {1, 2} and all(e.code == "SITE_CONFLICT" for e in errors)
 

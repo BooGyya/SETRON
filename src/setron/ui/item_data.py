@@ -71,10 +71,10 @@ class ItemManagerData:
 
 
 def item_data_from_source(versions, source):
-    """A와 같은 최신 관측일만 선택한다. 없는 날짜의 설비를 이전 관측으로 채우지 않는다."""
+    """A와 같은 최신 분석 관측일만 선택한다. HPA의 새 날짜로 일반 관측을 밀어내지 않는다."""
     if not source.dates:
         return ItemManagerData(versions, observation_label=source.source_label + " · 관측 기준일 없음")
-    day = source.dates[-1]
+    day = (source.analysis_dates or source.dates)[-1]
     return ItemManagerData(versions, tuple(r for r in source.records if r.base_date == day),
                            day, True, source.source_label)
 

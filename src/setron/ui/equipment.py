@@ -339,7 +339,7 @@ class EquipmentPage(QWidget):
             return False
         self.close_item_detail()
         self.origin = origin if origin in ("dashboard", "heatmap") else self.origin
-        self.scope_ids, self.scope_label = self.snapshot.equipment_ids, "적용 범위 전체"
+        self.scope_ids, self.scope_label = self.data.equipment_ids, "적용 범위 전체"
         self._reset_filters()
         self._update_scope()
         self._set_mode("list")
@@ -350,6 +350,8 @@ class EquipmentPage(QWidget):
             return False
         if not validate_scope(self.data, request.equipment_ids):
             return False
+        if not set(request.equipment_ids) <= set(self.snapshot.equipment_ids):
+            return False  # 별도 HPA 조회 자료로 대시보드의 전달 범위를 넓히지 않는다.
         if request.risk_only and not set(request.equipment_ids) <= set(self.snapshot.risky_ids):
             return False
         self.origin = origin if origin in ("dashboard", "heatmap") else "dashboard"
@@ -362,15 +364,18 @@ class EquipmentPage(QWidget):
 
     def _update_scope(self):
         query = self.snapshot.query
-        self.context.setText(f"적용 #{query.revision} · 기준 관측일 {self.snapshot.base_date} · {query.description}\n"
-                             f"현재 목록: {self.scope_label} · {len(self.scope_ids)}대 · 검색/후보 필터는 표시만 변경\n{self.snapshot.source_label}")
+        self.context.setText(f"적용 #{query.revision} · 일반 분석 기준일 {self.snapshot.base_date} · {query.description}\n"
+                             f"현재 목록: {self.scope_label} · {len(self.scope_ids)}대 · 검색/후보 필터는 표시만 변경\n"
+                             "HPA는 조건에 맞는 최신 자료와 기존 전달 범위의 관측을 조회하며 실제 관측일을 표시합니다.\n"
+                             + self.snapshot.source_label)
         ids = set(self.scope_ids)
         records = tuple(r for r in self.snapshot.selected_records if r.equipment_id in ids)
         summary = summarize(records, self.source.families, target_map(self.snapshot.target_values))
         tiles = tuple(d.selected for d in self.data.details if d.selected.equipment_id in ids)
         candidates = sum(t.risk is RiskStatus.RISK for t in tiles)
         unknown = sum(t.risk is RiskStatus.UNKNOWN and t.goal is not GoalState.EXCLUDED for t in tiles)
-        values = {"total": (f"{len(ids)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대"),
+        hpa_count = sum(t.goal is GoalState.EXCLUDED for t in tiles)
+        values = {"total": (f"{len(ids)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {hpa_count}대"),
                   "risk": (f"{candidates}대", f"목표 달성과 별도 · 위험 미확인 {unknown}대"),
                   "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
                            f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건 · SW 미등록 {missing_sw_count(summary)}대\n단위: 설비·계열 건 · 판단 불가는 분모 제외"),
@@ -407,9 +412,10 @@ class EquipmentPage(QWidget):
         rows, tones = [], []
         page = self.visible_tiles[start:start + self.page_size]
         for tile in page:
-            versions = "\n".join(v for f in tile.families for v in f.versions) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
-            names = "\n".join(f.title for f in tile.families) or "—"
-            rows.append((tile.code, tile.location.replace(" · ", "\n"), names, versions,
+            versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
+            names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
+            location = tile.location + (f" · 실제 관측일 {tile.observation_date}" if tile.goal is GoalState.EXCLUDED else "")
+            rows.append((tile.code, location.replace(" · ", "\n"), names, versions,
                          tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else ""),
                          tile.risk_label + "\n세부 근거 미연결"))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
@@ -426,14 +432,16 @@ class EquipmentPage(QWidget):
     def open_row(self, row):
         if not self._current() or not 0 <= row < len(self.model.ids):
             return False
-        request = EquipmentSelection(self.snapshot.query, self.snapshot.base_date, self.model.ids[row])
+        equipment_id = self.model.ids[row]
+        detail = next(d for d in self.data.details if d.record.equipment_id == equipment_id)
+        request = EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id, detail.record.base_date)
         return self.open_detail(request, origin="list")
 
     def open_detail(self, request, origin="heatmap"):
         if not self._current() or request.query is not self.snapshot.query or request.base_date != self.snapshot.base_date:
             return False
         detail = next((d for d in self.data.details if d.record.equipment_id == request.equipment_id), None)
-        if detail is None:
+        if detail is None or (request.observation_date is not None and request.observation_date != detail.record.base_date):
             return False
         self.close_item_detail()
         self.detail_back = origin if origin in ("dashboard", "heatmap", "list") else "list"
@@ -441,12 +449,13 @@ class EquipmentPage(QWidget):
             self.origin = origin if origin in ("dashboard", "heatmap") else self.origin
         self.selected_id = request.equipment_id
         self.detail_title.setText(detail.record.equipment_code + " · 설비 상세")
-        self.detail_location.setText(detail.whole.location + f" · 기준일 {self.snapshot.base_date}")
+        self.detail_location.setText(detail.whole.location + f" · 실제 관측일 {detail.record.base_date}")
         self.detail_summary.setText(f"물리 설비 1대 · 전체 SW 관측 {len(detail.record.pms)}건 · 모듈 수 미확정\n"
                                     f"선택 SW 판정: {detail.selected.goal.value} / 설비 전체 등록 SW 판정: {detail.whole.goal.value}\n"
                                     f"설비 위험: {detail.whole.risk_label} · 목표 상태와 별도")
         self.scope_note.setText("아래 표는 선택 설비의 전체 SW 관측입니다. 현재 설비군 밖의 SW도 표시하지만 대시보드·목록의 적용 범위를 넓히지는 않습니다.\n"
-                               f"현재 적용: {self.snapshot.query.description}")
+                               f"일반 분석 기준일 {self.snapshot.base_date} · 현재 적용: {self.snapshot.query.description}"
+                               + ("\nHPA 원본 조회는 공통 분석에 포함하지 않습니다." if detail.record.is_hpa else ""))
         models = {mid: g.label for g in self.source.catalog.groups for mid in self.source.bindings[g.key]}
         rows = []
         if detail.status:
@@ -458,7 +467,7 @@ class EquipmentPage(QWidget):
                                  comparison.target.version_raw if comparison.target else "목표 미확인", comparison.label,
                                  comparison.message or "확인된 릴리즈 순서로 비교"))
         elif detail.record.is_hpa:
-            rows = [(pm.pm_name or "모듈 미확정 · 공통 SW", f"{models.get(pm.group_id, '모델 미확인')} · 계열 {pm.family_id}",
+            rows = [(pm.pm_name or "모듈 미확정 · 공통 SW", f"{models.get(pm.group_id, detail.record.model_name)} · 계열 {pm.family_id}",
                      pm.version_raw if pm.version_raw is not None else "미입력", "—", "분석 제외", "HPA는 N 비교에서 제외")
                     for pm in detail.record.pms]
         self.detail_model.set_rows(rows)
@@ -466,7 +475,7 @@ class EquipmentPage(QWidget):
         self.detail_table.setVisible(bool(rows))
         extra = "HPA는 분석 제외입니다." if detail.record.is_hpa else "SW 관측이 없습니다." if not rows else "PM 배치 메모로 안전 Item 미적용을 추정하지 않습니다."
         self.evidence.setText(f"{extra}\n위험 근거: 판정 결과만 연결됨 · 규칙·필수 Item·릴리즈 문서·원본 위치 미연결.\n"
-                               f"관측 출처: {self.snapshot.source_label} · 기준일 {self.snapshot.base_date} · 원본 셀 연결은 확인 필요")
+                               f"관측 출처: {self.snapshot.source_label} · 실제 관측일 {detail.record.base_date} · 원본 셀 연결은 확인 필요")
         self._set_mode("detail")
         return True
 

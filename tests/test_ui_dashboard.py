@@ -176,23 +176,27 @@ def test_dashboard_waits_for_apply_and_draft_changes_do_not_refresh(window):
     assert page.snapshot is None
     window.query_panel.apply_draft()
     before = page.snapshot
-    assert page.metrics["total"].value.text() == "4대"
+    assert page.metrics["total"].value.text() == "3대"
     window.query_panel.reset_draft()
     assert page.snapshot is before
     window.query_panel.apply_draft()
     assert page.snapshot is not before
-    assert page.metrics["total"].value.text() == "5대"
+    assert page.metrics["total"].value.text() == "4대"
 
 
 def test_kpi_and_matrix_use_the_same_snapshot_and_do_not_treat_risk_as_below(window):
     page = window.pages["dashboard"]
     window.query_panel.apply_draft()
+    assert page.metrics["total"].value.text() == "4대"
+    assert page.metrics["total"].caption.text() == "HPA 제외 1대"
     assert page.metrics["rate"].value.text() == "75.0%"
     assert "3/4건" in page.metrics["rate"].caption.text()
     assert "판단 불가 1건" in page.metrics["rate"].caption.text()
     assert page.metrics["risk"].value.text() == "2대"
     assert page.metrics["upgrade"].value.text() == "1대"
     assert "3/4건" in page.matrix_buttons[len(page.snapshot.rows), 4].text()
+    assert "4대" in page.matrix_buttons[len(page.snapshot.rows), 4].text()
+    assert page.matrix_buttons[len(page.snapshot.rows), 4].accessibleName() == "전체 전체 전체 설비 4대"
 
 
 def test_general_cell_and_risk_badge_emit_distinct_exact_cohorts(window):
@@ -241,7 +245,7 @@ def test_chart_legend_only_changes_visibility_not_applied_scope_or_kpis(window):
         check.setChecked(False)
     assert page.chart.chart().series() == []
     assert page.snapshot is before
-    assert page.metrics["total"].value.text() == "5대"
+    assert page.metrics["total"].value.text() == "4대"
 
 
 def test_bar_click_does_not_inherit_global_or_risk_only_scope(window):
@@ -304,7 +308,7 @@ def test_provider_failure_shows_error_and_retry_does_not_keep_old_result(window,
     assert page.metrics["total"].value.text() == "—"
     monkeypatch.setattr(page.source, "snapshot", original)
     window.query_panel.apply_draft()
-    assert page.metrics["total"].value.text() == "5대"
+    assert page.metrics["total"].value.text() == "4대"
 
 
 def test_unregistered_sw_is_separate_and_prevents_complete_claim(app, source):
@@ -322,13 +326,28 @@ def test_unregistered_sw_is_separate_and_prevents_complete_claim(app, source):
     page.deleteLater()
 
 
-def test_hpa_only_scope_keeps_physical_count_but_has_no_analysis_chart(app, source):
+def test_hpa_only_scope_is_excluded_from_counts_but_remains_available_for_lookup(app, source):
+    """HPA만 있는 범위의 대수·적용률 표시와 상세 조회 연결을 함께 확인한다.
+
+    param
+    - app: 화면 이벤트를 처리할 시험용 QApplication.
+    - source: HPA 관측을 포함한 합성 대시보드 공급자.
+    """
     source = test_source(records=tuple(r for r in source.records if r.is_hpa))
     state = QueryState(source.catalog)
     page = DashboardPage(state, source)
     page.apply_query(state.apply())
-    assert page.metrics["total"].value.text() == "1대"
+    assert page.metrics["total"].value.text() == "0대"
+    assert page.metrics["total"].caption.text() == "HPA 제외 1대"
     assert page.metrics["rate"].value.text() == "계산 불가"
+    assert page.snapshot.equipment_ids == (4,)
+    cell = page.matrix_buttons[len(page.snapshot.rows), 4]
+    assert cell.text() == "분석 제외\n0/0건 · 0대"
+    assert cell.accessibleName() == "전체 전체 전체 설비 0대"
+    assert cell.isEnabled()
+    spy = QSignalSpy(page.drilldown_requested)
+    cell.click()
+    assert spy.count() == 1 and spy.at(0)[0].equipment_ids == (4,)
     page.tabs.setCurrentIndex(2)
     assert page.chart.isHidden() and "분석 대상 설비가 없습니다" in page.message.text()
     page.deleteLater()
@@ -381,7 +400,7 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
 
 def test_real_entrypoint_registers_dashboard_and_heatmap_and_does_not_auto_apply(app):
     window = create_window()
-    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai"}
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai", "management"}
     assert window.query_state.applied is None
     assert "합성 예시" in window.notice.text()
     assert window.nav["heatmap"].isEnabled()
