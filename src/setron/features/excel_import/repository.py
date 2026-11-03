@@ -32,7 +32,8 @@ class ImportValidationRepository:
         """
         repository = EquipmentRepository()
         groups = {row["group_id"]: row for row in repository.rows(tx, "equipment_group")}
-        models = tuple(ModelReference(row["group_id"], row["group_name"], row["category"], row.get("parent_group_id"))
+        models = tuple(ModelReference(row["group_id"], row["group_name"], row["category"], row.get("parent_group_id"),
+                                      analysis_enabled=bool(row["analysis_enabled"]))
                        for row in groups.values())
         family_rows = repository.rows(tx, "version_family")
         references = []
@@ -62,7 +63,8 @@ class ImportValidationRepository:
                              if target_family == family_id and (group := groups.get(group_id)) is not None
                              and group["category"] == family.key.category}
             families.append(FamilyReference(family.key,
-                FamilyReleases(family_id, versions, (aliases or {}).get(family_id) if family_id in needed else None),
+                FamilyReleases(family_id, versions, (aliases or {}).get(family_id) if family_id in needed else None,
+                               exact_raw=True),
                 target_values, family.owner_group_id))
             if not any(d.kind is ExtractKind.RELEASE_NOTE for d in drafts):
                 continue
@@ -79,6 +81,7 @@ class ImportValidationRepository:
                     }))
         equipment = {}
         equipment_sites = {}
+        equipment_classifications = {}
         snapshots = {}
         for draft in drafts:
             if draft.kind is not ExtractKind.EQUIPMENT_STATUS:
@@ -92,6 +95,15 @@ class ImportValidationRepository:
                     if equipment[code] is not None:
                         history = repository.rows(tx, "equipment_snapshot", equipment_id=equipment[code]["equipment_id"])
                         equipment_sites[code] = frozenset(snapshot["site"] for snapshot in history)
+                        equipment_classifications[code] = {}
+                        for snapshot in history:
+                            model_ids = {pm["group_id"] for pm in repository.rows(
+                                tx, "equipment_pm", snapshot_id=snapshot["snapshot_id"])}
+                            if snapshot["group_id"] is not None:
+                                model_ids.add(snapshot["group_id"])
+                            equipment_classifications[code][snapshot["base_date"].isoformat()] = frozenset(
+                                groups[model_id]["category"] == "HPA" or not groups[model_id]["analysis_enabled"]
+                                for model_id in model_ids)
                 if equipment[code] is None:
                     continue
                 normalized_date = _safe(row, "base_date")
@@ -106,4 +118,4 @@ class ImportValidationRepository:
         return ReferenceData(frozenset(code for code, value in equipment.items() if value is not None),
                              families=tuple(families), snapshots=tuple(value for value in snapshots.values() if value is not None),
                              stored_releases=tuple(stored), catalog_loaded=True, models=models,
-                             equipment_sites=equipment_sites)
+                             equipment_sites=equipment_sites, equipment_classifications=equipment_classifications)

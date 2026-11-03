@@ -166,6 +166,11 @@ class ItemsPage(QWidget):
             view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred if visible else QSizePolicy.Policy.Ignored)
         self.mode_changed.emit(mode)
 
+    def refresh_after_save(self):
+        """저장 전 조회 응답과 상세 선택을 폐기하고 현재 Item 자료를 읽는다."""
+        self.read_request.cancel()
+        self.reload()
+
     def reload(self):
         """이전 상세 요청을 무효화하고 중복 실행 없이 자료를 요청한다."""
         if self.read_request.busy:

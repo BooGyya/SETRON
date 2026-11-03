@@ -37,8 +37,9 @@ from setron.features.storage.inputs import merge_sources
 from setron.features.version.service import compare_version
 from setron.features.extraction.schemas import ExtractionReview
 from setron.features.extraction.normalization import normalize
+from setron.features.extraction.locations import record_locations
 from setron.infrastructure.ai_client import ResponseSource
-from .reference import ReferenceData, family_key, identity, model_issue, resolve_family
+from .reference import ReferenceData, analysis_excluded, family_key, identity, model_issue, resolve_family
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseError
 from setron.infrastructure.excel_reader import SheetData, cell_address
 
@@ -55,6 +56,7 @@ MAX_LENGTH = {
 DATE_FIELDS = ("base_date", "release_date")
 CONTEXT_FIELDS = ("group_name", "model_name", "family_name", "ui_type", "structure_type")
 PRODUCTION_AREAS = {"MEMORY", "FOUNDRY"}
+SOURCE_REQUIRED_FIELDS = {"equipment_code", "version_raw"}
 _ADDRESS = re.compile(r"^\$?([A-Z]{1,3})\$?([1-9][0-9]*)$")
 _DATE = re.compile(r"^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:[ T]00:00(?::00)?)?$")
 
@@ -95,7 +97,6 @@ def snapshot_sheet(sheet: SheetData) -> SheetSnapshot:
         sheet.address_of(i, j): json_value(value)
         for i, row in enumerate(sheet.values)
         for j, value in enumerate(row)
-        if value is not None and cell_text(value).strip()
     }
     return SheetSnapshot(
         sheet_name=sheet.sheet_name,
@@ -110,7 +111,8 @@ def snapshot_sheet(sheet: SheetData) -> SheetSnapshot:
 
 def extract_cells(snapshot: SheetSnapshot) -> list[tuple[str, str]]:
     """AI에 보낼 ``(주소, 값)`` 목록. 빈 셀은 뺀다."""
-    return [(address, cell_text(value)) for address, value in snapshot.cells.items()]
+    return [(address, cell_text(value)) for address, value in snapshot.cells.items()
+            if value is not None and cell_text(value).strip()]
 
 
 def parse_address(address: str) -> tuple[int, int]:
@@ -187,9 +189,10 @@ def draft_from_review(review: ExtractionReview, *, source: ResponseSource | None
     rows = tuple(ReviewRow(index, deepcopy(row.raw_values),
                           {field: cell.address for field, cell in row.sources.items()}, normalized=deepcopy(row.values))
                  for index, row in enumerate(review.rows, 1))
-    notes = tuple(Issue(IssueLevel.ERROR if note.row_number is not None else IssueLevel.REVIEW,
+    notes = tuple(Issue(IssueLevel.ERROR if note.row_number is not None or getattr(note, "blocks_save", False)
+                        else IssueLevel.REVIEW,
                         note.reason, note.row_number, note.field, note.address,
-                        code="EXTRACTION_UNRESOLVED") for note in review.issues)
+                        code=getattr(note, "code", None) or "EXTRACTION_UNRESOLVED") for note in review.issues)
     return ImportDraft(review.kind, review.workbook_name, snapshot, rows, ai_source=source, extraction_issues=notes,
                        workbook_id=workbook_id)
 
@@ -228,15 +231,21 @@ def edit_value(draft: ImportDraft, row_id: int, name: str, text: str | None) -> 
         edits.pop(name, None)
     else:
         edits[name] = value
-    return _replace_row(draft, replace(row, edits=edits))
+    from .review_locations import refresh_hpa_coverage
+
+    return refresh_hpa_coverage(_replace_row(draft, replace(row, edits=edits)))
 
 
 def revert_row(draft: ImportDraft, row_id: int) -> ImportDraft:
-    return _replace_row(draft, replace(draft.row(row_id), edits={}))
+    from .review_locations import refresh_hpa_coverage
+
+    return refresh_hpa_coverage(_replace_row(draft, replace(draft.row(row_id), edits={})))
 
 
 def set_excluded(draft: ImportDraft, row_id: int, excluded: bool) -> ImportDraft:
-    return _replace_row(draft, replace(draft.row(row_id), excluded=excluded))
+    from .review_locations import refresh_hpa_coverage
+
+    return refresh_hpa_coverage(_replace_row(draft, replace(draft.row(row_id), excluded=excluded)))
 
 
 # --- 검증 ---------------------------------------------------------------
@@ -331,19 +340,51 @@ def _source_issue(draft: ImportDraft, row: ReviewRow, name: str) -> Issue | None
     address = row.sources.get(name)
     label = FIELD_LABELS[name]
     if not address:
-        return Issue(IssueLevel.REVIEW, f"{label}: 원본 셀 위치가 없습니다. 원본에서 값을 확인하세요.", row.row_id, name)
+        return Issue(IssueLevel.ERROR, f"{label}: 원본 셀 위치가 없습니다. 원본에서 값을 확인하세요.",
+                     row.row_id, name, code="SOURCE_REQUIRED")
     parts = address.split(":")
     if len(parts) > 2 or not all(in_sheet(draft.sheet, part) for part in parts):
-        return Issue(IssueLevel.REVIEW, f"{label}: 원본 위치 {address}가 읽은 시트 범위 밖이거나 주소 형식이 아닙니다.",
-                     row.row_id, name, address)
+        return Issue(IssueLevel.ERROR, f"{label}: 원본 위치 {address}가 읽은 시트 범위 밖이거나 주소 형식이 아닙니다.",
+                     row.row_id, name, address, code="SOURCE_OUTSIDE")
     if len(parts) == 2:
-        return Issue(IssueLevel.REVIEW, f"{label}: 범위 주소라 원본 값 일치를 자동으로 확인하지 못했습니다.",
-                     row.row_id, name, address)
+        return Issue(IssueLevel.ERROR, f"{label}: 범위 주소라 원본 값 일치를 자동으로 확인하지 못했습니다.",
+                     row.row_id, name, address, code="SOURCE_RANGE")
     original = cell_text(value_at(draft.sheet, address)).strip()
     if not _same_text(original, value.strip()):
-        return Issue(IssueLevel.REVIEW, f"{label}: AI 값이 원본 셀 값과 다릅니다 · 원본 {address}: {original or '빈 칸'}",
-                     row.row_id, name, address)
+        return Issue(IssueLevel.ERROR, f"{label}: AI 값이 원본 셀 값과 다릅니다 · 원본 {address}: {original or '빈 칸'}",
+                     row.row_id, name, address, code="SOURCE_MISMATCH")
     return None
+
+
+def _has_source_position(draft: ImportDraft, row: ReviewRow, name: str) -> bool:
+    """원본 식별값의 위치가 실제 읽은 단일 셀로 확인됐는지 검사한다."""
+    address = row.sources.get(name)
+    if not isinstance(address, str) or not in_sheet(draft.sheet, address):
+        return False
+    top, left = parse_address(address)
+    return cell_address(top, left) in draft.sheet.cells
+
+
+def _is_hpa_row(draft: ImportDraft, row: ReviewRow, locations=()) -> bool:
+    """현재 표기를 지워도 해당 행의 실제 원본 HPA 근거와 필수 오류를 유지한다."""
+    classifiers = ("model_name", "group_name", "family_name")
+    if any(isinstance(values.get(name), str) and values[name].strip().casefold() == "hpa"
+           for values in (row.original, row.normalized, {name: row.value(name) for name in classifiers})
+           for name in classifiers):
+        return True
+    sources = {name: cell_address(*parse_address(address)) for name, address in row.sources.items()
+               if isinstance(address, str) and _has_source_position(draft, row, name)}
+    # AI가 분류 항목을 전부 빠뜨려도 호기·SW·PM의 실제 위치가 속한 HPA 레코드는 남는다.
+    identity_fields = ("equipment_code", "version_raw", "pm_name")
+    if any(location.is_hpa and any(name in location.fields and sources.get(name) == location.fields[name].address
+                                  for name in identity_fields) for location in locations):
+        return True
+    # 머리글 없는 수동 검토도 같은 원본 행의 HPA 분류 출처는 보존한다.
+    # 별도의 HPA 제목만으로 다른 행의 일반 설비까지 HPA로 간주하지 않는다.
+    identity_rows = {parse_address(sources[name])[0] for name in identity_fields if name in sources}
+    return any(name in sources and isinstance(value_at(draft.sheet, sources[name]), str)
+               and value_at(draft.sheet, sources[name]).strip().casefold() == "hpa"
+               and parse_address(sources[name])[0] in identity_rows for name in classifiers)
 
 
 def _row_issues(draft: ImportDraft, row: ReviewRow) -> list[Issue]:
@@ -359,6 +400,10 @@ def _row_issues(draft: ImportDraft, row: ReviewRow) -> list[Issue]:
     issues = []
     for name in draft.fields:
         value, address, label = row.value(name), row.sources.get(name), FIELD_LABELS[name]
+        if name in SOURCE_REQUIRED_FIELDS and (name in REQUIRED[draft.kind] or not _blank(value)) \
+                and not _has_source_position(draft, row, name):
+            issues.append(Issue(IssueLevel.ERROR, f"{label}: 원본 셀 위치를 확인해야 합니다. 값을 수정해도 위치 확인은 필요합니다.",
+                                row.row_id, name, address, code="REQUIRED_SOURCE_UNRESOLVED"))
         if value is not None and not isinstance(value, str):
             issues.append(Issue(IssueLevel.ERROR, f"{label}: 문자열 또는 빈 값이어야 합니다.",
                                 row.row_id, name, address, code="INVALID_TYPE"))
@@ -616,17 +661,24 @@ def _reference_issues(draft: ImportDraft, reference: ReferenceData | None) -> li
         if resolved is not None:
             if version is None:
                 continue
+            is_hpa = resolved.key.category == "HPA"
             registered = resolved.releases.match(version)
             if registered is None and draft.kind is ExtractKind.EQUIPMENT_STATUS:
-                issues.append(Issue(IssueLevel.REVIEW, "릴리즈 미등록 버전입니다. 원문을 보존하며 저장할 수 있지만 비교는 판단 불가입니다.",
+                message = ("릴리즈 미등록 HPA 버전입니다. 원문을 보존하며 저장할 수 있고 공통 분석에서는 제외합니다."
+                           if is_hpa else "릴리즈 미등록 버전입니다. 원문을 보존하며 저장할 수 있지만 비교는 판단 불가입니다.")
+                issues.append(Issue(IssueLevel.REVIEW, message,
                                     row.row_id, "version_raw", row.sources.get("version_raw"), code="RELEASE_UNREGISTERED"))
             if draft.kind is ExtractKind.EQUIPMENT_STATUS:
-                model = _safe(row, "model_name")
-                model = "M-O5" if model == "M5" else model
-                comparison = compare_version(resolved.releases, version, resolved.targets.get(model))
-                issues.append(Issue(IssueLevel.INFO,
-                    f"N 비교: {comparison.label}" + (f" · {comparison.message}" if comparison.message else ""),
-                    row.row_id, "version_raw", row.sources.get("version_raw"), code="VERSION_COMPARISON", comparison=comparison))
+                if is_hpa:
+                    issues.append(Issue(IssueLevel.INFO, "HPA는 저장·조회하며 전체 설비 수·N 이상 적용률·공통 분석에서 제외합니다.",
+                                        row.row_id, "version_raw", row.sources.get("version_raw"), code="HPA_ANALYSIS_EXCLUDED"))
+                else:
+                    model = _safe(row, "model_name")
+                    model = "M-O5" if model == "M5" else model
+                    comparison = compare_version(resolved.releases, version, resolved.targets.get(model))
+                    issues.append(Issue(IssueLevel.INFO,
+                        f"N 비교: {comparison.label}" + (f" · {comparison.message}" if comparison.message else ""),
+                        row.row_id, "version_raw", row.sources.get("version_raw"), code="VERSION_COMPARISON", comparison=comparison))
                 issues.extend(_stored_equipment_issues(draft, row, resolved.releases.family_id, reference))
             else:
                 issues.extend(_stored_release_issues(row, resolved.releases.family_id, reference))
@@ -738,22 +790,71 @@ def _stored_release_issues(row, family_id, reference) -> list[Issue]:
             for name in ("release_date", "content") if name in old.values and old.values[name] != _safe(row, name)]
 
 
-def validate(draft: ImportDraft, reference: ReferenceData | None = None) -> tuple[Issue, ...]:
+def _hpa_history_issues(drafts, reference, target_draft):
+    """이번 묶음의 날짜별 분류와 유지할 기존 이력이 상충하면 원본 확인을 요청한다."""
+    incoming, candidates = defaultdict(lambda: defaultdict(set)), []
+    for item in drafts:
+        if item.kind is not ExtractKind.EQUIPMENT_STATUS:
+            continue
+        for row in item.active_rows:
+            code, day = _safe(row, "equipment_code"), _safe(row, "base_date")
+            excluded = analysis_excluded(row, item.kind, reference)
+            if code is None or day is None or excluded is None:
+                continue
+            incoming[code][day].add(excluded)
+            candidates.append((item, row, code))
+    conflicts = {}
+    for code, dates in incoming.items():
+        previous = reference.equipment_classifications.get(code, {}) if reference is not None else {}
+        entries = sorted((day, hpa) for day, kinds in dates.items() for hpa in kinds)
+        all_entries = entries + [(day, hpa) for day, kinds in previous.items() for hpa in kinds]
+        by_kind = {kind: sorted({day for day, hpa in all_entries if hpa is kind}) for kind in (False, True)}
+        pair = None
+        for day, hpa in entries:
+            other_day = next((other for other in by_kind[not hpa] if other != day), None)
+            if other_day is not None:
+                pair = (other_day, not hpa), (day, hpa)
+                break
+        if pair is not None:
+            conflicts[code] = " / ".join(f"{day} {'HPA' if hpa else '일반 설비'}" for day, hpa in pair)
+    return [Issue(IssueLevel.ERROR,
+        f"설비({code})의 날짜별 HPA·일반 분류가 다릅니다 ({conflicts[code]}). "
+        "원본 호기와 모델·설비군을 확인·보완한 뒤 다시 검증하세요. 이번 저장 묶음 전체를 보류합니다.",
+        row.row_id, "model_name", row.sources.get("model_name"), code="HPA_HISTORY_CONFLICT")
+        for item, row, code in candidates if item is target_draft and code in conflicts]
+
+
+def validate(draft: ImportDraft, reference: ReferenceData | None = None,
+             *, batch_drafts: tuple[ImportDraft, ...] | None = None) -> tuple[Issue, ...]:
     """현재 초안 전체를 재검증하고 파일·시트·원본 위치를 포함한 결과를 반환한다.
 
     param
     - draft: 원본과 사용자 수정값을 보존한 가져오기 초안.
     - reference: 기존 현황·릴리즈와 확인된 순서. 미연결이면 None.
+    - batch_drafts: 같은 묶음의 날짜별 분류를 함께 검사할 전체 초안. 단일 검증이면 생략.
 
     return
     - 오류·확인·안내 순으로 정렬한 결과. ERROR가 하나라도 있으면 전체 묶음을 보류.
     """
+    excluded_hpa = set()
+    if draft.kind is ExtractKind.EQUIPMENT_STATUS and any(row.excluded for row in draft.rows):
+        from .source_sheet import sheet_from_snapshot
+
+        locations = record_locations(sheet_from_snapshot(draft.workbook_name, draft.sheet))
+        excluded_hpa = {row.row_id for row in draft.rows if row.excluded and _is_hpa_row(draft, row, locations)}
     issues = [Issue(IssueLevel.REVIEW, note.reason, None, note.field, note.address) for note in draft.notes]
     for issue in draft.extraction_issues:
         if issue.row_id is None:
             issues.append(issue)
-        elif not draft.row(issue.row_id).excluded:
-            edited = draft.row(issue.row_id).edits
+        else:
+            row = draft.row(issue.row_id)
+            if row.excluded and not (row.row_id in excluded_hpa and issue.field in REQUIRED[draft.kind] and issue.blocks_save):
+                continue
+            if issue.code == "REQUIRED_SOURCE_UNRESOLVED":
+                if issue.field is None or not _has_source_position(draft, row, issue.field):
+                    issues.append(issue)
+                continue
+            edited = row.edits
             # 명시적으로 수정한 항목은 현재값으로 재검증하며 원래 추출 사유로 계속 막지 않는다.
             family_fields = {"group_name", "model_name", "family_name", "ui_type", "structure_type"}
             if issue.field not in edited and not (issue.field == "family_name" and family_fields.intersection(edited)):
@@ -764,11 +865,17 @@ def validate(draft: ImportDraft, reference: ReferenceData | None = None) -> tupl
     for row in rows:
         issues.extend(_row_issues(draft, row))
     if draft.kind is ExtractKind.EQUIPMENT_STATUS:
+        for row in draft.rows:
+            if row.row_id in excluded_hpa:
+                issues.extend(issue for issue in _row_issues(draft, row)
+                              if issue.blocks_save and issue.field in REQUIRED[draft.kind])
+    if draft.kind is ExtractKind.EQUIPMENT_STATUS:
         issues.extend(_workbook_site_issues(rows))
         issues.extend(_equipment_issues(rows))
     else:
         issues.extend(_release_issues(rows))
     issues.extend(_reference_issues(draft, reference))
+    issues.extend(_hpa_history_issues(batch_drafts if batch_drafts is not None else (draft,), reference, draft))
     order = {IssueLevel.ERROR: 0, IssueLevel.REVIEW: 1, IssueLevel.INFO: 2}
     return tuple(replace(issue, workbook_name=draft.workbook_name, sheet_name=draft.sheet.sheet_name,
                          workbook_id=draft.workbook_id)
@@ -789,7 +896,7 @@ def validate_batch(drafts: tuple[ImportDraft, ...], reference: ReferenceData | N
         return (Issue(IssueLevel.ERROR, "검증할 저장 묶음이 없습니다.", code="EMPTY_BATCH"),)
     if len(drafts) == 1:
         return validate(drafts[0], reference)
-    issues = [issue for draft in drafts for issue in validate(draft, reference)]
+    issues = [issue for draft in drafts for issue in validate(draft, reference, batch_drafts=drafts)]
     lookup = {}
     rows_by_kind = defaultdict(list)
     equipment_by_workbook = defaultdict(list)
@@ -835,7 +942,8 @@ def has_errors(issues: Iterable[Issue]) -> bool:
 
 # --- 저장 요청 -------------------------------------------------------------
 
-def build_save_request(draft: ImportDraft, request_id: str, reference: ReferenceData | None = None) -> SaveRequest:
+def build_save_request(draft: ImportDraft, request_id: str, reference: ReferenceData | None = None,
+                       *, batch_drafts: tuple[ImportDraft, ...] | None = None) -> SaveRequest:
     """초안 전체를 재검증하고 정확한 중복의 출처를 합쳐 저장 요청으로 만든다.
 
     param
@@ -849,7 +957,7 @@ def build_save_request(draft: ImportDraft, request_id: str, reference: Reference
     raises
     - ImportBlockedError: 검증 오류가 하나라도 남아 있는 경우.
     """
-    issues = validate(draft, reference)
+    issues = validate(draft, reference, batch_drafts=batch_drafts)
     if has_errors(issues):
         raise ImportBlockedError("오류가 남아 있어 저장할 수 없습니다.")
     merged: dict[tuple, SaveRow] = {}
@@ -945,7 +1053,7 @@ class ImportValidationService:
             if errors:
                 raise ImportBlockedError("오류가 남아 있어 이번 묶음 전체의 저장을 보류합니다. "
                                          + " / ".join(issue.message for issue in errors[:5]))
-            return tuple(build_save_request(draft, f"{request_id}:{index}", reference)
+            return tuple(build_save_request(draft, f"{request_id}:{index}", reference, batch_drafts=drafts)
                          for index, draft in enumerate(drafts, 1))
 
 

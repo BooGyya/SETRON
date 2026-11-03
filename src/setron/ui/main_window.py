@@ -31,6 +31,7 @@ MENUS = (
     Menu("import", "데이터 가져오기", "30937.svg", "6cfa9.svg"),
     Menu("replay", "Version Replay", "e4697.svg", "1bd1e.svg"),
     Menu("versions", "버전 관리", "7b6c5.svg", "77fb3.svg"),
+    Menu("management", "관리 데이터", "db27a.svg", "2543e.svg"),
     Menu("history", "이력 조회", "d0b8c.svg", "04165.svg"),
     Menu("reports", "보고서", "b12e4.svg", "49591.svg"),
     Menu("settings", "기준 · 설정", "db27a.svg", "2543e.svg"),
@@ -228,8 +229,10 @@ class MainWindow(QMainWindow):
         status_body = QVBoxLayout(status)
         status_body.setContentsMargins(12, 12, 12, 12)
         status_body.setSpacing(4)
-        status_body.addWidget(label("업무 데이터 미연결", 12, medium=True, color=SECONDARY))
-        status_body.addWidget(label("공통 UI 미리보기", 13, color=SECONDARY))
+        self.connection_label = label("업무 데이터 미연결", 12, medium=True, color=SECONDARY)
+        self.connection_detail = label("공통 UI 미리보기", 13, color=SECONDARY)
+        status_body.addWidget(self.connection_label)
+        status_body.addWidget(self.connection_detail)
         side.addWidget(status)
         side.addStretch()
         self.sidebar_scroll.setWidget(content)
@@ -298,6 +301,15 @@ class MainWindow(QMainWindow):
     def set_query_catalog(self, catalog: QueryCatalog) -> None:
         """검증된 선택지만 주입한다. 원본 구역명을 Fab/Line으로 추론하지 않는다."""
         self.query_panel.set_catalog(catalog)
+
+    def closeEvent(self, event):
+        """DB 저장 결과를 확인하기 전에 앱을 닫아 결과 안내를 잃지 않게 한다."""
+        guard = getattr(self, "close_guard", None)
+        if guard is not None and not guard():
+            self.notice.setText("관리 데이터 저장 중입니다. 저장 결과를 확인한 뒤 닫아 주세요.")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _header_action(self, key: str) -> None:
         if key == "help":

@@ -2,13 +2,26 @@
 
 from dataclasses import dataclass, replace
 from datetime import date
-from typing import Mapping
+from typing import Callable, Mapping
 
 from setron.features.aggregation.schemas import EquipmentRecord, Summary
 from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.service import FamilyReleases
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
+
+
+class HpaClassificationConflict(ValueError):
+    """같은 호기의 상충하는 분류 이력을 원문 관측일과 함께 검토하도록 알린다."""
+
+    def __init__(self, records: tuple[EquipmentRecord, ...]):
+        self.observations = tuple(sorted({
+            (record.equipment_code, record.base_date, record.is_hpa) for record in records
+        }))
+        details = "\n".join(f"{code} · {day.isoformat()} · {'HPA' if is_hpa else '일반 설비'}"
+                            for code, day, is_hpa in self.observations)
+        super().__init__("같은 호기에 HPA와 일반 설비 분류 이력이 함께 있어 조회를 보류했습니다. "
+                         "원문 분류를 검토하세요.\n" + details)
 
 
 @dataclass(frozen=True)
@@ -68,8 +81,10 @@ class DashboardSnapshot:
     trends: tuple[GroupTrend, ...]
     observations: tuple[TrendPoint, ...]
     source_label: str
-    selected_records: tuple[EquipmentRecord, ...]  # 히트맵도 같은 기준일·필터 결과를 사용
+    selected_records: tuple[EquipmentRecord, ...]  # 공통 분석과 드릴다운의 같은 기준일·필터 결과
     target_values: tuple[TargetN, ...]  # 실제 계산에 사용한 N. 이후 초안과 분리
+    hpa_lookup_records: tuple[EquipmentRecord, ...] = ()  # 공통 분석과 분리한 호기별 최신 원본 관측
+    hpa_lookup_locations: tuple[tuple[int, EquipmentLocation], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,10 +107,12 @@ class DashboardSource:
     def __init__(self, *, catalog: QueryCatalog, bindings: tuple[GroupBinding, ...],
                  records: tuple[EquipmentRecord, ...], locations: Mapping[int, EquipmentLocation],
                  families: Mapping[int, FamilyReleases], targets: Mapping[tuple[int, int], int],
-                 risks: Mapping[int, RiskStatus], source_label: str):
+                 risks: Mapping[int, RiskStatus], source_label: str,
+                 risk_evaluator: Callable[[EquipmentRecord], RiskStatus] | None = None):
         self.catalog, self.records = catalog, tuple(records)
         self.locations, self.families = dict(locations), dict(families)
         self.targets, self.risks = dict(targets), dict(risks)
+        self.risk_evaluator = risk_evaluator
         self.source_label = source_label
         self.bindings = {b.group_key: tuple(b.model_ids) for b in bindings}
         group_keys = {o.key for o in catalog.groups}
@@ -126,6 +143,64 @@ class DashboardSource:
         if any(not isinstance(status, RiskStatus) for status in self.risks.values()):
             raise ValueError("위험 판정 상태 형식이 올바르지 않습니다.")
         self.dates = tuple(sorted({r.base_date for r in self.records}))
+        self.analysis_dates = tuple(sorted({r.base_date for r in self.records if not r.is_hpa}))
+
+    def latest_hpa_records(self) -> tuple[EquipmentRecord, ...]:
+        """공통 분석 기준일과 독립적으로 호기별 최신 HPA 원본 관측을 조회한다.
+
+        return
+        - 설비 ID 오름차순의 최신 HPA 관측. 실제 관측일·원본 구역·SW를 바꾸지 않는다.
+
+        raises
+        - HpaClassificationConflict: 같은 설비 ID의 이력에 일반 설비와 HPA 분류가 함께 있는 경우.
+          분류가 바뀐 이유를 추정하거나 두 관측을 합치지 않고 원문 검토를 요청한다.
+        """
+        hpa_ids, analysis_ids, latest = set(), set(), {}
+        for record in self.records:
+            equipment_id = record.equipment_id
+            if record.is_hpa:
+                hpa_ids.add(equipment_id)
+                previous = latest.get(equipment_id)
+                if previous is None or record.base_date > previous.base_date:
+                    latest[equipment_id] = record
+            else:
+                analysis_ids.add(equipment_id)
+        conflicts = hpa_ids & analysis_ids
+        if conflicts:
+            raise HpaClassificationConflict(tuple(record for record in self.records
+                                                   if record.equipment_id in conflicts))
+        return tuple(latest[equipment_id] for equipment_id in sorted(latest))
+
+    def _hpa_lookup(self, query):
+        """최신 원본의 사업장·구역과 유효한 명시적 위치 매핑을 고정한다.
+
+        param
+        - query: 현재 적용한 공통 조건. 특정 일반 설비군을 고르면 HPA는 제외한다.
+
+        return
+        - 조건에 맞는 원본 관측과 불변 위치 대응 튜플. 새 구역의 Fab·Line은 추정하지 않는다.
+        """
+        latest = self.latest_hpa_records()
+        selection = query.selection
+        if selection.group_key is not None:
+            return (), ()
+        sites = {option.label: option.key for option in self.catalog.sites}
+        records, locations = [], []
+        for record in latest:
+            previous = self.locations[record.equipment_id]
+            site_key = sites.get(record.site, previous.site_key)
+            stale_mapping = site_key != previous.site_key or previous.raw_area != record.line
+            location = EquipmentLocation(site_key, record.line,
+                                         None if stale_mapping else previous.fab_key,
+                                         None if stale_mapping else previous.line_key)
+            if selection.site_key is not None and selection.site_key != location.site_key:
+                continue
+            if any(value is not None and (actual is not None if value is UNASSIGNED else actual != value)
+                   for value, actual in ((selection.fab_key, location.fab_key), (selection.line_key, location.line_key))):
+                continue
+            records.append(record)
+            locations.append((record.equipment_id, location))
+        return tuple(records), tuple(locations)
 
     def _scope_records(self, records, query, group_keys=None, position=None):
         selection = query.selection
@@ -156,11 +231,25 @@ class DashboardSource:
     def _summary(self, records):
         return summarize(records, self.families, self.targets)
 
+    def risk_status(self, record):
+        """현재 표시하는 PM 범위로 위험을 판정한다. 고정 예시 자료는 기존 표를 사용한다.
+
+        param
+        - record: 모델 필터를 적용한 선택 SW 또는 같은 날짜의 전체 SW 관측.
+
+        return
+        - 해당 관측 범위의 위험 상태. HPA는 분석 제외이므로 미확인.
+        """
+        if record.is_hpa:
+            return RiskStatus.UNKNOWN
+        return (self.risk_evaluator(record) if self.risk_evaluator is not None
+                else self.risks.get(record.equipment_id, RiskStatus.UNKNOWN))
+
     def _cell(self, label, keys, records):
         ids = tuple(r.equipment_id for r in records)
         return DashboardCell(label, keys, ids,
                              tuple(r.equipment_id for r in records if not r.is_hpa
-                                   and self.risks.get(r.equipment_id) is RiskStatus.RISK), self._summary(records))
+                                   and self.risk_status(r) is RiskStatus.RISK), self._summary(records))
 
     def snapshot(self, query: AppliedQuery) -> DashboardSnapshot:
         if query.targets is not None:
@@ -169,7 +258,7 @@ class DashboardSource:
             targets = target_map(validate_targets(self, query.targets))
             scoped = DashboardSource(catalog=self.catalog, bindings=tuple(GroupBinding(k, v) for k, v in self.bindings.items()),
                                      records=self.records, locations=self.locations, families=self.families, targets=targets,
-                                     risks=self.risks, source_label=self.source_label)
+                                     risks=self.risks, source_label=self.source_label, risk_evaluator=self.risk_evaluator)
             return scoped._snapshot(query)
         return self._snapshot(query)
 
@@ -179,9 +268,15 @@ class DashboardSource:
         QueryState(self.catalog).validate(query.selection)
         if not self.dates:
             raise ValueError("기준 관측일이 없습니다.")
-        day = self.dates[-1]
+        # HPA만 새 날짜에 저장되어도 일반 설비의 분석 기준일을 밀어내지 않는다.
+        # HPA만 있는 자료는 최신 관측을 조회할 수 있게 하되 집계는 0대로 유지한다.
+        day = (self.analysis_dates or self.dates)[-1]
         current = tuple(r for r in self.records if r.base_date == day)
         selected = self._scope_records(current, query)
+        hpa_lookup, hpa_locations = self._hpa_lookup(query)
+        latest_location_ids = {equipment_id for equipment_id, _ in hpa_locations}
+        hpa_locations += tuple((r.equipment_id, replace(self.locations[r.equipment_id], raw_area=r.line))
+                               for r in selected if r.is_hpa and r.equipment_id not in latest_location_ids)
         total = self._cell("전체", tuple(self.bindings), selected)
         groups = tuple(self._cell(o.label, (o.key,), self._scope_records(current, query, (o.key,)))
                        for o in self.catalog.groups)
@@ -203,11 +298,12 @@ class DashboardSource:
         trends = tuple(GroupTrend(o.key, o.label, self._observations(query, selected, (o.key,)))
                        for o in self.catalog.groups if query.selection.group_key in (None, o.key))
         return DashboardSnapshot(query, day, total.equipment_ids, total.risky_ids,
-                                 sum(not r.is_hpa and self.risks.get(r.equipment_id, RiskStatus.UNKNOWN)
+                                 sum(not r.is_hpa and self.risk_status(r)
                                      is RiskStatus.UNKNOWN for r in selected),
                                  total.summary, tuple(rows), groups, trends,
                                  self._observations(query, selected), self.source_label, selected,
-                                 tuple(TargetN(mid, fid, rid) for (mid, fid), rid in sorted(self.targets.items())))
+                                 tuple(TargetN(mid, fid, rid) for (mid, fid), rid in sorted(self.targets.items())),
+                                 hpa_lookup, hpa_locations)
 
     def _observations(self, query, baseline, group_keys=None):
         active = {query.selection.group_key} if query.selection.group_key else set(self.bindings)
@@ -217,8 +313,9 @@ class DashboardSource:
         cohort = {r.equipment_id for r in baseline if not r.is_hpa and
                   (any(pm.group_id in model_ids for pm in r.pms) or (not r.pms and group_keys is None))}
         points = []
-        for day in self.dates:
+        for day in self.analysis_dates:
             observations = tuple(replace(r, pms=tuple(pm for pm in r.pms if pm.group_id in model_ids))
-                                 for r in self.records if r.base_date == day and r.equipment_id in cohort)
+                                 for r in self.records if not r.is_hpa and r.base_date == day
+                                 and r.equipment_id in cohort)
             points.append(TrendPoint(day, self._summary(observations), len(cohort) - len(observations)))
         return tuple(points)

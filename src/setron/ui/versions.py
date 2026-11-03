@@ -37,7 +37,7 @@ class VersionsPage(QWidget):
     mode_changed = Signal(str)
     page_size = 12
 
-    def __init__(self, loader):
+    def __init__(self, loader, *, editor_opener=None):
         """릴리즈 조회와 저장 미연결 편집 진입점을 구성한다.
 
         param
@@ -45,6 +45,7 @@ class VersionsPage(QWidget):
         """
         super().__init__()
         self.loader, self.catalog = loader, None
+        self.editor_opener = editor_opener
         self.read_request = ReadRequest(self)
         self.read_request.completed.connect(self._loaded)
         self.mode, self.page_index, self.selected_id = "list", 0, None
@@ -173,6 +174,11 @@ class VersionsPage(QWidget):
             view.setVisible(visible)
             view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred if visible else QSizePolicy.Policy.Ignored)
         self.mode_changed.emit(mode)
+
+    def refresh_after_save(self):
+        """저장 전 조회 응답을 폐기하고 새 릴리즈 자료로 목록·상세를 갱신한다."""
+        self.read_request.cancel()
+        self.reload()
 
     def reload(self):
         """이전 상세를 비우고 중복 실행 없이 자료를 요청한다."""
@@ -344,8 +350,11 @@ class VersionsPage(QWidget):
             self.table.setFocus()
 
     def open_editor(self):
-        """선택 릴리즈의 빈 편집 기반을 열고 실제 필드·DB 연결은 제공하지 않는다."""
+        """DB 연결 시 선택한 릴리즈를 관리 편집 화면으로 보내고, 미연결이면 편집 기반을 연다."""
         if self.mode != "detail" or self.catalog is None or self.selected_id is None:
+            return
+        if self.editor_opener is not None:
+            self.editor_opener(self.selected_id)
             return
         if self.editor is not None and self.editor.isVisible():
             self.editor.raise_()

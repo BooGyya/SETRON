@@ -64,6 +64,11 @@ class TileButton(QPushButton):
                 for version in family.versions:
                     segment_body.addWidget(label(version, 11, color=color, wrap=True))
                 body.addWidget(segment)
+            if data.goal is GoalState.EXCLUDED:
+                body.addWidget(label(f"{data.model_name or 'HPA'} · 실제 관측일 {data.observation_date}",
+                                     12, color=SECONDARY, wrap=True))
+                for version in data.raw_versions:
+                    body.addWidget(label(version, 11, color=SECONDARY, wrap=True))
             if not data.families and data.goal is not GoalState.EXCLUDED:
                 body.addWidget(label("SW 미등록 · 비교 불가", 12, color=SECONDARY, wrap=True))
         for child in self.findChildren(QWidget):
@@ -253,15 +258,16 @@ class HeatmapPage(QWidget):
         self.tiles = equipment_tiles(result, self.source)
         self.snapshot, self.selected_id = result, None
         self.selection_notice.setText(self.selection_hint)
-        self.result_status.setText("예시 결과 · " + ("조회 적용됨" if result.equipment_ids else "조건에 맞는 설비 없음"))
+        self.result_status.setText("예시 결과 · " + ("조회 적용됨" if self.tiles else "조건에 맞는 설비 없음"))
         self.result_status.set_tone("info")
-        self.context.setText(f"적용 #{query.revision} · 기준 관측일 {result.base_date} · {query.description}\n{result.source_label}")
+        self.context.setText(f"적용 #{query.revision} · 일반 분석 기준일 {result.base_date} · {query.description}\n"
+                             f"{result.source_label}\nHPA는 조건에 맞는 최신 자료와 기존 전달 범위의 관측이며 실제 관측일을 표시합니다.")
         self.risk_button.setText(f"위험 후보 {len(result.risky_ids)}대만 보기")
         self.risk_button.setAccessibleName(self.risk_button.text())
-        self.risk_button.setEnabled(bool(result.equipment_ids))
+        self.risk_button.setEnabled(bool(self.tiles))
         summary = result.summary
         values = {
-            "total": (f"{len(result.equipment_ids)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대"),
+            "total": (f"{len(self.tiles)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {sum(t.goal is GoalState.EXCLUDED for t in self.tiles)}대"),
             "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
                      f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건 · SW 미등록 {missing_sw_count(summary)}대"),
             "risk": (f"{len(result.risky_ids)}대", f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
@@ -322,4 +328,5 @@ class HeatmapPage(QWidget):
         self.selection_notice.setText(f"선택: {tile.code} · {tile.goal.value} · {tile.risk_label}\n"
                                       + ("설비 상세로 이동합니다." if self.detail_connected else
                                          "설비 ID 전달 완료 · 목록·상세는 6번 작업에서 연결합니다."))
-        self.equipment_selected.emit(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id))
+        self.equipment_selected.emit(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id,
+                                                        tile.observation_date))

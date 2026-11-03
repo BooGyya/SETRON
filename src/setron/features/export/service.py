@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from datetime import datetime
+import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
@@ -28,6 +30,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from setron.features.aggregation.schemas import FamilyStatus, RateCount
 from setron.features.aging.schemas import EquipmentAge
 from setron.features.export.schemas import ExportResult, ExportStatus, StatusReport
+from setron.features.export.xlsx_cells import ReportTextWriter
 from setron.features.risk.schemas import EquipmentRisk, RiskStatus
 from setron.features.version.schemas import CompareStatus
 
@@ -41,37 +44,60 @@ PERCENT = "0.0%"
 
 
 def build_status_report(report: StatusReport) -> Workbook:
-    """보고서 내용을 통합문서로 만든다. 파일로 저장하지는 않는다."""
+    """보고서 표·차트와 원문을 보존한 통합문서를 만든다.
+
+    긴 문자열은 원래 셀에 좌표 참조를 남기고 마지막 ``긴값_분할`` 시트에
+    같은 reference_id의 part_index 순서로 나눠 보존한다. 원문과 같은 참조 문구는
+    해당 좌표의 분할 행이 없으면 일반 문자열이다.
+    """
     book = Workbook()
-    _conditions(book.active, report)
-    _summary(book.create_sheet("요약"), report)
-    _families(book.create_sheet("계열별 현황"), report)
-    _composition(book.create_sheet("상태 구성비"), report)
-    _equipment(book.create_sheet("설비별 판정"), report)
-    _priority(book.create_sheet("우선순위"), report)
+    text = ReportTextWriter(book)
+    _conditions(book.active, report, text)
+    _summary(book.create_sheet("요약"), report, text)
+    _families(book.create_sheet("계열별 현황"), report, text)
+    _composition(book.create_sheet("상태 구성비"), report, text)
+    _equipment(book.create_sheet("설비별 판정"), report, text)
+    _priority(book.create_sheet("우선순위"), report, text)
     if len(report.trend) > 1:
-        _trend(book.create_sheet("날짜별 추이"), report)
+        _trend(book.create_sheet("날짜별 추이"), report, text)
+    text.finish()
     return book
 
 
 def save_status_report(report: StatusReport, path: str | Path) -> ExportResult:
-    """보고서를 xlsx 파일로 저장한다. 실패해도 예외 대신 원인을 담은 결과를 돌려준다."""
+    """보고서를 저장하고 실패하면 기존 파일을 보존하며 원인을 안내한다."""
     path = Path(path)
     if path.suffix.lower() != ".xlsx":
         return ExportResult(ExportStatus.FAILED, path, "파일 이름은 .xlsx로 끝나야 합니다.")
+    temporary = None
+    book = None
     try:
-        build_status_report(report).save(path)
+        book = build_status_report(report)
+        with NamedTemporaryFile(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent, delete=False) as file:
+            temporary = Path(file.name)
+        book.save(temporary)
+        os.replace(temporary, path)
     except PermissionError:
         message = "파일을 저장할 수 없습니다. 같은 이름의 파일이 Excel에서 열려 있는지, 폴더 쓰기 권한이 있는지 확인해 주세요."
         return ExportResult(ExportStatus.FAILED, path, message)
     except OSError as error:
         return ExportResult(ExportStatus.FAILED, path, f"파일을 저장하지 못했습니다: {error.strerror or error}")
+    except (ValueError, TypeError) as error:
+        return ExportResult(ExportStatus.FAILED, path, f"현황 자료를 XLSX로 보존할 수 없습니다: {error}")
+    finally:
+        if book is not None:
+            book.close()
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
     return ExportResult(ExportStatus.SAVED, path)
 
 
 # --- 시트 -----------------------------------------------------------------------
 
-def _conditions(sheet: Worksheet, report: StatusReport) -> None:
+def _conditions(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
     sheet.title = "조회 조건"
     base_date = report.summary.base_date
     created = report.created_at or datetime.now()
@@ -82,15 +108,15 @@ def _conditions(sheet: Worksheet, report: StatusReport) -> None:
         ["노후도 기준", _age_rule_note(report)],
         ["적용률 계산", "N 이상 ÷ (N 이상 + N 미만). 판단 불가는 분모에서 빼고 따로 적습니다."],
         ["생성 시각", created.strftime("%Y-%m-%d %H:%M")],
-    ])
+    ], text=text)
     start = sheet.max_row + 2
     sheet.cell(start, 1, "모델·계열별 목표 N").font = Font(bold=True)
     _rows(sheet, ["모델", "계열", "목표 N"],
           [[t.model_name, t.family_name, t.version_raw or "미지정 (판단 불가)"] for t in report.targets],
-          start=start + 1)
+          start=start + 1, text=text)
 
 
-def _summary(sheet: Worksheet, report: StatusReport) -> None:
+def _summary(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
     summary = report.summary
     risk_count = (sum(e.status is RiskStatus.RISK for e in report.risks.equipment)
                   if report.risks else NOT_CALCULATED)
@@ -103,15 +129,15 @@ def _summary(sheet: Worksheet, report: StatusReport) -> None:
         ["N 미만 (건)", summary.below, "설비 1대 × 계열 1건"],
         ["판단 불가 (건)", summary.undetermined, "버전·릴리즈·목표 N을 확인할 수 없는 건. 안전으로 보지 않음"],
         ["위험 후보 설비", risk_count, "목표 달성 여부와 별개"],
-    ])
+    ], text=text)
     sheet["B4"].number_format = PERCENT
 
 
-def _families(sheet: Worksheet, report: StatusReport) -> None:
+def _families(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
     counts = report.summary.by_family
     _rows(sheet, ["계열", "N 이상", "N 미만", "판단 불가", "적용률", "비고"], [
         [_family_name(report, c.family_id), c.compliant, c.below, c.undetermined, *_rate(c)] for c in counts
-    ])
+    ], text=text)
     _percent_column(sheet, "E", len(counts))
     if not counts:
         return
@@ -123,13 +149,13 @@ def _families(sheet: Worksheet, report: StatusReport) -> None:
     sheet.add_chart(chart, "H2")
 
 
-def _composition(sheet: Worksheet, report: StatusReport) -> None:
+def _composition(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
     summary = report.summary
     _rows(sheet, ["상태", "건수"], [
         ["N 이상", summary.compliant],
         ["N 미만", summary.below],
         ["판단 불가", summary.undetermined],
-    ])
+    ], text=text)
     sheet["D1"] = "설비 1대 × 계열 1건 기준. 판단 불가도 포함한 전체 건수의 구성이라 적용률과 분모가 다릅니다."
     chart = PieChart()
     chart.title = "상태 구성비 (건)"
@@ -138,7 +164,7 @@ def _composition(sheet: Worksheet, report: StatusReport) -> None:
     sheet.add_chart(chart, "D3")
 
 
-def _equipment(sheet: Worksheet, report: StatusReport) -> None:
+def _equipment(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
     risks = {r.record.equipment_id: r for r in report.risks.equipment} if report.risks else None
     ages = {a.record.equipment_id: a for a in report.ages} if report.ages is not None else None
     header = ["설비", "Site", "Line", "모델", "계열", "설치 버전", "목표 N", "판정", "사유", "PM 버전 불일치",
@@ -155,10 +181,10 @@ def _equipment(sheet: Worksheet, report: StatusReport) -> None:
                 _family_name(report, family.family_id), _versions(family), _target(family),
                 _family_label(family), _reason(family), "예" if family.pm_mismatch else "", *risk, *age,
             ])
-    _rows(sheet, header, rows)
+    _rows(sheet, header, rows, text=text)
 
 
-def _priority(sheet: Worksheet, report: StatusReport) -> None:
+def _priority(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
     result = report.priority
     if result is None:
         sheet["A1"] = "우선순위를 계산하지 않았습니다."
@@ -168,7 +194,7 @@ def _priority(sheet: Worksheet, report: StatusReport) -> None:
          e.representative.age.elapsed_label, _family_name(report, e.representative.pm.family_id),
          "일부 계열 기간 미확인" if e.partial_age else ""]
         for e in result.ranked
-    ])
+    ], text=text)
     notes = []
     if not result.has_rules:
         notes.append("등록된 위험 기준이 없어 노후도로만 정렬했습니다.")
@@ -181,14 +207,14 @@ def _priority(sheet: Worksheet, report: StatusReport) -> None:
     sheet.cell(start, 1, "확인 필요 (순위 없음)").font = Font(bold=True)
     _rows(sheet, ["설비", "위험", "위험 사유", "빠진 근거"], [
         [e.record.equipment_code, e.risk.label, _reasons(e.risk), " ".join(e.messages)] for e in result.needs_check
-    ], start=start + 1)
+    ], start=start + 1, text=text)
 
 
-def _trend(sheet: Worksheet, report: StatusReport) -> None:
+def _trend(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
     trend = report.trend
     _rows(sheet, ["기준일", "N 이상", "N 미만", "판단 불가", "적용률", "비고"], [
         [s.base_date, s.compliant, s.below, s.undetermined, *_rate(s)] for s in trend
-    ])
+    ], text=text)
     for row in range(2, len(trend) + 2):
         sheet.cell(row, 1).number_format = "yyyy-mm-dd"
     _percent_column(sheet, "E", len(trend))
@@ -203,12 +229,15 @@ def _trend(sheet: Worksheet, report: StatusReport) -> None:
 
 # --- 셀 값 ----------------------------------------------------------------------
 
-def _rows(sheet: Worksheet, header: Sequence[str], rows: Iterable[Sequence], start: int = 1) -> None:
+def _rows(sheet: Worksheet, header: Sequence[str], rows: Iterable[Sequence], start: int = 1,
+          *, text: ReportTextWriter) -> None:
     for column, title in enumerate(header, start=1):
-        sheet.cell(start, column, title).font = Font(bold=True)
+        cell = sheet.cell(start, column)
+        text.write(cell, title, title)
+        cell.font = Font(bold=True)
     for offset, row in enumerate(rows, start=1):
         for column, value in enumerate(row, start=1):
-            sheet.cell(start + offset, column, value)
+            text.write(sheet.cell(start + offset, column), value, header[column - 1])
 
 
 def _rate(count: RateCount) -> list:

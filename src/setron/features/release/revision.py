@@ -78,7 +78,8 @@ class ReleaseRevisionService:
         with self.storage.transaction() as tx:
             self._lock_families(tx, (value.family_id,))
             detail = self.releases.register_release_in(tx, value, items)
-            result = self._result(tx, detail, (value.family_id,), context=context)
+            result = self._result(tx, detail, (value.family_id,), context=context,
+                invalidated_applicability=(detail.release.current["release_version_id"],))
         return result
 
     def update_release(self, release_id: int, changes: dict) -> RevisionResult:
@@ -104,7 +105,8 @@ class ReleaseRevisionService:
             release = self.releases._edit(tx, "release_version", {"release_version_id": release_id}, changes)
             invalidated = (release_id,) if before["version_raw"] != release["version_raw"] else ()
             result = self._result(tx, self.releases._detail(tx, release), (release["family_id"],),
-                                  invalidated, context=context)
+                                  invalidated, context=context,
+                                  invalidated_applicability=(release_id,) if before != release else ())
         return result
 
     def register_item(self, release_id: int, value: ItemInput) -> RevisionResult:
@@ -328,7 +330,7 @@ class ReleaseRevisionService:
             query = query.with_for_update()
         return tuple(sorted(set(tx.session.execute(query).scalars())))
 
-    def _result(self, tx, value, families, invalidated=(), *, context):
+    def _result(self, tx, value, families, invalidated=(), *, context, invalidated_applicability=()):
         """관리값과 같은 트랜잭션에서 계산한 판정을 묶는다.
 
         param
@@ -337,10 +339,12 @@ class ReleaseRevisionService:
         - families: 설비의 릴리즈 연결을 갱신할 계열 ID 튜플.
         - invalidated: 버전명 변경으로 기존 연결을 재확인할 릴리즈 ID 튜플.
         - context: 이번 작업을 시작할 때 복사한 명시적 조회 조건.
+        - invalidated_applicability: 관리값·원본 변경으로 적용 근거를 다시 확인해야 할 릴리즈 ID 튜플.
 
         return
         - 바깥쪽 commit 성공 후 호출자에게 전달할 RevisionResult.
         """
         refresh = self.refresher.refresh_in(tx, context=context, family_ids=families,
-                                            invalidated_release_ids=invalidated)
+                                            invalidated_release_ids=invalidated,
+                                            invalidated_applicability_release_ids=invalidated_applicability)
         return RevisionResult(value, refresh)

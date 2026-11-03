@@ -28,6 +28,7 @@ def revision_mysql_storage(schema_database):
     """
     storage = StorageService(schema_database)
     with storage.transaction() as tx:
+        baseline_setting_keys = {row["setting_key"] for row in all_rows_in(tx, "app_setting")}
         for name in TABLE_NAMES:
             if name != "app_setting":
                 assert not all_rows_in(tx, name), "기존 업무 자료가 있으면 검증 자료를 추가하지 않습니다."
@@ -42,8 +43,12 @@ def revision_mysql_storage(schema_database):
     try:
         yield storage
     finally:
-        # 시작할 때 비어 있음을 확인한 테이블만 FK 역순으로 정리한다. 기본 설정은 유지한다.
+        # 이번 테스트가 추가한 설정만 지운다. 스키마가 제공한 노후도 등의 기본값은 유지한다.
         with storage.transaction() as tx:
+            for row in all_rows_in(tx, "app_setting"):
+                if row["setting_key"] not in baseline_setting_keys:
+                    tx.repository.delete(tx.session, "app_setting", {"setting_key": row["setting_key"]})
+            # 시작할 때 비어 있음을 확인한 업무 테이블은 FK 역순으로 정리한다.
             for table in reversed(storage.repository.metadata.sorted_tables):
                 if table.name == "equipment_group":
                     for row in reversed(all_rows_in(tx, "equipment_group")):

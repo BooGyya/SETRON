@@ -43,6 +43,9 @@ def target_pairs(source) -> tuple[TargetPair, ...]:
             reason = ("다른 계열" if release.family_id != family_id else "릴리즈 ID 중복" if ids[release.release_version_id] > 1 else
                       "순서 미확인" if type(release.version_order) is not int else
                       "순서 중복" if orders[release.version_order] > 1 else None)
+            if (reason is None and hasattr(source, "applicability")
+                    and release.release_version_id not in source.applicability.get((model_id, family_id), ())):
+                reason = "모델 적용 근거 미확인 · 재확인 필요"
             options.append(TargetOption(release, reason))
         options.sort(key=lambda o: (o.unavailable_reason is not None,
                                    o.release.version_order is None, o.release.version_order or 0, o.release.release_version_id))

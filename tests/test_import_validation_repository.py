@@ -32,7 +32,8 @@ def database():
     engine = create_engine("sqlite://")
     metadata = MetaData()
     definitions = {
-        "equipment_group": (("group_id", Integer), ("group_name", String), ("category", String), ("parent_group_id", Integer)),
+        "equipment_group": (("group_id", Integer), ("group_name", String), ("category", String),
+                            ("parent_group_id", Integer), ("analysis_enabled", Integer)),
         "version_family": (("family_id", Integer), ("group_id", Integer), ("family_name", String), ("ui_type", String)),
         "release_version": (("release_version_id", Integer), ("family_id", Integer), ("version_raw", LargeBinary),
                             ("version_order", Integer), ("released_at", Date)),
@@ -50,7 +51,9 @@ def database():
     }
     for name in TABLE_NAMES:
         columns = definitions.get(name, (("id", Integer),))
-        Table(name, metadata, *(Column(field, kind, primary_key=i == 0) for i, (field, kind) in enumerate(columns)))
+        Table(name, metadata, *(Column(field, kind, primary_key=i == 0,
+            **({"nullable": False, "default": 1} if field == "analysis_enabled" else {}))
+            for i, (field, kind) in enumerate(columns)))
     metadata.create_all(engine)
     tables = metadata.tables
     with engine.begin() as connection:

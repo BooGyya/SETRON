@@ -118,6 +118,10 @@ class EquipmentService:
         self._check_site(tx, equipment, value.site)
         existing = self.repository.rows(tx, "equipment_snapshot", equipment_id=equipment["equipment_id"], base_date=value.base_date)
         require(not existing, "같은 호기·기준일의 현황이 이미 있습니다. 재가져오기 검토가 필요합니다.")
+        group_ids = {pm.group_id for software in value.software for pm in software.pms}
+        if value.group_id is not None:
+            group_ids.add(value.group_id)
+        self._check_hpa_history(tx, equipment, value.base_date, group_ids)
         snapshot = tx.insert("equipment_snapshot", {
             **{field.name: getattr(value, field.name) for field in fields(SnapshotInput)
                if field.name not in {"equipment_code", "software"}},
@@ -148,7 +152,7 @@ class EquipmentService:
         group_ids = {pm.group_id for software in value.software for pm in software.pms}
         if value.group_id is not None:
             group_ids.add(value.group_id)
-        groups = {group_id: tx.get("equipment_group", {"group_id": group_id}) for group_id in sorted(group_ids)}
+        groups = self._check_model_mix(tx, group_ids)
         for software in value.software:
             self._check_sources(tx, batch, software.source_reference)
             family = tx.get("version_family", {"family_id": software.family_id})
@@ -161,6 +165,42 @@ class EquipmentService:
                 require(release["family_id"] == software.family_id, "적용 SW와 연결 릴리즈의 버전 계열이 다릅니다.")
             for pm in software.pms:
                 self._check_sources(tx, batch, pm.source_reference)
+
+    @staticmethod
+    def _check_model_mix(tx, group_ids):
+        """최종 모델 구성에 HPA 등 분석 제외 모델과 일반 모델이 섞이지 않게 한다."""
+        groups = {group_id: tx.get("equipment_group", {"group_id": group_id}) for group_id in sorted(group_ids)}
+        excluded = {group_id for group_id, group in groups.items()
+                    if group["category"] == "HPA" or group.get("analysis_enabled") is not None
+                    and not group["analysis_enabled"]}
+        require(not excluded or excluded == set(group_ids),
+                "분석 제외 모델과 분석 모델이 한 설비에 섞여 있습니다. HPA와 일반 설비를 구분해야 합니다.")
+        return groups
+
+    def _check_hpa_history(self, tx, equipment, base_date, group_ids):
+        """다른 날짜의 HPA·일반 구분과 충돌하면 원본 확인 전까지 전체 저장을 보류한다."""
+        current = self._check_model_mix(tx, group_ids)
+
+        def kind(groups):
+            return "HPA" if any(group["category"] == "HPA" or group.get("analysis_enabled") is not None
+                                and not group["analysis_enabled"] for group in groups.values()) else "일반 설비"
+
+        current_kind = kind(current)
+        for snapshot in self.repository.rows(tx, "equipment_snapshot", lock=True, equipment_id=equipment["equipment_id"]):
+            if snapshot["base_date"] == base_date:
+                continue
+            stored_ids = {pm["group_id"] for pm in self.repository.rows(
+                tx, "equipment_pm", lock=True, snapshot_id=snapshot["snapshot_id"])}
+            if snapshot["group_id"] is not None:
+                stored_ids.add(snapshot["group_id"])
+            require(bool(stored_ids),
+                    f"{equipment['equipment_code']}: {snapshot['base_date']} 관측의 모델 분류를 확인할 수 없습니다. "
+                    "원본을 확인하기 전까지 이번 저장 묶음 전체를 보류합니다.")
+            stored_kind = kind(self._check_model_mix(tx, stored_ids))
+            require(stored_kind == current_kind,
+                    f"{equipment['equipment_code']}: {snapshot['base_date']} 관측은 {stored_kind}, "
+                    f"{base_date} 저장 대상은 {current_kind}로 날짜별 분류가 다릅니다. "
+                    "호기와 분류의 원본을 확인하기 전까지 이번 저장 묶음 전체를 보류합니다.")
 
     def _check_site(self, tx, equipment, site):
         """사업장은 호기의 고정 소속이다. 다른 날짜의 Excel도 소속을 바꾸지 못한다."""
@@ -177,23 +217,71 @@ class EquipmentService:
         DatabaseImportSaver가 전체 검사와 기존값 검토 여부를 확인한 뒤 호출한다.
         입력에 없는 날짜·계열·고정 PM 위치는 유지하며 사업장은 변경하지 않는다.
         """
-        require(isinstance(snapshots, tuple) and bool(snapshots), "저장할 현황 묶음이 필요합니다.")
-        prepared = tuple(prepare_snapshot(value) for value in snapshots)
-        keys = [(value.equipment_code, value.base_date) for value in prepared]
-        require(len(set(keys)) == len(keys), "같은 호기·기준일의 현황이 중복됐습니다. 저장 전에 합쳐야 합니다.")
-        results = []
-        for value in prepared:
-            equipment = self.repository.find_equipment(tx, value.equipment_code, lock=True)
-            existing = self.repository.rows(tx, "equipment_snapshot", lock=True,
-                equipment_id=equipment["equipment_id"], base_date=value.base_date) if equipment else []
-            if not existing:
-                results.append(self._save(tx, value))
-                continue
+        return self.import_snapshot_batches_in(tx, (snapshots,), metadata_keys_by_batch=(metadata_keys,))[0]
+
+    def import_snapshot_batches_in(self, tx, batches: tuple[tuple[SnapshotInput, ...], ...], *,
+                                   metadata_keys_by_batch=None) -> tuple[tuple[StoredSnapshot, ...], ...]:
+        """원본 입력 작업별 묶음을 적용하고 모든 시트가 반영된 최종 구성을 검사한다.
+
+        같은 현황의 PM이 여러 시트에 나뉘어도 중간 혼합 상태로 오차단하지 않는다.
+        원래의 다른 날짜 이력은 쓰기 전에 확인하고 최종 PM·날짜별 분류를 다시 검사한다.
+        출처와 batch_id는 합치지 않으며, 오류는 호출자가 연 트랜잭션 전체를 취소해야 한다.
+
+        param
+        - tx, batches: 저장 트랜잭션과 원본 입력 작업별 SnapshotInput 튜플.
+        - metadata_keys_by_batch: 각 묶음이 갱신할 (호기, 날짜) 집합. None은 해당 묶음 전체.
+
+        return
+        - 각 입력 묶음의 순서에 대응하는 최종 저장 현황. 중간 상태는 반환하지 않음.
+        """
+        require(isinstance(batches, tuple) and bool(batches), "저장할 현황 묶음이 필요합니다.")
+        prepared_batches = []
+        for snapshots in batches:
+            require(isinstance(snapshots, tuple) and bool(snapshots), "저장할 현황 묶음이 필요합니다.")
+            prepared = tuple(prepare_snapshot(value) for value in snapshots)
+            keys = [(value.equipment_code, value.base_date) for value in prepared]
+            require(len(set(keys)) == len(keys), "같은 호기·기준일의 현황이 중복됐습니다. 저장 전에 합쳐야 합니다.")
+            prepared_batches.append(prepared)
+        if metadata_keys_by_batch is None:
+            metadata_keys_by_batch = (None,) * len(prepared_batches)
+        require(isinstance(metadata_keys_by_batch, tuple) and len(metadata_keys_by_batch) == len(prepared_batches),
+                "각 원본 묶음의 공통정보 갱신 범위를 확인해야 합니다.")
+        values = tuple(value for prepared in prepared_batches for value in prepared)
+        equipment_by_code = {code: self.repository.find_equipment(tx, code, lock=True)
+                             for code in sorted({value.equipment_code for value in values})}
+        # 같은 요청에 포함된 다른 날짜를 먼저 덮어써 원래의 분류 충돌을 숨기지 않는다.
+        for value in values:
             self._validate_links(tx, value)
-            self._check_site(tx, equipment, value.site)
-            update_metadata = metadata_keys is None or (value.equipment_code, value.base_date) in metadata_keys
-            results.append(self._merge(tx, equipment, existing[0], value, update_metadata=update_metadata))
-        return tuple(results)
+            equipment = equipment_by_code[value.equipment_code]
+            if equipment is not None:
+                self._check_site(tx, equipment, value.site)
+                groups = {pm.group_id for software in value.software for pm in software.pms}
+                if value.group_id is not None:
+                    groups.add(value.group_id)
+                self._check_hpa_history(tx, equipment, value.base_date, groups)
+        for prepared, metadata_keys in zip(prepared_batches, metadata_keys_by_batch):
+            for value in prepared:
+                equipment = self.repository.find_equipment(tx, value.equipment_code, lock=True)
+                existing = self.repository.rows(tx, "equipment_snapshot", lock=True,
+                    equipment_id=equipment["equipment_id"], base_date=value.base_date) if equipment else []
+                if not existing:
+                    self._save(tx, value)
+                    continue
+                update_metadata = metadata_keys is None or (value.equipment_code, value.base_date) in metadata_keys
+                self._merge(tx, equipment, existing[0], value, update_metadata=update_metadata)
+        final = {}
+        for code, day in sorted({(value.equipment_code, value.base_date) for value in values}):
+            equipment = self.repository.find_equipment(tx, code, lock=True)
+            snapshot = self.repository.rows(tx, "equipment_snapshot", lock=True,
+                equipment_id=equipment["equipment_id"], base_date=day)[0]
+            groups = {pm["group_id"] for pm in self.repository.rows(tx, "equipment_pm", lock=True,
+                                                                   snapshot_id=snapshot["snapshot_id"])}
+            if snapshot["group_id"] is not None:
+                groups.add(snapshot["group_id"])
+            self._check_hpa_history(tx, equipment, day, groups)
+            final[code, day] = self.repository.load(tx, equipment, snapshot, lock=True)
+        return tuple(tuple(final[value.equipment_code, value.base_date] for value in prepared)
+                     for prepared in prepared_batches)
 
     def _merge(self, tx, equipment, snapshot, value, *, update_metadata=True):
         """공유 SW를 분리·재연결하며 가져온 고정 PM 위치만 갱신한다."""
@@ -261,6 +349,7 @@ class EquipmentService:
                 if sw["equipment_version_id"] not in referenced:
                     tx.repository.delete(tx.session, "equipment_version", {"equipment_version_id": sw["equipment_version_id"]})
         groups = {pm["group_id"] for pm in pms}
+        # 입력에 없는 PM도 유지한다. 모든 원본 묶음의 적용 후 호출자가 최종 분류를 검사한다.
         representative = next(iter(groups)) if len(groups) == 1 else None
         changes = {field.name: getattr(value, field.name) for field in fields(SnapshotInput)
                    if field.name not in {"equipment_code", "base_date", "site", "software", "group_id"}} if update_metadata else {}

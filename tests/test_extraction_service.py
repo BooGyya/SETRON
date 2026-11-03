@@ -253,6 +253,87 @@ def test_hpa_is_preserved_with_missing_required_fields_for_review():
     assert any(note.row_number == 2 and note.field == "version_raw" for note in data.issues)
 
 
+@pytest.mark.parametrize("missing", [("equipment_code",), ("version_raw",), ("equipment_code", "version_raw")],
+                         ids=["호기 공란", "SW 공란", "호기·SW 공란"])
+def test_hpa_blank_cells_keep_locations_and_block_batch_until_explicitly_completed(missing):
+    """HPA 빈 필수값의 실제 셀을 안내하고 보완 후에만 정상 행과 함께 저장 요청을 만든다.
+
+    param
+    - missing: 공란으로 재현한 뒤 명시적으로 보완할 필수 항목 이름의 튜플.
+    """
+    from setron.features.excel_import.schemas import ImportBlockedError
+    from setron.features.excel_import.service import (
+        build_save_request, draft_from_review, edit_value, has_errors, validate,
+    )
+
+    fields = ("base_date", "site", "group_name", "model_name", "family_name", "equipment_code",
+              "version_raw", "production_area")
+    normal = dict(zip(fields, ("2026-11-03", "시험사업장", "Oxide", "M-O2", "O2", "TEST-OXIDE-1",
+                               "vTEST.O2", None)))
+    hpa = dict(zip(fields, ("2026-11-03", "시험사업장", "HPA", "HPA", "HPA", "TEST-HPA-1",
+                            "vTEST.HPA", None)))
+    completed = dict(hpa)
+    for name in missing:
+        hpa[name] = None
+    sheet = SheetData("HPA_증강_합성.xlsx", "검증현황", 7, 3,
+                      [list(fields), list(normal.values()), list(hpa.values())])
+    sources = {name: sheet.address_of(2, column) for column, name in enumerate(fields)}
+    review, client = extract(sheet,
+        (normal, {name: sheet.address_of(1, column) for column, name in enumerate(fields)}), (hpa, sources))
+
+    assert len(review.rows) == 2
+    assert review.rows[1].family_key.category == "HPA"
+    assert review.rows[1].values["production_area"] is None
+    assert "읽은 범위: C7:J9" in client.calls[0][1].content
+    draft = draft_from_review(review)
+    original = deepcopy(draft)
+    issues = validate(draft)
+    for name in missing:
+        assert review.rows[1].sources[name].value is None
+        assert any(issue.field == name and issue.row_id == 2 and issue.address == sources[name]
+                   and issue.excel_position == (9, fields.index(name) + 3)
+                   and issue.workbook_name == sheet.workbook_name and issue.sheet_name == sheet.sheet_name
+                   and issue.blocks_save for issue in issues)
+    with pytest.raises(ImportBlockedError):
+        build_save_request(draft, "hpa-before-review")
+    for name in missing:
+        draft = edit_value(draft, 2, name, completed[name])
+    assert not has_errors(validate(draft))
+    saved = build_save_request(draft, "hpa-after-review")
+    assert len(saved.rows) == 2
+    assert saved.rows[1].values["equipment_code"] == completed["equipment_code"]
+    assert saved.rows[1].values["version_raw"] == completed["version_raw"]
+    assert saved.rows[1].values["production_area"] is None
+    assert set(saved.rows[1].edited_fields) == set(missing)
+    for name in missing:
+        assert original.row(2).value(name) is None
+        assert review.raw_data[sheet.sheet_name][sources[name]] is None
+
+
+@pytest.mark.parametrize("field", ["equipment_code", "version_raw"], ids=["호기", "SW"])
+def test_hpa_blank_cell_never_confirms_an_invented_identifier(field):
+    """읽은 범위 안의 빈 셀이라도 AI가 만든 호기·SW 값의 근거로 쓰지 않는다.
+
+    param
+    - field: AI가 원본에 없는 값을 응답한 호기 또는 SW 항목.
+    """
+    sheet = SheetData("HPA_합성.xlsx", "현황", 5, 4, [["HPA", None]])
+    review, client = extract(sheet, ({"model_name": "HPA", field: "TEST-INVENTED"},
+                                    {"model_name": "D5", field: "E5"}))
+    assert "읽은 범위: D5:E5" in client.calls[0][1].content
+    assert review.rows[0].values[field] is None
+    assert review.rows[0].raw_values[field] == "TEST-INVENTED"
+    assert review.rows[0].sources[field].value is None
+    assert any(issue.field == field and issue.address == "E5"
+               and "원본 셀에서 확인할 수 없습니다" in issue.reason for issue in review.issues)
+
+
+def test_ragged_input_does_not_describe_unread_cells_as_blank():
+    """일부 좌표가 없는 합성 입력을 완전한 직사각형 사용 영역으로 안내하지 않는다."""
+    _, client = extract(equipment_sheet(), equipment_row())
+    assert "읽은 범위:" not in client.calls[0][1].content
+
+
 def test_release_version_date_items_and_modification_mark_keep_link_and_provenance():
     sheet = SheetData("릴리즈_합성.xlsx", "구UI", 1, 1,
                       [["Poly", "M-C3", "구UI", "C3"], ["Version", "No", "내용", "개조형", "표식"],

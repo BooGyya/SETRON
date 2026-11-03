@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import DashboardChart, series_color
-from setron.ui.dashboard_data import DashboardDrilldown, DashboardSource, missing_sw_count
+from setron.ui.dashboard_data import DashboardDrilldown, DashboardSource, HpaClassificationConflict, missing_sw_count
 from setron.ui.theme import INK, PRIMARY, SECONDARY, TONES, font, icon, svg_size
 
 
@@ -160,7 +160,7 @@ class DashboardPage(QWidget):
         self.message = label("조회 적용 전입니다. 위의 공통 조건에서 조회 적용을 눌러 주세요.", color=SECONDARY, wrap=True)
         self.content.body.addWidget(self.message)
         self.definition = label("달성률 = N 이상 / (N 이상 + N 미만), 단위는 설비·계열 건입니다. 판단 불가는 분모에서 제외하고 별도 표시합니다.\n"
-                                "물리 대수에는 HPA를 포함하지만 분석에서는 제외합니다. 모델별 대수를 더해 물리 대수를 만들지 않습니다.",
+                                "HPA는 전체 설비 수와 적용률·공통 분석에서 제외하며, 설비 목록에서 조회할 수 있습니다. 모델별 대수를 더해 물리 대수를 만들지 않습니다.",
                                 12, color=SECONDARY, wrap=True)
         self.content.body.addWidget(self.definition)
         self.selection_notice = label("", 13, color=SECONDARY, wrap=True)
@@ -200,6 +200,12 @@ class DashboardPage(QWidget):
             if self.state.catalog != self.source.catalog:
                 raise ValueError("조회 선택지와 데이터 공급자의 매핑이 다릅니다.")
             result = self.source.snapshot(query)
+        except HpaClassificationConflict as error:
+            self.result_status.setText("조회 보류 · HPA 분류 확인 필요")
+            self.result_status.set_tone("danger")
+            self.message.setTextFormat(Qt.TextFormat.PlainText)
+            self.message.setText(str(error))
+            return False
         except (ValueError, RuntimeError):
             self.result_status.setText("결과 표시 실패 · 다시 적용해 주세요")
             self.result_status.set_tone("danger")
@@ -217,7 +223,7 @@ class DashboardPage(QWidget):
         self.result_status.set_tone("info")
         self.context.setText(f"적용 #{query.revision} · 기준 관측일 {result.base_date} · {query.description}\n{result.source_label}")
         values = {
-            "total": (f"{len(result.equipment_ids)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대"),
+            "total": (f"{summary.equipment_count}대", f"HPA 제외 {summary.hpa_excluded}대"),
             "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
                      f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건"
                      + f" · SW 미등록 {no_sw}대"
@@ -290,7 +296,7 @@ class DashboardPage(QWidget):
             self.chart.clear()
             return
         if not has_analysis and mode != 0:
-            self.message.setText("분석 대상 설비가 없습니다. HPA는 물리 대수에만 포함하고 그래프 분석에서는 제외합니다.")
+            self.message.setText("분석 대상 설비가 없습니다. HPA는 전체 설비 수와 적용률·공통 분석에서 제외하며, 설비 목록에서 조회할 수 있습니다.")
             self.chart.clear()
             return
         if mode == 0:
@@ -333,13 +339,13 @@ class DashboardPage(QWidget):
                 cell_body.setContentsMargins(4, 4, 4, 4)
                 cell_body.setSpacing(2)
                 rate = "—" if not cell.equipment_ids else "분석 제외" if summary.hpa_excluded and not summary.equipment_count else "정보 부족" if summary.rate is None else f"{summary.rate:.1%}"
-                text = rate + (f"\n{summary.compliant}/{summary.compliant + summary.below}건 · {len(cell.equipment_ids)}대" if cell.equipment_ids else "")
+                text = rate + (f"\n{summary.compliant}/{summary.compliant + summary.below}건 · {summary.equipment_count}대" if cell.equipment_ids else "")
                 main = button(text)
                 main.setFont(font(14, numeric=True))
                 main.setProperty("dashboardCellButton", True)
                 main.setStyleSheet(f"QPushButton {{color:{ink};background:transparent;text-align:left;border:1px solid transparent;padding:2px;min-height:40px;}} QPushButton:focus {{border-color:{PRIMARY};}}")
                 main.setEnabled(bool(cell.equipment_ids))
-                main.setAccessibleName(f"{row.label} {cell.label} 전체 설비 {len(cell.equipment_ids)}대")
+                main.setAccessibleName(f"{row.label} {cell.label} 전체 설비 {summary.equipment_count}대")
                 main.setToolTip(f"N 이상 {summary.compliant}건 / N 미만 {summary.below}건 / 판단 불가 {summary.undetermined}건\nHPA 제외 {summary.hpa_excluded}대 · 해당 범위 전체 선택")
                 main.clicked.connect(lambda checked=False, title=f"{row.label} / {cell.label}", ids=cell.equipment_ids: self._select(title, ids))
                 cell_body.addWidget(main)

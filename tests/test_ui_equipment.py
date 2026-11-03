@@ -130,7 +130,7 @@ def test_header_opens_applied_cohort_without_new_query_or_menu(window, monkeypat
     assert page.snapshot is window.pages["dashboard"].snapshot is window.pages["heatmap"].snapshot
     assert page.scope_ids == tuple(range(1, 19))
     assert window.route == "equipment" and window.header.title.text() == "설비 목록"
-    assert window.nav["heatmap"].isChecked() and len(window.nav) == 10
+    assert window.nav["heatmap"].isChecked() and len(window.nav) == 11
     assert page.model.rowCount() == 12 and page.metrics["total"].value.text() == "18대"
 
 
@@ -245,7 +245,7 @@ def test_representative_states_use_one_reusable_detail(window, eid, goal):
     page, query = open_list(window)
     assert page.open_detail(EquipmentSelection(query, DAY, eid))
     assert goal.value in page.detail_summary.text()
-    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai"}
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai", "management"}
     if eid == 3:
         assert page.detail_model.rows[0][2] == "미입력" and "버전 값이 비어" in page.detail_model.rows[0][5]
     if eid == 4:

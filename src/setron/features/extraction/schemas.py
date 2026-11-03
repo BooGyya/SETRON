@@ -20,6 +20,8 @@ class ExtractionIssue:
     address: str | None = None
     # Excel 행 번호가 아니라 추출 결과에서 1부터 시작하는 행 번호다.
     row_number: int | None = None
+    code: str | None = None
+    blocks_save: bool = False
 
 
 @dataclass(frozen=True)

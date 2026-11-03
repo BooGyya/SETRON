@@ -4,9 +4,9 @@ from PySide6.QtTest import QTest
 
 from setron.features.excel_import.service import build_save_request
 from setron.features.ai.schemas import AIResult, AIStatus, AITask, ExtractedRow, ExtractResult
-from setron.infrastructure.excel_reader import WorkbookInfo
+from setron.infrastructure.excel_reader import WorkbookInfo, SheetData
 from setron.ui.import_page import ImportPage, _workbook_key
-from test_ui_import import app, identity_reader  # noqa: F401
+from test_ui_import import app, identity_reader, wait_for_extraction  # noqa: F401
 from test_import_validation import row
 
 
@@ -17,7 +17,13 @@ def test_same_named_workbooks_keep_distinct_identity_in_review_and_save_request(
         value = row()
         return AIResult(AITask.EXCEL_EXTRACT, AIStatus.OK, "검토 예제",
                         ExtractResult(kind, sheet, (ExtractedRow(value.original, value.sources),)))
-    page = ImportPage(excel=identity_reader(books), extractor=extract)
+    reader = identity_reader(books)
+    original_reader = reader.read_sheet
+    def read(workbook_name, sheet_name, *, app_pid, full_name):
+        original_reader(workbook_name, sheet_name, app_pid=app_pid, full_name=full_name)
+        return SheetData(workbook_name, sheet_name, 1, 1, [list(row().original.values())])
+    reader.read_sheet = read
+    page = ImportPage(excel=reader, extractor=extract)
     try:
         page.load_workbooks()
         ids = []
@@ -26,7 +32,7 @@ def test_same_named_workbooks_keep_distinct_identity_in_review_and_save_request(
             assert page.read_selected()
             QTest.qWait(10)
             assert page.extract()
-            QTest.qWait(10)
+            wait_for_extraction(page)
             assert page.draft is not None
             assert page.draft.workbook_name == "현황.xlsx"
             assert page.draft.workbook_id == _workbook_key(book)

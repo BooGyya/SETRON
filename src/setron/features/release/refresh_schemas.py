@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date
 
+from setron.features.aggregation.schemas import EquipmentRecord
 from setron.features.aggregation.schemas import Summary
 from setron.features.item.schemas import ItemSummary
 from setron.features.risk.schemas import RiskSummary
@@ -16,13 +17,17 @@ class RefreshContext:
 
     ivar
     - targets: (모델 ID, 계열 ID)별 기존 목표. None은 미지정이며 저장하거나 자동 변경하지 않음.
-    - applicability: (모델 ID, 계열 ID)별 적용 가능한 릴리즈 ID 튜플. 키가 없으면 미확인.
+    - applicability: (모델 ID, 계열 ID)별 호출 시 확인한 릴리즈 ID 튜플. 키가 없으면 미확인.
+      이번 저장에서 관리값·원본이 달라진 릴리즈에는 이전 목록을 재사용하지 않음.
     - aliases: 계열 ID별 확인된 다른 버전 표기와 현재 릴리즈 원문의 대응.
+    - use_saved_applicability: True이면 BE-011에 저장한 근거를 변경 후 같은 트랜잭션에서
+      다시 확인한다. 입력 applicability를 이전 자료의 검증 결과로 재사용하지 않음.
     """
 
     targets: Mapping[tuple[int, int], int | None] = field(default_factory=dict)
     applicability: Mapping[tuple[int, int], tuple[int, ...]] = field(default_factory=dict)
     aliases: Mapping[int, Mapping[str, str]] = field(default_factory=dict)
+    use_saved_applicability: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,7 @@ class DateJudgments:
     summary: Summary
     item_summaries: tuple[ItemSummary, ...]
     risks: RiskSummary
+    records: tuple[EquipmentRecord, ...] = ()
 
 
 @dataclass(frozen=True)
