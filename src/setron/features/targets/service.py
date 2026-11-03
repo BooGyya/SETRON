@@ -19,6 +19,7 @@ from setron.features.storage.validation import StorageValidationError, decode_re
 from setron.features.version.schemas import ReleaseVersion
 
 from .schemas import CandidateConfirmation, ExcludedCandidate, TargetCandidate, TargetCatalog, TargetPair
+from .shared import SharedNoteCandidates
 
 
 class TargetService:
@@ -81,12 +82,15 @@ class TargetService:
         포함된 쌍은 None/무효 ID까지 보존하고, 없는 쌍만 최신 후보로 초기화한다.
         추천값·선택값은 반환만 하며 저장하지 않는다. 조회 범위 밖 mapping도
         수정하지 않는다. 릴리즈 변경·삭제·교체 후에는 지문을 다시 검사한다.
+        공유 노트는 해당 모델에 유효한 O Item이 하나라도 있는 버전만 포함한다.
+        저장된 구분란의 X·공란 또는 무효 근거를 이전 수동 후보로 대체하지 않는다.
         """
         requested = tuple(_pair(pair) for pair in pairs)
         require(len(set(requested)) == len(requested), "모델·계열 쌍이 중복됐습니다.")
         chosen = _targets(targets)
         models, families = _rows(tx, "equipment_group"), _rows(tx, "version_family")
         releases = _rows(tx, "release_version")
+        shared = SharedNoteCandidates(tx, releases, models, families) if requested else None
         result = []
         for pair in requested:
             reason = _pair_reason(pair, models, families)
@@ -95,6 +99,21 @@ class TargetService:
                 saved = _setting(tx, pair)
                 available, excluded, confirmed, reason = _candidates(
                     pair, saved, releases, _pair_fingerprint(pair, models, families))
+                item_candidates, item_excluded, covered = shared.for_pair(pair)
+                if covered:
+                    release_map = {row["release_version_id"]: row for row in releases}
+                    fingerprint = _pair_fingerprint(pair, models, families)
+                    payload = {"schema": 1, "model_id": pair[0], "family_id": pair[1],
+                               "pair_fingerprint": fingerprint,
+                               "candidates": [{"confirmation": asdict(value),
+                                               "fingerprint": _fingerprint(release_map[value.release_id])}
+                                              for value in item_candidates]}
+                    derived, invalid, _, _ = _candidates(pair, {"setting_value": payload}, releases, fingerprint)
+                    available = tuple(sorted((*[value for value in available if value.release_id not in covered], *derived),
+                                             key=lambda value: (value.release.version_order, value.release_id)))
+                    excluded = (*[value for value in excluded if value.release_id not in covered], *item_excluded, *invalid)
+                    confirmed = True
+                    reason = None if available else (excluded[0].reason if excluded else reason)
             recommended = available[-1].release_id if available else None
             selected = chosen[pair] if pair in chosen else recommended
             selection_reason = reason
