@@ -75,15 +75,17 @@ def filled(storage, schema_database):  # noqa: F811
         row(1, {"equipment_code": "C1", "version_raw": "F1"}, edited=("version_raw",), **{**EQUIPMENT, "line": TRICKY},
             equipment_code="EXP-1", model_name="M-O2", family_name="O2", version_raw="v1",
             pm_name="PM1")], "exp-1",
-        cells={"C1": "EXP-1", "F1": TRICKY}))
+        # 특수문자 원문은 대조하지 않는 셀(Z9)에 둔다. 저장 값과 연결된 셀은 원본과 같아야 한다.
+        cells={"C1": "EXP-1", "F1": "v1", "Z9": TRICKY}))
     saver.save(request(ExtractKind.EQUIPMENT_STATUS, [
         row(2, {"equipment_code": "C2", "version_raw": "F2"},
             **{**EQUIPMENT, "base_date": "2026-10-22", "production_area": None},
             equipment_code="EXP-1", model_name="M-O2", family_name="O2", version_raw="v2",
-            pm_name="PM1")], "exp-history"))
+            pm_name="PM1")], "exp-history", cells={"C2": "EXP-1", "F2": "v2"}))
     saver.save(request(ExtractKind.RELEASE_NOTE, [
         row(1, {"version_raw": "A2", "content": "D2"}, version_raw="v1", content=TRICKY,
-            model_name="M-O2", family_name="O2", release_date="2026-09-01")], "exp-2"))
+            model_name="M-O2", family_name="O2", release_date="2026-09-01")], "exp-2",
+        cells={"A2": "v1", "D2": TRICKY}))
     with storage.transaction() as tx:
         release = tx.session.connection().exec_driver_sql(
             "SELECT r.release_version_id, r.family_id, r.batch_id, f.group_id "
