@@ -119,8 +119,8 @@ def test_forecast_section_has_reference_note_table_and_limits(tmp_path):
     assert "참고 예측" in texts
     assert "예측은 저장된 현황으로 계산한 참고용 값이며 실제 완료 시점을 보장하지 않습니다." in texts
     o2 = table(document, "계열", "상태")[0]
-    assert o2 == ["O2", "참고 예측", "1", "2", "3", "0", "90.0", "2026-12-30"]
-    assert texts[texts.index("가정") + 1].startswith("기간 동안의 기존 설비 패치 속도")
+    assert o2 == ["O2", "참고 예측", "2", "1", "0.03", "3", "0", "90", "2026-12-30"]
+    assert texts[texts.index("가정") + 1].startswith("기간 처음과 끝 사이의 N 이상 대수 증가 속도")
     assert "O2는 남은 3건을 약 90일 뒤 마칠 것으로 보입니다." in texts
 
 
