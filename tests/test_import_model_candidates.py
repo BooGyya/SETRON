@@ -21,6 +21,14 @@ def test_raw_names_match_ignoring_spaces_and_case():
     assert find_candidate(None) is None and find_candidate(" ") is None
 
 
+def test_family_only_c4_label_maps_to_registered_model_with_note():
+    """릴리즈노트 모델 칸의 'C4'처럼 계열 이름만 적힌 표기도 M-C4 후보를 내고 주의 문구를 붙인다."""
+    candidate = find_candidate("c4")
+    assert (candidate.model_name, candidate.family_name, candidate.group_name) == ("M-C4", "C4", "Poly")
+    assert "계열 이름만" in candidate.note
+    assert find_candidate("C4 Plus") is None  # 파생형 표기는 그대로 둔다
+
+
 def test_only_model_name_is_replaced_and_other_values_fill_blanks():
     fields = ("model_name", "group_name", "family_name", "ui_type")
     changes = candidate_changes({"model_name": "M-C3 (6각) (통합UI)", "group_name": None,

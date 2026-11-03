@@ -609,7 +609,7 @@ DB 공급자는 `ui/database_source.py`의 `database_catalog()`로 저장 현황
 
 데이터 파트(`ai/svhm`)의 결정적 규칙 두 가지를 **후보로만** 가져왔다(팀 결정 2026-11-03). 사용자가 확인해야 값이 바뀐다.
 
-- 모델명 번역표: `features/extraction/model_candidates.py`가 `ai/svhm/core/refdata.py`의 원문 모델 표기 대응을 시연용 시드 모델 이름(M-C3·M-C4 등, 9계열)으로 옮긴 표다. `features/excel_import/candidates.py`의 `apply_model_candidates(draft)`가 모델명은 등록 모델 이름으로 바꾸고 빈 설비군·계열·UI·구조·개조만 채운다. 가져오기 화면의 '번역표 후보 적용 (n행)' 버튼이 확인창 승인 후 적용하며, 바뀐 값은 사용자 수정으로 기록되고 원문은 그대로 남는다. 시드에 없는 모델(KCTC Inline Ox·Cluster Ox)은 후보를 내지 않고, C3 UI 미표기의 '통합UI'처럼 확정 사항에 없는 값은 확인창에 주의 문구로 보여 준다.
+- 모델명 번역표: `features/extraction/model_candidates.py`가 `ai/svhm/core/refdata.py`의 원문 모델 표기 대응을 시연용 시드 모델 이름(M-C3·M-C4 등, 9계열)으로 옮긴 표다. `features/excel_import/candidates.py`의 `apply_model_candidates(draft)`가 모델명은 등록 모델 이름으로 바꾸고 빈 설비군·계열·UI·구조·개조만 채운다. 가져오기 화면의 '번역표 후보 적용 (n행)' 버튼이 확인창 승인 후 적용하며, 바뀐 값은 사용자 수정으로 기록되고 원문은 그대로 남는다. 릴리즈노트 모델 칸처럼 계열 이름만 적힌 `C4`는 데이터 파트 설비군 이름을 근거로 M-C4 후보를 내고 주의 문구를 붙인다. 시드에 없는 모델(KCTC Inline Ox·Cluster Ox)은 후보를 내지 않고, C3 UI 미표기의 '통합UI'처럼 확정 사항에 없는 값은 확인창에 주의 문구로 보여 준다.
 - 버전 순서: `features/release/order_candidates.py`의 `suggest_version_orders()`가 저장된 릴리즈의 버전 셀 행 순서(릴리즈노트 나열 순서)로 10, 20, 30 …을 제안하고 출시일이 거꾸로 가면 경고한다(`ai/svhm/excel/release_parser.py`와 같은 규칙). 순서가 확인된 릴리즈가 있거나, 원본 위치가 없거나, 여러 입력 작업·시트에서 온 계열은 제안하지 않는다. 관리 화면의 '선택 계열의 버전 순서 후보를 수정 목록에 추가'가 후보를 수정 목록에 넣고, 기존 묶음 검토·저장(`ManagementService.save`)을 거쳐야 반영된다.
 
 ### DB 전체 SQL 내보내기 (Jira S15P31B106-76)
