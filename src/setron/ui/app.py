@@ -1,19 +1,23 @@
-"""UI 시작점. 대시보드·히트맵·목록/상세는 같은 합성 관측을 쓰며 DB·Excel을 시작하지 않는다.
+"""UI 시작점. 대시보드·히트맵·목록/상세는 같은 관측 공급자를 쓴다.
 
+`SETRON_DB_*` 설정이 없으면 합성 관측·메모리 저장을 쓰고 DB에 연결하지 않는다. 설정이 있으면 조회 화면은 DB 자료를
+읽고, 가져오기 저장과 DB 전체 SQL 내보내기도 DB를 쓴다.
 데이터 가져오기는 사용자가 불러오기를 누를 때만 실행 중인 Excel에 연결하고, AI는 예제 응답을 사용한다.
 """
 
 import argparse
 import sys
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource
 from setron.ui.dashboard_demo import demo_dashboard_source
-from setron.ui.database_source import dashboard_source_from_env
+from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
 from setron.ui.target_data import describe_targets, initial_targets
@@ -32,7 +36,8 @@ from setron.ui.read_worker import BackgroundRead
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
-                  excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None) -> MainWindow:
+                  excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
+                  db_exporter=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -44,6 +49,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - import_saver: Import 저장 공급자. None이면 메모리 저장.
     - ai_parser: 질문 해석 공급자. None이면 예제 응답.
     - ai_analyzer: 분석 공급자. None이면 예제 응답.
+    - db_exporter: ``path``를 받아 DB 전체를 .sql로 저장하고 ExportResult를 돌려주는 함수. None이면 내보내기 비활성.
 
     return
     - 실제 DB 연결을 자동 생성하지 않는 MainWindow.
@@ -174,7 +180,36 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if equipment.open_detail(request, origin="heatmap"):
             window.navigate("equipment")
 
+    export_action = window.header.actions["export"]
+    if db_exporter is not None:
+        export_action.setEnabled(True)
+        export_action.setToolTip("DB 전체를 SQL 파일로 내보냅니다. 받은 사람은 빈 DB에서 실행하면 같은 자료를 볼 수 있습니다.")
+
+    def export_sql(path=None):
+        """DB 전체를 .sql로 내보낸다. ``path``가 없으면 저장 위치를 묻고 결과를 알림창으로 알린다."""
+        interactive = path is None
+        if interactive:
+            default = Path.home() / f"setron_db_{datetime.now():%Y%m%d_%H%M}.sql"
+            path, _ = QFileDialog.getSaveFileName(window, "DB 전체 SQL 내보내기", str(default), "SQL 파일 (*.sql)")
+            if not path:
+                return None
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = db_exporter(path)
+        finally:
+            QApplication.restoreOverrideCursor()
+        text = (f"{result.path} 에 저장했습니다 ({result.message}).\n받은 사람은 빈 DB에서 이 파일을 실행하면 됩니다."
+                if result.saved else f"내보내지 못했습니다. {result.message}")
+        if interactive:
+            (QMessageBox.information if result.saved else QMessageBox.warning)(window, "DB 전체 SQL 내보내기", text)
+        return result
+
+    window.export_sql = export_sql
+
     def open_all(action):
+        if action == "export" and db_exporter is not None:
+            export_sql()
+            return
         if action == "equipment_list":
             remember_origin()
             if equipment.open_all(window.route):
@@ -268,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
     source, problem = dashboard_source_from_env()
     window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
-                           import_saver=saver_from_env())
+                           import_saver=saver_from_env(), db_exporter=sql_exporter_from_env())
     if problem:
         window.notice.setText(problem)
     if screen := app.primaryScreen():

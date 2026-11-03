@@ -63,6 +63,9 @@ S15P31B106/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
 │       │   │   └── service.py
+│       │   ├── db_export/
+│       │   │   ├── __init__.py
+│       │   │   └── service.py
 │       │   ├── export/
 │       │   │   ├── __init__.py
 │       │   │   ├── schemas.py
@@ -568,6 +571,12 @@ DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 
 - 앱(`python -m setron`)은 `SETRON_DB_NAME`이 설정돼 있으면 `ui/import_page.saver_from_env()`로 이 저장소를 쓰고, 없으면 메모리 저장소를 쓴다. DB 접속은 첫 저장 때 한다.
 - 같은 설정이면 조회 화면도 `ui/database_source.py`의 `DatabaseDashboardSource`로 DB 자료를 읽는다. '조회 적용'마다 DB를 다시 읽으므로 저장 후 조회 적용을 누르면 반영된다. 조회 선택지는 VER3 선택지를 유지하고, Site는 이름이 같을 때만, 설비군은 `GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않거나 PM·HPA 연결을 확인해야 하는 현황은 빼고 건수를 안내한다. 목표 N·위험 기준은 DB에 없어 지정하지 않으므로 적용률은 계산 불가, 위험은 미확인으로 나온다. 목표 초안은 다시 읽은 모델·계열 목록에 맞춘다(고른 값 유지, 새 항목 미지정). 시작할 때 DB를 읽지 못하면 합성 예시로 시작하고 안내한다.
 - `database/seed_demo_catalog.sql`은 교육용 자료의 모델 표기로 만든 시연용 모델 9개·계열 9개다. 확정 기준 자료가 아니며 개발 DB에만 적용한다.
+
+### DB 전체 SQL 내보내기 (Jira S15P31B106-76)
+
+`features/db_export/service.py`의 `export_database(database, path)`가 관리 테이블(`TABLE_NAMES`) 13개의 구조(`SHOW CREATE TABLE`)와 모든 행을 한 트랜잭션에서 읽어 .sql 파일로 저장한다(멘토링 2차, REQ-054). 받은 사람이 빈 DB에서 실행하면 같은 자료와 AUTO_INCREMENT 값이 들어간다. `DROP TABLE`을 넣지 않으므로 같은 테이블이 있는 DB에서는 첫 `CREATE TABLE`에서 멈추고 기존 자료를 바꾸지 않는다. 다른 PC 자료의 가져오기·병합은 보류(REQ-055)다. 실행 중에만 외래키 검사를 끄고, 임시 파일에 다 쓴 뒤 이름을 바꿔 실패해도 반쯤 쓴 파일이 남지 않는다. 값은 pymysql의 `escape`로 적는다. 실패는 예외 대신 `ExportResult`로 돌려준다.
+
+화면에서는 상단 '데이터 내보내기' 버튼으로 실행한다. `SETRON_DB_*` 설정이 있을 때만 `ui/database_source.sql_exporter_from_env()`가 내보내기 함수를 만들고 버튼을 켠다. 저장 위치를 묻고 결과를 알림창으로 알린다. `tests/test_db_export_mysql.py`가 실제 MySQL에서 내보내기 → 테이블 삭제 → 파일 실행 → 내용·AUTO_INCREMENT 일치를 확인한다.
 
 ## B 읽기 변환 공통 기반
 

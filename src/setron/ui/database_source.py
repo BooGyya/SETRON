@@ -144,3 +144,19 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
         return DatabaseDashboardSource(lambda: load_dashboard_source(storage)), None
     except (DatabaseError, StorageValidationError) as error:
         return None, f"DB 자료를 읽지 못해 합성 예시로 시작했습니다: {error}"
+
+
+def sql_exporter_from_env(environ=None):
+    """``SETRON_DB_*`` 설정이 있으면 ``path``를 받아 DB 전체를 .sql로 저장하는 함수를, 없으면 None을 돌려준다.
+
+    DB 접속은 내보낼 때 한다.
+    """
+    import os
+
+    from setron.features.db_export.service import export_database
+    from setron.infrastructure.database import Database
+
+    values = os.environ if environ is None else environ
+    if not values.get("SETRON_DB_NAME"):
+        return None
+    return lambda path: export_database(Database.from_env(values), path)
