@@ -54,105 +54,119 @@ def codes(entries):
     return [e.record.equipment_code for e in entries]
 
 
-def test_risk_equipment_comes_first_then_longer_elapsed_period():
+TARGETS = {(M_C4, F_C4): V3, (M_O2, F_O2): O2_V1, (M_O3, F_O3): O3_V1}  # C4 기준 N = v3
+
+
+def test_risk_equipment_comes_first_then_most_behind_target():
+    """멘토링 3차: 위험 → 버전이 가장 낮은(N에서 가장 많이 뒤처진) 설비 → 나머지 낮은 순."""
     records = [equipment(1, c4("v3")), equipment(2, c4("v1")), equipment(3, c4("v2"))]
 
-    result = prioritize(records, assessor(DIRECT_V2), FAMILIES, DEFAULT_THRESHOLDS)
+    result = prioritize(records, assessor(DIRECT_V2), FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
 
-    assert codes(result.ranked) == ["EQ03", "EQ02", "EQ01"]  # 위험 2년 → 위험 없음 3년 → 1년
+    assert codes(result.ranked) == ["EQ03", "EQ02", "EQ01"]  # 위험(N-1) → N-2 → N
+    assert [e.steps_behind for e in result.ranked] == [1, 2, 0]
     assert [e.rank for e in result.ranked] == [1, 2, 3]
     assert result.ranked[0].risk.reasons and not result.needs_check
 
 
-def test_older_risk_equipment_goes_before_newer_risk_equipment():
-    older_risk = direct(3, V1)
+def test_more_behind_risk_equipment_goes_first_among_risks():
     records = [equipment(1, c4("v2")), equipment(2, c4("v1"))]
 
-    result = prioritize(records, assessor(DIRECT_V2, older_risk), FAMILIES, DEFAULT_THRESHOLDS)
+    result = prioritize(records, assessor(DIRECT_V2, direct(3, V1)), FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
 
     assert codes(result.ranked) == ["EQ02", "EQ01"]
 
 
-def test_mixed_equipment_uses_oldest_family_and_keeps_each_period():
-    """명세 예: O2 3년·O3 6개월이면 대표값은 3년이다."""
-    mixed = equipment(1, PmVersion("PM1", M_O3, F_O3, "o3-v1"), PmVersion("PM3", M_O2, F_O2, "o2-v1"))
-    two_years = equipment(2, c4("v2"))
+def test_above_target_is_after_target():
+    """N 위(음수 칸)는 N보다 뒤에 둔다."""
+    records = [equipment(1, c4("v4")), equipment(2, c4("v3"))]
 
-    result = prioritize([two_years, mixed], assessor(), FAMILIES, DEFAULT_THRESHOLDS)
+    result = prioritize(records, assessor(), FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
+
+    assert codes(result.ranked) == ["EQ02", "EQ01"]
+    assert [e.steps_behind for e in result.ranked] == [0, -1]
+
+
+def test_without_target_falls_back_to_version_position():
+    records = [equipment(1, c4("v3")), equipment(2, c4("v1")), equipment(3, c4("v2"))]
+
+    result = prioritize(records, assessor(), FAMILIES, DEFAULT_THRESHOLDS)
+
+    assert codes(result.ranked) == ["EQ02", "EQ03", "EQ01"]
+    assert all(e.steps_behind is None for e in result.ranked)
+
+
+def test_same_steps_and_position_are_ordered_by_older_release_date():
+    """O2 v1(2023 출시)과 O3 v1(2026 출시)은 둘 다 N이고 첫 위치 → 출시일이 오래된 O2가 먼저."""
+    records = [equipment(1, PmVersion(None, M_O3, F_O3, "o3-v1")), equipment(2, PmVersion(None, M_O2, F_O2, "o2-v1"))]
+
+    result = prioritize(records, assessor(), FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
+
+    assert codes(result.ranked) == ["EQ02", "EQ01"]
+
+
+def test_mixed_equipment_uses_most_behind_pm_and_keeps_age_for_display():
+    mixed = equipment(1, PmVersion("PM1", M_O3, F_O3, "o3-v1"), PmVersion("PM3", M_C4, F_C4, "v1"))
+    one_behind = equipment(2, c4("v2"))
+
+    result = prioritize([one_behind, mixed], assessor(), FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
 
     assert codes(result.ranked) == ["EQ01", "EQ02"]
     first = result.ranked[0]
-    assert first.representative.pm.pm_name == "PM3"
+    assert first.steps_behind == 2 and first.lowest.pm.pm_name in {"PM1", "PM3"}
+    assert first.representative.pm.pm_name == "PM3"  # 노후도는 순위와 별도로 보여 준다
     assert [p.age.elapsed_label for p in first.age.pms] == ["6개월", "3년"]
-    assert not first.partial_age
 
 
-def test_confirmed_risk_without_release_date_needs_check_and_keeps_reason():
+def test_missing_release_date_is_still_ranked():
+    """출시일은 마지막 정렬 기준이라 없어도 순위를 매긴다 (이전에는 확인 필요)."""
     result = prioritize([equipment(1, c4("v4")), equipment(2, c4("v3"))], assessor(DIRECT_V4),
-                        FAMILIES, DEFAULT_THRESHOLDS)
+                        FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
 
-    assert codes(result.ranked) == ["EQ02"]
-    entry = result.needs_check[0]
-    assert entry.rank is None and entry.gaps == (PriorityGap.AGE_UNKNOWN,)
-    assert entry.is_risk and entry.risk.reasons[0].rule.risk_reason == "사유 2"
+    assert codes(result.ranked) == ["EQ01", "EQ02"]
+    assert result.ranked[0].is_risk and result.ranked[0].lowest.release.released_at is None
+    assert not result.needs_check
 
 
-def test_unknown_risk_or_missing_version_needs_check_without_rank():
+def test_unknown_risk_or_unknown_version_position_needs_check_without_rank():
     unresolved_o2 = direct(4, O2_V1, family_id=F_O2, mapping=MappingStatus.UNRESOLVED)
     records = [
-        equipment(1, PmVersion(None, M_O2, F_O2, "o2-v1")),  # 위험 미확인, 기간은 있음
+        equipment(1, PmVersion(None, M_O2, F_O2, "o2-v1")),  # 위험 미확인
         equipment(2, c4(None)),                              # 버전 없음
-        equipment(3, c4("v4")),                              # 위험 있음, 출시일 없음
+        equipment(3, c4("v9")),                              # 미등록 버전
     ]
 
-    result = prioritize(records, assessor(DIRECT_V4, unresolved_o2), FAMILIES, DEFAULT_THRESHOLDS)
+    result = prioritize(records, assessor(DIRECT_V4, unresolved_o2), FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
 
     assert result.ranked == ()
-    assert codes(result.needs_check) == ["EQ03", "EQ01", "EQ02"]  # 위험 확인 설비를 위에 두고 순위는 없음
-    assert result.needs_check[1].gaps == (PriorityGap.RISK_UNKNOWN,)
-    assert PriorityGap.AGE_UNKNOWN in result.needs_check[2].gaps
+    assert codes(result.needs_check) == ["EQ01", "EQ02", "EQ03"]
+    assert result.needs_check[0].gaps == (PriorityGap.RISK_UNKNOWN,)
+    assert PriorityGap.VERSION_UNKNOWN in result.needs_check[1].gaps
+    assert PriorityGap.VERSION_UNKNOWN in result.needs_check[2].gaps
     assert all(e.rank is None and e.messages for e in result.needs_check)
 
 
-def test_mixed_equipment_with_unknown_period_is_ranked_with_partial_flag():
-    record = equipment(1, PmVersion(None, M_O2, F_O2, "o2-v1"), c4("v4"))
+def test_unordered_release_has_no_position():
+    families = {F_C4: FamilyReleases(F_C4, [ReleaseVersion(V1, F_C4, "v1", None, date(2023, 10, 1))])}
+    catalog = RiskAssessor(families, ItemCatalog(families, []), [])
 
-    result = prioritize([record], assessor(), FAMILIES, DEFAULT_THRESHOLDS)
+    result = prioritize([equipment(1, c4("v1"))], catalog, families, DEFAULT_THRESHOLDS)
 
-    assert result.ranked[0].partial_age
-    assert result.ranked[0].representative.pm.family_id == F_O2
+    assert result.needs_check[0].gaps == (PriorityGap.VERSION_UNKNOWN,)
 
 
 def test_hpa_is_excluded_and_counted():
     result = prioritize([equipment(1, c4("v1")), equipment(2, c4("v1"), hpa=True)], assessor(DIRECT_V2),
-                        FAMILIES, DEFAULT_THRESHOLDS)
+                        FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
 
     assert codes(result.ranked) == ["EQ01"]
     assert result.hpa_excluded == 1
 
 
-def test_without_rules_sorts_by_age_and_reports_missing_rules():
-    result = prioritize([equipment(1, c4("v3")), equipment(2, c4("v1"))], assessor(), FAMILIES, DEFAULT_THRESHOLDS)
+def test_without_rules_sorts_by_version_and_reports_missing_rules():
+    result = prioritize([equipment(1, c4("v3")), equipment(2, c4("v1"))], assessor(), FAMILIES, DEFAULT_THRESHOLDS,
+                        targets=TARGETS)
 
     assert codes(result.ranked) == ["EQ02", "EQ01"]
     assert all(e.risk.status is RiskStatus.NO_RISK for e in result.ranked)
     assert not result.has_rules
-
-
-def test_invalid_threshold_setting_still_sorts_by_elapsed_period():
-    result = prioritize([equipment(1, c4("v3")), equipment(2, c4("v1"))], assessor(), FAMILIES, None)
-
-    assert codes(result.ranked) == ["EQ02", "EQ01"]
-
-
-def test_same_risk_and_period_falls_back_to_equipment_code():
-    result = prioritize([equipment(2, c4("v1")), equipment(1, c4("v1"))], assessor(), FAMILIES, DEFAULT_THRESHOLDS)
-
-    assert codes(result.ranked) == ["EQ01", "EQ02"]
-
-
-def test_release_after_query_date_needs_check():
-    result = prioritize([equipment(1, c4("v3"))], assessor(), FAMILIES, DEFAULT_THRESHOLDS,
-                        base_date=date(2025, 1, 1))
-
-    assert result.needs_check[0].gaps == (PriorityGap.AGE_UNKNOWN,)

@@ -163,15 +163,17 @@ def _priority(sheet: Worksheet, report: StatusReport) -> None:
     if result is None:
         sheet["A1"] = "우선순위를 계산하지 않았습니다."
         return
-    _rows(sheet, ["순위", "설비", "위험", "위험 사유", "대표 경과 기간", "대표 계열", "비고"], [
+    _rows(sheet, ["순위", "설비", "위험", "위험 사유", "기준 N까지(칸)", "가장 낮은 버전", "계열", "출시일",
+                  "대표 경과 기간"], [
         [e.rank, e.record.equipment_code, e.risk.label, _reasons(e.risk),
-         e.representative.age.elapsed_label, _family_name(report, e.representative.pm.family_id),
-         "일부 계열 기간 미확인" if e.partial_age else ""]
+         "N 미지정" if e.steps_behind is None else e.steps_behind, e.lowest.release.version_raw,
+         _family_name(report, e.lowest.pm.family_id), e.lowest.release.released_at or "미확인",
+         e.representative.age.elapsed_label if e.representative else "미확인"]
         for e in result.ranked
     ])
     notes = []
     if not result.has_rules:
-        notes.append("등록된 위험 기준이 없어 노후도로만 정렬했습니다.")
+        notes.append("등록된 위험 기준이 없어 버전 순서로만 정렬했습니다.")
     if result.hpa_excluded:
         notes.append(f"HPA {result.hpa_excluded}대는 제외했습니다.")
     start = sheet.max_row + 2
