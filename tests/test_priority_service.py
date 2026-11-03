@@ -6,7 +6,7 @@ from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.aging.schemas import DEFAULT_THRESHOLDS
 from setron.features.item.service import ItemCatalog
 from setron.features.priority.schemas import PriorityGap
-from setron.features.priority.service import prioritize
+from setron.features.priority.service import prioritize, prioritize_from_risks
 from setron.features.risk.schemas import MappingStatus, RiskRule, RiskStatus, RuleType
 from setron.features.risk.service import RiskAssessor
 from setron.features.version.schemas import ReleaseVersion
@@ -170,3 +170,17 @@ def test_without_rules_sorts_by_version_and_reports_missing_rules():
     assert codes(result.ranked) == ["EQ02", "EQ01"]
     assert all(e.risk.status is RiskStatus.NO_RISK for e in result.ranked)
     assert not result.has_rules
+
+
+def test_precomputed_risks_give_same_order_and_missing_risk_needs_check():
+    """이미 판정한 위험 결과로도 같은 순서를 만들고, 판정 결과가 없는 설비는 위험 미확인으로 둔다."""
+    records = [equipment(1, c4("v3")), equipment(2, c4("v1")), equipment(3, c4("v2"))]
+    judged = assessor(DIRECT_V2)
+    expected = prioritize(records, judged, FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
+
+    result = prioritize_from_risks(records, judged.summarize(records), FAMILIES, DEFAULT_THRESHOLDS, targets=TARGETS)
+    partial = prioritize_from_risks(records, judged.summarize(records[:2]), FAMILIES, DEFAULT_THRESHOLDS,
+                                    targets=TARGETS)
+
+    assert codes(result.ranked) == codes(expected.ranked) and result.has_rules
+    assert codes(partial.needs_check) == ["EQ03"] and partial.needs_check[0].gaps == (PriorityGap.RISK_UNKNOWN,)

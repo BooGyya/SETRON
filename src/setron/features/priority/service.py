@@ -23,7 +23,7 @@ from setron.features.aggregation.service import Targets
 from setron.features.aging.schemas import AgeThresholds
 from setron.features.aging.service import equipment_age
 from setron.features.priority.schemas import PmPosition, PriorityEntry, PriorityGap, PriorityList
-from setron.features.risk.schemas import RiskStatus
+from setron.features.risk.schemas import EquipmentRisk, RiskStatus, RiskSummary
 from setron.features.risk.service import RiskAssessor
 from setron.features.version.service import FamilyReleases
 
@@ -42,9 +42,34 @@ def prioritize(
     ``targets``는 (모델 ID, 계열 ID) → 목표 N 릴리즈 ID다. 없으면 모든 설비를 0칸으로 보고 버전 위치로 정렬한다.
     조회 날짜를 주지 않으면 설비마다 그 현황의 기준 날짜로 노후도를 계산한다.
     """
+    return _prioritize(records, assessor.equipment_risk, bool(assessor.rules), families, thresholds, base_date,
+                       targets or {})
+
+
+def prioritize_from_risks(
+    records: Iterable[EquipmentRecord],
+    risks: RiskSummary,
+    families: Mapping[int, FamilyReleases],
+    thresholds: AgeThresholds | None,
+    base_date: date | None = None,
+    *,
+    targets: Targets | None = None,
+) -> PriorityList:
+    """이미 판정한 위험 결과(:class:`RiskSummary`)로 우선순위를 정한다. 판정 결과가 없는 설비는 위험 미확인이다.
+
+    현황 보고서처럼 위험을 먼저 계산해 둔 곳에서 같은 판정을 다시 하지 않으려고 쓴다.
+    """
+    by_id = {risk.record.equipment_id: risk for risk in risks.equipment}
+
+    def risk_of(record: EquipmentRecord) -> EquipmentRisk:
+        return by_id.get(record.equipment_id) or EquipmentRisk(record, RiskStatus.UNKNOWN, ())
+
+    return _prioritize(records, risk_of, risks.has_rules, families, thresholds, base_date, targets or {})
+
+
+def _prioritize(records, risk_of, has_rules, families, thresholds, base_date, targets) -> PriorityList:
     records = tuple(records)
-    targets = targets or {}
-    entries = [_entry(r, assessor, families, thresholds, base_date, targets) for r in records if not r.is_hpa]
+    entries = [_entry(r, risk_of(r), families, thresholds, base_date, targets) for r in records if not r.is_hpa]
 
     ranked = sorted((e for e in entries if not e.gaps), key=_order)
     needs_check = sorted(
@@ -55,7 +80,7 @@ def prioritize(
         tuple(_with_rank(e, i) for i, e in enumerate(ranked, start=1)),
         tuple(needs_check),
         hpa_excluded=sum(r.is_hpa for r in records),
-        has_rules=bool(assessor.rules),
+        has_rules=has_rules,
     )
 
 
@@ -67,13 +92,12 @@ def _order(entry: PriorityEntry):
 
 def _entry(
     record: EquipmentRecord,
-    assessor: RiskAssessor,
+    risk: EquipmentRisk,
     families: Mapping[int, FamilyReleases],
     thresholds: AgeThresholds | None,
     base_date: date | None,
     targets: Targets,
 ) -> PriorityEntry:
-    risk = assessor.equipment_risk(record)
     age = equipment_age(record, families, thresholds, base_date)
     calculated = [p for p in age.pms if p.age.elapsed_days is not None]
     representative = max(calculated, key=lambda p: p.age.elapsed_days) if calculated else None

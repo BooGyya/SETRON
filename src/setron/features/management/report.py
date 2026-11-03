@@ -6,6 +6,7 @@ from datetime import date
 from setron.features.aggregation.service import summarize
 from setron.features.aging.service import equipment_age
 from setron.features.export.schemas import StatusReport, TargetRow
+from setron.features.priority.service import prioritize_from_risks
 from setron.features.risk.schemas import EquipmentRisk, RiskStatus, RiskSummary
 from setron.features.storage.inputs import identifier, require, required_text
 
@@ -86,11 +87,14 @@ def build_status_report_from_refresh(refresh, thresholds, base_date, *, group_na
     analysis_days = {day.base_date for day in refresh.dates
                      if any(not record.is_hpa for record in getattr(day, "records", ()))
                      or day.summary.equipment_count > 0}
+    risks = _filter_risks(observed.risks, records, summary.hpa_excluded)
+    # 우선순위(BE-017)는 같은 범위·위험 판정·목표 N으로 계산한다.
+    priority = prioritize_from_risks(records, risks, refresh.families, thresholds, base_date, targets=targets)
     return StatusReport(
         summary=summary, scope=_labels(selected, group_names, family_names, refresh),
         targets=tuple(rows), family_names={fid: name for fid, name in family_names.items()
                                          if selected.family_ids is None or fid in selected.family_ids},
-        risks=_filter_risks(observed.risks, records, summary.hpa_excluded),
+        risks=risks, priority=priority,
         ages=ages, thresholds=thresholds,
         trend=tuple(summaries[day] for day in sorted(summaries) if day in analysis_days),
     )
