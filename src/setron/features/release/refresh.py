@@ -58,7 +58,7 @@ class ReleaseRefreshService:
         groups = {row["group_id"]: row for row in repository.rows(tx, "equipment_group")}
         family_rows = repository.rows(tx, "version_family")
         release_rows = repository.rows(tx, "release_version")
-        families = _families(family_rows, release_rows, context.aliases)
+        families = families_from_rows(family_rows, release_rows, context.aliases)
         affected = set(families) if family_ids is None else set(family_ids)
         require(affected <= set(families), "재판정 대상에 미등록 계열이 있습니다.")
         _link_equipment(tx, repository, families, release_rows, context.aliases,
@@ -89,7 +89,7 @@ class ReleaseRefreshService:
         ) for row in links))
         items = tuple(Item(row["item_id"], row["item_no"], row["content"])
                       for row in repository.rows(tx, "item"))
-        rules = tuple(_rule(row, families, links) for row in repository.rows(tx, "risk_rule"))
+        rules = tuple(rule_from_row(row, families, links) for row in repository.rows(tx, "risk_rule"))
         assessor = RiskAssessor(families, catalog, rules)
 
         by_date = defaultdict(list)
@@ -187,7 +187,7 @@ def _context_copy(context):
                           context.use_saved_applicability)
 
 
-def _families(family_rows, release_rows, aliases):
+def families_from_rows(family_rows, release_rows, aliases):
     """전체 계열을 현재 릴리즈와 유효한 확정 별칭으로 구성한다.
 
     param
@@ -281,7 +281,7 @@ def _target_validity(pair, selected, families, groups, owners, applicability, in
     return TargetValidity(model_id, fid, selected, reason is None, reason)
 
 
-def _rule(row, families, links):
+def rule_from_row(row, families, links):
     """수동 위험 규칙을 변환하고 잘못된 연결은 이번 판정에서 미확인으로 둔다.
 
     기존 수동 지정과 원본 근거를 변경하지 않는다. 미확인 해제 버전을 미해제와
@@ -312,3 +312,8 @@ def _rule(row, families, links):
                 invalid |= (release is None or release.version_order is None
                             or release.version_order in family.sorted.duplicated_orders)
     return replace(rule, mapping_status=MappingStatus.UNRESOLVED) if invalid else rule
+
+
+# 이전 내부 이름. 관리 검증(management/validation.py)이 아직 이 이름을 쓴다.
+_families = families_from_rows
+_rule = rule_from_row

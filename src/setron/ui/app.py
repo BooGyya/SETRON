@@ -30,6 +30,7 @@ from setron.ui.item_data import ItemManagerData, item_data_from_source
 from setron.ui.items import ItemsPage
 from setron.ui.ai_data import FreshAnalysisData, facts_from_snapshot
 from setron.ui.ai_page import AIPage
+from setron.ui.analysis_data import analysis_hooks, choice_parser
 from setron.ui.ai_connection import ai_providers_from_env
 from setron.ui.import_demo import DemoExcel, example_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
@@ -42,7 +43,7 @@ from setron.ui.management_integration import export_failure, report_filter
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
-                  db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None) -> MainWindow:
+                  db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -55,6 +56,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - import_saver: Import 저장 공급자. None이면 메모리 저장.
     - ai_parser: 질문 해석 공급자. None이면 예제 응답.
     - ai_analyzer: 분석 공급자. None이면 예제 응답.
+    - ai_client: 회사 AI 클라이언트. 있으면 질문 해석에 화면 선택지를 함께 보내고, 원인 설명·예측 설명에 쓴다.
     - db_exporter: ``path``를 받아 DB 전체를 .sql로 저장하고 ExportResult를 돌려주는 함수. None이면 내보내기 비활성.
     - data_exporter: 현재 관리값을 읽기 쉬운 Excel로 내보내는 공급자.
     - management_gateway: 워커에서 관리 기록 조회·묶음 저장·XLSX 출력을 실행하는 공급자.
@@ -189,10 +191,20 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             return FreshAnalysisData(facts_from_snapshot(snapshot), snapshot)
         return BackgroundRead(load)
 
+    def current_snapshot():
+        snapshot = dashboard.snapshot
+        return snapshot if snapshot is not None and window.query_state.is_current(snapshot.query) else None
+
+    if ai_parser is None and ai_client is not None:
+        ai_parser = choice_parser(ai_client, lambda: window.query_state.catalog)
+    hooks = analysis_hooks(source, current_snapshot, ai_client)
+    if ai_analyzer is not None:
+        hooks["explainer"] = None  # 분석 공급자를 직접 넘기면 그 공급자로 분석한다
     ai = AIPage(window.query_state, ai_parser, ai_analyzer, apply_ai_selection, current_facts,
                 fresh_loader=fresh_analysis_loader if hasattr(source, "refresh") else None,
                 analysis_allowed=lambda: not (management.busy or management.locked or window.management_saving
-                                               or window.management_refresh.busy))
+                                               or window.management_refresh.busy),
+                **hooks)
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
     window.register_page("versions", versions, uses_query=False)
@@ -513,8 +525,34 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.notice.setText(prefix + " · 같은 조회 조건으로 집계·위험 결과를 다시 읽었습니다. 목표 N 선택은 유지했습니다.")
         ai.refresh()
 
+    def refresh_query_catalog(*, reapply=False):
+        """저장 뒤 DB의 새 Site·Line을 조회 선택지에 반영한다. 선택지가 같으면 아무것도 바꾸지 않는다.
+
+        선택지가 바뀌면 적용 조건이 무효가 된다. ``reapply``이고 적용 조건·목표 N이 초안과 같으며
+        새 선택지에서도 유효하면 같은 조건을 다시 적용하고 True를 돌려준다.
+        """
+        if not hasattr(source, "reload_catalog"):
+            return False
+        try:
+            catalog = source.reload_catalog()
+        except RuntimeError as error:
+            window.notice.setText(str(error))
+            return False
+        if catalog == window.query_state.catalog:
+            return False
+        state = window.query_state
+        applied = state.applied
+        same = (applied is not None and state.applied_is_current and state.draft == applied.selection
+                and state.target_draft == applied.targets)
+        window.query_panel.set_catalog(catalog)
+        if not (reapply and same and state.draft == applied.selection):
+            return False
+        window.query_panel.apply_draft()
+        return True
+
     def after_management_save(result):
         window.management_saving = False
+        reapplied = result is not None and refresh_query_catalog(reapply=True)
         window.management_last_success = result is not None
         versions.setEnabled(True)
         items.setEnabled(True)
@@ -523,8 +561,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         ai.invalidate_data()
         query = window.query_state.applied
         cancel_management_refresh()
-        window.management_refresh_query = query
-        if query is not None and window.query_state.is_current(query):
+        if reapplied:
+            # 선택지가 바뀌어 같은 조건을 다시 적용했다. 적용 과정에서 화면을 이미 새로 읽었다.
+            window.notice.setText("저장 완료 · 조회 선택지(Site·Line)를 새로 읽고 같은 조회 조건을 다시 적용했습니다.")
+        elif query is not None and window.query_state.is_current(query):
+            window.management_refresh_query = query
             window.management_refresh.start(BackgroundRead(lambda: source.snapshot(query)))
         else:
             prefix = "저장 완료" if window.management_last_success else "저장 실패 · 기존값 유지"
@@ -556,6 +597,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if not is_database_import_saver(importer.saver):
             return
         cancel_management_refresh()
+        refresh_query_catalog()
         dashboard.invalidate()
         ai.invalidate_data()
         heatmap.invalidate()
@@ -598,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
                            import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
                            management_gateway=gateway_from_env() if source is not None else None,
                            data_exporter=data_exporter_from_env(), extractor=ai.extractor,
-                           ai_parser=ai.parser, ai_analyzer=ai.analyzer)
+                           ai_client=ai.client)
     if problem or ai.problem:
         window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
     if screen := app.primaryScreen():

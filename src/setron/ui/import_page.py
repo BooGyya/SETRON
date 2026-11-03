@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from setron.features.ai.schemas import ExtractKind
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.excel_import.reference import ReferenceData
+from setron.features.excel_import.candidates import apply_model_candidates, candidate_notes, model_candidate_rows
 from setron.features.excel_import.schemas import FIELD_LABELS, ISSUE_LABELS, KIND_LABELS, Issue, IssueLevel
 from setron.features.excel_import.service import (
     build_save_request, cell_text, describe_save_error, draft_from_review, edit_value,
@@ -264,10 +265,14 @@ class ImportPage(QWidget):
         self.save_summary = label("", 13, color=SECONDARY, wrap=True)
         save.body.addWidget(self.save_summary)
         self.save_button = button("검토 완료 · 저장", primary=True)
+        self.candidate_button = button("번역표 후보 적용")
+        self.candidate_button.setToolTip("원문 모델 표기를 데이터 파트 번역표의 등록 모델로 바꾸고 빈 설비군·계열·UI를 채웁니다. "
+                                         "적용한 값은 사용자 수정으로 기록됩니다.")
         self.revalidate_button = button("다시 검사")
         self.requery_button = button("대시보드로 이동")
         self.requery_button.setToolTip("이동만 합니다. 조회 결과를 갱신하려면 조회 적용을 다시 눌러 주세요.")
-        save.body.addWidget(_WrapRow([self.save_button, self.revalidate_button, self.requery_button], 200))
+        save.body.addWidget(_WrapRow([self.save_button, self.candidate_button, self.revalidate_button,
+                                      self.requery_button], 200))
         self.result_label = label("", 13, wrap=True)
         self.result_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         save.body.addWidget(self.result_label)
@@ -277,6 +282,7 @@ class ImportPage(QWidget):
         self.read_button.clicked.connect(self.read_selected)
         self.extract_button.clicked.connect(self.extract)
         self.save_button.clicked.connect(self.save)
+        self.candidate_button.clicked.connect(self.apply_model_candidates)
         self.revalidate_button.clicked.connect(self.revalidate)
         self.requery_button.clicked.connect(self.requery_requested.emit)
         self.workbook_combo.currentIndexChanged.connect(self._fill_sheets)
@@ -375,6 +381,9 @@ class ImportPage(QWidget):
         reviews = sum(i.level is IssueLevel.REVIEW for i in self.issues)
         self.save_button.setEnabled(self.draft is not None and not errors and not self.busy and not self.locked)
         self.revalidate_button.setEnabled(self.draft is not None and not self.busy and not self.locked)
+        candidates = model_candidate_rows(self.draft) if self.draft is not None else {}
+        self.candidate_button.setText(f"번역표 후보 적용 ({len(candidates)}행)" if candidates else "번역표 후보 적용")
+        self.candidate_button.setEnabled(bool(candidates) and not self.busy and not self.locked)
         self.requery_button.setVisible(self.state == "saved")
         if self.draft is None:
             self.save_summary.setText("AI 추출 결과를 검토한 뒤 저장할 수 있습니다.")
@@ -385,6 +394,31 @@ class ImportPage(QWidget):
                 f"저장 대상 {active}행 · 제외 {excluded}행 · 오류 {errors}건 · 확인 필요 {reviews}건\n"
                 + ("필수값 오류가 남으면 묶음 전체를 저장하지 않습니다. 값과 원본 위치를 보완하고 다시 검사해 주세요." if errors else
                    f"저장 위치: {self.saver.target_label}"))
+
+    def apply_model_candidates(self):
+        """번역표 후보를 확인창에서 승인한 경우에만 적용하고 다시 검증한다.
+
+        return
+        - 적용했으면 True. 후보가 없거나 취소하면 False.
+        """
+        if self.draft is None or self.busy or self.locked:
+            return False
+        rows = model_candidate_rows(self.draft)
+        if not rows:
+            return False
+        notes = candidate_notes(self.draft)
+        text = (f"{len(rows)}행의 모델 표기를 데이터 파트 번역표의 등록 모델로 바꾸고 빈 설비군·계열·UI를 채웁니다.\n"
+                "원문은 그대로 남고 바뀐 값은 사용자 수정으로 기록됩니다."
+                + ("\n\n확인할 점:\n" + "\n".join(f"- {note}" for note in notes) if notes else "")
+                + "\n\n적용할까요?")
+        if not self.confirm(text):
+            return False
+        self.draft, count = apply_model_candidates(self.draft)
+        self._changed()
+        self._set_status("번역표 후보 적용", "info", f"{count}행에 번역표 후보를 적용했습니다. 검토 항목을 확인해 주세요.")
+        if self.selected_row_id is not None:
+            self.select_row(self.selected_row_id)
+        return True
 
     # --- C-1 Excel 선택·미리보기 ----------------------------------------------
 

@@ -202,6 +202,10 @@ class DashboardSource:
             locations.append((record.equipment_id, location))
         return tuple(records), tuple(locations)
 
+    def scoped_records(self, query: AppliedQuery) -> tuple[EquipmentRecord, ...]:
+        """모든 관측일에서 조회 조건(위치·설비군)에 맞는 설비 관측. 날짜별 예측(BE-020) 입력으로 쓴다."""
+        return self._scope_records(self.records, query)
+
     def _scope_records(self, records, query, group_keys=None, position=None):
         selection = query.selection
         active = {selection.group_key} if selection.group_key is not None else set(self.bindings)

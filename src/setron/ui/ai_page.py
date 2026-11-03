@@ -51,13 +51,18 @@ class AIPage(QWidget):
     fresh_data_ready = Signal(object)
 
     def __init__(self, query_state, parser, analyzer, applier, facts_provider, *, confirm=None, fresh_loader=None,
-                 analysis_allowed=None):
+                 analysis_allowed=None, explainer=None, forecaster=None, snapshot_provider=None, report_saver=None):
         super().__init__()
         self.state = query_state
         self.parser = parser or (lambda question: parse_question(example_client(AITask.QUERY_PARSE), question))
         self.analyzer = analyzer or (lambda question, facts: analyze(example_client(AITask.ANALYSIS), question, facts))
         self.applier, self.facts_provider = applier, facts_provider
         self.fresh_loader = fresh_loader
+        # 원인 설명(BE-019)·참고 예측(BE-020)·Word 보고서(BE-022). 없으면 기존 분석만 한다.
+        self.explainer, self.forecaster = explainer, forecaster
+        self.snapshot_provider = snapshot_provider or (lambda: None)
+        self.report_saver = report_saver
+        self.report, self.forecast_report, self.report_question, self.analysis_snapshot = None, None, None, None
         self.analysis_allowed = analysis_allowed or (lambda: True)
         self.fresh_request = ReadRequest(self)
         self.fresh_request.completed.connect(self._fresh_loaded)
@@ -136,6 +141,19 @@ class AIPage(QWidget):
         self.evidence_label = _section(analysis, "근거 · 자료로 확인")
         self.assumption_label = _section(analysis, "추정 · 자료로 확인하지 않음")
         self.unconfirmed_label = _section(analysis, "미확인")
+        self.number_check_label = _section(analysis, "숫자 확인")
+        extra = QHBoxLayout()
+        self.forecast_button = button("통일 예측 (참고)")
+        self.forecast_button.setToolTip("현재 조회 범위의 날짜별 저장 현황으로 목표 N 통일 완료 시점을 단순 비례로 계산합니다.")
+        self.forecast_button.clicked.connect(self.run_forecast)
+        self.report_button = button("Word 보고서 저장")
+        self.report_button.setToolTip("질문·조건·답변(근거·추정·미확인)·사용한 수치·참고 예측을 .docx로 저장합니다.")
+        self.report_button.clicked.connect(lambda: self.save_report())
+        extra.addWidget(self.forecast_button)
+        extra.addWidget(self.report_button)
+        extra.addStretch()
+        analysis.body.addLayout(extra)
+        self.forecast_label = _section(analysis, "참고 예측")
         body.addWidget(analysis)
         self.refresh()
 
@@ -154,7 +172,61 @@ class AIPage(QWidget):
         self.parse_button.setEnabled(self.busy is None)
         available = facts is not None or (self.fresh_loader is not None and self.state.applied_is_current)
         self.analyze_button.setEnabled(self.busy is None and available and self.analysis_allowed())
+        self.forecast_button.setVisible(self.forecaster is not None)
+        self.forecast_button.setEnabled(self.busy is None and self.forecaster is not None and self.analysis_allowed()
+                                        and self._current_snapshot() is not None)
+        self.report_button.setVisible(self.report_saver is not None)
+        self.report_button.setEnabled(self.busy is None and self.report is not None)
         self._render_apply()
+
+    def _current_snapshot(self):
+        if self.analysis_snapshot is not None and self.state.is_current(self.analysis_snapshot.query):
+            return self.analysis_snapshot
+        snapshot = self.snapshot_provider()
+        return snapshot if snapshot is not None and self.state.is_current(snapshot.query) else None
+
+    def run_forecast(self):
+        """현재 조회 범위로 참고 예측을 계산하고 설명을 받는다 (BE-020). 숫자는 계산, 설명만 AI가 맡는다."""
+        snapshot = self._current_snapshot()
+        if self.busy is not None or self.forecaster is None or snapshot is None or not self.analysis_allowed():
+            return False
+        question = self.question.text().strip() or "목표 N 통일은 언제쯤 끝날까?"
+        try:
+            report = self.forecaster(question, snapshot)
+        except Exception:
+            self.forecast_label.setText("예측을 계산하지 못했습니다. 조회 적용 후 다시 시도해 주세요.")
+            return False
+        self.forecast_report = report
+        lines = []
+        for row in report.facts.get("계열별 예측", []):
+            line = f"• {row['계열']}: {row['상태']} · {row['표시']}"
+            if row["예상 잔여 기간(일)"] is not None and row["참고 완료일"]:
+                line += f" · 남은 {row['끝 N 미만(남은 대수)']}대 · 약 {row['예상 잔여 기간(일)']}일 · {row['참고 완료일']}"
+            lines.append(line + "".join(f" · {reason}" for reason in row["사유"]))
+        answer = report.result.data.answer if report.result.ok else f"예측 설명을 받지 못했습니다: {report.result.message}"
+        self.forecast_label.setText("\n".join(lines or ["예측할 계열이 없습니다."]) + "\n" + answer)
+        self.refresh()
+        return True
+
+    def save_report(self, path=None):
+        """분석(과 참고 예측) 결과를 Word로 저장한다 (BE-022). AI를 다시 호출하지 않는다."""
+        if self.report is None or self.report_saver is None:
+            return None
+        from setron.features.report.schemas import WordReport
+        report = WordReport(question=self.report_question, analysis=self.report, forecast=self.forecast_report)
+        if path is not None:
+            return self.report_saver(report, path)
+        from datetime import datetime
+        from pathlib import Path
+        from PySide6.QtWidgets import QFileDialog
+        default = Path.home() / f"setron_ai_report_{datetime.now():%Y%m%d_%H%M}.docx"
+        path, _ = QFileDialog.getSaveFileName(self, "Word 보고서 저장", str(default), "Word 문서 (*.docx)")
+        if not path:
+            return None
+        result = self.report_saver(report, path)
+        (QMessageBox.information if result.saved else QMessageBox.warning)(
+            self, "Word 보고서 저장", f"{result.path} 에 저장했습니다." if result.saved else f"저장하지 못했습니다. {result.message}")
+        return result
 
     # --- 질문 해석 ---------------------------------------------------------
 
@@ -289,7 +361,9 @@ class AIPage(QWidget):
 
     def _clear_analysis(self):
         self.answer = None
-        for widget in (self.answer_label, self.evidence_label, self.assumption_label, self.unconfirmed_label):
+        self.report, self.forecast_report, self.report_question, self.analysis_snapshot = None, None, None, None
+        for widget in (self.answer_label, self.evidence_label, self.assumption_label, self.unconfirmed_label,
+                       self.number_check_label, self.forecast_label):
             widget.setText("")
 
     def invalidate_data(self):
@@ -325,18 +399,19 @@ class AIPage(QWidget):
             self._set_status("조회 조건 변경", "warning", "분석 준비 중 조회 조건이 바뀌었습니다. 다시 요청해 주세요.")
             self.refresh()
             return
-        self._begin_analysis(question, data.facts, query=query)
+        self._begin_analysis(question, data.facts, query=query, snapshot=data.snapshot)
 
-    def _begin_analysis(self, question, facts, *, query=None):
+    def _begin_analysis(self, question, facts, *, query=None, snapshot=None):
         self.analysis_query = query if query is not None else self.state.applied
         self.busy = "analysis"
         self._clear_analysis()
         self._set_status("분석 중", "info")
         self.refresh()
         generation = self.generation
-        QTimer.singleShot(0, lambda: self._analyze(generation, question, facts))
+        snapshot = snapshot if snapshot is not None else self.snapshot_provider()
+        QTimer.singleShot(0, lambda: self._analyze(generation, question, facts, snapshot))
 
-    def _analyze(self, generation, question, facts):
+    def _analyze(self, generation, question, facts, snapshot=None):
         if generation != self.generation:
             return
         self.busy = None
@@ -345,8 +420,13 @@ class AIPage(QWidget):
             self._set_status("조회 조건 변경", "warning", "조회 조건이 바뀌어 이전 자료의 분석을 실행하지 않았습니다.")
             self.refresh()
             return
+        report = None
         try:
-            result = self.analyzer(question, facts)
+            if self.explainer is not None and snapshot is not None:
+                report = self.explainer(question, snapshot)
+                result = report.result
+            else:
+                result = self.analyzer(question, facts)
         except Exception:
             result = None
         if generation != self.generation or (query is not None and not self.state.is_current(query)):
@@ -370,5 +450,10 @@ class AIPage(QWidget):
         self.evidence_label.setText(evidence)
         self.assumption_label.setText(_bullets(result.data.assumptions, "추정 없음"))
         self.unconfirmed_label.setText(_bullets(result.data.unconfirmed, "미확인 항목 없음"))
+        if report is not None:
+            self.report, self.report_question, self.analysis_snapshot = report, question, snapshot
+            self.number_check_label.setText(
+                "답변의 숫자가 모두 보낸 자료에 있습니다." if report.numbers_match else
+                "보낸 자료에 없는 숫자가 있습니다. 대시보드 수치와 대조해 주세요: " + ", ".join(report.unmatched_numbers))
         self._set_status("분석 완료", "info", f"{facts['조회 조건']} · 기준일 {facts['기준일']} 자료로 요청했습니다.")
         self.refresh()

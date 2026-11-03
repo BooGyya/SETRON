@@ -259,6 +259,25 @@ def test_management_and_current_scope_xlsx_include_latest_saved_values(app, file
                 book.close()
 
 
+def test_line_rename_updates_query_choices_and_reapplies_same_query(app, file_storage):
+    """저장으로 Line 선택지가 바뀌면 선택지를 새로 읽고, 여전히 유효한 같은 조회 조건을 다시 적용한다."""
+    with running_window(app, file_storage) as (window, source, calls, release_id, item_id, snapshot):
+        window.query_panel.set_draft(QuerySelection(site_key="hwaseong"))
+        window.query_panel.apply_draft()
+        before = window.query_state.applied
+        page = open_record(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id})
+        page.inputs["line"].editor.setText("새 화성 라인")
+        save_current(window, app, page)
+        wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
+
+        applied = window.query_state.applied
+        assert applied is not before and window.query_state.applied_is_current
+        assert applied.selection == QuerySelection(site_key="hwaseong") and applied.targets == before.targets
+        assert "hwaseong:새 화성 라인" in {o.key for o in window.query_state.catalog.lines}
+        assert window.query_state.catalog == source.catalog
+        assert window.pages["dashboard"].snapshot.selected_records[0].line == "새 화성 라인"
+
+
 def test_refresh_failure_after_save_blocks_cached_ai_and_old_graphs(app, file_storage):
     """저장 성공 뒤 재조회 실패 시 예전 화면이나 분석 숫자를 다시 사용하지 않는다."""
     with running_window(app, file_storage) as (window, source, calls, release_id, item_id, snapshot):

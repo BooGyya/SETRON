@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 
 from setron.features.ai.schemas import ExtractKind
 from setron.features.equipment.repository import EquipmentRepository
-from setron.features.export.management import SHEETS, build_management_workbook, save_management_data
+from setron.features.export.management import SHEETS, build_management_workbook, save_management_summary
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.infrastructure.database import Database
 from setron.features.storage.service import StorageService
@@ -81,7 +81,7 @@ def test_release_item_and_risk_use_readable_names(book):
 
 
 def test_saved_file_keeps_formula_like_text_as_text(storage, book, tmp_path):  # noqa: F811
-    result = save_management_data(storage, tmp_path / "관리데이터.xlsx")
+    result = save_management_summary(storage, tmp_path / "관리데이터.xlsx")
 
     assert result.saved and "설비 현황" in result.message
     saved = load_workbook(tmp_path / "관리데이터.xlsx")
@@ -90,7 +90,7 @@ def test_saved_file_keeps_formula_like_text_as_text(storage, book, tmp_path):  #
 
 
 def test_wrong_name_and_db_failure_are_reported(storage, tmp_path):  # noqa: F811
-    assert save_management_data(storage, tmp_path / "x.csv").message == "파일 이름은 .xlsx로 끝나야 합니다."
+    assert save_management_summary(storage, tmp_path / "x.csv").message == "파일 이름은 .xlsx로 끝나야 합니다."
     broken = Database.from_env({"SETRON_DB_HOST": "127.0.0.1", "SETRON_DB_PORT": "1", "SETRON_DB_NAME": "x",
                                 "SETRON_DB_USER": "u", "SETRON_DB_PASSWORD": "p", "SETRON_DB_CONNECT_TIMEOUT": "1"})
 
@@ -98,5 +98,5 @@ def test_wrong_name_and_db_failure_are_reported(storage, tmp_path):  # noqa: F81
         def transaction(self):
             return StorageService(broken).transaction()
 
-    result = save_management_data(Lazy(), tmp_path / "x.xlsx")
+    result = save_management_summary(Lazy(), tmp_path / "x.xlsx")
     assert not result.saved and result.message.startswith("DB 자료를 읽지 못했습니다")

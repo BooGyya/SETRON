@@ -14,6 +14,8 @@ DB 자료를 본다. '조회 적용'을 누를 때마다 DB를 다시 읽어 가
 
 from __future__ import annotations
 
+import inspect
+
 from collections.abc import Callable
 from dataclasses import replace
 from threading import RLock
@@ -22,14 +24,14 @@ from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.read import read_equipment_record
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
 from setron.features.item.service import ItemCatalog
-from setron.features.release.refresh import _families, _rule
+from setron.features.release.refresh import families_from_rows, rule_from_row
 from setron.features.risk.schemas import RiskStatus
 from setron.features.risk.service import RiskAssessor
 from setron.features.targets.service import TargetService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import DatabaseError
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding
-from setron.ui.query_state import QueryCatalog, TargetN, preview_catalog
+from setron.ui.query_state import LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
 from setron.ui.target_data import target_pairs
 from setron.ui.version_data import ItemEntry, ModelFamily, ReleaseEntry, SourceReference, VersionCatalog
 
@@ -41,9 +43,32 @@ GROUP_MODELS = {
 SOURCE_LABEL = "MySQL DB 저장 자료 · 조회 적용 시 목표 N·위험 기준 재확인"
 
 
+def database_catalog(snapshots) -> QueryCatalog:
+    """저장된 현황의 실제 Site·Line으로 조회 선택지를 만든다.
+
+    - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site를 이름 그대로 덧붙인다.
+    - Line: 관측된 (Site, Line) 조합. 키는 "Site 키:Line"이며 Fab은 매핑 자료가 없어 지정하지 않는다.
+    - 설비군: VER3 선택지 그대로 (:data:`GROUP_MODELS`로 등록 모델에 연결).
+    """
+    base = preview_catalog()
+    known = {option.label for option in base.sites}
+    extra = sorted({value.site for value in snapshots if value.site and value.site not in known})
+    sites = (*base.sites, *(SiteOption(name, name) for name in extra))
+    keys = {option.label: option.key for option in sites}
+    lines = sorted({(keys[value.site], value.line) for value in snapshots if value.site in keys and value.line})
+    return QueryCatalog(
+        sites=sites,
+        lines=tuple(LineOption(f"{site}:{line}", line, site, None) for site, line in lines),
+        groups=base.groups,
+        source_label="DB 저장 현황의 Site·Line · Fab 매핑 미등록",
+    )
+
+
 def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> DashboardSource:
-    """DB를 한 번 읽어 대시보드 공급자를 만든다. 연결할 수 없는 현황은 빼고 ``source_label``에 건수를 적는다."""
-    catalog = catalog or preview_catalog()
+    """DB를 한 번 읽어 대시보드 공급자를 만든다. 연결할 수 없는 현황은 빼고 ``source_label``에 건수를 적는다.
+
+    ``catalog``를 주면 그 선택지를 그대로 쓰고(조회 중 선택지 고정), 없으면 저장 현황으로 새로 만든다.
+    """
     repository = EquipmentRepository()
     with storage.transaction() as tx:
         groups = repository.rows(tx, "equipment_group")
@@ -59,6 +84,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
                               for model_id in ([pm.group_id for pm in sw.pms] if sw.pms else [value.group_id])
                               if model_id is not None}))
         target_catalog = TargetService(None).read_in(tx, pairs, {pair: None for pair in pairs})
+    catalog = catalog or database_catalog(stored)
 
     by_name = {}
     for group in groups:
@@ -83,16 +109,21 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
             continue
         records.append(record)
     # 과거 관측을 나중에 가져와도 현재 위치는 snapshot ID가 아닌 관측일로 정한다.
-    locations = {r.equipment_id: EquipmentLocation(sites[r.site], r.line)
-                 for r in sorted(records, key=lambda record: record.base_date)}
+    line_keys = {option.key for option in catalog.lines}
 
-    family_releases = _families(families, releases, {})
+    def location(record):
+        key = f"{sites[record.site]}:{record.line}"
+        return EquipmentLocation(sites[record.site], record.line, None, key if key in line_keys else None)
+
+    locations = {r.equipment_id: location(r) for r in sorted(records, key=lambda record: record.base_date)}
+
+    family_releases = families_from_rows(families, releases, {})
     item_catalog = ItemCatalog(family_releases, tuple(VersionItem(
         row["release_version_id"], row["item_id"], ItemState(row["item_state"]),
         TargetScope(row["target_scope"]), tuple(row["target_group_ids"] or ()),
     ) for row in links))
     assessor = RiskAssessor(family_releases, item_catalog,
-                            tuple(_rule(row, family_releases, links) for row in rules))
+                            tuple(rule_from_row(row, family_releases, links) for row in rules))
 
     def risk_status(record):
         """표시하는 모델의 PM만 포함한 관측을 현재 위험 규칙으로 다시 판정한다.
@@ -121,6 +152,8 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
     source.applicability = target_catalog.applicability
     source.target_reasons = {(pair.model_id, pair.family_id): pair.reason for pair in target_catalog.pairs}
     source.risks_by_date = risks_by_date
+    # AI 분석·예측 입력(ui/analysis_data.py)이 대시보드와 같은 위험 판정·Item 자료를 쓰도록 함께 둔다.
+    source.assessor, source.item_catalog = assessor, item_catalog
     source.version_catalog = _version_catalog(groups, families, releases, items, links, stored,
                                              target_catalog.applicability, label)
     return source
@@ -157,7 +190,7 @@ def _version_catalog(groups, families, releases, items, links, observations, app
                               family_rows[family_id]["family_name"])
                   for model_id, family_id in sorted(pairs)
                   if model_id in models and family_id in family_rows)
-    family_releases = _families(families, releases, {})
+    family_releases = families_from_rows(families, releases, {})
     entries = tuple(ReleaseEntry(
         family_releases[row["family_id"]].get(row["release_version_id"]),
         tuple(pair.model_id for pair in known if pair.family_id == row["family_id"]),
@@ -173,25 +206,45 @@ def _version_catalog(groups, families, releases, items, links, observations, app
 
 
 class DatabaseDashboardSource(DashboardSource):
-    """조회할 때마다 DB를 다시 읽는 대시보드 공급자. 조회 선택지와 설비군 매핑은 처음 값을 유지한다."""
+    """조회할 때마다 DB를 다시 읽는 대시보드 공급자.
+
+    조회 중에는 선택지를 고정하고, 저장 뒤 :meth:`reload_catalog`로 새 Site·Line을 반영한다.
+    ``loader(catalog)``는 ``catalog``가 None이면 저장 현황으로 선택지를 새로 만든다.
+    """
 
     notice = SOURCE_LABEL  # 상단 안내용. 건수는 조회 결과마다 source_label에 다시 적힌다.
 
-    def __init__(self, loader: Callable[[], DashboardSource]) -> None:
+    def __init__(self, loader: Callable[..., DashboardSource]) -> None:
         self._lock = RLock()
         self._loader = loader
-        self._copy(loader())
+        # 인자 없는 로더(고정 자료·기존 호출)는 선택지를 받지 않는다.
+        self._takes_catalog = bool(inspect.signature(loader).parameters)
+        self._copy(self._load(None))
+
+    def _load(self, catalog):
+        return self._loader(catalog) if self._takes_catalog else self._loader()
 
     def refresh(self) -> None:
         """DB를 다시 읽는다. 실패하면 이전 자료를 유지하고 화면이 처리하는 RuntimeError를 낸다."""
         with self._lock:
             try:
-                fresh = self._loader()
+                fresh = self._load(self.catalog)
             except DatabaseError as error:
                 raise RuntimeError(f"DB 자료를 읽지 못했습니다: {error}") from error
-            if fresh.catalog != self.catalog or fresh.bindings != self.bindings:
-                raise RuntimeError("조회 선택지나 설비군 매핑이 바뀌었습니다. 앱을 다시 시작해 주세요.")
+            # 선택지를 받지 않는 로더(고정 자료·테스트)는 로더가 만든 선택지를 그대로 쓴다.
+            if fresh.bindings != self.bindings:
+                raise RuntimeError("설비군 매핑이 바뀌었습니다. 앱을 다시 시작해 주세요.")
             self._copy(fresh)
+
+    def reload_catalog(self) -> QueryCatalog:
+        """저장 현황으로 조회 선택지를 다시 만들고 자료도 함께 다시 읽는다. 저장 직후 화면 스레드에서 부른다."""
+        with self._lock:
+            try:
+                fresh = self._load(None)
+            except DatabaseError as error:
+                raise RuntimeError(f"DB 자료를 읽지 못했습니다: {error}") from error
+            self._copy(fresh)
+            return self.catalog
 
     def load_version_catalog(self) -> VersionCatalog:
         """새 DB 자료의 릴리즈·Item·원본 위치를 조회 화면에 전달한다."""
@@ -246,7 +299,7 @@ class DatabaseDashboardSource(DashboardSource):
 
     def _copy(self, source: DashboardSource) -> None:
         with self._lock:
-            self.__dict__.update({k: v for k, v in vars(source).items() if k not in {"_lock", "_loader"}})
+            self.__dict__.update({k: v for k, v in vars(source).items() if k not in {"_lock", "_loader", "_takes_catalog"}})
 
 
 def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | None, str | None]:
@@ -267,7 +320,7 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
         return None, None
     try:
         storage = StorageService(Database.from_env(values))
-        return DatabaseDashboardSource(lambda: load_dashboard_source(storage)), None
+        return DatabaseDashboardSource(lambda catalog=None: load_dashboard_source(storage, catalog)), None
     except (DatabaseError, StorageValidationError) as error:
         return None, f"DB 자료를 읽지 못해 합성 예시로 시작했습니다: {error}"
 
@@ -310,7 +363,7 @@ def data_exporter_from_env(environ=None):
     import os
     from pathlib import Path
 
-    from setron.features.export.management import save_management_data
+    from setron.features.export.management import save_management_summary
     from setron.features.export.schemas import ExportResult, ExportStatus
     from setron.features.storage.service import StorageService
     from setron.infrastructure.database import Database
@@ -323,7 +376,7 @@ def data_exporter_from_env(environ=None):
         database = None
         try:
             database = Database.from_env(values)
-            return save_management_data(StorageService(database), path)
+            return save_management_summary(StorageService(database), path)
         except DatabaseError as error:
             return ExportResult(ExportStatus.FAILED, Path(path), f"DB 자료를 읽지 못했습니다: {error}")
         finally:
