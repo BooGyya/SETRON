@@ -55,6 +55,11 @@ def test_mysql_final_shared_pm_link_conflict(revision_mysql_storage, reverse, in
     cases.test_final_shared_pm_link_conflict_rolls_back_whole_batch(revision_mysql_storage, reverse, invalid_link)
 
 
+def test_mysql_pm_move_protects_unselected_non_pm_link(revision_mysql_storage):
+    """기존 혼재 자료에서도 비선택 SW의 명시적 연결과 원본을 보존한다."""
+    cases.test_pm_move_cannot_overwrite_unselected_non_pm_software_link(revision_mysql_storage)
+
+
 def test_mysql_non_pm_version_change_rechecks_release(revision_mysql_storage):
     """실제 MySQL에서도 SW 수정 후 이전 연결을 새 원문과 재검증한다."""
     cases.test_non_pm_version_change_rechecks_release_link(revision_mysql_storage)

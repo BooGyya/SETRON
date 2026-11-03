@@ -674,6 +674,22 @@ def test_final_shared_pm_link_conflict_rolls_back_whole_batch(revision_storage, 
     assert {table: all_rows(storage, table) for table in tables} == before
 
 
+def test_pm_move_cannot_overwrite_unselected_non_pm_software_link(revision_storage):
+    """기존 혼재 자료를 정리할 때도 선택하지 않은 비-PM SW의 연결을 보호한다."""
+    storage = revision_storage
+    service, snapshot, _, second = service_for(storage, shared=True)
+    selected = all_rows(storage, "equipment_pm")
+    with storage.transaction() as tx:
+        tx.insert("equipment_version", {"snapshot_id": snapshot.snapshot_id, "family_id": 1,
+            "version_raw": "v2", "release_version_id": second, "batch_id": snapshot.batch_id,
+            "source_reference": location("version_raw", "E1")})
+    before = {table: all_rows(storage, table) for table in ("equipment_pm", "equipment_version", "import_batch")}
+    with pytest.raises(StorageValidationError):
+        service.save(tuple(edit(service, "equipment_pm", {"pm_id": pm["pm_id"]},
+                                {"version_raw": "v2", "release_version_id": None}) for pm in selected))
+    assert {table: all_rows(storage, table) for table in before} == before
+
+
 @pytest.mark.parametrize("table,id_field,field,value", [
     ("equipment_version", "equipment_version_id", "version_raw", "v1\nv2"),
     ("equipment_version", "equipment_version_id", "version_raw", "#N/A"),
