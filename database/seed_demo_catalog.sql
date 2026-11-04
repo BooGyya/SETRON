@@ -1,10 +1,10 @@
 -- 시연용 모델·계열 기준 자료 v2 (Jira S15P31B106-75) — 2026-11-03 데이터 파트 기준 자료(멘토 확정 14모델·15계열)로 갱신
 --
 -- 가져오기 저장은 등록된 모델(equipment_group)과 버전 계열(version_family)에만 연결한다.
--- schema_mysql5619.sql에는 이 기준 자료가 없어서, 교육용 입력 자료(03_데이터)의 모델 표기를 바탕으로
--- 시연용 목록을 만든 것이다. 확정된 기준 자료가 아니며 데이터 담당 확인 후 바꾼다.
+-- schema_mysql5619.sql과 별도로 모델·계열 기준 목록만 넣는다. 설비 현황·릴리즈·Item은 넣지 않는다.
+-- 실제 버전의 모델 적용 범위·순서·목표 N·위험 여부는 이 기준 목록으로 확정하지 않는다.
 --
--- 여러 번 실행해도 같은 이름은 다시 넣지 않는다. 개발 DB에만 적용한다.
+-- 여러 번 실행해도 같은 이름은 다시 넣지 않는다. 개발·검증용 기준정보다.
 --   docker compose exec -T mysql-dev sh -c 'mysql -h127.0.0.1 -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' < database/seed_demo_catalog.sql
 
 SET NAMES utf8mb4;

@@ -99,10 +99,12 @@ class DatabaseImportSaver:
 
     target_label = TARGET_LABEL
 
-    def __init__(self, storage=None, *, connect: Callable[[], Any] | None = None) -> None:
-        """``storage``를 바로 주거나, 첫 저장 때 ``connect()``로 만든다 (앱 시작 시 DB에 접속하지 않기 위함)."""
+    def __init__(self, storage=None, *, connect: Callable[[], Any] | None = None,
+                 background_save: bool = False) -> None:
+        """저장소를 주입하거나 첫 사용 때 연결한다. 환경변수로 만든 운영 공급자는 GUI 밖에서 저장한다."""
         _require(storage is not None or connect is not None, "저장 서비스 또는 접속 방법이 필요합니다.")
         self._storage, self._connect = storage, connect
+        self.background_save = background_save
         self._storage_lock = Lock()
         self.repository = EquipmentRepository()
         self._saved_requests: set[str] = set()
@@ -113,7 +115,7 @@ class DatabaseImportSaver:
         values = os.environ if environ is None else environ
         if not values.get("SETRON_DB_NAME"):
             return None
-        return cls(connect=lambda: StorageService(Database.from_env(values)))
+        return cls(connect=lambda: StorageService(Database.from_env(values)), background_save=True)
 
     @property
     def storage(self):

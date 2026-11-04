@@ -35,7 +35,9 @@ from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.import_demo import example_extractor
 from setron.ui.import_extraction import LiveSheetExtractor, extract_for_review
 from setron.features.excel_import.review_locations import assign_source, refresh_hpa_coverage
-from setron.features.extraction.schemas import ExtractionReview
+from setron.features.extraction.schemas import ExtractionProgress, ExtractionReview
+from setron.features.reference_data import area_of
+from setron.features.storage.validation import StorageValidationError
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_import_review import choose_release_reviews
@@ -155,9 +157,12 @@ class ImportPage(QWidget):
         self._review_context = None
         self.extraction_request = ReadRequest(self)
         self.extraction_request.completed.connect(self._extraction_completed)
+        self.extraction_request.progressed.connect(self._extraction_progressed)
         self._extraction_context = None
         self.release_request = ReadRequest(self)
         self.release_request.completed.connect(self._release_review_completed)
+        self.save_request = ReadRequest(self)
+        self.save_request.completed.connect(self._save_completed)
         self._release_context = None
         self._release_risk_decisions = set()
         body = QVBoxLayout(self)
@@ -218,12 +223,18 @@ class ImportPage(QWidget):
         review = Card()
         review.body.addWidget(label("3. AI 추출 결과 검토 · 수정", 20, medium=True))
         self.extract_button = button("AI로 항목 추출", primary=True)
+        self.cancel_extract_button = button("추출 취소")
+        self.cancel_extract_button.clicked.connect(lambda: self._cancel_extraction(user_requested=True))
         self.source_badge = StatusBadge("AI 추출 전", "neutral")
+        self.extraction_feedback = label("", 13, color=SECONDARY, wrap=True)
+        self.extraction_feedback.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         actions = QHBoxLayout()
         actions.addWidget(self.extract_button)
+        actions.addWidget(self.cancel_extract_button)
         actions.addWidget(self.source_badge)
         actions.addStretch()
         review.body.addLayout(actions)
+        review.body.addWidget(self.extraction_feedback)
         review.body.addWidget(label("AI 추출값은 원본과 따로 보관합니다. 수정한 값은 ‘수정됨’으로 표시되고 원본 값·셀 위치는 바뀌지 않습니다. "
                                     "AI 결과는 검토 없이 저장하지 않습니다.", 13, color=SECONDARY, wrap=True))
         # 시트 공통 정보: 교육용 현황표에는 기준일·사업장 셀이 없어 한 번 입력해 모든 행에 적용한다 (1차 점검 6번).
@@ -251,6 +262,24 @@ class ImportPage(QWidget):
         common_layout.addWidget(_WrapRow([self.common_apply_button, self.common_overwrite], 220))
         self.common_box = common
         review.body.addWidget(common)
+        self.release_common_box = QWidget()
+        release_common = QVBoxLayout(self.release_common_box)
+        release_common.setContentsMargins(0, 0, 0, 0)
+        release_common.addWidget(label("시트 공통 정보 · 릴리즈 노트 관리 모델·계열", 16, medium=True))
+        release_common.addWidget(label("원본 제목과 UI 구분을 확인한 뒤 관리 계열을 선택하세요. "
+                                       "선택한 관리 모델·계열은 모든 저장 대상 행에 수정값으로 기록합니다. "
+                                       "Item의 실제 적용 모델 범위는 별도로 검토합니다.", 13, color=SECONDARY, wrap=True))
+        self.release_family_combo = QComboBox()
+        self.release_family_combo.setAccessibleName("릴리즈 노트 공통 관리 계열")
+        self.release_family_combo.setFixedHeight(38)
+        self.release_family_values = {}
+        self.release_family_choice = None
+        self.release_common_apply_button = button("선택한 관리 계열을 모든 행에 적용")
+        release_common.addWidget(self.release_family_combo)
+        release_common.addWidget(self.release_common_apply_button)
+        self.release_common_apply_button.clicked.connect(self.apply_release_common)
+        self.release_family_combo.currentIndexChanged.connect(self._release_family_selected)
+        review.body.addWidget(self.release_common_box)
         self.row_model = ReadTableModel(("행", "상태"))
         self.row_table = read_table(self.row_model, "추출 행 목록", (70, 150))
         self.row_table.clicked.connect(lambda index: self.select_row(self.row_model.ids[index.row()]))
@@ -297,6 +326,9 @@ class ImportPage(QWidget):
         self.revalidate_button = button("다시 검사")
         self.requery_button = button("대시보드로 이동")
         self.requery_button.setToolTip("이동만 합니다. 조회 결과를 갱신하려면 조회 적용을 다시 눌러 주세요.")
+        if isinstance(self.saver, DatabaseImportSaver):
+            self.requery_button.setText("저장 자료 조회")
+            self.requery_button.setToolTip("현재 선택한 조회 조건과 목표 N으로 최신 DB 자료를 조회합니다.")
         save.body.addWidget(_WrapRow([self.save_button, self.candidate_button, self.revalidate_button,
                                       self.requery_button], 200))
         self.result_label = label("", 13, wrap=True)
@@ -323,6 +355,8 @@ class ImportPage(QWidget):
         self.status.set_tone(tone)
         if notice is not None:
             self.notice.setText(notice)
+        if hasattr(self, "extraction_feedback"):
+            self.extraction_feedback.setText(text + (f"\n{notice}" if notice else ""))
 
     @property
     def kind(self):
@@ -353,6 +387,7 @@ class ImportPage(QWidget):
         self.list_button.setEnabled(not self.busy)
         self.read_button.setEnabled(not self.busy and self.sheet_combo.currentIndex() >= 0)
         self.extract_button.setEnabled(not self.busy and self.snapshot is not None and not self.locked)
+        self.cancel_extract_button.setVisible(self.state == "extracting")
         for combo in (self.workbook_combo, self.sheet_combo, self.kind_combo):
             combo.setEnabled(not self.busy)
         rows, ids = [], []
@@ -375,11 +410,18 @@ class ImportPage(QWidget):
         _fit(self.row_table)
         self.row_table.setVisible(bool(rows))
         self.row_empty.setVisible(not rows)
-        self.row_empty.setText("시트를 읽은 뒤 AI로 항목 추출을 눌러 주세요." if draft is None else "추출된 행이 없습니다.")
+        self.row_empty.setText(
+            "AI 추출 응답을 기다리고 있습니다." if self.state == "extracting" else
+            "추출된 행이 없습니다. 위 안내를 확인해 주세요." if draft is None and self.source_badge.text() != "AI 추출 전" else
+            "시트를 읽은 뒤 AI로 항목 추출을 눌러 주세요." if draft is None else
+            "추출된 행이 없습니다. 검토 항목을 확인하고 다시 추출해 주세요.")
         if self.selected_row_id in ids:
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
         self.common_box.setVisible(self.kind is ExtractKind.EQUIPMENT_STATUS)
+        self.release_common_box.setVisible(self.kind is ExtractKind.RELEASE_NOTE)
+        self._refresh_release_choices()
+        self.release_family_combo.setEnabled(draft is not None and not self.busy and not self.locked)
         for widget in (self.common_date, self.common_site, self.common_area, self.common_apply_button, self.common_overwrite):
             widget.setEnabled(draft is not None and not self.busy and not self.locked)
         self.issue_model.set_rows(tuple((ISSUE_LABELS[i.level], str(i.row_id) if i.row_id else "전체",
@@ -415,6 +457,12 @@ class ImportPage(QWidget):
         self.candidate_button.setText(f"번역표 후보 적용 ({len(candidates)}행)" if candidates else "번역표 후보 적용")
         self.candidate_button.setEnabled(bool(candidates) and not self.busy and not self.locked)
         self.requery_button.setVisible(self.state == "saved")
+        if isinstance(self.saver, DatabaseImportSaver):
+            self.requery_button.setToolTip("최신 DB 자료로 릴리즈 목록을 다시 조회합니다."
+                                          if self.kind is ExtractKind.RELEASE_NOTE else
+                                          "현재 선택한 조회 조건과 목표 N으로 최신 DB 자료를 조회합니다.")
+        self.release_common_apply_button.setEnabled(self.draft is not None and not self.busy and not self.locked
+                                                   and self.release_family_combo.currentData() is not None)
         if self.draft is None:
             self.save_summary.setText("AI 추출 결과를 검토한 뒤 저장할 수 있습니다.")
         else:
@@ -514,6 +562,7 @@ class ImportPage(QWidget):
         self._render()
 
     def _reset_draft(self):
+        self.release_family_choice = None
         self.review_request.cancel()
         self._review_context = None
         self.extraction_request.cancel()
@@ -526,6 +575,7 @@ class ImportPage(QWidget):
         self.result_label.setText("")
         self.source_badge.setText("AI 추출 전")
         self.source_badge.set_tone("neutral")
+        self.extraction_feedback.setText("")
 
     def read_selected(self):
         """선택 정보를 고정해 해당 통합문서의 시트 읽기를 예약한다.
@@ -628,6 +678,8 @@ class ImportPage(QWidget):
             return False
         self._reset_draft()
         self.state = "extracting"
+        self.source_badge.setText("AI 추출 중")
+        self.source_badge.set_tone("info")
         count = sum(value is not None and bool(cell_text(value).strip()) for value in self.snapshot.cells.values())
         self._set_status("AI 추출 중", "info", f"{self.snapshot.sheet_name}의 값이 있는 셀 {count}개를 보냅니다.")
         self._render()
@@ -648,8 +700,18 @@ class ImportPage(QWidget):
         self._extraction_context = (generation, workbook, snapshot, kind, workbook_id)
         captured = deepcopy(snapshot)
         extractor, sheet_extractor = self.extractor, self.sheet_extractor
-        self.extraction_request.start(BackgroundRead(lambda: extract_for_review(
-            kind, workbook, captured, extractor=extractor, sheet_extractor=sheet_extractor)))
+        self.extraction_request.start(BackgroundRead(lambda context: extract_for_review(
+            kind, workbook, captured, extractor=extractor, sheet_extractor=sheet_extractor,
+            progress=context.report, cancelled=context.cancelled), with_context=True))
+
+    def _extraction_progressed(self, progress):
+        if self.state != "extracting" or not isinstance(progress, ExtractionProgress):
+            return
+        if progress.stage == "review":
+            self._set_status("AI 응답 완료 · 원본 대조 중", "info", "받은 응답을 원본 셀 값과 대조하고 있습니다.")
+        else:
+            self._set_status(f"AI 추출 중 · {progress.completed}/{progress.total} 구간 완료", "info",
+                             f"{self.snapshot.sheet_name} · {progress.total}개 구간 중 {progress.completed}개 응답을 처리했습니다.")
 
     def _extraction_completed(self, result, error):
         """현재 파일·시트의 완료 결과만 화면에 반영한다.
@@ -675,6 +737,8 @@ class ImportPage(QWidget):
             except Exception:
                 result, draft = None, None
         if draft is None:
+            self.source_badge.setText("AI 추출 실패")
+            self.source_badge.set_tone("danger")
             self._set_status("AI 추출 실패", "danger",
                              str(error) if isinstance(error, AIConfigError) else
                              result.message if result is not None else "AI 추출 결과를 처리하지 못했습니다. 다시 시도하세요.")
@@ -762,14 +826,19 @@ class ImportPage(QWidget):
         self._set_status("기존 자료 검사 취소", "warning", "검토한 값은 유지됩니다. ‘다시 검사’를 눌러 주세요.")
         self._render()
 
-    def _cancel_extraction(self):
+    def _cancel_extraction(self, *, user_requested=False):
         """화면을 떠난 뒤 도착한 추출 결과를 폐기하고 재추출을 안내한다."""
         if self.state != "extracting":
             return
         self.extraction_request.cancel()
         self._extraction_context = None
         self.state = "idle"
-        self._set_status("AI 추출 취소", "warning", "화면을 떠나 추출 결과 수신을 취소했습니다. 다시 추출해 주세요.")
+        self.source_badge.setText("AI 추출 취소")
+        self.source_badge.set_tone("warning")
+        self._set_status("AI 추출 취소", "warning",
+                         ("취소를 요청했습니다. 추가 AI 호출을 중단하고 도착하는 응답은 화면에 반영하지 않습니다."
+                          if user_requested else
+                          "화면을 떠나 추출 결과 수신을 취소했습니다. 추가 AI 호출을 중단합니다."))
         self._render()
 
     def hideEvent(self, event):
@@ -778,6 +847,9 @@ class ImportPage(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event):
+        if self.state == "saving":
+            event.ignore()
+            return
         self._cancel_extraction()
         self._cancel_review()
         super().closeEvent(event)
@@ -825,6 +897,63 @@ class ImportPage(QWidget):
         for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):
             widget.setEnabled(not self.busy and not self.locked)
         self._render()
+        return True
+
+    def _release_family_selected(self, *_):
+        self.release_family_choice = self.release_family_combo.currentData()
+        self._render_save()
+
+    def _refresh_release_choices(self):
+        """DB 기준정보에서 관리 계열 선택지를 만들고 명시적으로 고른 선택만 유지한다."""
+        previous = self.release_family_choice
+        self.release_family_combo.blockSignals(True)
+        self.release_family_combo.clear()
+        self.release_family_combo.addItem("관리 모델·계열 선택", None)
+        self.release_family_values = {}
+        if self.reference is not None and self.draft is not None:
+            models = {model.group_id: model for model in self.reference.models or ()}
+            area = area_of({}, sheet_name=self.draft.sheet.sheet_name, workbook_name=self.draft.workbook_name)
+            for family in self.reference.families:
+                if family.production_area != ("FOUNDRY" if area == "FOUNDRY" else None):
+                    continue
+                key = family.key
+                owner = models.get(family.owner_group_id)
+                model_name = owner.model_name if owner else key.model_name
+                if not model_name:
+                    continue
+                family_id = family.releases.family_id
+                values = dict(model_name=model_name, group_name=key.category, family_name=key.family_name,
+                              ui_type=key.ui_type, structure_type=key.structure_type)
+                title = f"{model_name} · {key.family_name}"
+                if key.ui_type:
+                    title += " · " + {"LEGACY": "구UI", "INTEGRATED": "통합UI"}.get(key.ui_type, key.ui_type)
+                if family.production_area:
+                    title += " · 파운드리"
+                self.release_family_values[family_id] = values
+                self.release_family_combo.addItem(title, family_id)
+        selected = self.release_family_combo.findData(previous)
+        self.release_family_combo.setCurrentIndex(max(0, selected))
+        self.release_family_combo.blockSignals(False)
+
+    def apply_release_common(self):
+        """선택한 DB 관리 계열을 사용자가 확인한 뒤 전체 활성 행에 명시적인 수정으로 기록한다."""
+        if self.draft is None or self.busy or self.locked or self.kind is not ExtractKind.RELEASE_NOTE:
+            return False
+        values = self.release_family_values.get(self.release_family_combo.currentData())
+        if values is None:
+            return False
+        if not self.confirm(f"관리 계열: {self.release_family_combo.currentText()}\n"
+                            f"저장 대상 {len(self.draft.active_rows)}행의 관리 모델·계열·UI·구조 구분을 이 값으로 바꿀까요?\n"
+                            "원본 추출값과 셀 위치는 보존하고 Item 적용 모델 범위는 바꾸지 않습니다."):
+            return False
+        draft = self.draft
+        for row in draft.active_rows:
+            for name, value in values.items():
+                draft = edit_value(draft, row.row_id, name, value)
+        self.draft = draft
+        self._changed()
+        if self.selected_row_id is not None:
+            self.select_row(self.selected_row_id)
         return True
 
     def apply_common(self):
@@ -1000,7 +1129,9 @@ class ImportPage(QWidget):
             return
         self.state = "idle"
         if error is not None:
-            self._set_status("릴리즈 교체 검토 실패", "danger", "최신 자료를 다시 검사한 뒤 저장해 주세요.")
+            self._set_status("릴리즈 교체 검토 실패", "danger",
+                             str(error) if isinstance(error, StorageValidationError) else
+                             "최신 자료를 다시 검사한 뒤 저장해 주세요.")
             self._render()
             return
         if not isinstance(plans, tuple):
@@ -1034,9 +1165,13 @@ class ImportPage(QWidget):
         QTimer.singleShot(0, lambda: self._save(request))
 
     def _save(self, request):
-        try:
-            receipt = self.saver.save(request)
-        except Exception as exc:
+        saver, snapshot = self.saver, deepcopy(request)
+        loader = lambda: saver.save(snapshot)
+        self.save_request.start(BackgroundRead(loader) if getattr(saver, "background_save", False) else loader)
+
+    def _save_completed(self, receipt, exc):
+        """저장 결과는 GUI 스레드에서 표시하고 성공한 묶음만 조회 화면에 알린다."""
+        if exc is not None:
             state, message = describe_save_error(exc)
             if state == "unknown":
                 self.state = "unknown"
@@ -1053,8 +1188,12 @@ class ImportPage(QWidget):
             self._set_status("저장 완료", "success", f"{receipt.target_label} · 입력 작업 {receipt.batch_id}")
             self.result_label.setText(
                 f"입력 작업 {receipt.batch_id} · {receipt.row_count}행 · {receipt.saved_at:%Y-%m-%d %H:%M:%S}\n"
-                "조회 화면은 자동으로 바뀌지 않습니다. 저장한 자료를 반영하려면 대시보드에서 ‘조회 적용’을 다시 눌러 주세요.\n"
-                "다른 시트를 가져오려면 시트를 다시 읽어 주세요.")
+                + (("‘저장 자료 조회’를 누르면 최신 DB 자료로 릴리즈 목록을 다시 조회합니다.\n"
+                    if self.kind is ExtractKind.RELEASE_NOTE else
+                    "‘저장 자료 조회’를 누르면 선택 조건으로 최신 DB 자료를 조회합니다.\n")
+                   if isinstance(self.saver, DatabaseImportSaver) else
+                   "조회 화면은 자동으로 바뀌지 않습니다. 대시보드에서 ‘조회 적용’을 다시 눌러 주세요.\n")
+                + "다른 시트를 가져오려면 시트를 다시 읽어 주세요.")
             self.saved.emit(receipt)
         if self.selected_row_id is not None:
             self.select_row(self.selected_row_id)

@@ -1,5 +1,7 @@
 """가져오기 화면의 원본 스냅샷과 실제 AI 추출 서비스를 연결한다."""
 
+import inspect
+
 from setron.features.excel_import.service import extract_cells
 from setron.features.extraction.schemas import ExtractionReview
 from setron.features.extraction.service import extract_sheet_data, review_extraction_result
@@ -18,7 +20,7 @@ class LiveSheetExtractor:
         """
         self.client_factory = client_factory or OpenAICompatibleChatClient.from_env
 
-    def __call__(self, kind, sheet):
+    def __call__(self, kind, sheet, *, progress=None, cancelled=None):
         """워커에서 실제 AI를 호출하고 원본 대조를 마친 검토 결과를 반환한다.
 
         param
@@ -31,10 +33,11 @@ class LiveSheetExtractor:
         - AIConfigError: 실제 AI 연결 설정이 없거나 잘못된 경우.
         """
         with self.client_factory() as client:
-            return extract_sheet_data(client, kind, sheet)
+            return extract_sheet_data(client, kind, sheet, progress=progress, cancelled=cancelled, max_workers=2)
 
 
-def extract_for_review(kind, workbook_name, snapshot, *, extractor=None, sheet_extractor=None):
+def extract_for_review(kind, workbook_name, snapshot, *, extractor=None, sheet_extractor=None,
+                       progress=None, cancelled=None):
     """신규·기존 추출 공급자를 동일한 원본 검증 경계로 연결한다.
 
     param
@@ -46,10 +49,20 @@ def extract_for_review(kind, workbook_name, snapshot, *, extractor=None, sheet_e
     - 원본 대조와 누락 검사를 거친 AIResult.
     """
     sheet = sheet_from_snapshot(workbook_name, snapshot)
+    if cancelled and cancelled():
+        raise InterruptedError("AI 추출을 취소했습니다.")
     if extractor is not None:
         result = extractor(kind, snapshot.sheet_name, extract_cells(snapshot))
         return review_extraction_result(kind, sheet, result)
-    result = (sheet_extractor or LiveSheetExtractor())(kind, sheet)
+    provider = sheet_extractor or LiveSheetExtractor()
+    try:
+        parameters = inspect.signature(provider).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    variadic = any(value.kind is inspect.Parameter.VAR_KEYWORD for value in parameters.values())
+    options = {name: value for name, value in (("progress", progress), ("cancelled", cancelled))
+               if name in parameters or variadic}
+    result = provider(kind, sheet, **options)
     if result.ok and not isinstance(result.data, ExtractionReview):
         return review_extraction_result(kind, sheet, result)
     return result

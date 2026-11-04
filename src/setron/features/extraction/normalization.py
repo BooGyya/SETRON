@@ -1,6 +1,7 @@
 """출처를 확인한 원문에만 확정된 공통 항목 규칙을 적용한다."""
 
 from datetime import datetime
+import math
 import re
 
 from setron.features.ai.schemas import ExtractKind
@@ -27,6 +28,15 @@ def normalize(values, kind, row_number, sources):
     for field, value in result.items():
         if value is not None and field not in {"version_raw", "equipment_code", "engine_version", "epd_version", "content"}:
             result[field] = value.strip() or None
+
+    item_source = sources.get("item_no")
+    if kind is ExtractKind.RELEASE_NOTE and item_source:
+        number = item_source.value
+        if (isinstance(number, (int, float)) and not isinstance(number, bool) and 0 <= number <= 2147483647
+                and math.isfinite(number) and number == int(number)
+                and result.get("item_no") in {str(number), str(int(number))}):
+            # Excel COM은 정수 셀도 1.0으로 읽는다. 숫자 원본이 확인된 경우에만 정수 표기로 정리한다.
+            result["item_no"] = str(int(number))
 
     model = result.get("model_name")
     model_source = sources.get("model_name")

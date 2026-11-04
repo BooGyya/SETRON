@@ -3,7 +3,9 @@
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date, datetime
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import re
+import sys
 
 from setron.features.ai.schemas import (
     AIResult, AIStatus, AITask, EQUIPMENT_STATUS_FIELDS, RELEASE_NOTE_FIELDS, ExtractKind, ExtractResult,
@@ -13,11 +15,18 @@ from setron.infrastructure.ai_client import ChatClient
 from setron.infrastructure.excel_reader import SheetData, cell_address
 
 from .normalization import normalize
-from .locations import hpa_coverage_issues, match_location, record_locations, restore_required_sources
-from .schemas import CellSource, ExtractionIssue, ExtractionReview, ReviewRow
+from .locations import (
+    equipment_coverage_issues, equipment_header_rows, hpa_coverage_issues,
+    match_location, record_locations, restore_required_sources,
+)
+from .schemas import CellSource, ExtractionIssue, ExtractionProgress, ExtractionReview, ReviewRow
+
+RELEASE_CHUNK_ROWS = 20
+EQUIPMENT_CHUNK_CELLS = 120
 
 
-def extract_sheet_data(client: ChatClient, kind: ExtractKind, sheet: SheetData) -> AIResult[ExtractionReview]:
+def extract_sheet_data(client: ChatClient, kind: ExtractKind, sheet: SheetData, *,
+                       progress=None, cancelled=None, max_workers=1) -> AIResult[ExtractionReview]:
     """선택한 시트의 값·병합 위치를 AI에 보내고 출처를 대조한 검토 자료를 반환한다.
 
     한 번에 한 시트를 처리하므로 같은 통합문서의 C3 구UI·통합UI도 별개 결과로 유지한다.
@@ -28,11 +37,17 @@ def extract_sheet_data(client: ChatClient, kind: ExtractKind, sheet: SheetData) 
     - client: 원본 시트 추출을 요청할 AI 호출 클라이언트.
     - kind: 설비 현황 또는 릴리즈 노트.
     - sheet: 파일·시트명과 실제 읽은 셀·병합 범위를 포함한 SheetData.
+    - progress: 구간 응답 수신과 원본 대조 단계의 보고 함수. 위젯에 직접 접근하지 않아야 함.
+    - cancelled: 협력 취소 여부를 반환하는 함수.
+    - max_workers: 동시에 보낼 릴리즈 추출 요청 수. 1 또는 2.
 
     return
     - 원본과 대조한 검토 자료 또는 AI 호출·응답 실패를 담은 AIResult.
     """
     kind = ExtractKind(kind)
+    _check_cancelled(cancelled)
+    if max_workers not in (1, 2):
+        raise ValueError("동시 추출 요청은 1개 또는 2개만 허용합니다.")
     # AI 호출 도중 호출자가 SheetData를 수정해도 요청과 대조 대상이 달라지지 않는다.
     sheet = deepcopy(sheet)
     originals = {sheet.address_of(i, j): value for i, row in enumerate(sheet.values) for j, value in enumerate(row)}
@@ -45,9 +60,175 @@ def extract_sheet_data(client: ChatClient, kind: ExtractKind, sheet: SheetData) 
     used_range = None
     if width and all(len(row) == width for row in sheet.values):
         used_range = f"{sheet.address_of(0, 0)}:{sheet.address_of(sheet.row_count - 1, width - 1)}"
-    response = extract_sheet(client, kind, sheet.sheet_name, cells,
-                             merged_ranges=[rng.address for rng in sheet.merged_ranges], used_range=used_range)
+    options = dict(merged_ranges=[rng.address for rng in sheet.merged_ranges], used_range=used_range)
+    if kind is ExtractKind.RELEASE_NOTE and sheet.row_count > RELEASE_CHUNK_ROWS:
+        response = _extract_release_chunks(client, sheet, cells, options, progress, cancelled, max_workers)
+    elif kind is ExtractKind.EQUIPMENT_STATUS and (bounds := _equipment_bounds(sheet, cells)):
+        response = _extract_chunks(client, kind, sheet, cells, options, bounds, progress, cancelled, max_workers)
+    else:
+        if progress:
+            progress(ExtractionProgress(0, 1))
+        response = extract_sheet(client, kind, sheet.sheet_name, cells, **options)
+        if progress and response.ok:
+            progress(ExtractionProgress(1, 1))
+    _check_cancelled(cancelled)
+    if progress and response.ok:
+        progress(ExtractionProgress(1, 1, "review"))
     return review_extraction_result(kind, sheet, response)
+
+
+def _check_cancelled(cancelled):
+    if cancelled is not None and cancelled():
+        raise InterruptedError("AI 추출을 취소했습니다.")
+
+
+def _release_context(sheet, cells):
+    """세로형 표의 제목·머리말과 버전/날짜 열을 확인한다. 확인 불가 양식은 전체 문맥을 유지한다."""
+    version_names = {"version", "버전", "버전명", "swversion", "sw버전"}
+    content_names = {"description", "update내용", "업데이트내용", "변경내용", "변경사항", "내용"}
+    date_names = {"date", "releasedate", "출시일", "배포일"}
+    headers, shared_columns = [], set()
+    for index, row in enumerate(sheet.values, sheet.first_row):
+        names = [re.sub(r"[\s_./:-]", "", str(value or "").casefold()) for value in row]
+        if set(names) & version_names and set(names) & content_names:
+            headers.append(index)
+            shared_columns.update(sheet.first_col + col for col, name in enumerate(names)
+                                  if name in version_names | date_names)
+    if not headers:
+        return None
+    prefix = {address for address, _ in cells if int(re.search(r"[0-9]+$", address)[0]) <= headers[0]}
+    prefix.update(address for address, _ in cells if int(re.search(r"[0-9]+$", address)[0]) in headers)
+    for merged in sheet.merged_ranges:
+        if merged.left <= sheet.first_col and merged.right >= sheet.first_col + sheet.col_count - 1:
+            prefix.add(cell_address(merged.top, merged.left))
+    return prefix, shared_columns
+
+
+def _release_chunk(sheet, cells, options, context, first, last):
+    if context is None:
+        return cells, options
+    selected, shared_columns = set(context[0]), context[1]
+    previous = {}
+    for address, _ in cells:
+        match = re.fullmatch(r"([A-Z]+)([0-9]+)", address)
+        row = int(match[2])
+        if first <= row <= last:
+            selected.add(address)
+        elif row < first:
+            for column in shared_columns:
+                if match[1] == cell_address(1, column)[:-1]:
+                    previous[column] = address
+    selected.update(previous.values())
+    ranges = []
+    for merged in sheet.merged_ranges:
+        anchor = cell_address(merged.top, merged.left)
+        if (merged.top <= last and merged.bottom >= first) or anchor in selected:
+            selected.add(anchor)
+            ranges.append(merged.address)
+    bounds = f"{cell_address(first, sheet.first_col)}:{cell_address(last, sheet.first_col + sheet.col_count - 1)}"
+    return [(address, value) for address, value in cells if address in selected], dict(
+        merged_ranges=ranges, used_range=bounds)
+
+
+def _equipment_bounds(sheet, cells):
+    """확정된 세로형 현황표만 응답 크기가 비슷한 행 구간으로 나눈다. 문맥은 전체 보존한다."""
+    headers = equipment_header_rows(sheet)
+    if not headers or len(cells) <= EQUIPMENT_CHUNK_CELLS:
+        return None
+    weights = {}
+    for address, _ in cells:
+        row = int(re.search(r"[0-9]+$", address)[0])
+        if row > headers[0]:
+            weights[row] = weights.get(row, 0) + 1
+    total = sum(weights.values())
+    parts = min(len(weights), (len(cells) + EQUIPMENT_CHUNK_CELLS - 1) // EQUIPMENT_CHUNK_CELLS)
+    if parts < 2:
+        return None
+    first, cumulative, bounds = sheet.first_row, 0, []
+    last_row = sheet.first_row + sheet.row_count - 1
+    for row, weight in sorted(weights.items()):
+        cumulative += weight
+        if len(bounds) < parts - 1 and cumulative * parts >= total * (len(bounds) + 1):
+            bounds.append((first, row))
+            first = row + 1
+    if first <= last_row:
+        bounds.append((first, last_row))
+    return bounds
+
+
+def _equipment_record_row(row, sheet):
+    # 공유된 세로 병합 앵커는 현재 레코드의 행을 가리키지 않는다.
+    shared = {cell_address(area.top, area.left) for area in sheet.merged_ranges if area.bottom > area.top}
+    for name in ("version_raw", "equipment_code", "pm_name", "model_name"):
+        address = row.sources.get(name, "")
+        match = re.fullmatch(r"\$?([A-Za-z]+)\$?([1-9][0-9]*)", address.strip())
+        if match and f"{match[1].upper()}{match[2]}" not in shared:
+            return int(match[2])
+    return None
+
+
+def _extract_chunk(client, kind, name, cells, options, first, last, cancelled):
+    uninitialize = None
+    try:
+        if sys.platform == "win32":
+            import pythoncom
+            pythoncom.CoInitialize()
+            uninitialize = pythoncom.CoUninitialize
+        _check_cancelled(cancelled)
+        return extract_sheet(client, kind, name, cells, extract_rows=(first, last), **options)
+    finally:
+        if uninitialize:
+            uninitialize()
+
+
+def _extract_release_chunks(client, sheet, cells, options, progress, cancelled, max_workers):
+    """최대 두 구간만 동시에 요청하고 응답 순서와 무관하게 원본 순서로 합친다. 일부 성공은 반환하지 않는다."""
+    last_row = sheet.first_row + sheet.row_count - 1
+    bounds = [(first, min(first + RELEASE_CHUNK_ROWS - 1, last_row))
+              for first in range(sheet.first_row, last_row + 1, RELEASE_CHUNK_ROWS)]
+    return _extract_chunks(client, ExtractKind.RELEASE_NOTE, sheet, cells, options, bounds,
+                           progress, cancelled, max_workers, _release_context(sheet, cells))
+
+
+def _extract_chunks(client, kind, sheet, cells, options, bounds, progress, cancelled, max_workers, context=None):
+    results, pending = {}, {}
+    executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="setron-extraction")
+    next_index = 0
+    if progress:
+        progress(ExtractionProgress(0, len(bounds)))
+    try:
+        while pending or next_index < len(bounds):
+            _check_cancelled(cancelled)
+            while len(pending) < max_workers and next_index < len(bounds):
+                _check_cancelled(cancelled)
+                first, last = bounds[next_index]
+                body, metadata = _release_chunk(sheet, cells, options, context, first, last)
+                pending[executor.submit(_extract_chunk, client, kind, sheet.sheet_name, body, metadata,
+                                        first, last, cancelled)] = next_index
+                next_index += 1
+            done, _ = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+            _check_cancelled(cancelled)
+            for future in done:
+                index = pending.pop(future)
+                first, last = bounds[index]
+                response = future.result()
+                if not response.ok:
+                    return replace(response, data=None, message=f"{first}~{last}행 추출 실패 · {response.message}")
+                for row in response.data.rows:
+                    match = re.fullmatch(r"[A-Z]+([1-9][0-9]*)", row.sources.get("content", ""))
+                    source_row = (int(match[1]) if match else None) if kind is ExtractKind.RELEASE_NOTE else _equipment_record_row(row, sheet)
+                    if source_row is not None and not first <= source_row <= last:
+                        return replace(response, status=AIStatus.INVALID_RESPONSE, data=None,
+                                       message=f"{first}~{last}행 밖의 {'변경 항목' if kind is ExtractKind.RELEASE_NOTE else '설비 항목'}이 반환되었습니다. 다시 추출해 주세요.")
+                results[index] = response
+                if progress:
+                    progress(ExtractionProgress(len(results), len(bounds)))
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    rows = [row for index in range(len(bounds)) for row in results[index].data.rows]
+    notes = [note for index in range(len(bounds)) for note in results[index].data.review_notes]
+    data = ExtractResult(kind, sheet.sheet_name, tuple(rows), tuple(dict.fromkeys(notes)))
+    return replace(response, data=data, raw_content=None)
 
 
 def review_extraction_result(kind: ExtractKind, sheet: SheetData,
@@ -120,6 +301,7 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
         issues.append(ExtractionIssue("AI 응답에 추출된 행이 없습니다. 원본 양식과 응답을 확인하세요."))
     if kind is ExtractKind.EQUIPMENT_STATUS:
         issues.extend(hpa_coverage_issues(sheet, locations, covered, rows))
+        issues.extend(equipment_coverage_issues(sheet, rows, locations))
     review = _review(sheet, kind, tuple(rows), tuple(issues), originals)
     return replace(response, data=review, message="추출 결과를 원본과 대조했습니다. 검토 후 검증을 진행하세요.")
 
@@ -145,7 +327,8 @@ def recheck_hpa_coverage(sheet: SheetData, rows) -> tuple[ExtractionIssue, ...]:
         if location is not None:
             covered.add(id(location))
         reviews.append(ReviewRow(dict(values), dict(values), sources, None))
-    return hpa_coverage_issues(sheet, locations, covered, reviews)
+    return (*hpa_coverage_issues(sheet, locations, covered, reviews),
+            *equipment_coverage_issues(sheet, reviews, locations))
 
 
 def _text(value):
