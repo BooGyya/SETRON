@@ -88,7 +88,7 @@ def saved(tmp_path):
 
 
 def test_sheets_are_created_in_order(saved):
-    assert saved.sheetnames == ["조회 조건", "요약", "계열별 현황", "상태 구성비", "설비별 판정", "우선순위", "날짜별 추이"]
+    assert saved.sheetnames == ["조회 조건", "요약", "계열별 현황", "상태 구성비", "설비별 판정", "우선순위", "날짜별 추이", "구성 트리맵"]
 
 
 def test_conditions_show_base_date_scope_and_each_target(saved):
@@ -232,7 +232,7 @@ def test_report_long_scope_splits_only_above_cell_limit_and_keeps_chart_layout(t
     saved = load_workbook(path)
     try:
         assert saved.sheetnames == ["조회 조건", "요약", "계열별 현황", "상태 구성비", "설비별 판정",
-                                    "우선순위", "날짜별 추이", OVERFLOW_SHEET]
+                                    "우선순위", "날짜별 추이", "구성 트리맵", OVERFLOW_SHEET]
         assert saved["조회 조건"]["B3"].value == exact
         assert saved["조회 조건"]["B4"].value == saved["조회 조건"]["B5"].value == marker
         parts = list(saved[OVERFLOW_SHEET].iter_rows(min_row=2, values_only=True))

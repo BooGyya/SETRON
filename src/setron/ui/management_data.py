@@ -88,6 +88,11 @@ class ManagementGateway:
         with self._storage() as storage:
             return ManagementService(storage).get_applicability(model_id, family_id)
 
+    def create_risk_rule(self, values, context=RefreshContext()):
+        """위험 기준을 새로 등록하고 재판정한 결과를 돌려준다 (BE-015). 저장 결과 형식은 ``save``와 같다."""
+        with self._storage() as storage:
+            return ManagementService(storage, context).create_risk_rule(values)
+
     def version_order_candidates(self, family_id):
         """계열의 릴리즈 기록과 릴리즈노트 나열 순서 후보(데이터 파트 규칙)를 함께 돌려준다. 저장하지 않는다."""
         from setron.features.release.order_candidates import suggest_version_orders

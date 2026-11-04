@@ -28,6 +28,7 @@ class AnalysisInput:
     - ``assessor``: 없으면 위험 자료를 '미계산'으로 둔다.
     - ``item_catalog``·``items``: 없으면 통일 지연 근거(릴리즈 Item)를 보내지 않는다.
     - ``trend``: 날짜별 집계(``summarize_by_date``). 있으면 날짜별 추이를 보낸다.
+    - ``history``: 같은 조회 범위의 여러 날짜 관측(기준일 이하). 있으면 버전 변경 이력을 보낸다.
     """
 
     records: tuple[EquipmentRecord, ...]
@@ -39,6 +40,7 @@ class AnalysisInput:
     item_catalog: ItemCatalog | None = None
     items: tuple[Item, ...] = ()
     trend: tuple[Summary, ...] = ()
+    history: tuple[EquipmentRecord, ...] = ()
 
 
 @dataclass(frozen=True)

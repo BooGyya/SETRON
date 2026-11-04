@@ -24,6 +24,7 @@ from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.read import read_equipment_record
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
 from setron.features.item.service import ItemCatalog
+from setron.features.aging.repository import thresholds_in
 from setron.features.release.refresh import families_from_rows, rule_from_row
 from setron.features.risk.schemas import RiskStatus
 from setron.features.risk.service import RiskAssessor
@@ -86,6 +87,8 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
                               for model_id in ([pm.group_id for pm in sw.pms] if sw.pms else [value.group_id])
                               if model_id is not None}))
         target_catalog = TargetService(None).read_in(tx, pairs, {pair: None for pair in pairs})
+        # 노후도 기간 기준 (BE-016). 저장값이 잘못되면 None이며 화면은 '기준 설정 오류'로 보인다.
+        age_thresholds = thresholds_in(tx).thresholds
     catalog = catalog or database_catalog(stored, {group["group_name"] for group in groups})
 
     by_name = {}
@@ -158,6 +161,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
     source.assessor, source.item_catalog = assessor, item_catalog
     # 화면이 번호 대신 이름을 보이도록 계열·모델 이름을 둔다 (dashboard_data.family_name·model_name).
     source.family_names = {row["family_id"]: row["family_name"] for row in families}
+    source.age_thresholds = age_thresholds
     source.model_names = {row["group_id"]: row["group_name"] for row in groups}
     source.version_catalog = _version_catalog(groups, families, releases, items, links, stored,
                                              target_catalog.applicability, label)

@@ -39,7 +39,16 @@ def analysis_input(source, snapshot) -> AnalysisInput:
         item_catalog=getattr(source, "item_catalog", None),
         items=tuple(entry.item for entry in getattr(catalog, "items", ())),
         trend=tuple(point.summary for point in snapshot.observations),
+        # 같은 조회 범위의 기준일 이하 관측으로 버전 변경 이력을 만든다 (BE-019).
+        history=_history(source, snapshot),
     )
+
+
+def _history(source, snapshot):
+    scoped = getattr(source, "scoped_records", None)
+    if scoped is None:
+        return ()
+    return tuple(r for r in scoped(snapshot.query) if r.base_date <= snapshot.base_date)
 
 
 def explain_snapshot(client: ChatClient, question: str, source, snapshot) -> AnalysisReport:

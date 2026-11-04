@@ -37,6 +37,8 @@ def client_with(handler, environ=None):
 def test_config_reads_process_environment_and_hides_key(monkeypatch):
     for name, value in settings().items():
         monkeypatch.setenv(name, value)
+    # 팀 .env에 SETRON_AI_TIMEOUT(180)이 있으면 기본값 60 검사가 깨지므로 지운다.
+    monkeypatch.delenv("SETRON_AI_TIMEOUT", raising=False)
     config = AIConfig.from_env()
     assert config.base_url == settings()["SETRON_AI_BASE_URL"]
     assert config.model == "test-model" and config.timeout == 60

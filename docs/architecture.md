@@ -613,6 +613,15 @@ DB 공급자는 `ui/database_source.py`의 `database_catalog()`로 저장 현황
 - DB 모드 설비군 선택지는 `GROUP_MODELS`의 모델이 DB에 등록된 것만 둔다.
 - HeatMap 타일 격자는 세로로 내용 높이만 쓴다(큰 창에서 타일이 늘어나지 않음).
 
+### 남은 BE 작업 연결 (11-04)
+
+- 위험 기준 새로 등록 (BE-015): `ManagementService.create_risk_rule(values)`가 같은 트랜잭션에서 연결 검사(`validate_risk_in`) → 등록 → 재판정 → MANUAL 입력 작업 기록을 한다. 재연결 근거(`target_reference`)는 릴리즈 교체가 읽는 키(`family`·`item`·`direct_version`·`start_version`·`end_version`)로 만든다. 관리 화면 '위험 기준 새로 등록'(`ui/risk_rule_dialog.py`)이 유형별 연결 칸을 보여 주고, 저장은 묶음 저장과 같은 `saved` 신호로 화면을 갱신한다.
+- 버전 변경 이력 (BE-019): `analysis.service.version_changes()`가 같은 조회 범위의 기준일 이하 관측(`DashboardSource.scoped_records`)에서 같은 설비·계열의 이웃한 두 관측일 사이 버전 변경을 '버전 변경 이력'으로 AI에 보낸다. 방향은 확인된 릴리즈 순서로만 정한다(아니면 '순서 미확인').
+- 예측 질문 연결 (BE-018 → BE-020): `forecast.service.is_forecast_question()`이 '언제·예측·완료 시점·남은 기간' 등의 표현을 찾으면 AI 분석이 끝난 뒤 같은 조회 범위로 참고 예측도 실행한다.
+- 우선순위·노후도 화면 (BE-016·017): 설비 목록 정렬에 '업그레이드 우선순위'를 더했다(`equipment_data.upgrade_priority`, 화면과 같은 위험 판정·목표 N 사용). 설비 상세에 순위(또는 확인 필요 사유)·목표 N보다 낮은 단계·가장 오래된 버전 경과를 보인다. DB 공급자는 저장된 기간 기준(`thresholds_in`)을, 합성 자료는 기본값을 쓴다. 'N보다 몇 단계 낮음'(BE-003)은 이미 비교 표시('N-2')에 있었다.
+- 트리맵 (BE-021): 현황 보고서에 '구성 트리맵' 시트(계열 > 상태별 설비·계열 건수)를 두고, 저장 뒤 `export/treemap.py`가 Excel 2016 이상의 chartEx 트리맵을 넣는다. 차트는 숨은 이름(`_xlchart.v1.N`)으로 표 셀을 참조하고, Excel이 요구하는 스타일·색 부품(`chartex/style.xml`·`colors.xml`, Excel 기본값)을 함께 넣는다. 점 색은 Excel 트리맵의 점 번호(상위 칸 → 하위 칸, 표 순서)에 맞춰 앱 상태 색으로 칠한다. Excel 16.0에서 열어 차트 종류 117(트리맵)과 색을 확인했다. 2016 미만 버전은 안내 도형이 보인다.
+- 실제 AI 응답 대응 (BE-005): 실제 GMS(gpt-5) 분석 응답이 `unconfirmed` 항목을 `{"문장": null}` 객체로 보내 형식 오류가 났다. 분석 답변의 문장 목록은 이런 객체도 문장으로 받고(`_sentences`), 프롬프트에 '문장 문자열 목록'을 명시했다.
+
 ### 데이터 파트 후보 연동 (번역표·버전 순서)
 
 데이터 파트(`ai/svhm`)의 결정적 규칙 두 가지를 **후보로만** 가져왔다(팀 결정 2026-11-03). 사용자가 확인해야 값이 바뀐다.

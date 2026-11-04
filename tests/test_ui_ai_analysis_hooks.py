@@ -100,3 +100,24 @@ def test_question_parser_sends_current_choices(window):
 
     prompt = client.calls[0][0].content
     assert all(label in prompt for label in query_choices(catalog).sites)
+
+
+def test_forecast_words_are_detected():
+    from setron.features.forecast.service import is_forecast_question
+
+    assert is_forecast_question("C4 통일은 언제 끝나?") and is_forecast_question("남은 기간 예측해 줘")
+    assert not is_forecast_question("화성 C4 현황 보여줘") and not is_forecast_question(None)
+
+
+def test_forecast_question_also_runs_reference_forecast(window):
+    """완료 시점을 묻는 질문은 분석 뒤 같은 조회 범위의 참고 예측도 함께 보인다 (BE-018 → BE-020)."""
+    page = window.pages["ai"]
+    page.question.setText("목표 N 통일은 언제쯤 끝날까?")
+    assert page.analyze()
+    QTest.qWait(20)
+    assert page.forecast_report is not None and "참고용" in page.forecast_label.text()
+
+    page.question.setText("화성 C4 현황 설명해 줘")
+    assert page.analyze()
+    QTest.qWait(20)
+    assert page.forecast_report is None

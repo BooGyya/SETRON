@@ -64,7 +64,8 @@ ANALYSIS_PROMPT = (
     "너는 반도체 설비 SW 버전 현황 분석가다. 함께 받은 자료만 근거로 질문에 답한다.\n"
     "자료로 확인한 내용은 evidence에, 추정은 assumptions에, 자료로 확인할 수 없는 내용은 unconfirmed에 나눠 적는다.\n"
     "자료의 숫자를 바꾸거나 새로 계산한 확률·완료 날짜를 만들지 않는다.\n"
-    '{"answer": "답변", "evidence": [], "assumptions": [], "unconfirmed": []}\n'
+    "evidence·assumptions·unconfirmed는 문장 문자열의 목록이다. 객체나 null을 넣지 않는다.\n"
+    '{"answer": "답변", "evidence": ["문장"], "assumptions": ["문장"], "unconfirmed": ["문장"]}\n'
     + COMMON_RULES
 )
 
@@ -287,10 +288,33 @@ def _to_analysis_answer(obj: dict[str, Any]) -> AnalysisAnswer:
         raise InvalidResponse("answer가 비어 있습니다.")
     return AnalysisAnswer(
         answer=answer,
-        evidence=_strings(obj, "evidence"),
-        assumptions=_strings(obj, "assumptions"),
-        unconfirmed=_strings(obj, "unconfirmed"),
+        evidence=_sentences(obj, "evidence"),
+        assumptions=_sentences(obj, "assumptions"),
+        unconfirmed=_sentences(obj, "unconfirmed"),
     )
+
+
+def _sentences(obj: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    """분석 답변의 문장 목록. 실제 AI가 {"내용": null}·{"내용": "값"} 객체로 보내도 문장으로 바꾼다.
+
+    실제 응답(GMS gpt-5, 11-04)에서 unconfirmed 항목이 객체로 와 답변 전체가 형식 오류가 됐다.
+    숫자·중첩 목록 같은 다른 형식은 여전히 오류로 처리한다.
+    """
+    value = obj.get(key) or []
+    if not isinstance(value, list):
+        raise InvalidResponse(f"{key}는 목록이어야 합니다.")
+    result = []
+    for item in value:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict) and all(isinstance(k, str) and (v is None or isinstance(v, str))
+                                            for k, v in item.items()):
+            text = " / ".join(k if v is None or not v.strip() else f"{k}: {v}" for k, v in item.items())
+        else:
+            raise InvalidResponse(f"{key}의 항목은 문장이어야 합니다.")
+        if text.strip():
+            result.append(text.strip())
+    return tuple(result)
 
 
 def _to_extract_result(
