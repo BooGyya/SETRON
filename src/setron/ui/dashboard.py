@@ -10,8 +10,7 @@ from PySide6.QtWidgets import (
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import DashboardChart, series_color
 from setron.ui.dashboard_data import (
-    DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationData,
-    count_value, missing_sw_count, upgrade_caption,
+    DashboardDrilldown, DashboardSource, HpaClassificationConflict, count_value, missing_sw_count, upgrade_caption,
 )
 from setron.ui.theme import INK, PRIMARY, SECONDARY, TONES, font, icon, svg_size
 
@@ -81,7 +80,6 @@ class DashboardPage(QWidget):
         super().__init__()
         self.setObjectName("canvas")
         self.state, self.source, self.snapshot = state, source, None
-        self.no_observations = False
         self.drilldown_connected = drilldown_connected
         self.visible_groups = {o.key for o in source.catalog.groups}
         self.metrics = {}
@@ -89,7 +87,7 @@ class DashboardPage(QWidget):
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
-        self.result_status = StatusBadge(f"조회 적용 전 · {self._result_label()}", "info")
+        self.result_status = StatusBadge("조회 적용 전 · 예시 데이터", "info")
         body.addWidget(self.result_status)
         cards = []
         for key, title, asset, tone in (
@@ -180,7 +178,6 @@ class DashboardPage(QWidget):
 
     def invalidate(self, *_):
         self.snapshot = None
-        self.no_observations = False
         self.result_status.setText("선택지 변경 · 재조회 필요")
         self.result_status.set_tone("warning")
         self._clear_values()
@@ -202,7 +199,6 @@ class DashboardPage(QWidget):
         if not self.state.is_current(query):
             return False
         self.snapshot = None
-        self.no_observations = False
         self._clear_values()
         self.result_status.setText(f"{self._result_label()} 계산 중")
         self.context.setText("적용 #" + str(query.revision) + " · " + query.description)
@@ -210,14 +206,6 @@ class DashboardPage(QWidget):
             if self.state.catalog != self.source.catalog:
                 raise ValueError("조회 선택지와 데이터 공급자의 매핑이 다릅니다.")
             result = self.source.snapshot(query)
-        except NoObservationData:
-            self.no_observations = True
-            self.result_status.setText(f"{self._result_label()} · 저장된 설비 현황 없음")
-            self.result_status.set_tone("info")
-            self.context.setText(self.context.text() + f"\n{self.source.source_label}")
-            self.message.setText("조회 가능한 설비 현황이 없습니다. 데이터 가져오기에서 설비 현황표를 저장한 뒤 다시 조회해 주세요.")
-            self.observations.setText("저장된 관측일이 없습니다.")
-            return False
         except HpaClassificationConflict as error:
             self.result_status.setText("조회 보류 · HPA 분류 확인 필요")
             self.result_status.set_tone("danger")
@@ -235,7 +223,6 @@ class DashboardPage(QWidget):
         if not self.state.is_current(query) or result.query is not query:
             return False
         self.snapshot = result
-        self.no_observations = False
         summary = result.summary
         no_sw = missing_sw_count(summary)
         self.result_status.setText(f"{self._result_label()} · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))

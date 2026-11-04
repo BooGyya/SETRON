@@ -19,7 +19,7 @@ def refresh_hpa_coverage(draft):
     return
     - 재검사 결과를 포함한 초안. 릴리즈와 미대조 수동 초안은 변경하지 않음.
     """
-    global_codes = {"HPA_COVERAGE_MISSING", "HPA_COVERAGE_UNRESOLVED", "EQUIPMENT_COVERAGE_MISSING"}
+    global_codes = {"HPA_COVERAGE_MISSING", "HPA_COVERAGE_UNRESOLVED"}
     if draft.kind is not ExtractKind.EQUIPMENT_STATUS:
         return draft
     if not any(row.normalized for row in draft.rows) and not any(issue.code in global_codes for issue in draft.extraction_issues):

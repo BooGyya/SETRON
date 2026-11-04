@@ -139,8 +139,7 @@ def _derived(row, field, raw, kind):
             values[name] = value
         elif sources and all(_matches_saved(name, value, original, row.values, kind, address)
                              for address, original in sources):
-            # 제목 안의 모델은 대조한 값만 사용하고, 계열의 '구UI·통합UI' 원문 표기는 보존한다.
-            values[name] = value if name == "model_name" else _text(sources[0][1])
+            values[name] = _text(sources[0][1])
     return normalize(values, kind, 1, {})[0].get(field) == row.values.get(field)
 
 

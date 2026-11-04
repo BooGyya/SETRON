@@ -7,13 +7,6 @@ from setron.features.ai.schemas import ExtractKind
 
 
 @dataclass(frozen=True)
-class ExtractionProgress:
-    completed: int
-    total: int
-    stage: str = "extract"
-
-
-@dataclass(frozen=True)
 class CellSource:
     sheet: str
     address: str

@@ -11,10 +11,6 @@ from setron.features.version.service import FamilyReleases
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
 
 
-class NoObservationData(ValueError):
-    """저장 자료에 조회할 기준 관측일이 없다. DB 접속 오류와 구분한다."""
-
-
 class HpaClassificationConflict(ValueError):
     """같은 호기의 상충하는 분류 이력을 원문 관측일과 함께 검토하도록 알린다."""
 
@@ -312,7 +308,7 @@ class DashboardSource:
 
         QueryState(self.catalog).validate(query.selection)
         if not self.dates:
-            raise NoObservationData("기준 관측일이 없습니다.")
+            raise ValueError("기준 관측일이 없습니다.")
         # HPA만 새 날짜에 저장되어도 일반 설비의 분석 기준일을 밀어내지 않는다.
         # HPA만 있는 자료는 최신 관측을 조회할 수 있게 하되 집계는 0대로 유지한다.
         day = (self.analysis_dates or self.dates)[-1]

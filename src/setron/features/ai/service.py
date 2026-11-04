@@ -75,9 +75,6 @@ EXTRACT_PROMPT = (
     "사용할 항목 이름: {fields}\n"
     '{{"rows": [{{"values": {{"항목": "값"}}, "sources": {{"항목": "셀 주소"}}}}],\n'
     ' "review_notes": [{{"reason": "확인이 필요한 이유", "field": "항목 또는 null", "address": "셀 주소 또는 null"}}]}}\n'
-    "values의 값은 반드시 문자열 또는 null이다. item_no 같은 숫자도 따옴표로 감싼 문자열로 쓴다. "
-    "sources의 값은 셀 주소 문자열만 허용한다. 출처가 없는 항목의 sources 키는 생략하고 null을 쓰지 않는다.\n"
-    "값이 없는 선택 항목은 values와 sources에서 모두 생략해 응답을 간결하게 쓴다.\n"
     + COMMON_RULES.replace("{", "{{").replace("}", "}}")
 )
 
@@ -160,7 +157,6 @@ def extract_sheet(
     *,
     merged_ranges: Sequence[str] = (),
     used_range: str | None = None,
-    extract_rows: tuple[int, int] | None = None,
 ) -> AIResult[ExtractResult]:
     """시트의 셀 값에서 원본 표기와 위치를 추출한다.
 
@@ -173,7 +169,6 @@ def extract_sheet(
     - cells: 실제 읽은 셀 주소·값 목록.
     - merged_ranges: 원본 병합 범위. 병합값 출처는 왼쪽 위 셀로 지정.
     - used_range: 실제 읽은 직사각형 범위. None이면 생략된 셀이 빈칸이라고 안내하지 않음.
-    - extract_rows: 이 요청에서 추출할 변경 내용의 원본 행 구간. 다른 행은 공통 정보·병합 근거로만 사용.
 
     return
     - 추출값·출처·검토 메모 또는 호출·응답 오류를 담은 AIResult.
@@ -190,17 +185,6 @@ def extract_sheet(
         )
     if merged_ranges:
         body += "\n병합 범위: " + ", ".join(merged_ranges)
-    if extract_rows is not None:
-        first, last = extract_rows
-        body += (f"\n이번 요청의 추출 대상 행: {first}~{last}행. "
-                 + ("content의 원본 셀이 이 구간에 있는 변경 항목을 빠짐없이 추출한다. "
-                    if kind is ExtractKind.RELEASE_NOTE else
-                    "이 구간의 모든 병렬 표에서 설비·PM·SW 레코드를 빠짐없이 추출한다. "
-                    "레코드의 행은 세로로 병합되지 않은 version_raw 원본 셀을 기준으로 한다. "
-                    "그 출처가 없으면 equipment_code, pm_name, model_name 순서로 세로 병합되지 않은 출처를 쓴다. "
-                    "필수값이 빈 HPA 레코드도 해당 구간에 포함한다. ")
-                 + "다른 행은 제목·열 이름·공통 모델·UI·병합값·날짜의 근거로만 사용한다. "
-                   "이 구간 밖의 레코드는 결과 rows에 넣지 않는다. sources는 원본 셀 주소를 그대로 쓴다.")
     messages = [ChatMessage("system", prompt), ChatMessage("user", f"시트: {sheet_name}\n{body}")]
     return _run(
         client,
@@ -227,11 +211,11 @@ def _run(
 
     try:
         data = convert(_load_json_object(reply.content))
-    except InvalidResponse as error:
+    except InvalidResponse:
         return AIResult(
             task=task,
             status=AIStatus.INVALID_RESPONSE,
-            message=(f"{INVALID_MESSAGE}\n형식 확인: {error}" if task is AITask.EXCEL_EXTRACT else INVALID_MESSAGE),
+            message=INVALID_MESSAGE,
             source=reply.source,
             raw_content=reply.content,
         )

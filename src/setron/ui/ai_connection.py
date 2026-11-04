@@ -9,10 +9,8 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from functools import partial
 
 from setron.features.ai.service import analyze, extract_sheet, parse_question
-from setron.features.extraction.service import extract_sheet_data
 from setron.infrastructure.ai_client import AIConfigError, OpenAICompatibleChatClient
 
 
@@ -21,7 +19,6 @@ class AIProviders:
     """화면에 넘길 실제 AI 공급자. 설정이 없으면 모두 None(예제 응답)이다.
 
     - ``extractor(kind, sheet_name, cells)``: 가져오기 화면의 AI 추출.
-    - ``sheet_extractor(kind, sheet)``: 원본 범위·병합 위치를 보존하는 실제 가져오기 추출.
     - ``parser(question)``·``analyzer(question, facts)``: AI 분석 화면의 질문 해석·분석.
     - ``problem``: 설정이 잘못돼 예제 응답으로 시작한 이유.
     """
@@ -31,7 +28,6 @@ class AIProviders:
     parser: Callable | None = None
     analyzer: Callable | None = None
     problem: str | None = None
-    sheet_extractor: Callable | None = None
 
     @property
     def connected(self) -> bool:
@@ -55,7 +51,6 @@ def ai_providers_from_env(environ: Mapping[str, str] | None = None, *, client_fa
     return AIProviders(
         client=client,
         extractor=lambda kind, sheet_name, cells: extract_sheet(client, kind, sheet_name, cells),
-        sheet_extractor=partial(extract_sheet_data, client, max_workers=2),
         parser=lambda question: parse_question(client, question),
         analyzer=lambda question, facts: analyze(client, question, facts),
     )

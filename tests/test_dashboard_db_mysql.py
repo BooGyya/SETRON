@@ -131,8 +131,7 @@ def test_source_from_env():
     source, problem = dashboard_source_from_env({
         "SETRON_DB_HOST": "127.0.0.1", "SETRON_DB_PORT": "1", "SETRON_DB_NAME": "setron",
         "SETRON_DB_USER": "u", "SETRON_DB_PASSWORD": "p", "SETRON_DB_CONNECT_TIMEOUT": "1"})
-    assert source is None and problem.startswith("DB 자료를 읽지 못했습니다")
-    assert "합성" not in problem
+    assert source is None and problem.startswith("DB 자료를 읽지 못해")
 
 
 def test_risk_rules_in_db_decide_dashboard_risk(storage):  # noqa: F811

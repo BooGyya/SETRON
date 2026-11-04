@@ -146,7 +146,7 @@ class EquipmentPage(QWidget):
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
-        self.result_status = StatusBadge(f"조회 적용 전 · {getattr(source, 'result_label', '예시 결과')}", "info")
+        self.result_status = StatusBadge("조회 적용 전 · 예시 데이터", "info")
         body.addWidget(self.result_status)
         self.context = label("공통 조건에서 조회 적용을 눌러 주세요.", 13, color=SECONDARY, wrap=True)
         body.addWidget(self.context)
