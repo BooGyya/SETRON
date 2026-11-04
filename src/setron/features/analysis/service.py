@@ -8,6 +8,8 @@
 - 통일 지연 근거: N 미만 설비의 설치 버전과 목표 N 사이에서, 목표 N에는 포함되고 설치 버전에는
   포함되지 않은 Item. 저장된 버전별 Item 상태만 쓴다 (BE-014)
 - 날짜별 추이: 날짜별 집계가 있을 때만
+- 버전 변경 이력: 여러 날짜 관측이 있을 때, 같은 설비·계열의 이웃한 두 관측일 사이에 설치 버전이 바뀐 기록.
+  두 날짜 모두 관측된 경우만 비교하고(관측 없는 날을 채우지 않음), 방향은 확인된 릴리즈 순서로만 정한다.
 
 정한 규칙
 - 적용률은 판단 불가를 분모에서 뺀 값이며, 계산할 수 없으면 None(null)으로 보낸다.
@@ -39,6 +41,7 @@ STATUS_LABELS = {
     CompareStatus.UNDETERMINED: "판단 불가",
 }
 MAX_GAP_ITEMS = 20  # 한 계열·설치 버전에 보내는 Item 수 상한. 넘으면 개수만 알린다.
+MAX_CHANGES = 30  # 버전 변경 이력에 보내는 기록 수 상한. 넘으면 개수만 알린다.
 
 _VERSION = re.compile(r"\bv?\d+(?:[._]\d+){2,}[\w+\-]*|\bv\d[\w.+\-]*", re.IGNORECASE)
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
@@ -57,7 +60,57 @@ def build_facts(data: AnalysisInput) -> dict[str, Any]:
     }
     if len(data.trend) > 1:
         facts["날짜별 추이"] = [{"기준일": s.base_date.isoformat(), **_rates(s)} for s in data.trend]
+    if data.history:
+        facts["버전 변경 이력"] = version_changes(data.history, data.families, data.family_names)
     return facts
+
+
+def version_changes(records, families, family_names=None) -> dict[str, Any]:
+    """같은 설비·계열의 이웃한 두 관측일 사이 설치 버전 변경 (BE-019·FUN-038).
+
+    PM이 여러 개면 설치 버전 묶음(정렬한 원문)으로 비교한다. 방향은 두 버전 모두 확인된 순서가 있을 때만
+    '올림'·'내림'으로, 아니면 '순서 미확인'으로 둔다. HPA는 분석에서 빼므로 넣지 않는다.
+    """
+    names = family_names or {}
+    seen: dict[tuple[int, int], list[tuple[Any, tuple[str, ...]]]] = {}
+    codes = {}
+    for record in sorted((r for r in records if not r.is_hpa), key=lambda r: (r.equipment_id, r.base_date)):
+        codes[record.equipment_id] = record.equipment_code
+        by_family: dict[int, set[str]] = {}
+        for pm in record.pms:
+            by_family.setdefault(pm.family_id, set()).add(pm.version_raw or "미입력")
+        for family_id, raws in by_family.items():
+            seen.setdefault((record.equipment_id, family_id), []).append((record.base_date, tuple(sorted(raws))))
+    rows, counts = [], {"올림": 0, "내림": 0, "순서 미확인": 0}
+    for (equipment_id, family_id), observed in sorted(seen.items()):
+        family = families.get(family_id)
+        for (before_day, before), (after_day, after) in zip(observed, observed[1:]):
+            if before == after:
+                continue
+            direction = _direction(family, before, after)
+            counts[direction] += 1
+            rows.append({"설비": codes[equipment_id], "계열": names.get(family_id, f"계열 {family_id}"),
+                         "이전 관측일": before_day.isoformat(), "이전 버전": " / ".join(before),
+                         "다음 관측일": after_day.isoformat(), "다음 버전": " / ".join(after), "방향": direction})
+    days = sorted({day for observed in seen.values() for day, _ in observed})
+    return {"비교 기간": {"처음": days[0].isoformat(), "끝": days[-1].isoformat()} if days else None,
+            "관측일 수": len(days), "변경 건수": len(rows), **{f"{key} 건수": value for key, value in counts.items()},
+            "변경": rows[:MAX_CHANGES], "보내지 않은 변경 건수": max(0, len(rows) - MAX_CHANGES)}
+
+
+def _direction(family, before, after) -> str:
+    def order(raws):
+        orders = []
+        for raw in raws:
+            release = family.match(raw) if family is not None else None
+            if release is None or release.version_order is None:
+                return None
+            orders.append(release.version_order)
+        return min(orders)
+    old, new = order(before), order(after)
+    if old is None or new is None or old == new:
+        return "순서 미확인"
+    return "올림" if new > old else "내림"
 
 
 def check_numbers(answer: AnalysisAnswer, facts: Mapping[str, Any]) -> tuple[str, ...]:

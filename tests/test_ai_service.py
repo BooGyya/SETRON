@@ -120,3 +120,20 @@ def test_example_client_runs_out_of_replies():
 
     assert parse_question(client, "질문").status is AIStatus.FAILED
     assert parse_question(client, "질문").status is AIStatus.FAILED
+
+
+def test_analysis_accepts_sentence_objects_from_real_ai():
+    """실제 AI(GMS gpt-5)가 unconfirmed를 {"내용": null} 객체로 보낸 응답도 문장으로 받는다 (11-04 실제 응답)."""
+    content = ('{"answer": "두 버전이 함께 있습니다.", "evidence": ["C4 v4.56.6.43 9대"], "assumptions": [],'
+               ' "unconfirmed": [{"두 버전으로 나뉜 구체적 사유": null}, {"목표 버전": "자료 없음"}]}')
+
+    result = analyze(ExampleChatClient([content]), "질문", {})
+
+    assert result.ok
+    assert result.data.unconfirmed == ("두 버전으로 나뉜 구체적 사유", "목표 버전: 자료 없음")
+
+
+def test_analysis_with_non_sentence_items_is_invalid():
+    result = analyze(ExampleChatClient(['{"answer": "답", "evidence": [3, [1]]}']), "질문", {})
+
+    assert result.status is AIStatus.INVALID_RESPONSE

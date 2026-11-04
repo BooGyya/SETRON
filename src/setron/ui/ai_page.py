@@ -457,3 +457,7 @@ class AIPage(QWidget):
                 "보낸 자료에 없는 숫자가 있습니다. 대시보드 수치와 대조해 주세요: " + ", ".join(report.unmatched_numbers))
         self._set_status("분석 완료", "info", f"{facts['조회 조건']} · 기준일 {facts['기준일']} 자료로 요청했습니다.")
         self.refresh()
+        # 완료 시점·남은 기간을 묻는 질문이면 같은 조회 범위로 참고 예측도 함께 보인다 (BE-018 → BE-020).
+        from setron.features.forecast.service import is_forecast_question
+        if self.forecaster is not None and is_forecast_question(question):
+            self.run_forecast()

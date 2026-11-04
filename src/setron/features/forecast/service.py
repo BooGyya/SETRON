@@ -38,6 +38,16 @@ from setron.features.version.service import FamilyReleases
 from setron.infrastructure.ai_client import ChatClient
 
 
+# 예측을 묻는 질문의 표현 (BE-018 → BE-020). 숫자 계산은 하지 않고, 참고 예측을 함께 실행할지만 정한다.
+FORECAST_WORDS = ("언제", "예측", "완료 시점", "완료일", "끝날", "끝나", "남은 기간", "잔여 기간", "몇 달", "몇 주", "얼마나 걸")
+
+
+def is_forecast_question(question: str | None) -> bool:
+    """통일 완료 시점·남은 기간을 묻는 질문인지. 공백을 무시하고 표현이 들어 있는지만 본다."""
+    text = "".join((question or "").split())
+    return any("".join(word.split()) in text for word in FORECAST_WORDS)
+
+
 def forecast(
     records: Iterable[EquipmentRecord],
     families: Mapping[int, FamilyReleases],

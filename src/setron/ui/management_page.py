@@ -540,6 +540,31 @@ class ManagementPage(QWidget):
             self.state, self._reviewed = "edit", None
             self._render()
 
+    def open_risk_dialog(self, dialog_factory=None):
+        """위험 기준 등록 창을 열고, 등록을 누르면 저장한다. 수정 목록과 섞지 않고 바로 한 건 저장한다."""
+        if self.busy or self.locked or self.gateway is None or self.state in {"review", "saving"} or not self.references:
+            self.notice.setText("관리 자료를 불러온 뒤, 검토 중인 수정 묶음이 없을 때 위험 기준을 등록할 수 있습니다.")
+            return False
+        from setron.ui.risk_rule_dialog import RiskRuleDialog
+        dialog = (dialog_factory or RiskRuleDialog)(self, self.references, self.family_choice.currentData())
+        if not dialog.exec():
+            return False
+        return self.create_risk_rule(dialog.values())
+
+    def create_risk_rule(self, values):
+        if self.busy or self.locked or self.gateway is None:
+            return False
+        try:
+            context = deepcopy(self.context_provider())
+        except Exception:
+            self.notice.setText("현재 조회 조건을 확인하지 못했습니다. 조회 조건을 다시 적용해 주세요.")
+            return False
+        values = deepcopy(values)
+        self.state = "saving"
+        self.save_started.emit()
+        # 저장 완료·실패 처리는 묶음 저장과 같은 경로(saved·save_failed 신호)를 쓴다.
+        return self._start("save", lambda: self.gateway.create_risk_rule(values, context))
+
     def save(self):
         if self.busy or self.locked or self.state != "review" or self._reviewed is None or self.gateway is None:
             return False
@@ -582,6 +607,10 @@ class ManagementPage(QWidget):
                                                 "순서가 확인된 릴리즈가 있는 계열은 제안하지 않습니다.")
         card.body.addWidget(self.order_candidates_button)
         self.order_candidates_button.clicked.connect(self._load_order_candidates)
+        self.risk_create_button = button("위험 기준 새로 등록")
+        self.risk_create_button.setToolTip("환경·안전 필수 Item, 결함 Item, 위험 버전을 새로 지정합니다. 저장하면 위험을 다시 판정합니다.")
+        card.body.addWidget(self.risk_create_button)
+        self.risk_create_button.clicked.connect(lambda: self.open_risk_dialog())
         self.load_candidates_button.clicked.connect(self._load_applicability)
         self.add_candidates_button.clicked.connect(self._stage_applicability)
         self.applicability_view = None

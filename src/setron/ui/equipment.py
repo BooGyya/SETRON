@@ -20,6 +20,23 @@ from setron.features.item.schemas import APPLICATION_LABELS
 from setron.ui.theme import PRIMARY, SECONDARY, TONES, font
 
 
+
+def priority_text(entry, thresholds):
+    """설비 상세의 업그레이드 우선순위(BE-017)·버전 경과(BE-016) 줄. 순위와 노후도는 별개로 보인다."""
+    if entry is None:
+        return "업그레이드 우선순위: 분석 제외"
+    rank = f"{entry.rank}위" if entry.rank else "확인 필요 (" + " · ".join(entry.messages) + ")"
+    oldest = entry.representative
+    if thresholds is None:
+        age = "기간 기준 설정 오류 · 관리 화면에서 확인"
+    elif oldest is None or oldest.age.elapsed_label is None:
+        age = "출시일 미확인"
+    else:
+        age = (f"{oldest.pm.pm_name or '공통 SW'} {oldest.pm.version_raw} · {oldest.age.elapsed_label} · {oldest.age.label}"
+               f" (기준: {thresholds.description})")
+    steps = f" · 목표 N보다 {entry.steps_behind}단계 낮음" if entry.steps_behind else ""
+    return f"업그레이드 우선순위: {rank}{steps}\n가장 오래된 버전 경과: {age}"
+
 class ReadTableModel(QAbstractTableModel):
     """원문은 Qt DisplayRole의 일반 텍스트로만 표시한다. 호기 ID는 행 데이터와 함께 보관한다."""
 
@@ -171,7 +188,8 @@ class EquipmentPage(QWidget):
         self.sort.setAccessibleName("설비 목록 정렬")
         self.sort.setProperty("queryField", True)
         self.sort.setFixedHeight(38)
-        for caption, value in (("설비명 ↑", "code"), ("설비명 ↓", "code-desc"), ("Site · 설비명", "site")):
+        for caption, value in (("설비명 ↑", "code"), ("설비명 ↓", "code-desc"), ("Site · 설비명", "site"),
+                               ("업그레이드 우선순위", "priority")):
             self.sort.addItem(caption, value)
         self.sort.currentIndexChanged.connect(self._filter_changed)
         self.filters = QGridLayout()
@@ -416,7 +434,11 @@ class EquipmentPage(QWidget):
             versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
             names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
             location = tile.location + (f" · 실제 관측일 {tile.observation_date}" if tile.goal is GoalState.EXCLUDED else "")
-            rows.append((tile.code, location.replace(" · ", "\n"), names, versions,
+            code = tile.code
+            if self.sort.currentData() == "priority":
+                entry = self.data.priority.get(tile.equipment_id)
+                code = (f"{entry.rank}위 · " if entry is not None and entry.rank else "확인 필요 · ") + code
+            rows.append((code, location.replace(" · ", "\n"), names, versions,
                          tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else ""),
                          tile.risk_label + "\n세부 근거 미연결"))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
@@ -453,7 +475,8 @@ class EquipmentPage(QWidget):
         self.detail_location.setText(detail.whole.location + f" · 실제 관측일 {detail.record.base_date}")
         self.detail_summary.setText(f"물리 설비 1대 · 전체 SW 관측 {len(detail.record.pms)}건 · 모듈 수 미확정\n"
                                     f"선택 SW 판정: {detail.selected.goal.value} / 설비 전체 등록 SW 판정: {detail.whole.goal.value}\n"
-                                    f"설비 위험: {detail.whole.risk_label} · 목표 상태와 별도")
+                                    f"설비 위험: {detail.whole.risk_label} · 목표 상태와 별도\n"
+                                    + priority_text(self.data.priority.get(detail.record.equipment_id), self.data.thresholds))
         self.scope_note.setText("아래 표는 선택 설비의 전체 SW 관측입니다. 현재 설비군 밖의 SW도 표시하지만 대시보드·목록의 적용 범위를 넓히지는 않습니다.\n"
                                f"일반 분석 기준일 {self.snapshot.base_date} · 현재 적용: {self.snapshot.query.description}"
                                + ("\nHPA 원본 조회는 공통 분석에 포함하지 않습니다." if detail.record.is_hpa else ""))

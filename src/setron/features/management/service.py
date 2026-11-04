@@ -1,5 +1,6 @@
 """검토한 관리값 변경을 한 트랜잭션으로 저장하고 최신 판정을 반환한다."""
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import date, datetime
@@ -201,6 +202,53 @@ class ManagementService:
             records = tuple(self._view(tx, e.table, tx.get(e.table, e.key)) for e in edits)
             result = ManagementResult(records, refresh, ages, thresholds, audit["batch_id"])
         return result
+
+    def create_risk_rule(self, values):
+        """환경안전·결함·위험 버전 지정을 새로 등록하고 같은 트랜잭션에서 재판정한다 (BE-015).
+
+        ``values``: rule_type, family_id, risk_reason과 유형별 연결(item_id·release_version_id·
+        start/end_release_version_id), 선택 group_id, mapping_status(기본 UNRESOLVED), is_enabled(기본 True).
+        재연결 근거(target_reference)는 등록 시점의 계열·Item·버전 이름으로 만든다. 연결이 맞지 않으면 저장하지 않는다.
+        """
+        require(isinstance(values, Mapping), "등록할 위험 정보가 필요합니다.")
+        allowed = {"rule_type", "family_id", "group_id", "item_id", "release_version_id", "start_release_version_id",
+                   "end_release_version_id", "risk_reason", "is_enabled", "mapping_status"}
+        require(set(values) <= allowed, "위험 등록에 쓸 수 없는 항목이 있습니다.")
+        row = {"is_enabled": True, "mapping_status": "UNRESOLVED", **deepcopy(dict(values))}
+        context = _context_copy(self.context)
+        with self.storage.transaction() as tx:
+            self._lock(tx)
+            row["target_reference"] = self._risk_reference(tx, row)
+            # 같은 검사를 등록 전에 거쳐 잘못된 연결을 DB에 남기지 않는다 (ID는 임시값).
+            validate_risk_in(tx, {**row, "risk_rule_id": 1}, context)
+            created = tx.insert("risk_rule", row)
+            validate_risk_in(tx, created, context)
+            refresh = ReleaseRefreshService().refresh_in(tx, context=context)
+            thresholds = self._thresholds(tx)
+            ages = tuple((d.base_date, tuple(equipment_age(e.record, refresh.families, thresholds)
+                                            for e in d.summary.equipment)) for d in refresh.dates)
+            journal = json.loads(json.dumps({"schema": 1, "management_create": {"table": "risk_rule", "values": created}},
+                                            ensure_ascii=False, default=_json_value, allow_nan=False))
+            audit = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": journal})
+            record = self._view(tx, "risk_rule", tx.get("risk_rule", {"risk_rule_id": created["risk_rule_id"]}))
+            return ManagementResult((record,), refresh, ages, thresholds, audit["batch_id"])
+
+    @staticmethod
+    def _risk_reference(tx, row):
+        """릴리즈 교체 뒤 재연결에 쓰는 근거. 릴리즈 교체(replacement)가 읽는 키 이름을 그대로 쓴다."""
+        family = tx.get("version_family", {"family_id": row.get("family_id")})
+        reference = {"family": {"family_id": family["family_id"], "family_name": family["family_name"]}}
+        for field, key in (("release_version_id", "direct_version"), ("start_release_version_id", "start_version"),
+                           ("end_release_version_id", "end_version")):
+            if row.get(field) is not None:
+                release = tx.get("release_version", {"release_version_id": row[field]})
+                reference[key] = {name: release[name] for name in
+                                  ("release_version_id", "family_id", "version_raw", "version_suffix")}
+        if row.get("item_id") is not None:
+            item = tx.get("item", {"item_id": row["item_id"]})
+            reference["item"] = {"item_id": item["item_id"], "item_no": item.get("item_no"),
+                                 "content": item.get("content"), "family_id": family["family_id"]}
+        return reference
 
     def status_report(self, result, base_date, *, scope=(), filters=None):
         """실제 조회 범위를 적용한 집계·위험·노후도를 기존 XLSX 출력에 전달한다."""

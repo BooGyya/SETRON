@@ -11,7 +11,8 @@
 
 차트는 모두 같은 시트의 표 셀을 참조하므로 Excel에서 셀을 고치면 차트도 바뀐다.
 적용률은 판단 불가를 분모에서 뺀 값이고(BE-012), 계산할 수 없으면 빈 셀에 '계산 불가'를 적는다.
-트리맵은 openpyxl이 지원하지 않아 아직 만들지 않는다 (명세의 구현 검증 대기 항목).
+- 구성 트리맵: 계열 > 상태(N 이상·N 미만·판단 불가)별 설비·계열 건수. openpyxl이 트리맵을 만들지 못해 저장 뒤
+  :mod:`setron.features.export.treemap`이 Excel 2016 이상의 차트(chartEx)를 넣는다. 그 미만 버전에서는 안내 도형이 보인다.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from setron.features.aggregation.schemas import FamilyStatus, RateCount
 from setron.features.aging.schemas import EquipmentAge
 from setron.features.export.schemas import ExportResult, ExportStatus, StatusReport
+from setron.features.export.treemap import add_treemap
 from setron.features.export.xlsx_cells import ReportTextWriter
 from setron.features.risk.schemas import EquipmentRisk, RiskStatus
 from setron.features.version.schemas import CompareStatus
@@ -60,7 +62,9 @@ def build_status_report(report: StatusReport) -> Workbook:
     _priority(book.create_sheet("우선순위"), report, text)
     if len(report.trend) > 1:
         _trend(book.create_sheet("날짜별 추이"), report, text)
-    text.finish()
+    if treemap_rows(report):
+        _rows(book.create_sheet(TREEMAP_SHEET), ["계열", "상태", "건수"], treemap_rows(report), text=text)
+    text.finish()  # 긴값 분할 시트는 여기서 마지막에 만들어진다
     return book
 
 
@@ -76,6 +80,9 @@ def save_status_report(report: StatusReport, path: str | Path) -> ExportResult:
         with NamedTemporaryFile(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent, delete=False) as file:
             temporary = Path(file.name)
         book.save(temporary)
+        rows = treemap_rows(report)
+        if rows:
+            add_treemap(temporary, TREEMAP_SHEET, rows, title="계열·상태별 구성 (설비·계열 건)", colors=TREEMAP_COLORS)
         os.replace(temporary, path)
     except PermissionError:
         message = "파일을 저장할 수 없습니다. 같은 이름의 파일이 Excel에서 열려 있는지, 폴더 쓰기 권한이 있는지 확인해 주세요."
@@ -253,6 +260,21 @@ def _rate(count: RateCount) -> list:
 def _percent_column(sheet: Worksheet, column: str, count: int) -> None:
     for row in range(2, count + 2):
         sheet[f"{column}{row}"].number_format = PERCENT
+
+
+TREEMAP_SHEET = "구성 트리맵"
+# 앱 상태 색상(theme.TONES의 테두리색)과 맞춘다: N 이상 초록, N 미만 노랑, 판단 불가 회색
+TREEMAP_COLORS = {"N 이상": "208457", "N 미만": "D5B660", "판단 불가": "B8C0CC"}
+
+
+def treemap_rows(report: StatusReport) -> list[tuple[str, str, int]]:
+    """트리맵 표: (계열, 상태, 건수). 0건은 넣지 않는다(트리맵에서 크기 0 칸은 보이지 않음)."""
+    rows = []
+    for count in report.summary.by_family:
+        for label, value in (("N 이상", count.compliant), ("N 미만", count.below), ("판단 불가", count.undetermined)):
+            if value:
+                rows.append((_family_name(report, count.family_id), label, value))
+    return rows
 
 
 def _family_name(report: StatusReport, family_id: int) -> str:
