@@ -29,7 +29,7 @@ Excel 미실행·연결 실패·선택 파일/시트 없음·동일 파일명 �
 | `SETRON_AI_MODEL` | 사용 가능한 모델명. 교육 자료 평가에 사용한 값 `gpt-6.1-sol` | 사내 서버가 제공하는 모델명. 전달받은 예시 `gpt-4` |
 | `SETRON_AI_TIMEOUT` | 코드 기본 60초. `.env.example`은 전체 시트 평가에 맞춰 180초 | 선택 사항. 코드 기본 60초 |
 
-개발 설정은 `.env.example`, 사내 Windows 설정은 `.env.windows.example`을 참고합니다. 기존 `.env`를 덮어쓰지 말고 필요한 항목을 추가하세요. 실제 키는 Git에서 제외된 환경 파일에만 보관합니다. 앱 코드가 환경 파일을 직접 읽지는 않으므로 실행 시 `uv run --locked --env-file .env ...` 또는 `--env-file .env.windows`로 불러옵니다. 필수 AI 설정이 없으면 `AIConfigError`가 발생하며, 다른 `OPENAI_*` 설정이나 기본 OpenAI 서버로 대체하지 않습니다.
+개발 설정은 `.env.example`, 사내 Windows 설정은 `.env.windows.example`을 참고합니다. 기존 `.env`를 덮어쓰지 말고 필요한 항목을 추가하세요. 실제 키는 Git에서 제외된 환경 파일에만 보관합니다. 소스 앱은 프로젝트의 `.env`를 자동으로 읽으며, 다른 파일을 쓸 때는 `uv run --locked --env-file .env.windows ...`로 지정합니다. 이미 지정한 환경변수가 우선합니다. 실행 파일은 옆의 `setron.env`를 읽습니다. 필수 AI 설정이 없으면 `AIConfigError`가 발생하며, 다른 `OPENAI_*` 설정이나 기본 OpenAI 서버로 대체하지 않습니다.
 
 ```python
 from setron.features.ai.service import parse_question
@@ -50,6 +50,8 @@ SDK 자동 재시도는 끕니다. 연결·HTTP 오류, 시간 초과와 호출 
 `features/extraction/service.py`의 `extract_sheet_data(client, kind, sheet_data)`는 BE-006에서 읽은 `SheetData`를 기존 AI 호출 계층에 전달하고, 반환값을 원본 셀과 대조해 검토 자료를 만듭니다. 설비 현황과 릴리즈 노트를 처리하며 병합 셀의 실제 앵커, 호기·PM·SW 연결, C3 UI와 KCTC 구조 구분을 보존합니다.
 
 `result.ok`를 확인한 뒤 `result.data.rows`에서 정리한 `values`, AI 원문 `raw_values`, 셀 위치와 실제 값 `sources`를 확인합니다. 원본과 일치하지 않는 값은 검토값에서 제외하고 `issues`에 사유를 남깁니다. `needs_review`와 `issues`를 확인해 보완해야 하며, `OK`는 검토 자료 생성 성공을 뜻합니다. 이후 BE-008의 전체 검증과 BE-009의 검토 후 저장 단계를 거칩니다.
+
+긴 릴리즈 노트는 20행씩 나누고 최대 두 구간을 동시에 요청합니다. 세로형 표의 머리말을 확인할 수 있으면 해당 구간의 셀과 제목·머리말·앞선 버전/날짜·걸친 병합 셀의 원본 근거만 전송합니다. 큰 설비 현황표도 호기·SW 버전 열을 확인하면 데이터 양에 맞춰 행 구간을 나누며, 병렬 표·공통 정보·병합 셀 문맥은 전체 보존합니다. 양식이 확인되지 않으면 한 번의 전체 추출을 유지합니다. 화면에는 완료된 구간 수와 원본 대조 단계를 표시하며, **추출 취소**를 누르면 추가 호출을 중단하고 늦은 응답을 반영하지 않습니다. 이미 전송한 요청은 응답이 도착할 수 있습니다. 구간별 실패 시 일부 결과만 저장하지 않습니다. 진행 상태와 실패 사유는 추출 결과 검토 영역에서도 표시합니다. 확인된 호기·SW 열의 호기가 결과에서 빠지면 원본 셀 위치와 함께 저장 차단 사유로 표시합니다.
 
 GMS 교육 자료의 실제 추출과 모델 비교는 [BE-007 테스트 결과](docs/test-results/be-007-ai-extraction.md)에 기록했습니다. 원본 스냅샷·정답·실제 응답·오류별 대조표를 함께 보관하며, 모델의 표기 차이와 후처리 차단도 구분합니다.
 
@@ -243,7 +245,7 @@ Dockerfile이나 초기화 스크립트를 수정했다면 `docker compose build
 
 `SETRON_DB_HOST`, `SETRON_DB_PORT`, `SETRON_DB_NAME`, `SETRON_DB_USER`, `SETRON_DB_PASSWORD`가 필수입니다. `SETRON_DB_CONNECT_TIMEOUT`은 연결 제한 시간(초)이며 생략하면 5초입니다. 테스트 DB에는 같은 항목을 `SETRON_TEST_DB_*`로 지정합니다. Compose의 `ROOT_PASSWORD` 설정은 DB 초기화와 상태 확인용이며 앱에서는 사용하지 않습니다.
 
-실제 환경 파일은 Git에서 제외됩니다. 코드가 파일을 자동으로 읽지는 않으므로 실행할 때 uv의 `--env-file` 옵션으로 불러오거나 환경변수를 직접 설정합니다. 개발 DB에 접속하는지 다음 명령으로 확인할 수 있습니다.
+실제 환경 파일은 Git에서 제외됩니다. 소스 앱의 실행 진입점은 프로젝트의 `.env`를 자동으로 읽으며, uv의 `--env-file` 옵션이나 OS에서 이미 지정한 환경변수는 우선합니다. 별도 DB 연결 점검 모듈에는 다음처럼 설정을 불러와 실행합니다.
 
 ```powershell
 uv run --locked --env-file .env python -m setron.infrastructure.database
@@ -359,7 +361,9 @@ uv run --locked --env-file .env python -m pytest tests/test_release_mysql.py -q
 uv run --locked python -m setron
 ```
 
-실행 진입점은 `src/setron/__main__.py`입니다. 현재는 **A 작업 단위 1~7과 B-1 버전 목록·상세**를 실행합니다. VER3 Light 기반 공통 조회 패널, 대시보드·히트맵·설비 목록/상세, 모델·계열별 목표 선택과 읽기 전용 릴리즈 조회를 확인할 수 있습니다. 조회 적용 시 같은 합성 관측과 적용한 목표 N으로 계산하며 실제 DB·Excel에는 연결하지 않습니다.
+실행 진입점은 `src/setron/__main__.py`입니다. 기본 실행은 프로젝트의 `.env`를 읽어 실제 MySQL 자료로 대시보드·히트맵·설비 목록·릴리즈·Item을 조회하고, 가져오기와 관리 데이터 저장도 같은 DB에 연결합니다. 설정이 없거나 DB 접속에 실패하면 오류를 알리고 종료합니다. DB에 설비 현황이 없으면 관측일과 집계값을 만들지 않고 자료 없음으로 표시합니다.
+
+UI 확인용 합성 자료는 `uv run --locked python -m setron --demo`로 명시적으로 실행합니다. 이 모드는 DB와 실제 AI에 연결하지 않고 데모 Excel·예제 응답·메모리 저장소를 사용합니다. 기존 `--demo-excel`도 같은 데모 모드로 실행합니다.
 
 이미 설치된 가상환경으로 직접 실행할 때는 터미널에 맞는 명령을 사용합니다.
 
@@ -373,9 +377,11 @@ uv run --locked python -m setron
 .\.venv\Scripts\python.exe -m setron
 ```
 
-`uv run --locked --env-file .env python -m setron`처럼 `SETRON_DB_*` 설정을 넣어 실행하면 조회 화면은 DB 자료를 읽고, 가져오기 저장과 DB 전체 SQL 내보내기도 DB를 사용합니다. Python 없이 실행하는 Windows 실행 파일 만들기와 `setron.env` 설정은 [docs/windows-package.md](docs/windows-package.md)를 봅니다.
+다른 DB 설정 파일을 쓰려면 `uv run --locked --env-file .env.windows python -m setron`처럼 지정합니다. Python 없이 실행하는 Windows 실행 파일 만들기와 `setron.env` 설정은 [docs/windows-package.md](docs/windows-package.md)를 봅니다.
 
 ### 작업 단위 2·3·4·5·6·7 확인 범위
+
+아래는 `--demo`로 확인하는 기존 합성 UI의 검토 범위입니다. 일반 실행에는 위의 실제 DB 연결 기준을 적용합니다.
 
 - 224px 사이드바, 원본 SEMES 로고·메뉴 아이콘·폰트, 공통 헤더·카드·버튼·배지를 제공합니다.
 - 시작 시에는 아직 적용된 조건이 없어 지표를 ‘—’로 표시합니다. **조회 적용**을 누르면 합성 예시 대시보드·히트맵 결과를 함께 갱신합니다.

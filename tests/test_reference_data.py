@@ -62,6 +62,15 @@ def test_model_derived_family_needs_no_source_cell():
     assert _derived(row, "family_name", raw, kind) and _derived(row, "ui_type", raw, kind)
     wrong = SaveRow((1,), {"model_name": "M-C3", "family_name": "C4"}, {"model_name": {"sheet": "Memory", "cells": ["D4"]}}, ())
     assert not _derived(wrong, "family_name", raw, kind)
+    # 실제 릴리즈 제목에는 모델 외에 문서명·UI가 함께 들어 있다.
+    title = {"sheet": "Memory", "cells": {"D4": "P-PJT M-C3 SW 정기 Release List — 구UI"}}
+    assert _derived(row, "family_name", title, ExtractKind.RELEASE_NOTE)
+    assert not _derived(wrong, "family_name", title, ExtractKind.RELEASE_NOTE)
+    legacy_raw = {"sheet": "Memory", "cells": {"D4": "M-C3", "E4": "C3 구UI"}}
+    legacy = SaveRow((1,), {"model_name": "M-C3", "family_name": "C3", "ui_type": "LEGACY"},
+                     {"model_name": {"sheet": "Memory", "cells": ["D4"]},
+                      "family_name": {"sheet": "Memory", "cells": ["E4"]}}, ())
+    assert _derived(legacy, "ui_type", legacy_raw, kind)
 
 
 def test_normalized_ui_and_structure_match_original_cell_spelling():

@@ -39,6 +39,43 @@ def _token(value):
 _HEADERS = {_token(alias): field for field, aliases in _ALIASES.items() for alias in aliases}
 
 
+def equipment_header_rows(sheet):
+    """호기·SW 버전 열이 함께 확인된 세로형 표의 머리글 행만 반환한다."""
+    return tuple(sheet.first_row + index for index, row in enumerate(sheet.values)
+                 if {"equipment_code", "version_raw"} <= {_HEADERS.get(_token(value)) for value in row})
+
+
+def equipment_coverage_issues(sheet, rows, locations=None):
+    """확정된 세로형 호기·SW 열의 실제 호기 셀과 추출 출처를 대조한다. 머리글과 병합 제목은 제외한다."""
+    grid, mappings, expected = _Grid(sheet), [], set()
+    for row in range(sheet.first_row, grid.last_row + 1):
+        headers = [(col, _HEADERS[_token(cell.value)]) for col in range(sheet.first_col, grid.last_col + 1)
+                   if (cell := grid.source(row, col)) and _token(cell.value) in _HEADERS]
+        current = [mapping for mapping in _segments(headers)
+                   if {"equipment_code", "version_raw"} <= mapping.keys()
+                   and mapping["equipment_code"] is not None and mapping["version_raw"] is not None]
+        if current:
+            mappings = current
+            continue
+        for mapping in mappings:
+            equipment = grid.source(row, mapping["equipment_code"])
+            version = grid.source(row, mapping["version_raw"])
+            if (equipment and version and equipment.address != version.address
+                    and equipment.value is not None and str(equipment.value).strip()
+                    and _token(equipment.value) not in _HEADERS):
+                expected.add(equipment.address)
+    # HPA는 PM별 일치와 빈 필수값까지 확인하는 기존 검사에서 더 구체적으로 보고한다.
+    locations = record_locations(sheet) if locations is None else locations
+    expected.difference_update(cell.address for location in locations if location.is_hpa
+                               and (cell := location.fields.get("equipment_code")))
+    covered = {source.address for row in rows if (source := row.sources.get("equipment_code"))}
+    return tuple(ExtractionIssue(
+        "이 호기의 추출 결과가 없습니다. 원본을 확인하고 해당 행을 보완하거나 다시 추출해 주세요.",
+        "equipment_code", address, code="EQUIPMENT_COVERAGE_MISSING", blocks_save=True,
+    ) for address in sorted(expected - covered, key=lambda address: (
+        int(re.search(r"[0-9]+$", address)[0]), address)))
+
+
 def _is_hpa(value):
     """설명문이나 부분 문자열을 분류로 오인하지 않고 원본 HPA 표기만 확인한다.
 

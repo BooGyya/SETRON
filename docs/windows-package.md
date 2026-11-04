@@ -53,9 +53,11 @@ uv run --locked --env-file .env python database/reset_demo_db.py --confirm <SETR
 
 | 상황 | 화면 |
 | --- | --- |
-| `setron.env`가 없거나 `SETRON_DB_NAME`이 없음 | 합성 예시 자료로 시작. 가져오기 저장은 메모리, 내보내기 버튼 비활성 |
+| `setron.env`가 없거나 `SETRON_DB_NAME`이 없음 | DB 접속 설정을 확인하도록 안내하고 종료 |
 | DB 접속 성공 | 상단 안내 "MySQL DB 저장 자료". 가져오기 저장·조회·위험 판정·내보내기(관리 데이터 Excel, DB 전체 SQL)가 DB를 사용 |
-| DB 접속 실패 | 합성 예시 자료로 시작하고 상단에 "DB 자료를 읽지 못해…" 안내 |
+| DB 접속 실패 | DB 읽기 실패를 알리고 종료 |
+| DB 접속 성공, 저장된 설비 현황 없음 | 조회 가능한 설비 현황이 없다고 표시. 관측일·집계값을 임의로 만들지 않음 |
+| `SETRON.exe --demo` 실행 | DB·실제 AI 연결 없이 합성 자료·데모 Excel·메모리 저장으로 화면 확인 |
 
 ## 5. 설치형 MySQL 실사용 확인
 

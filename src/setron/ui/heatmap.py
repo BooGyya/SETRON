@@ -133,7 +133,7 @@ class HeatmapPage(QWidget):
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
-        self.result_status = StatusBadge("조회 적용 전 · 예시 데이터", "info")
+        self.result_status = StatusBadge(f"조회 적용 전 · {getattr(source, 'result_label', '예시 결과')}", "info")
         body.addWidget(self.result_status)
         self.context = label("대시보드와 같은 조건을 사용합니다. 위에서 조회 적용을 눌러 주세요.", 13, color=SECONDARY, wrap=True)
         body.addWidget(self.context)
@@ -246,6 +246,15 @@ class HeatmapPage(QWidget):
         self.result_status.setText("결과 표시 실패 · 다시 적용해 주세요")
         self.result_status.set_tone("danger")
         self.message.setText("관측 자료·선택지 연결을 확인하고 조회 적용으로 다시 시도해 주세요.")
+
+    def show_no_observations(self, query):
+        if not self.state.is_current(query):
+            return
+        self._clear()
+        self.result_status.setText(f"{getattr(self.source, 'result_label', '예시 결과')} · 저장된 설비 현황 없음")
+        self.result_status.set_tone("info")
+        self.context.setText(f"적용 #{query.revision} · {query.description}\n{self.source.source_label}")
+        self.message.setText("조회 가능한 설비 현황이 없습니다. 설비 현황표를 가져온 뒤 다시 조회해 주세요.")
 
     def invalidate(self, *_):
         self._clear()
