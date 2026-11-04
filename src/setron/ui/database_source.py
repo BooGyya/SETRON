@@ -318,8 +318,8 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
 
     return
     - (공급자, None): DB 자료를 쓴다.
-    - (None, None): DB 설정이 없다. 기본 실행은 오류를 알리고 종료한다.
-    - (None, 안내): DB 읽기 실패. 기본 실행은 오류를 알리고 종료한다.
+    - (None, None): 설정이 없어 합성 예시를 쓴다.
+    - (None, 안내): 설정은 있지만 읽지 못해 합성 예시로 시작한다.
     """
     import os
 
@@ -333,7 +333,7 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
         storage = StorageService(Database.from_env(values))
         return DatabaseDashboardSource(lambda catalog=None: load_dashboard_source(storage, catalog)), None
     except (DatabaseError, StorageValidationError) as error:
-        return None, f"DB 자료를 읽지 못했습니다: {error}"
+        return None, f"DB 자료를 읽지 못해 합성 예시로 시작했습니다: {error}"
 
 
 def sql_exporter_from_env(environ=None):

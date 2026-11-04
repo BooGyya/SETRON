@@ -2,8 +2,6 @@
 
 from dataclasses import dataclass
 from collections.abc import Callable
-import sys
-from threading import Event
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 
@@ -14,11 +12,9 @@ class BackgroundRead:
 
     ivar
     - load: Qt 위젯을 접근하지 않고 독립된 읽기 결과를 반환하는 함수.
-    - with_context: True이면 load에 진행 보고·취소 확인용 ReadContext를 전달한다.
     """
 
     load: Callable
-    with_context: bool = False
 
     def __call__(self):
         """원래 공급자를 호출한다.
@@ -32,24 +28,16 @@ class BackgroundRead:
         return self.load()
 
 
-@dataclass(frozen=True)
-class ReadContext:
-    """위젯을 참조하지 않고 작업 진행을 보고하거나 협력 취소를 확인한다."""
-    cancelled: Callable[[], bool]
-    report: Callable[[object], None]
-
-
 class _Result(QObject):
     """워커 완료 신호 전달 객체."""
 
     done = Signal(int, object, object)
-    progress = Signal(int, object)
 
 
 class _ReadTask(QRunnable):
     """화면 객체를 참조하지 않는 읽기 작업."""
 
-    def __init__(self, generation, loader, cancelled):
+    def __init__(self, generation, loader):
         """작업과 독립된 완료 신호를 보관한다.
 
         param
@@ -59,36 +47,21 @@ class _ReadTask(QRunnable):
         super().__init__()
         self.generation, self.loader = generation, loader
         self.result = _Result()
-        self.cancelled = cancelled
 
     def run(self):
         """성공 또는 실패를 UI 스레드에 전달한다."""
-        uninitialize = None
         try:
-            if sys.platform == "win32":
-                import pythoncom
-                pythoncom.CoInitialize()
-                uninitialize = pythoncom.CoUninitialize
-            if isinstance(self.loader, BackgroundRead) and self.loader.with_context:
-                context = ReadContext(self.cancelled.is_set,
-                                      lambda value: self.result.progress.emit(self.generation, value))
-                value = self.loader.load(context)
-            else:
-                value = self.loader()
+            value = self.loader()
         except Exception as error:
             self.result.done.emit(self.generation, None, error)
         else:
             self.result.done.emit(self.generation, value, None)
-        finally:
-            if uninitialize is not None:
-                uninitialize()
 
 
 class ReadRequest(QObject):
     """중복 요청과 취소된 응답을 차단하는 조회 조정자."""
 
     completed = Signal(object, object)
-    progressed = Signal(object)
 
     def __init__(self, parent):
         """화면 수명에 맞춰 조정자를 생성한다.
@@ -98,7 +71,6 @@ class ReadRequest(QObject):
         """
         super().__init__(parent)
         self.busy, self.generation = False, 0
-        self._cancelled = None
 
     def start(self, loader):
         """명시한 워커 공급자 또는 기존 메모리 공급자를 실행한다.
@@ -113,9 +85,7 @@ class ReadRequest(QObject):
             return False
         self.busy = True
         self.generation += 1
-        self._cancelled = Event()
-        task = _ReadTask(self.generation, loader, self._cancelled)
-        task.result.progress.connect(self._progress, Qt.ConnectionType.QueuedConnection)
+        task = _ReadTask(self.generation, loader)
         if isinstance(loader, BackgroundRead):
             task.result.done.connect(self._finish, Qt.ConnectionType.QueuedConnection)
             QThreadPool.globalInstance().start(task)
@@ -123,11 +93,6 @@ class ReadRequest(QObject):
             task.result.done.connect(self._finish)
             task.run()
         return True
-
-    @Slot(int, object)
-    def _progress(self, generation, value):
-        if self.busy and generation == self.generation:
-            self.progressed.emit(value)
 
     @Slot(int, object, object)
     def _finish(self, generation, value, error):
@@ -144,8 +109,6 @@ class ReadRequest(QObject):
         self.completed.emit(value, error)
 
     def cancel(self):
-        """늦은 응답을 차단하고 협력 취소를 요청한다. 실행 중인 스레드를 강제 종료하지 않는다."""
-        if self._cancelled is not None:
-            self._cancelled.set()
+        """응답 수락을 취소한다. 실행 중인 공급자 스레드는 강제 종료하지 않는다."""
         self.generation += 1
         self.busy = False

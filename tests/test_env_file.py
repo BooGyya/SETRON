@@ -1,7 +1,6 @@
-"""실행 환경에 따른 설정 파일 선택과 기존 환경변수 보존을 검증한다."""
+"""실행 파일 옆 설정 파일(setron.env) 읽기를 검증한다 (Jira S15P31B106-77)."""
 
 import sys
-from pathlib import Path
 
 import setron.__main__ as entry
 from setron.infrastructure.env_file import load_env_file
@@ -25,21 +24,13 @@ def test_missing_file_changes_nothing(tmp_path):
     assert load_env_file(tmp_path / "없음.env", environ) == () and environ == {}
 
 
-def test_entry_reads_project_env_regardless_of_working_directory(tmp_path, monkeypatch):
+def test_env_file_is_read_only_for_frozen_executable(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(entry, "load_env_file", lambda path: calls.append(path))
     monkeypatch.setattr("setron.ui.app.main", lambda: 0)
 
     monkeypatch.delattr(sys, "frozen", raising=False)
-    project_env = Path(entry.__file__).resolve().parents[2] / ".env"
-    monkeypatch.chdir(tmp_path)
-    assert entry.run() == 0 and calls == [project_env]
-
-
-def test_frozen_entry_reads_only_config_next_to_executable(tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(entry, "load_env_file", lambda path: calls.append(path))
-    monkeypatch.setattr("setron.ui.app.main", lambda: 0)
+    assert entry.run() == 0 and calls == []
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(tmp_path / "SETRON.exe"))

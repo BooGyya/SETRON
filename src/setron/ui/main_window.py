@@ -306,7 +306,7 @@ class MainWindow(QMainWindow):
         """DB 저장 결과를 확인하기 전에 앱을 닫아 결과 안내를 잃지 않게 한다."""
         guard = getattr(self, "close_guard", None)
         if guard is not None and not guard():
-            self.notice.setText("데이터 저장 중입니다. 저장 결과를 확인한 뒤 닫아 주세요.")
+            self.notice.setText("관리 데이터 저장 중입니다. 저장 결과를 확인한 뒤 닫아 주세요.")
             event.ignore()
             return
         super().closeEvent(event)

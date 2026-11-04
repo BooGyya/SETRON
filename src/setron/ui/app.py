@@ -1,7 +1,7 @@
 """UI 시작점. 대시보드·히트맵·목록/상세는 같은 관측 공급자를 쓴다.
 
-기본 실행은 `SETRON_DB_*`로 설정한 DB를 조회·저장에 사용한다. 설정·접속에 문제가 있으면 오류를 알리고 종료한다.
-합성 관측·메모리 저장은 명시적인 `--demo` 또는 `--demo-excel` 실행에서만 사용한다.
+`SETRON_DB_*` 설정이 없으면 합성 관측·메모리 저장을 쓰고 DB에 연결하지 않는다. 설정이 있으면 조회 화면은 DB 자료를
+읽고, 가져오기 저장과 DB 전체 SQL 내보내기도 DB를 쓴다.
 데이터 가져오기는 요청 시에만 실행 중인 Excel과 설정된 AI API에 연결한다. 데모 Excel은 예제 응답을 사용한다.
 """
 
@@ -31,7 +31,7 @@ from setron.ui.items import ItemsPage
 from setron.ui.ai_data import FreshAnalysisData, facts_from_snapshot
 from setron.ui.ai_page import AIPage
 from setron.ui.analysis_data import analysis_hooks, choice_parser
-from setron.ui.ai_connection import AIProviders, ai_providers_from_env
+from setron.ui.ai_connection import ai_providers_from_env
 from setron.ui.import_demo import DemoExcel, example_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -39,7 +39,6 @@ from setron.ui.release_refresh import capture_release_context, is_database_impor
 from setron.ui.management_page import ManagementPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter
-from setron.features.ai.schemas import ExtractKind
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
@@ -232,8 +231,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · {importer.extraction_label} · 저장 위치: {importer.saver.target_label}")
             list_action.setEnabled(False)
         elif window.route == "ai":
-            origin = "설정된 AI API" if ai_client is not None else "예제 응답"
-            window.notice.setText(f"AI 분석 · {origin} · 질문으로 DB를 바꾸지 않음")
+            window.notice.setText("AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음")
             list_action.setEnabled(False)
         elif window.route == "versions":
             window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
@@ -464,9 +462,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             # 한 번 계산한 같은 불변 결과를 두 화면에서 공유한다.
             heatmap.accept_result(query, dashboard.snapshot)
             list_action.setEnabled(equipment.accept_result(query, dashboard.snapshot))
-        elif dashboard.no_observations:
-            heatmap.show_no_observations(query)
-            equipment.clear("조회 가능한 설비 현황이 없습니다.")
         else:
             heatmap.fail_query(query)
             equipment.clear("설비 결과 표시 실패 · 다시 적용해 주세요")
@@ -478,16 +473,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.targets_changed.connect(lambda *_: ai.refresh())
     window.page_changed.connect(lambda key: ai.refresh() if key == "ai" else None)
     ai.navigate_requested.connect(window.navigate)
-    def requery_imported_data():
-        if is_database_import_saver(importer.saver) and importer.kind is ExtractKind.RELEASE_NOTE:
-            window.navigate("versions")
-            versions.reload()
-            return
-        window.navigate("dashboard")
-        if is_database_import_saver(importer.saver):
-            window.query_panel.apply_draft()
-
-    importer.requery_requested.connect(requery_imported_data)
+    importer.requery_requested.connect(lambda: window.navigate("dashboard"))
     window.query_panel.catalog_changed.connect(dashboard.invalidate)
     window.query_panel.catalog_changed.connect(heatmap.invalidate)
     window.query_panel.catalog_changed.connect(equipment.clear)
@@ -600,7 +586,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     management.request.completed.connect(lambda *_: ai.refresh())
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
-    window.close_guard = lambda: management.state != "saving" and importer.state != "saving"
+    window.close_guard = lambda: management.state != "saving"
 
     def invalidate_saved_results(receipt):
         """DB 저장 후 이전 판정·대기 중 AI 요청을 폐기하고 N 재확인을 안내한다.
@@ -640,7 +626,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--auto-close-ms", type=int, default=0, help="실행 검증용 자동 종료 시간")
-    parser.add_argument("--demo", action="store_true", help="DB 연결 없이 합성 자료로 화면 확인")
     parser.add_argument("--demo-excel", action="store_true", help="실행 중인 Excel 대신 합성 통합문서로 가져오기 화면 확인")
     args = parser.parse_args(argv)
     if args.auto_close_ms < 0:
@@ -648,22 +633,14 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("SETRON")
     install_theme(app)
-    demo = args.demo or args.demo_excel
-    source, problem = (None, None) if demo else dashboard_source_from_env()
-    if not demo and source is None:
-        QMessageBox.critical(None, "DB 연결 확인 필요", problem or
-                             "DB 접속 설정이 없습니다. 프로젝트의 .env 또는 실행 파일 옆 setron.env의 "
-                             "SETRON_DB_* 설정을 확인해 주세요.")
-        return 1
-    ai = AIProviders() if demo else ai_providers_from_env()
+    # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
+    source, problem = dashboard_source_from_env()
+    ai = ai_providers_from_env()
     app.aboutToQuit.connect(ai.close)
-    window = create_window(source, excel=DemoExcel() if demo else None,
-                           import_saver=None if demo else saver_from_env(),
-                           db_exporter=None if demo else sql_exporter_from_env(),
-                           management_gateway=None if demo else gateway_from_env(),
-                           data_exporter=None if demo else data_exporter_from_env(),
-                           extractor=example_extractor if demo else None,
-                           sheet_extractor=None if demo else ai.sheet_extractor,
+    window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
+                           import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
+                           management_gateway=gateway_from_env() if source is not None else None,
+                           data_exporter=data_exporter_from_env(), extractor=ai.extractor,
                            ai_client=ai.client)
     if problem or ai.problem:
         window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))

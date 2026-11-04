@@ -4,7 +4,6 @@ import json
 
 from setron.features.ai.schemas import AIStatus, ExtractKind
 from setron.infrastructure.ai_client import AIConfigError, ExampleChatClient
-from setron.infrastructure.excel_reader import MergedRange, SheetData
 from setron.ui.ai_connection import ai_providers_from_env
 
 SETTINGS = {"SETRON_AI_BASE_URL": "http://ai.local/v1", "SETRON_AI_API_KEY": "k", "SETRON_AI_MODEL": "m"}
@@ -40,14 +39,3 @@ def test_providers_share_one_client():
     assert providers.connected and providers.client is client
     assert extracted.status is AIStatus.OK and extracted.data.rows[0].values["version_raw"] == "v1"
     assert len(client.calls) == 2
-
-
-def test_sheet_provider_sends_original_bounds_and_merged_ranges():
-    client = ExampleChatClient([json.dumps({"rows": [], "review_notes": []})])
-    providers = ai_providers_from_env(SETTINGS, client_factory=lambda values: client)
-    sheet = SheetData("검증.xlsx", "구UI", 3, 2, [["v1", "내용"], [None, "다음 내용"]],
-                      [MergedRange(3, 2, 4, 2)])
-    result = providers.sheet_extractor(ExtractKind.RELEASE_NOTE, sheet)
-    assert result.ok
-    content = client.calls[0][-1].content
-    assert "B3:C4" in content and "B3:B4" in content

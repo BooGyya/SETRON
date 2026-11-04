@@ -12,11 +12,6 @@ def run() -> int:
     if getattr(sys, "frozen", False):
         # 배포한 실행 파일에는 uv --env-file이 없으므로 실행 파일 옆의 설정 파일을 읽는다.
         load_env_file(Path(sys.executable).with_name(ENV_FILE_NAME))
-    else:
-        # 실행 위치와 무관하게 이 소스 프로젝트의 설정만 읽는다. 외부에서 지정한 환경변수는 우선한다.
-        project_root = Path(__file__).resolve().parents[2]
-        if (project_root / "pyproject.toml").is_file():
-            load_env_file(project_root / ".env")
     from setron.ui.app import main
 
     return main()
