@@ -440,6 +440,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     versions.mode_changed.connect(sync_mode)
     items.mode_changed.connect(sync_mode)
     window.page_changed.connect(sync_mode)
+    sync_mode()  # 첫 화면(대시보드)에도 안내 배지 표시 규칙을 바로 적용한다.
     def ensure_loaded(key):
         # 등록 과정에서 취소된 초기 워커 조회는 해당 화면 진입 시 다시 시작한다.
         if key == "versions" and versions.catalog is None and not versions.read_request.busy:
