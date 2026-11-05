@@ -17,6 +17,28 @@ class GoalState(str, Enum):
     EXCLUDED = "HPA · 분석 제외"
 
 
+# 요구사항 3.2: 기준 버전 적용 설비는 초록, 버전이 많이 낮은 설비는 빨강. 임계값은 "추가 정의 필요"라서
+# 확정 전까지 N-2 이하를 빨강(많이 낮음)으로 둔다. 기준이 정해지면 이 값만 바꾼다.
+FAR_BELOW_STEPS = 2
+
+
+def compare_tone(status: CompareStatus, steps_below: int | None) -> str:
+    """버전 비교 표시 색. N 이상 초록, N-1·단계 미확인·판단 불가 노랑, N-2 이하 빨강.
+
+    단계를 모르는 N 미만은 '많이 낮음'으로 단정하지 않고 노랑으로 둔다.
+    """
+    if status is CompareStatus.AT_OR_ABOVE:
+        return "success"
+    if status is CompareStatus.BELOW and steps_below is not None and steps_below >= FAR_BELOW_STEPS:
+        return "danger"
+    return "warning"
+
+
+def _max_steps(comparisons) -> int | None:
+    steps = [c.steps_below for c in comparisons if c.status is CompareStatus.BELOW and c.steps_below is not None]
+    return max(steps) if steps else None
+
+
 @dataclass(frozen=True)
 class EquipmentSelection:
     query: AppliedQuery
@@ -32,6 +54,11 @@ class TileFamily:
     status: CompareStatus
     versions: tuple[str, ...]
     explanations: tuple[str, ...]
+    steps_below: int | None = None  # 이 계열 PM 중 확인된 가장 큰 N 미만 단계. 표시 색에만 쓴다.
+
+    @property
+    def tone(self) -> str:
+        return compare_tone(self.status, self.steps_below)
 
 
 @dataclass(frozen=True)
@@ -49,6 +76,22 @@ class EquipmentTile:
     observation_date: date | None = None
     raw_versions: tuple[str, ...] = ()
     model_name: str | None = None
+    # 화면 표시용 위치 조각. location 문구와 같은 원천이며 판정에는 쓰지 않는다.
+    fab_label: str | None = None
+    line_label: str | None = None
+    area: str | None = None
+    steps_below: int | None = None  # 설비 전체에서 확인된 가장 큰 N 미만 단계. 표시 색에만 쓴다.
+
+    @property
+    def version_tone(self) -> str:
+        """타일 채움색. 목표 판정과 같은 기준이며 위험 판정과는 섞지 않는다."""
+        if self.goal is GoalState.EXCLUDED:
+            return "neutral"
+        if self.goal is GoalState.MET:
+            return "success"
+        if self.goal is GoalState.BELOW and self.steps_below is not None and self.steps_below >= FAR_BELOW_STEPS:
+            return "danger"
+        return "warning"
 
     @property
     def risk_label(self):
@@ -136,7 +179,8 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                 explanations.append(f"{p.pm.pm_name or '공통'} 목표 N: {target}"
                                     + (f" · {comparison.message}" if comparison.message else ""))
             items.append(TileFamily(family.family_id, f"{names} · 계열 {family_name(source, family.family_id)}", family.status,
-                                    tuple(versions), tuple(explanations)))
+                                    tuple(versions), tuple(explanations),
+                                    _max_steps(p.comparison for p in family.pms)))
         raw_area = record.line if record.is_hpa else loc.raw_area
         location = (f"{sites[loc.site_key]} · Fab {fabs.get(loc.fab_key, '미지정')} · "
                     f"Line {lines.get(loc.line_key, '미지정')} · 원본 구역 {raw_area or '미확인'}")
@@ -146,5 +190,7 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                                     location, goal, source.risk_status(record), tuple(items),
                                     len({p.group_id for p in record.pms}) > 1 or len(families) > 1,
                                     any(f.pm_mismatch for f in families), record.base_date, raw_versions,
-                                    record.model_name if record.is_hpa else None))
+                                    record.model_name if record.is_hpa else None,
+                                    fabs.get(loc.fab_key), lines.get(loc.line_key), raw_area or None,
+                                    _max_steps(p.comparison for f in families for p in f.pms)))
     return tuple(result)

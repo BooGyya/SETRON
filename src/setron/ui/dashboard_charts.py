@@ -60,7 +60,7 @@ class DashboardChart(QChartView):
         series = QPieSeries()
         series.setPieSize(0.90)
         series.setHoleSize(0.65)
-        for title, count, color in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#e7b83d", "#66748e")):
+        for title, count, color in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#f6dc85", "#c9ced6")):
             if count:
                 part = series.append(f"{title} {count}건 ({count / total:.1%})", count)
                 part.setColor(QColor(color))

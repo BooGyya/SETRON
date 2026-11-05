@@ -5,7 +5,8 @@
 """
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from setron.features.ai.examples import example_client
 from setron.features.ai.schemas import AITask
@@ -14,7 +15,7 @@ from setron.infrastructure.ai_client import ResponseSource
 from setron.ui.ai_data import FreshAnalysisData, VIEW_LABELS, VIEW_ROUTES, ConditionStatus, check_apply, interpret, selection_for
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import SECONDARY
+from setron.ui.theme import INK, PRIMARY, SECONDARY, font, icon, svg_size
 from setron.ui.read_worker import ReadRequest
 
 SOURCE_LABELS = {
@@ -24,10 +25,43 @@ SOURCE_LABELS = {
 }
 
 
-def _section(card, title):
-    card.body.addWidget(label(title, 14, medium=True))
-    text = label("", 13, wrap=True)
+SPARKLE = "ver5/active-ai.svg"
+# 바로 분석 칩은 질문 입력란만 채운다. 해석·적용·분석은 사용자가 전송·버튼을 눌러야 실행된다.
+QUICK_QUESTIONS = (
+    ("원인 분석", "현재 조회 결과에서 목표 N 미달 원인을 분석해줘"),
+    ("업그레이드 우선순위", "업그레이드가 먼저 필요한 설비를 알려줘"),
+    ("버전 통일 시점 예측", "목표 N 통일은 언제쯤 끝날까?"),
+    ("보고서 생성", "현재 조회 결과로 보고서를 만들어줘"),
+)
+_STYLE = f"""
+QFrame#aiInputArea {{ background: white; border: none; border-top: 1px solid #dee0e5;
+    border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }}
+QFrame#aiAnswer {{ background: #f4f5f8; border: none; border-radius: 14px; border-top-left-radius: 4px; }}
+QLabel#aiAvatar {{ background: #ebeffd; border-radius: 18px; }}
+QLabel#aiBubble {{ background: {PRIMARY}; color: white; border-radius: 16px; border-bottom-right-radius: 4px;
+    padding: 11px 18px; }}
+QLabel#aiTag {{ background: #ebeffd; color: {PRIMARY}; border-radius: 6px; padding: 3px 8px; }}
+QFrame#aiInputBox {{ background: white; border: 1.5px solid {PRIMARY}; border-radius: 12px; }}
+QFrame#aiInputBox QLineEdit {{ background: transparent; border: none; color: {INK}; }}
+QPushButton#aiQuick {{ background: white; border: 1px solid #dee0e5; border-radius: 16px; padding: 6px 12px;
+    color: {INK}; min-height: 0; }}
+QPushButton#aiQuick:hover {{ background: #edf0fd; border-color: {PRIMARY}; }}
+QListWidget#aiConditions {{ background: white; border: 1px solid #dee0e5; border-radius: 10px; color: {INK}; }}
+QListWidget#aiConditions::item {{ padding: 9px 12px; border-bottom: 1px solid #eef0f3; }}
+"""
+
+
+def _text(size=13, color=None):
+    text = label("", size, color=color, wrap=True)
     text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    return text
+
+
+def _section(card, title):
+    heading = label(title, 13, medium=True)
+    heading.setVisible(False)
+    card.body.addWidget(heading)
+    text = _OptionalText(heading=heading)
     text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     card.body.addWidget(text)
     return text
@@ -35,6 +69,115 @@ def _section(card, title):
 
 def _bullets(values, empty):
     return "\n".join(f"• {value}" for value in values) if values else empty
+
+
+def _sparkle(size=18):
+    result = QLabel()
+    result.setPixmap(icon(SPARKLE).pixmap(svg_size(SPARKLE)))
+    result.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    result.setFixedSize(size, size)
+    return result
+
+
+def _tag(text):
+    result = QLabel(text)
+    result.setObjectName("aiTag")
+    result.setFont(font(12, medium=True))
+    result.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    return result
+
+
+class _UserBubble(QWidget):
+    """사용자 질문 말풍선(오른쪽 정렬). 질문 문구만 그대로 보여준다."""
+
+    def __init__(self):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch(1)
+        self.text = QLabel()
+        self.text.setObjectName("aiBubble")
+        self.text.setTextFormat(Qt.TextFormat.PlainText)
+        self.text.setFont(font(15, medium=True))
+        self.text.setWordWrap(True)
+        self.text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        row.addWidget(self.text, 0, Qt.AlignmentFlag.AlignRight)
+        self.hide()
+
+    def show_question(self, question):
+        self.text.setText(question)
+        self._fit(self.width())
+        self.setVisible(bool(question))
+
+    def _fit(self, available):
+        # 한 줄에 들어가면 글자 폭만큼, 길면 줄의 70%까지 넓히고 줄바꿈한다.
+        natural = self.text.fontMetrics().horizontalAdvance(self.text.text()) + 40
+        limit = max(200, int(available * 0.7)) if available > 0 else 640
+        self.text.setWordWrap(natural > limit)
+        self.text.setFixedWidth(min(natural, limit))
+
+    def resizeEvent(self, event):
+        self._fit(event.size().width())
+        super().resizeEvent(event)
+
+
+class _OptionalText(QLabel):
+    """내용이 있을 때만 보이는 문단. 비어 있는 섹션이 답변 블록에 빈 공간을 만들지 않게 한다."""
+
+    def __init__(self, size=13, color=None, heading=None):
+        super().__init__("")
+        self.heading = heading
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setFont(font(size))
+        self.setWordWrap(True)
+        if color:
+            self.setStyleSheet(f"color: {color};")
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setVisible(False)
+
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(text))
+        if self.heading is not None:
+            self.heading.setVisible(bool(text))
+
+
+class _AnswerBlock(QWidget):
+    """AI 답변 블록: 반짝이 아바타 + 회색 본문. ``body``는 Card와 같은 방식으로 위젯을 붙인다."""
+
+    def __init__(self, intent):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        avatar = _sparkle(36)
+        avatar.setObjectName("aiAvatar")
+        row.addWidget(avatar, 0, Qt.AlignmentFlag.AlignTop)
+        self.frame = QFrame()
+        self.frame.setObjectName("aiAnswer")
+        self.body = QVBoxLayout(self.frame)
+        self.body.setContentsMargins(22, 18, 22, 18)
+        self.body.setSpacing(12)
+        self.header = QHBoxLayout()
+        self.header.setSpacing(6)
+        caption = label("요청 인식", 12, medium=True, color="rgba(20,32,51,0.6)")
+        self.header.addWidget(caption)
+        self.header.addWidget(_tag(intent))
+        self.body.addLayout(self.header)
+        row.addWidget(self.frame, 1)
+
+    def add_header(self, badge):
+        """오른쪽 출처 배지. 좁은 창에서는 배지 문구를 줄바꿈해 가로 스크롤을 만들지 않는다."""
+        self.badge = badge
+        badge.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        self.header.addStretch(1)
+        self.header.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
+
+    def resizeEvent(self, event):
+        badge = getattr(self, "badge", None)
+        if badge is not None:
+            badge.setWordWrap(event.size().width() < 1000)
+        super().resizeEvent(event)
 
 
 class AIPage(QWidget):
@@ -72,90 +215,139 @@ class AIPage(QWidget):
         self.conditions, self.rows, self.parsed_catalog_revision = None, (), None
         self.parse_source, self.applied_query, self.answer = None, None, None
         self.busy, self.generation = None, 0
-        body = QVBoxLayout(self)
-        body.setContentsMargins(0, 0, 0, 0)
+        self.setStyleSheet(_STYLE)
+        page = QVBoxLayout(self)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
+        # 하나의 대화 카드: 위쪽 대화(질문 말풍선·AI 답변 블록), 아래쪽 바로 분석·질문 입력.
+        chat = Card(padding=0)
+        chat.body.setSpacing(0)
+        page.addWidget(chat)
+        thread = QWidget()
+        body = QVBoxLayout(thread)
+        body.setContentsMargins(24, 24, 24, 24)
         body.setSpacing(20)
+        chat.body.addWidget(thread)
+
+        state_row = QHBoxLayout()
+        state_row.setSpacing(10)
         self.status = StatusBadge("질문 대기", "info")
-        body.addWidget(self.status)
-        self.notice = label("회사 AI API 연결 전입니다. 결과는 예제 응답이며 실제 분석이 아닙니다.", 13, color=SECONDARY, wrap=True)
-        self.notice.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        body.addWidget(self.notice)
+        state_row.addWidget(self.status, 0, Qt.AlignmentFlag.AlignTop)
+        self.notice = _text(13, SECONDARY)
+        self.notice.setText("회사 AI API 연결 전입니다. 결과는 예제 응답이며 실제 분석이 아닙니다.")
+        state_row.addWidget(self.notice, 1)
+        body.addLayout(state_row)
 
-        ask = Card()
-        ask.body.addWidget(label("질문", 20, medium=True))
-        ask.body.addWidget(label("질문으로 DB 값을 바꾸지 않습니다. 해석된 조건은 확인한 뒤에만 공통 조회에 적용합니다.",
-                                 13, color=SECONDARY, wrap=True))
-        self.question = QLineEdit()
-        self.question.setAccessibleName("AI 질문")
-        self.question.setPlaceholderText("예: 화성 C4 설비 버전 현황 보여줘")
-        self.question.setFixedHeight(40)
-        self.question.setStyleSheet("QLineEdit {background:#f7f9fc;border:1px solid #e5eaf3;border-radius:10px;padding:8px;}")
-        self.question.returnPressed.connect(self.parse)
-        ask.body.addWidget(self.question)
-        self.parse_button = button("질문 해석", primary=True)
-        self.parse_button.clicked.connect(self.parse)
-        ask.body.addWidget(_WrapRow([self.parse_button], 200))
-        body.addWidget(ask)
-
-        condition = Card()
-        condition.body.addWidget(label("해석된 조건", 20, medium=True))
+        # 질문 해석 → 조건 확인 블록
+        self.question_bubble = _UserBubble()
+        body.addWidget(self.question_bubble)
+        condition = _AnswerBlock("조건 해석")
         self.parse_badge = StatusBadge("해석 전", "neutral")
-        condition.body.addWidget(self.parse_badge)
-        condition.body.addWidget(label("체크한 조건만 적용합니다. 적용할 수 없는 조건은 자동으로 빼지 않으므로, "
-                                       "그대로 두면 적용이 막힙니다. 제외할 조건은 직접 체크를 해제해 주세요.",
-                                       13, color=SECONDARY, wrap=True))
+        condition.add_header(self.parse_badge)
+        rule = _text(13)
+        rule.setText("질문으로 DB 값을 바꾸지 않습니다. 해석된 조건은 확인한 뒤에만 공통 조회에 적용합니다. "
+                     "체크한 조건만 적용하며, 적용할 수 없는 조건은 자동으로 빼지 않으므로 그대로 두면 적용이 막힙니다. "
+                     "제외할 조건은 직접 체크를 해제해 주세요.")
+        condition.body.addWidget(rule)
         self.condition_list = QListWidget()
+        self.condition_list.setObjectName("aiConditions")
         self.condition_list.setAccessibleName("해석된 조건 목록")
         self.condition_list.setWordWrap(True)
-        self.condition_list.setFixedHeight(220)
-        self.condition_list.setStyleSheet("QListWidget {background:white;border:1px solid #e9eef6;border-radius:8px;}"
-                                          "QListWidget::item {padding:8px;border-bottom:1px solid #e9eef6;}")
+        self.condition_list.setFixedHeight(200)
+        self.condition_list.setFont(font(13))
         self.condition_list.itemChanged.connect(lambda *_: self._render_apply())
         condition.body.addWidget(self.condition_list)
-        self.view_label = label("", 13, color=SECONDARY, wrap=True)
+        self.view_label = _OptionalText(13, SECONDARY)
         condition.body.addWidget(self.view_label)
-        self.apply_reason = label("", 13, wrap=True)
-        self.apply_reason.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        condition.body.addWidget(self.apply_reason)
+        self.apply_reason = _text(12, "rgba(20,32,51,0.6)")
         self.apply_button = button("확인 후 조건 적용", primary=True)
+        self.apply_button.setFixedHeight(40)
         self.apply_button.clicked.connect(self.apply_conditions)
-        condition.body.addWidget(_WrapRow([self.apply_button], 220))
-        self.apply_result = label("", 13, wrap=True)
+        apply_row = QHBoxLayout()
+        apply_row.setSpacing(12)
+        apply_row.addWidget(self.apply_reason, 1)
+        apply_row.addWidget(self.apply_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        condition.body.addLayout(apply_row)
+        self.apply_result = _OptionalText(13)
         condition.body.addWidget(self.apply_result)
         body.addWidget(condition)
 
-        analysis = Card()
-        analysis.body.addWidget(label("현재 조회 결과 분석", 20, medium=True))
-        self.facts_label = label("", 13, color=SECONDARY, wrap=True)
-        self.facts_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        analysis.body.addWidget(self.facts_label)
-        actions = QHBoxLayout()
-        self.analyze_button = button("현재 적용 조건으로 분석")
-        self.analyze_button.clicked.connect(self.analyze)
+        # 현재 조회 결과 분석 블록
+        self.analysis_bubble = _UserBubble()
+        body.addWidget(self.analysis_bubble)
+        analysis = _AnswerBlock("현재 조회 분석")
         self.analysis_badge = StatusBadge("분석 전", "neutral")
-        actions.addWidget(self.analyze_button)
-        actions.addWidget(self.analysis_badge)
-        actions.addStretch()
-        analysis.body.addLayout(actions)
+        analysis.add_header(self.analysis_badge)
+        self.facts_label = _text(12, "rgba(20,32,51,0.6)")
+        analysis.body.addWidget(self.facts_label)
         self.answer_label = _section(analysis, "답변")
         self.evidence_label = _section(analysis, "근거 · 자료로 확인")
         self.assumption_label = _section(analysis, "추정 · 자료로 확인하지 않음")
         self.unconfirmed_label = _section(analysis, "미확인")
         self.number_check_label = _section(analysis, "숫자 확인")
-        extra = QHBoxLayout()
+        self.forecast_label = _section(analysis, "참고 예측")
+        self.analyze_button = button("현재 적용 조건으로 분석")
+        self.analyze_button.clicked.connect(self.analyze)
         self.forecast_button = button("통일 예측 (참고)")
         self.forecast_button.setToolTip("현재 조회 범위의 날짜별 저장 현황으로 목표 N 통일 완료 시점을 단순 비례로 계산합니다.")
         self.forecast_button.clicked.connect(self.run_forecast)
-        self.report_button = button("Word 보고서 저장")
+        self.report_button = button("Word 보고서 저장", primary=True)
         self.report_button.setToolTip("질문·조건·답변(근거·추정·미확인)·사용한 수치·참고 예측을 .docx로 저장합니다.")
         self.report_button.clicked.connect(lambda: self.save_report())
-        extra.addWidget(self.forecast_button)
-        extra.addWidget(self.report_button)
-        extra.addStretch()
-        analysis.body.addLayout(extra)
-        self.forecast_label = _section(analysis, "참고 예측")
+        for action in (self.analyze_button, self.forecast_button, self.report_button):
+            action.setFixedHeight(40)
+        analysis.body.addWidget(_WrapRow([self.analyze_button, self.forecast_button, self.report_button], 190))
         body.addWidget(analysis)
+        body.addStretch(1)
+
+        # 바로 분석 · 질문 입력
+        composer = QFrame()
+        composer.setObjectName("aiInputArea")
+        compose = QVBoxLayout(composer)
+        compose.setContentsMargins(24, 14, 24, 18)
+        compose.setSpacing(10)
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(8)
+        quick_row.addWidget(label("바로 분석", 12, medium=True, color="rgba(20,32,51,0.6)"))
+        self.quick_buttons = []
+        for text, question in QUICK_QUESTIONS:
+            chip = QPushButton(text)
+            chip.setObjectName("aiQuick")
+            chip.setFont(font(12, medium=True))
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setToolTip(f"질문 입력란에 ‘{question}’을 채웁니다. 전송해야 해석합니다.")
+            chip.clicked.connect(lambda checked=False, value=question: self._prefill(value))
+            self.quick_buttons.append(chip)
+        quick_row.addWidget(_WrapRow(self.quick_buttons, 150), 1)
+        compose.addLayout(quick_row)
+        box = QFrame()
+        box.setObjectName("aiInputBox")
+        input_row = QHBoxLayout(box)
+        input_row.setContentsMargins(18, 8, 8, 8)
+        input_row.setSpacing(10)
+        input_row.addWidget(_sparkle(18))
+        self.question = QLineEdit()
+        self.question.setAccessibleName("AI 질문")
+        self.question.setPlaceholderText("질문을 입력하세요. 예) 화성 C4 설비 버전 현황 보여줘")
+        self.question.setFont(font(15))
+        self.question.setMinimumWidth(80)
+        self.question.setFixedHeight(40)
+        self.question.returnPressed.connect(self.parse)
+        input_row.addWidget(self.question, 1)
+        self.parse_button = button("전송", primary=True)
+        self.parse_button.setAccessibleName("질문 전송 · 조건 해석")
+        self.parse_button.setToolTip("질문을 조회 조건으로 해석합니다. 확인 전에는 아무 조건도 적용하지 않습니다.")
+        self.parse_button.setFixedSize(152, 40)
+        self.parse_button.clicked.connect(self.parse)
+        input_row.addWidget(self.parse_button)
+        compose.addWidget(box)
+        chat.body.addWidget(composer)
         self.refresh()
+
+    def _prefill(self, question):
+        """바로 분석 칩: 질문 입력란만 채운다. 해석·적용·분석은 실행하지 않는다."""
+        self.question.setText(question)
+        self.question.setFocus()
 
     def _set_status(self, text, tone, notice=None):
         self.status.setText(text)
@@ -167,7 +359,7 @@ class AIPage(QWidget):
         """공통 조회 적용·선택지 변경 뒤 분석 가능 여부와 적용 가능 여부를 다시 표시한다."""
         facts = self.facts_provider()
         self.facts_label.setText("분석에 보낼 자료 · 대시보드와 같은 적용 조건의 계산값\n"
-                                 + "\n".join(f"{key}: {'계산 불가' if value is None else value}" for key, value in facts.items())
+                                 + " · ".join(f"{key}: {'계산 불가' if value is None else value}" for key, value in facts.items())
                                  if facts else "조회 적용으로 대시보드 결과를 계산한 뒤 분석할 수 있습니다.")
         self.parse_button.setEnabled(self.busy is None)
         available = facts is not None or (self.fresh_loader is not None and self.state.applied_is_current)
@@ -234,6 +426,7 @@ class AIPage(QWidget):
         question = self.question.text().strip()
         if self.busy is not None or not question:
             return False
+        self.question_bubble.show_question(question)
         self.generation += 1
         self.busy = "parse"
         self.conditions, self.rows, self.parse_source = None, (), None
@@ -296,6 +489,8 @@ class AIPage(QWidget):
         return check_apply(self.rows, self.included())
 
     def _render_apply(self):
+        # 해석 전에는 빈 조건 목록 대신 안내 문구만 보인다.
+        self.condition_list.setVisible(self.condition_list.count() > 0)
         reason = self.apply_block_reason() if self.busy is None else "처리 중입니다."
         self.apply_button.setEnabled(reason is None)
         self.apply_reason.setText(reason or "적용할 수 있습니다. 적용 전에 확인 창이 표시됩니다.")
@@ -345,6 +540,7 @@ class AIPage(QWidget):
             if loader is None:
                 self._set_status("조회 확인 필요", "warning", "현재 적용 조건으로 자료를 다시 조회한 뒤 분석해 주세요.")
                 return False
+            self.analysis_bubble.show_question(question)
             self.generation += 1
             self.analysis_ticket = (self.generation, self.state.applied, question)
             self.busy = "facts"
@@ -402,6 +598,7 @@ class AIPage(QWidget):
         self._begin_analysis(question, data.facts, query=query, snapshot=data.snapshot)
 
     def _begin_analysis(self, question, facts, *, query=None, snapshot=None):
+        self.analysis_bubble.show_question(question)
         self.analysis_query = query if query is not None else self.state.applied
         self.busy = "analysis"
         self._clear_analysis()

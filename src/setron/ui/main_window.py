@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from setron.ui.components import EmptyState, PageHeader, StatusBadge, label
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryCatalog, QueryState, preview_catalog
-from setron.ui.theme import ASSETS, SECONDARY, font, icon, svg_size
+from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, font, icon, svg_size
 
 
 @dataclass(frozen=True)
@@ -23,18 +23,31 @@ class Menu:
     active_icon: str
 
 
+def _ver5(key: str, owner: str | None = None) -> tuple[str, str]:
+    # Figma VER5 사이드바 원본 아이콘: 기본은 글자색(#142033), 선택은 강조색(#3C5CE9)이다.
+    owner = owner or key
+    return f"ver5/{owner}.svg", f"ver5/active-{owner}.svg"
+
+
 MENUS = (
-    Menu("dashboard", "대시보드", "7742b.svg", "26b8a.svg"),
-    Menu("heatmap", "버전 히트맵", "0e6c6.svg", "f8ba2.svg"),
-    Menu("items", "아이템 매니저", "7b6c5.svg", "77fb3.svg"),
-    Menu("ai", "AI 분석", "a3b3c.svg", "6dc18.svg"),
-    Menu("import", "데이터 가져오기", "30937.svg", "6cfa9.svg"),
-    Menu("replay", "Version Replay", "e4697.svg", "1bd1e.svg"),
-    Menu("versions", "버전 관리", "7b6c5.svg", "77fb3.svg"),
-    Menu("management", "관리 데이터", "db27a.svg", "2543e.svg"),
-    Menu("history", "이력 조회", "d0b8c.svg", "04165.svg"),
-    Menu("reports", "보고서", "b12e4.svg", "49591.svg"),
-    Menu("settings", "기준 · 설정", "db27a.svg", "2543e.svg"),
+    Menu("dashboard", "대시보드", *_ver5("dashboard")),
+    Menu("heatmap", "버전 히트맵", *_ver5("heatmap")),
+    Menu("items", "아이템 매니저", *_ver5("items")),
+    Menu("ai", "AI 분석", *_ver5("ai")),
+    Menu("import", "데이터 가져오기", *_ver5("import")),
+    Menu("replay", "Version Replay", *_ver5("replay")),
+    Menu("versions", "버전 관리", *_ver5("versions")),
+    # VER5 사이드바에 없는 기존 메뉴. 기능을 유지하고 데이터 관리 묶음에 둔다.
+    Menu("management", "관리 데이터", *_ver5("management", "settings")),
+    Menu("history", "이력 조회", *_ver5("history")),
+    Menu("reports", "보고서", *_ver5("reports")),
+    Menu("settings", "기준 · 설정", *_ver5("settings")),
+)
+# 첫 묶음(현황 분석)은 제목 없이 표시한다.
+MENU_GROUPS = (
+    (None, ("dashboard", "heatmap", "items", "ai", "import", "replay")),
+    ("데이터 관리", ("versions", "management", "history")),
+    ("운영 설정", ("reports", "settings")),
 )
 
 
@@ -67,7 +80,7 @@ class NavButton(QPushButton):
         asset = self.menu.active_icon if selected else self.menu.normal_icon
         self.picture.setProperty("assetFile", asset)
         self.picture.setPixmap(icon(asset).pixmap(svg_size(asset)))
-        self.caption.setStyleSheet(f"color: {'white' if selected else SECONDARY if self.isEnabled() else '#8b95a8'};")
+        self.caption.setStyleSheet(f"color: {PRIMARY if selected else INK if self.isEnabled() else '#8b95a8'};")
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -185,7 +198,7 @@ class MainWindow(QMainWindow):
         content.setObjectName("sidebarContent")
         side = QVBoxLayout(content)
         side.setContentsMargins(20, 20, 20, 20)
-        side.setSpacing(6)
+        side.setSpacing(10)
         brand = QHBoxLayout()
         brand.setSpacing(10)
         logo = label("")
@@ -196,7 +209,7 @@ class MainWindow(QMainWindow):
         brand.addWidget(logo)
         divider = QFrame()
         divider.setFixedSize(1, 18)
-        divider.setStyleSheet("background:#e9eef6;")
+        divider.setStyleSheet("background:#d5d7da;")
         brand.addWidget(divider)
         brand_name = label("SETRON", 18, numeric=True)
         brand_font = font(18, numeric=True)
@@ -209,23 +222,25 @@ class MainWindow(QMainWindow):
         brand.setContentsMargins(0, 0, 0, 0)
         signature.setLayout(brand)
         side.addWidget(signature)
-        side.addWidget(label("SW 버전 현황 관리", 13, color=SECONDARY))
-        saved = QVBoxLayout()
-        saved.setSpacing(4)
-        for i, menu in enumerate(MENUS):
-            nav = NavButton(menu)
-            nav.setEnabled(menu.key == "dashboard")
-            nav.setToolTip(menu.title if nav.isEnabled() else menu.title + " · 준비 중")
-            nav.clicked.connect(lambda checked=False, key=menu.key: self.navigate(key))
-            self.nav[menu.key] = nav
-            if i < 6:
-                saved.addWidget(nav)
-                if i == 5:
-                    side.addLayout(saved)
-            else:
-                side.addWidget(nav)
+        side.addWidget(label("SW 버전 현황 관리", 13, color=INK))
+        for title, keys in MENU_GROUPS:
+            group = QVBoxLayout()
+            group.setSpacing(4)
+            if title is not None:
+                caption = label(title, 11, color=INK)
+                caption.setObjectName("navGroup")
+                side.addWidget(caption)
+            for key in keys:
+                menu = self._menus[key]
+                nav = NavButton(menu)
+                nav.setEnabled(menu.key == "dashboard")
+                nav.setToolTip(menu.title if nav.isEnabled() else menu.title + " · 준비 중")
+                nav.clicked.connect(lambda checked=False, key=menu.key: self.navigate(key))
+                self.nav[menu.key] = nav
+                group.addWidget(nav)
+            side.addLayout(group)
         status = QFrame()
-        status.setStyleSheet("QFrame {background:#f7f9fc;border-radius:10px;}")
+        status.setStyleSheet("QFrame {background:#f9fafb;border-radius:8px;}")
         status_body = QVBoxLayout(status)
         status_body.setContentsMargins(12, 12, 12, 12)
         status_body.setSpacing(4)

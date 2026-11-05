@@ -279,7 +279,7 @@ def test_responsive_tables_long_raw_and_original_assets(window, catalog, size):
     assert page.info_table.width() <= page.overview.width()
     nav = window.nav["versions"]
     asset = nav.picture.property("assetFile")
-    assert asset == "77fb3.svg" and (ASSETS / asset).stat().st_size > 0
+    assert asset == "ver5/active-versions.svg" and (ASSETS / asset).stat().st_size > 0
     assert nav.picture.pixmap().deviceIndependentSize().toSize() == svg_size(asset)
     window.navigate("dashboard")
     QTest.qWait(20)
