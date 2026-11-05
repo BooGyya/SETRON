@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLayout, QMessageBox, QMainWindow, QPushButton, QScrollArea,
+    QFrame, QHBoxLayout, QLayout, QMainWindow, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -163,7 +163,6 @@ class MainWindow(QMainWindow):
         self.body.setContentsMargins(28, 28, 28, 28)
         self.body.setSpacing(20)
         self.header = PageHeader()
-        self.header.action_requested.connect(self._header_action)
         self.body.addWidget(self.header)
         self.notice = StatusBadge("작업 단위 3 · 공통 조회 조건 · 업무 데이터 미연결", "info")
         self.body.addWidget(self.notice)
@@ -239,16 +238,6 @@ class MainWindow(QMainWindow):
                 self.nav[menu.key] = nav
                 group.addWidget(nav)
             side.addLayout(group)
-        status = QFrame()
-        status.setStyleSheet("QFrame {background:#f9fafb;border-radius:8px;}")
-        status_body = QVBoxLayout(status)
-        status_body.setContentsMargins(12, 12, 12, 12)
-        status_body.setSpacing(4)
-        self.connection_label = label("업무 데이터 미연결", 12, medium=True, color=SECONDARY)
-        self.connection_detail = label("공통 UI 미리보기", 13, color=SECONDARY)
-        status_body.addWidget(self.connection_label)
-        status_body.addWidget(self.connection_detail)
-        side.addWidget(status)
         side.addStretch()
         self.sidebar_scroll.setWidget(content)
         outer.addWidget(self.sidebar_scroll)
@@ -326,16 +315,3 @@ class MainWindow(QMainWindow):
             return
         super().closeEvent(event)
 
-    def _header_action(self, key: str) -> None:
-        if key == "help":
-            QMessageBox.information(
-                self, "공통 UI 미리보기 안내",
-                "공통 창·사이드바와 Site·Fab·Line·설비군 조회 조건을 제공합니다.\n\n"
-                "• 업무 화면을 등록하면 해당 메뉴가 활성화됩니다.\n"
-                "• 선택 변경·전체 조건으로 버튼은 선택 중인 조건만 바꿉니다.\n"
-                "• 조회 적용을 눌러야 적용 조건과 요청 번호가 갱신됩니다.\n"
-                "• 조건 적용은 데이터 조회 완료를 의미하지 않습니다.\n"
-                "• 업무 화면의 연결 범위와 예시/실데이터 여부는 각 화면 안내를 확인하세요.\n"
-                "• 예시 결과는 실제 회사 현황이 아닙니다. 목표 N 편집의 적용/저장 범위는 각 화면 안내를 확인하세요.\n"
-                "• 로그인이나 DB·Excel 연결을 시작하지 않습니다.",
-            )

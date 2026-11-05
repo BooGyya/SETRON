@@ -94,14 +94,12 @@ class PageHeader(QWidget):
             ("equipment_list", "설비 목록", None),
             ("export", "데이터 내보내기", "ef2c5.svg"),
             ("settings", "화면 설정", "b02b9.svg"),
-            ("help", "ⓘ 도움말", None),
         ):
             action = button(text, asset=asset)
             action.setObjectName("action_" + key)
             action.setFixedHeight(40 if key in ("equipment_list", "export") else 36)
-            action.setEnabled(key == "help")
-            if key != "help":
-                action.setToolTip("담당 기능을 연결한 뒤 활성화됩니다.")
+            action.setEnabled(False)
+            action.setToolTip("담당 기능을 연결한 뒤 활성화됩니다.")
             action.clicked.connect(lambda checked=False, action_key=key: self.action_requested.emit(action_key))
             actions.addWidget(action)
             self.actions[key] = action

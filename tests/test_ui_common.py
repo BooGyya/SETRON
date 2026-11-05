@@ -11,7 +11,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from setron.ui.app import main
 from setron.ui.components import Card, StatusBadge, button, label
@@ -163,14 +163,11 @@ def test_responsive_header_and_scroll_boundaries(window, app, size):
         assert window.sidebar_scroll.verticalScrollBar().maximum() > 0
 
 
-def test_help_works_but_unconnected_actions_are_disabled(window, monkeypatch):
-    messages = []
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args))
+def test_unconnected_actions_are_disabled_and_help_is_removed(window):
+    assert set(window.header.actions) == {"equipment_list", "export", "settings"}
     for key in ("equipment_list", "export", "settings"):
         assert not window.header.actions[key].isEnabled()
-    QTest.mouseClick(window.header.actions["help"], Qt.MouseButton.LeftButton)
-    assert len(messages) == 1
-    assert "공통 창" in messages[0][2]
+    assert not hasattr(window, "connection_label")
 
 
 def test_common_components_have_no_implicit_domain_state(app):

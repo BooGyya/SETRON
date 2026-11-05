@@ -67,12 +67,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     demo = source is None
     source = source if source is not None else demo_dashboard_source()
     window = MainWindow(query_catalog=source.catalog)
-    if management_gateway is not None:
-        window.connection_label.setText("관리 데이터 연결")
-        window.connection_detail.setText("검토 후 묶음 저장")
-    elif hasattr(source, "refresh"):
-        window.connection_label.setText("저장 자료 조회 연결")
-        window.connection_detail.setText("조회 요청마다 최신값 확인")
     window.setWindowTitle("SETRON · 설비 현황 미리보기")
     window.notice.setText("작업 단위 7 · 목표 N 편집 · 합성 예시 데이터 · DB 미연결 · 임시 선택" if demo
                           else f"{getattr(source, 'notice', source.source_label)} · 목표 N 임시 선택")
