@@ -184,6 +184,9 @@ class HeatmapPage(QWidget):
         ignore_width(self.context)
         status_row.addWidget(self.context, 1)
         body.addLayout(status_row)
+        # 화면 단순화: 결과 상태 배지·적용 번호 줄은 숨긴다(오류는 본문 안내로 표시).
+        self.result_status.hide()
+        self.context.hide()
 
         # 요약 띠: 분석 대수 · 목표 달성/미달/확인 필요 · 위험 후보 · 달성률 · 업그레이드.
         self.summary = Card(padding=12)
@@ -314,6 +317,7 @@ class HeatmapPage(QWidget):
                             "파란 테두리: 마우스를 올렸거나 선택한 설비", 11,
                             color=SECONDARY, wrap=True)
         ignore_width(legend_note)
+        legend_note.hide()  # 범례 설명 문장은 화면에 표시하지 않는다.
         self.content.body.addWidget(legend_note)
         self.view_count = label("조회 적용 전", 12, color=SECONDARY, wrap=True)
         ignore_width(self.view_count)
