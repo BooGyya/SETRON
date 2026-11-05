@@ -33,6 +33,7 @@ from setron.ui.ai_page import AIPage
 from setron.ui.analysis_data import analysis_hooks, choice_parser
 from setron.ui.ai_connection import ai_providers_from_env
 from setron.ui.import_demo import DemoExcel, example_extractor
+from setron.ui.import_extraction import rule_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_refresh import capture_release_context, is_database_import_saver
@@ -43,7 +44,8 @@ from setron.ui.management_integration import export_failure, report_filter
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
-                  db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None) -> MainWindow:
+                  db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None,
+                  rule_extractor=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -153,7 +155,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     if extractor is None and sheet_extractor is None and isinstance(excel, DemoExcel):
         extractor = example_extractor
     importer = ImportPage(excel, extractor, import_saver, refresh_context_provider=release_refresh_context,
-                          sheet_extractor=sheet_extractor)
+                          sheet_extractor=sheet_extractor, rule_extractor=rule_extractor)
     window.release_refresh_context = release_refresh_context
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
     window.management_gateway = management_gateway
@@ -641,7 +643,9 @@ def main(argv: list[str] | None = None) -> int:
                            import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
                            management_gateway=gateway_from_env() if source is not None else None,
                            data_exporter=data_exporter_from_env(), extractor=ai.extractor,
-                           ai_client=ai.client)
+                           ai_client=ai.client,
+                           # 실제 Excel이면 정해진 양식은 규칙으로 먼저 읽는다. 합성 통합문서(--demo-excel)는 예제 흐름 유지.
+                           rule_extractor=None if args.demo_excel else rule_extractor)
     if problem or ai.problem:
         window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
     if screen := app.primaryScreen():

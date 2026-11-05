@@ -44,6 +44,7 @@ class ResponseSource(str, Enum):
 
     EXAMPLE = "EXAMPLE"
     REAL = "REAL"
+    RULE = "RULE"          # AI 없이 정해진 양식을 규칙으로 읽은 결과 (features.rule_extraction)
 
 
 @dataclass(frozen=True)

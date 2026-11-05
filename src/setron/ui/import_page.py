@@ -45,6 +45,7 @@ from setron.ui.versions import _field, _fit
 SOURCE_LABELS = {
     ResponseSource.EXAMPLE: "예제 응답(EXAMPLE) · 실제 AI 결과 아님 · 시트 내용과 무관한 고정 응답",
     ResponseSource.REAL: "실제 AI API 응답(REAL)",
+    ResponseSource.RULE: "규칙 추출(RULE) · 정해진 양식을 AI 없이 읽음 · 원본 대조 완료",
     None: "AI 응답 출처 미확인",
 }
 
@@ -136,11 +137,12 @@ class ImportPage(QWidget):
     requery_requested = Signal()
 
     def __init__(self, excel=None, extractor=None, saver=None, *, reference=None, confirm=None,
-                 refresh_context_provider=None, release_review_chooser=None, sheet_extractor=None):
+                 refresh_context_provider=None, release_review_chooser=None, sheet_extractor=None, rule_extractor=None):
         super().__init__()
         self.excel = excel if excel is not None else excel_reader
         self.extractor = extractor
         self.sheet_extractor = sheet_extractor or LiveSheetExtractor()
+        self.rule_extractor = rule_extractor        # 정해진 양식은 AI 없이 규칙으로 먼저 읽는다 (features.rule_extraction)
         self.saver = saver or MemoryImportSaver("메모리 저장소 · DB 미연결 · 조회 화면 자료에 반영되지 않음")
         self.reference = reference
         self.confirm = confirm or self._ask
@@ -217,7 +219,7 @@ class ImportPage(QWidget):
 
         review = Card()
         review.body.addWidget(label("3. AI 추출 결과 검토 · 수정", 20, medium=True))
-        self.extract_button = button("AI로 항목 추출", primary=True)
+        self.extract_button = button("항목 추출 (규칙 → AI)" if self.rule_extractor is not None else "AI로 항목 추출", primary=True)
         self.source_badge = StatusBadge("AI 추출 전", "neutral")
         actions = QHBoxLayout()
         actions.addWidget(self.extract_button)
@@ -337,7 +339,8 @@ class ImportPage(QWidget):
         """
         if self.extractor is example_extractor:
             return "AI 예제 응답"
-        return "AI 원본 대조 추출" if self.extractor is not None else "설정된 AI API · 원본 대조 추출"
+        method = "AI 원본 대조 추출" if self.extractor is not None else "설정된 AI API · 원본 대조 추출"
+        return f"정해진 양식은 규칙 추출 · 그 밖은 {method}" if self.rule_extractor is not None else method
 
     @property
     def busy(self):
@@ -375,7 +378,7 @@ class ImportPage(QWidget):
         _fit(self.row_table)
         self.row_table.setVisible(bool(rows))
         self.row_empty.setVisible(not rows)
-        self.row_empty.setText("시트를 읽은 뒤 AI로 항목 추출을 눌러 주세요." if draft is None else "추출된 행이 없습니다.")
+        self.row_empty.setText(f"시트를 읽은 뒤 {self.extract_button.text()}을 눌러 주세요." if draft is None else "추출된 행이 없습니다.")
         if self.selected_row_id in ids:
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
@@ -629,7 +632,9 @@ class ImportPage(QWidget):
         self._reset_draft()
         self.state = "extracting"
         count = sum(value is not None and bool(cell_text(value).strip()) for value in self.snapshot.cells.values())
-        self._set_status("AI 추출 중", "info", f"{self.snapshot.sheet_name}의 값이 있는 셀 {count}개를 보냅니다.")
+        self._set_status("추출 중", "info",
+                         f"{self.snapshot.sheet_name}을(를) 정해진 양식이면 규칙으로 바로 읽고, 아니면 값이 있는 셀 {count}개를 AI에 보냅니다."
+                         if self.rule_extractor is not None else f"{self.snapshot.sheet_name}의 값이 있는 셀 {count}개를 보냅니다.")
         self._render()
         generation, snapshot, workbook = self.generation, self.snapshot, self.workbook_name
         workbook_id = self.workbook_id
@@ -647,9 +652,9 @@ class ImportPage(QWidget):
             return
         self._extraction_context = (generation, workbook, snapshot, kind, workbook_id)
         captured = deepcopy(snapshot)
-        extractor, sheet_extractor = self.extractor, self.sheet_extractor
+        extractor, sheet_extractor, rules = self.extractor, self.sheet_extractor, self.rule_extractor
         self.extraction_request.start(BackgroundRead(lambda: extract_for_review(
-            kind, workbook, captured, extractor=extractor, sheet_extractor=sheet_extractor)))
+            kind, workbook, captured, extractor=extractor, sheet_extractor=sheet_extractor, rules=rules)))
 
     def _extraction_completed(self, result, error):
         """현재 파일·시트의 완료 결과만 화면에 반영한다.
@@ -682,7 +687,7 @@ class ImportPage(QWidget):
             return
         self.draft = draft
         self.source_badge.setText(SOURCE_LABELS.get(draft.ai_source, SOURCE_LABELS[None]))
-        self.source_badge.set_tone("warning" if draft.ai_source is not ResponseSource.REAL else "info")
+        self.source_badge.set_tone("info" if draft.ai_source in {ResponseSource.REAL, ResponseSource.RULE} else "warning")
         self._changed(initial=True)
         if draft.rows:
             self.select_row(draft.rows[0].row_id)
@@ -734,7 +739,8 @@ class ImportPage(QWidget):
             ), *self.issues)
         errors = has_errors(self.issues)
         notice = ("기존 자료를 읽지 못했습니다. DB 연결을 확인한 뒤 ‘다시 검사’를 눌러 주세요." if error is not None else
-                  "AI 추출 결과입니다. 행을 선택해 값을 확인·수정하고 검토 항목을 처리해 주세요." if initial else
+                  ("규칙 추출 결과입니다(정해진 양식 · AI 미사용). " if self.draft is not None and self.draft.ai_source is ResponseSource.RULE
+                   else "AI 추출 결과입니다. ") + "행을 선택해 값을 확인·수정하고 검토 항목을 처리해 주세요." if initial else
                   "현재 검토값의 검사를 마쳤습니다. 변경 내용과 확인 항목을 검토해 주세요.")
         self._set_status("검토 필요 · 오류 있음" if errors else "검토 중 · 저장 가능", "warning" if errors else "info",
                          notice)

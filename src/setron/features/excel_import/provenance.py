@@ -126,25 +126,31 @@ def _matches_saved(field, value, original, values, kind, address):
 
 
 def _derived(row, field, raw, kind):
-    """출처가 확인된 모델·계열이 확정하는 분류·UI·구조만 별도 셀 없이 허용한다."""
+    """출처가 확인된 모델·계열이 확정하는 분류·UI·구조만 별도 셀 없이 허용한다.
+
+    확인된 셀의 원문(예: 계열 'C3 구UI' → UI LEGACY)과 원본 대조를 마친 저장값(예: 제목 셀
+    'KCTC Inline O2 SW Release List'에서 읽은 모델 'Inline O2' → 구조 INLINE) 두 가지로 다시 정규화해
+    하나라도 저장값과 같으면 허용한다. 둘 다 원본에서 확인된 셀에서만 나오므로 임의 값은 그대로 막는다.
+    """
     if field not in _DERIVED:
         return False
-    values, cell_sources = {}, {}
+    texts, saved, cell_sources = {}, {}, {}
     for name in ("model_name", "family_name"):
         value = row.values.get(name)
         if value is None:
             continue
         sources = _source_cells(row, name, raw)
         if name in row.edited_fields:
-            values[name] = value
+            texts[name] = saved[name] = value
         elif sources and all(_matches_saved(name, value, original, row.values, kind, address)
                              for address, original in sources):
-            # 원본 셀과 대조를 마친 저장값으로 다시 정규화한다. 셀 전체(예: 제목 'KCTC Inline O2 SW Release List')를
-            # 모델명으로 쓰면 모델을 알 수 없어 구조·분류를 확인하지 못한다. 셀 원문은 UI 표기 확인용으로 함께 넘긴다.
-            values[name] = value
             address, original = sources[0]
+            texts[name] = _text(original) if len(sources) == 1 and original is not None else value
+            saved[name] = value
             cell_sources[name] = CellSource("", address, original)
-    return normalize(values, kind, 1, cell_sources)[0].get(field) == row.values.get(field)
+    expected = row.values.get(field)
+    return any(normalize(values, kind, 1, cell_sources)[0].get(field) == expected
+               for values in (texts, saved) if values)
 
 
 def _hpa(value):

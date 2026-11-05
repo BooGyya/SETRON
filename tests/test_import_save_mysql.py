@@ -483,3 +483,18 @@ def test_c3_mixed_family_names_choose_matching_ui_before_name_priority(storage, 
     saved = EquipmentService(storage).get_snapshot(code, date(2026, 11, 2))
     assert saved.software[0].family_id == integrated["family_id"]
     assert saved.software[0].version_raw == "v-c3-mixed-name"
+
+
+def test_rerelease_is_saved_once_with_first_release_date(storage):
+    """같은 버전이 다른 날짜로 두 번 나오면 재배포로 보고 첫 출시일로 한 릴리즈에 Item을 모두 담는다 (멘토 확인 2026-11-05)."""
+    rows = [row(1, {"version_raw": "A2", "release_date": "A2", "content": "D2", "item_no": "C2"},
+                version_raw="v4.56.9.99", release_date="2026-02-06", item_no=1, content="재배포 블록 Item",
+                model_name="M-C4", family_name="C4"),
+            row(2, {"version_raw": "A3", "release_date": "A3", "content": "D3", "item_no": "C3"},
+                version_raw="v4.56.9.99", release_date="2026-02-02", item_no=1, content="첫 블록 Item",
+                model_name="M-C4", family_name="C4")]
+    receipt = DatabaseImportSaver(storage).save(request(ExtractKind.RELEASE_NOTE, rows, "req-rerelease"))
+    saved = [r for r in ReleaseService(storage).list_releases(_family_id(storage, "C4"))
+             if r.current["version_raw"] == "v4.56.9.99"]
+    assert len(saved) == 1 and saved[0].current["released_at"] == date(2026, 2, 2)
+    assert count(storage, "item", batch_id=receipt.batch_id) == 2
