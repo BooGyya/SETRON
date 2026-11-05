@@ -124,22 +124,18 @@ class QueryPanel(QWidget):
         self.apply_button.setFixedWidth(230)
         self.apply_button.setFixedHeight(40)
         self.apply_button.setToolTip("선택한 조건을 확정합니다. 업무 데이터 조회는 아직 연결되지 않았습니다.")
-        self.reset_button = button("전체 조건으로")
-        self.reset_button.setFixedWidth(180)
+        self.reset_button = button("조건 초기화", asset="ver5/reset.svg")
+        self.reset_button.setProperty("soft", True)
+        self.reset_button.setFixedWidth(230)
         self.reset_button.setFixedHeight(40)
         self.reset_button.setToolTip("선택만 전체로 초기화합니다. 적용하려면 조회 적용을 눌러 주세요.")
-        self.goal_button = button("목표 기준 편집")
-        self.goal_button.setFixedWidth(170)
+        self.goal_button = button("버전(N) 기준 입력")
+        self.goal_button.setFixedWidth(256)
         self.goal_button.setFixedHeight(40)
         self.goal_button.setEnabled(False)
         self.goal_button.setToolTip("목표 N 편집은 별도 작업입니다.")
-        self.choice_button = button("조건 선택")
-        self.choice_button.setCheckable(True)
-        self.choice_button.setFixedWidth(136)
-        self.choice_button.setFixedHeight(40)
-        self.choice_button.setToolTip("Site·Fab·Line·설비군 빠른 선택을 펼치거나 접습니다.")
-        self.choice_button.toggled.connect(self._show_quick_rows)
-        self.actions_row = _WrapRow([self.apply_button, self.reset_button, self.goal_button, self.choice_button], 150)
+        # VER5: 빠른 선택 펼침('조건 선택') 없이 조건 초기화 · 버전(N) 기준 입력 · 조회 적용 순서로 둔다.
+        self.actions_row = _WrapRow([self.reset_button, self.goal_button, self.apply_button], 256)
         self.card.body.addWidget(self.actions_row)
         self.hint = label("선택 변경·초기화는 자동 적용되지 않습니다. ‘조회 적용’을 눌러 확정하세요.",
                           13, color=SECONDARY, wrap=True)
@@ -155,6 +151,9 @@ class QueryPanel(QWidget):
         self.applied_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         applied.addWidget(self.applied_summary, 1)
         outer.addLayout(applied)
+        # 화면 단순화: 안내 문구·선택지 출처·적용 상태 줄은 표시하지 않는다(값은 내부·접근성용으로 유지).
+        for hidden in (self.hint, self.source_label, self.status, self.applied_summary):
+            hidden.hide()
         self.apply_button.clicked.connect(self.apply_draft)
         self.reset_button.clicked.connect(self.reset_draft)
         self._render()
@@ -191,13 +190,9 @@ class QueryPanel(QWidget):
                 self.quick_buttons[field, value] = item
                 widgets.append(item)
             row = _WrapRow(widgets, width)
-            row.setVisible(getattr(self, "choice_button", None) is not None and self.choice_button.isChecked())
+            row.setVisible(False)  # 빠른 선택 줄은 VER5 화면에서 쓰지 않는다(콤보로 선택).
             self.quick_rows.append(row)
             self.card.body.insertWidget(self.card.body.indexOf(self.fields_row) + len(self.quick_rows), row)
-
-    def _show_quick_rows(self, visible):
-        for row in self.quick_rows:
-            row.setVisible(visible)
 
     def _choose(self, field, index):
         if index >= 0:

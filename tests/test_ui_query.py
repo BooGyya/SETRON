@@ -314,13 +314,14 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
         window.set_query_catalog(preview_catalog())
     window.resize(*size)
     panel = window.query_panel
-    # VER5: 빠른 선택은 '조건 선택'으로 펼친다. 조회 카드 안쪽 여백은 좌우 20px·상하 16px이다.
+    # VER5: 빠른 선택 줄 없이 콤보와 버튼만 보인다. 조회 카드 안쪽 여백은 좌우 20px·상하 16px이다.
     assert not any(row.isVisible() for row in panel.quick_rows)
-    panel.choice_button.setChecked(True)
+    assert not hasattr(panel, "choice_button")
+    assert [w.text().strip() for w in panel.actions_row.widgets] == ["조건 초기화", "버전(N) 기준 입력", "조회 적용"]
     QTest.qWait(60)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()
-    for widget in [*panel.combos.values(), *panel.quick_buttons.values(), *panel.actions_row.widgets]:
+    for widget in [*panel.combos.values(), *panel.actions_row.widgets]:
         assert widget.isVisible()
         point = widget.mapTo(panel.card, QPoint(0, 0))
         assert point.x() >= 20
