@@ -193,6 +193,7 @@ class DashboardPage(QWidget):
         body.setSpacing(18)
         self.result_status = StatusBadge("조회 적용 전 · 예시 데이터", "info")
         body.addWidget(self.result_status)
+        self.result_status.hide()  # 상태 문구는 본문 안내(self.message)로 대신 전달한다.
         cards = []
         for key, title, asset, accent in (
             ("rate", "목표 N 이상 달성률", "bbc12.svg", True),
