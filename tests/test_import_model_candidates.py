@@ -88,3 +88,64 @@ def test_kctc_model_listed_under_oxide_becomes_kctc():
     kctc = candidate_changes({"model_name": "Inline Ox (CIP)", "group_name": "Oxide"}, fields)
     assert kctc["model_name"] == "Inline Ox" and kctc["group_name"] == "KCTC" and kctc["structure_type"] == "INLINE"
     assert "group_name" not in candidate_changes({"model_name": "M-O2", "group_name": "Oxide"}, fields)
+
+
+def test_category_word_in_family_and_non_category_group_are_replaced():
+    """릴리즈노트 제목 'KCTC Inline O2 …'에서 계열 칸에 KCTC, 설비군 칸에 항목명(Engine)이 들어온 경우를 고친다."""
+    fields = ("model_name", "group_name", "family_name", "structure_type")
+    changes = candidate_changes({"model_name": "Inline O2", "group_name": "Engine", "family_name": "KCTC"}, fields,
+                                replace_invalid=True)
+    assert changes["family_name"] == "Inline O2" and changes["group_name"] == "KCTC" and changes["structure_type"] == "INLINE"
+    # 정상 값은 건드리지 않는다.
+    assert candidate_changes({"model_name": "Inline O2", "group_name": "KCTC", "family_name": "Inline O2",
+                              "structure_type": "INLINE"}, fields, replace_invalid=True) == {}
+    # 기본값(사용자 입력 보호)에서는 이미 있는 값을 바꾸지 않는다.
+    assert "family_name" not in candidate_changes({"model_name": "Inline O2", "family_name": "KCTC"}, fields)
+    assert "group_name" not in candidate_changes({"model_name": "M-O2", "group_name": "Oxide"}, fields)
+
+
+def test_family_field_that_is_not_a_family_name_is_replaced():
+    """계열 칸에 'M-C4'·'P-PJT' 같은 제목 조각이 들어오면 모델의 계열로, 등록 계열 이름은 그대로 둔다."""
+    fields = ("model_name", "group_name", "family_name")
+    fix = dict(replace_invalid=True)
+    assert candidate_changes({"model_name": "M-C4", "group_name": "Poly", "family_name": "M-C4"}, fields, **fix) == {"family_name": "C4"}
+    assert candidate_changes({"model_name": "M-C3", "group_name": "Poly", "family_name": "C3 구UI"}, fields, **fix) == {}
+    assert candidate_changes({"model_name": "M-O2", "group_name": "Oxide", "family_name": "O2 (파운드리)"}, fields, **fix) == {}
+
+
+def test_model_name_inside_title_is_found_only_when_unique():
+    """'P-PJT M-C4 SW. 정기 Release List' 안의 M-C4를 찾고, 모델이 둘 이상이면 고르지 않는다."""
+    assert find_candidate("P-PJT M-C4 SW. 정기 Release List").model_name == "M-C4"
+    assert find_candidate("P-PJT M-O5 Prime SW Release").model_name == "M-O5 Prime"      # 긴 이름 우선
+    assert find_candidate("KCTC Cluster Ox SW Release List").model_name == "Cluster Ox"
+    assert find_candidate("M-O2 / M-O3 공용") is None
+    assert find_candidate("P-PJT SW Release List") is None
+
+
+def test_c3_release_sheet_name_gives_ui_candidate_with_note():
+    """C3 릴리즈노트에서 UI가 비어 있으면 시트 이름(구UI)을 후보로 두고 확인 문구를 붙인다. 설비 현황표에는 쓰지 않는다."""
+    from dataclasses import replace
+    from setron.features.ai.schemas import ExtractKind
+    from setron.features.excel_import.candidates import SHEET_UI_NOTE
+    data = sheet(["2026-10-21", "화성", "E1", "PM1", "M-C3", "C3", "v1", None])
+    draft = draft_for(data, [eq_row(2, equipment_code="E1", model_name="M-C3", family_name="C3", version_raw="v1")])
+    release = replace(draft, kind=ExtractKind.RELEASE_NOTE, sheet=replace(draft.sheet, sheet_name="구UI"))
+    rows = model_candidate_rows(release)
+    assert all(change.get("ui_type") == "구UI" for change in rows.values()) and rows
+    assert SHEET_UI_NOTE in candidate_notes(release)
+    # 시트 이름이 UI가 아니면 릴리즈노트 C3에 UI 후보를 내지 않는다('미표기=통합UI'는 현황표 전용).
+    other = replace(release, sheet=replace(release.sheet, sheet_name="Release"))
+    assert all("ui_type" not in change for change in model_candidate_rows(other).values())
+
+
+def test_user_typed_family_is_kept_but_ai_value_is_fixed():
+    """화면에서 사람이 직접 입력한 계열은 보호하고, AI가 넣은 'KCTC' 같은 값만 고친다."""
+    from setron.features.excel_import.service import edit_value
+    data = sheet(["2026-10-21", "화성", "E1", "PM1", "Inline O2", "KCTC", "v1", None],
+                 ["2026-10-21", "화성", "E2", "PM1", "Inline O2", "KCTC", "v1", None])
+    draft = draft_for(data, [eq_row(2, equipment_code="E1", model_name="Inline O2", family_name="KCTC", version_raw="v1"),
+                             eq_row(3, equipment_code="E2", model_name="Inline O2", family_name="KCTC", version_raw="v1")])
+    draft = edit_value(draft, 2, "family_name", "내가 쓴 계열")
+    rows = model_candidate_rows(draft)
+    assert rows[1]["family_name"] == "Inline O2"
+    assert "family_name" not in rows.get(2, {})

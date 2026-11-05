@@ -84,20 +84,48 @@ def _key(text: str) -> str:
 
 _INDEX = {_key(c.raw): c for c in CANDIDATES}
 _VERSION_KEYS = {_key(r) for r in _reference.RESOLVE_BY_VERSION}
+_CATEGORY_WORDS = {"poly", "oxide", "kctc", "hpa"}
+_FAMILY_WORDS = {name.casefold() for base in set(_FAMILY_OF.values()) | {"C3 구UI", "C3 통합UI"}
+                 for name in (base, base + _reference.FOUNDRY_SUFFIX)}
+# 제목 등 긴 글자 안에서 찾을 등록 모델 이름 (긴 이름 먼저: 'M-O5 Prime'이 'M-O5'보다 우선)
+_MODEL_TOKENS = sorted(set(_reference.MODEL_CATEGORIES), key=len, reverse=True)
 
 
 def find_candidate(raw_model: str | None) -> ModelCandidate | None:
-    """원문 모델 표기(공백·대소문자 무시)에 맞는 후보. 없으면 None."""
+    """원문 모델 표기(공백·대소문자 무시)에 맞는 후보. 없으면 None.
+
+    번역표에 정확히 없으면, 'P-PJT M-C4 SW. 정기 Release List'처럼 긴 글자 안에 등록 모델 이름이
+    단어로 하나만 들어 있을 때 그 모델을 후보로 낸다(둘 이상이면 고르지 않는다).
+    """
     if not isinstance(raw_model, str) or not raw_model.strip():
         return None
-    return _INDEX.get(_key(raw_model))
+    exact = _INDEX.get(_key(raw_model))
+    if exact is not None:
+        return exact
+    found = []
+    text = raw_model
+    for name in _MODEL_TOKENS:
+        pattern = r"(?<![\w-])" + re.escape(name) + r"(?![\w+])"
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            found.append(name)
+            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)   # 'M-O5 Prime' 안의 'M-O5'를 다시 세지 않음
+    if len(found) != 1:
+        return None
+    base = _INDEX.get(_key(found[0]))
+    if base is None:
+        return None
+    note = f"긴 글자 '{raw_model.strip()[:40]}' 안의 등록 모델 이름 '{found[0]}'으로 둠 (제목·설명 칸에서 읽은 값인지 확인)"
+    return ModelCandidate(raw_model, base.model_name, base.group_name, base.family_name, base.ui_type,
+                          base.structure_type, base.modification_type, note)
 
 
-def candidate_changes(current: Mapping[str, str | None], fields) -> dict[str, str]:
+def candidate_changes(current: Mapping[str, str | None], fields, *, replace_invalid: bool = False) -> dict[str, str]:
     """검토 행의 현재 값에 후보를 적용할 때 바뀌는 항목만 돌려준다.
 
     모델명은 등록 모델 이름과 다르면 바꾸고, 나머지 항목은 비어 있을 때만 채운다. ``fields``에 없는 항목은 넣지 않는다.
     'M-C4/C4+' 표기는 같은 행의 SW 버전(_DEX)으로 C4+/C4를 정한다.
+    ``replace_invalid``이면 AI가 엉뚱한 셀에서 읽은 값(설비군 칸의 'Engine', 계열 칸의 'KCTC'·'M-C4')도
+    모델 기준으로 바꾼다. 사용자가 직접 입력한 값에는 쓰지 않는다(호출자가 수정 항목을 제외).
     """
     candidate = find_candidate(current.get("model_name"))
     if candidate is None:
@@ -117,6 +145,13 @@ def candidate_changes(current: Mapping[str, str | None], fields) -> dict[str, st
         elif (name == "group_name" and candidate.group_name == KCTC
               and str(existing or "").strip().casefold() == "oxide"):
             # 현황표는 KCTC 설비를 Oxide 묶음 아래 적는다. 최상위 분류는 KCTC (멘토 확정: Poly/Oxide/KCTC 3개).
+            changes[name] = value
+        elif replace_invalid and name == "group_name" and str(existing or "").strip().casefold() not in _CATEGORY_WORDS:
+            # 설비군 칸에 설비군이 아닌 글자(예: 릴리즈노트 '항목' 칸의 Engine)가 들어오면 모델의 설비군으로 바꾼다.
+            changes[name] = value
+        elif replace_invalid and name == "family_name" and str(existing or "").strip().casefold() not in _FAMILY_WORDS:
+            # SW 계열 칸에 계열 이름이 아닌 글자(설비군 'KCTC', 모델명 'M-C4', 'P-PJT' 등 제목 조각)가 들어오면
+            # 모델의 계열로 바꾼다. 'C3 구UI'·'O2 (파운드리)'처럼 등록 계열 이름은 그대로 둔다.
             changes[name] = value
         elif existing is None or not str(existing).strip():
             changes[name] = value
