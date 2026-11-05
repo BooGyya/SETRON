@@ -155,6 +155,9 @@ class QueryPanel(QWidget):
         self.applied_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         applied.addWidget(self.applied_summary, 1)
         outer.addLayout(applied)
+        # 화면 단순화: 안내 문구·선택지 출처·적용 상태 줄은 표시하지 않는다(값은 내부·접근성용으로 유지).
+        for hidden in (self.hint, self.source_label, self.status, self.applied_summary):
+            hidden.hide()
         self.apply_button.clicked.connect(self.apply_draft)
         self.reset_button.clicked.connect(self.reset_draft)
         self._render()
