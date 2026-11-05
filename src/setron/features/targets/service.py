@@ -67,6 +67,9 @@ class TargetService:
         if setting is None:
             tx.insert("app_setting", {**key, "setting_value": payload})
         else:
+            previous = setting["setting_value"]
+            if isinstance(previous, dict) and "version_lineage" in previous:
+                payload["version_lineage"] = previous["version_lineage"]
             tx.update("app_setting", key, {"setting_value": payload})
         return self.read_in(tx, (pair,)).pairs[0]
 
@@ -90,6 +93,7 @@ class TargetService:
         chosen = _targets(targets)
         models, families = _rows(tx, "equipment_group"), _rows(tx, "version_family")
         releases = _rows(tx, "release_version")
+        release_map = {row["release_version_id"]: row for row in releases}
         shared = SharedNoteCandidates(tx, releases, models, families) if requested else None
         result = []
         for pair in requested:
@@ -97,12 +101,10 @@ class TargetService:
             available, excluded, confirmed = (), (), False
             if reason is None:
                 saved = _setting(tx, pair)
-                available, excluded, confirmed, reason = _candidates(
-                    pair, saved, releases, _pair_fingerprint(pair, models, families))
+                fingerprint = _pair_fingerprint(pair, models, families)
+                available, excluded, confirmed, reason = _candidates(pair, saved, releases, fingerprint)
                 item_candidates, item_excluded, covered = shared.for_pair(pair)
                 if covered:
-                    release_map = {row["release_version_id"]: row for row in releases}
-                    fingerprint = _pair_fingerprint(pair, models, families)
                     payload = {"schema": 1, "model_id": pair[0], "family_id": pair[1],
                                "pair_fingerprint": fingerprint,
                                "candidates": [{"confirmation": asdict(value),
@@ -114,6 +116,14 @@ class TargetService:
                     excluded = (*[value for value in excluded if value.release_id not in covered], *item_excluded, *invalid)
                     confirmed = True
                     reason = None if available else (excluded[0].reason if excluded else reason)
+                available, lineage_excluded, lineage_problem = _restrict_lineage(
+                    pair, saved, available, release_map, fingerprint)
+                excluded = (*excluded, *lineage_excluded)
+                if lineage_problem:
+                    confirmed = False
+                    reason = lineage_problem
+                elif not available and lineage_excluded:
+                    reason = lineage_excluded[0].reason
             recommended = available[-1].release_id if available else None
             selected = chosen[pair] if pair in chosen else recommended
             selection_reason = reason
@@ -216,6 +226,29 @@ def _pair_fingerprint(pair, models, families):
             ancestors[current] = groups[current]
             current = groups[current]["parent_group_id"]
     return _fingerprint({"family": family, "models": sorted(ancestors.values(), key=lambda r: r["group_id"])})
+
+
+def _restrict_lineage(pair, saved, candidates, release_map, fingerprint):
+    """공유 O를 반영한 뒤에도 명시적으로 확인해 저장한 버전 줄기 범위를 적용한다."""
+    payload = saved.get("setting_value") if saved else None
+    if not isinstance(payload, dict) or "version_lineage" not in payload:
+        return candidates, (), None
+    lineage = payload["version_lineage"]
+    if (lineage not in ("BASE", "DFB", "DEX") or payload.get("schema") != 1
+            or (payload.get("model_id"), payload.get("family_id")) != pair
+            or payload.get("pair_fingerprint") != fingerprint):
+        reason = "저장된 버전 줄기 범위를 다시 확인해 주세요."
+        return (), tuple(ExcludedCandidate(candidate.release_id, reason) for candidate in candidates), reason
+
+    allowed, excluded = [], []
+    for candidate in candidates:
+        suffix = release_map[candidate.release_id]["version_suffix"] or "BASE"
+        if suffix == lineage:
+            allowed.append(candidate)
+        else:
+            reason = f"확인된 {lineage} 버전 줄기 범위 밖입니다."
+            excluded.append(ExcludedCandidate(candidate.release_id, reason))
+    return tuple(allowed), tuple(excluded), None
 
 
 def _fingerprint(value):

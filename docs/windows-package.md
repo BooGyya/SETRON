@@ -10,7 +10,8 @@ Jira S15P31B106-77. 폐쇄망 Windows PC에서 Python·uv 설치 없이 SETRON�
 powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 ```
 
-- 결과는 `dist\SETRON\` 폴더다. `SETRON.exe`, 실행에 필요한 `_internal\` 폴더, 설정 예시 `setron.env.example`이 들어 있다.
+- 배포 파일은 `dist\SETRON\` 폴더에 생성된다. `SETRON.exe`, 실행에 필요한 `_internal\` 폴더, 설정 예시 `setron.env.example`이 들어 있다.
+- 저장소에서 실행할 때는 루트의 `setron.exe`를 열면 된다. 이 파일은 `dist\SETRON\SETRON.exe`를 실행한다.
 - 폴더 전체(약 220MB)를 압축해 옮긴다. `SETRON.exe`만 옮기면 실행되지 않는다.
 - 빌드 설정은 `packaging\setron.spec`, 시작 스크립트는 `packaging\run_setron.py`다. 화면 아이콘·폰트(`ui/assets`)와 MySQL 드라이버를 함께 묶는다.
 
@@ -23,6 +24,8 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 | MySQL | 회사 PC에 설치된 MySQL 5.6.19. SETRON용 빈 DB와 계정을 만들어 둔다 |
 | 스키마 | 빈 DB에 `database\schema_mysql5619.sql`을 HeidiSQL 등으로 실행한다 |
 | 기준 자료 | 시연·확인 때만 `database\seed_demo_catalog.sql`을 실행한다 (확정 기준 자료 아님) |
+
+개발 PC에서 시연 DB를 준비할 때는 `.env.windows.example`을 `.env.windows`로 복사하고, 같은 PC의 Windows MySQL에 미리 만든 DB와 계정을 입력한다. 저장소 루트에서 `init_local_db.bat`을 실행하면 스키마와 `database/seed.sql`의 설비 300대·6개월 목업 데이터를 적용한다. 배치 실행에는 `uv`가 필요하며, 스키마만 준비하려면 `init_local_db.bat --no-seed`를 실행한다.
 
 시연·확인 전에 DB를 빈 상태로 다시 만들려면 개발 PC에서 아래를 실행한다. 관리 테이블 13개를 지우고 스키마와 시연용 기준 자료를 다시 넣는다. 대상 DB의 SETRON 자료가 모두 지워지므로 `--confirm`에 접속 설정의 DB 이름을 한 번 더 적어야 실행된다.
 
