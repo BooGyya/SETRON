@@ -1,18 +1,27 @@
 """B-3 Item 매니저. 메모리 읽기 자료만 표시하며 SQL·수정·저장은 수행하지 않는다."""
 
-from PySide6.QtCore import QSignalBlocker, Qt, Signal
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QPoint, QRect, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton, QSizePolicy,
+    QStyle, QStyledItemDelegate, QVBoxLayout, QWidget,
+)
 
 from setron.features.item.schemas import APPLICATION_LABELS, Application, ItemState
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
-from setron.ui.item_data import BASIS_LABELS, ItemEquipmentSelection, ItemManagerData, selected_application
+from setron.ui.item_data import (
+    BASIS_LABELS, ItemEquipmentSelection, ItemManagerData, release_note_rows, selected_application,
+)
 from setron.ui.item_distribution import ItemDistribution
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import SECONDARY
+from setron.ui.theme import ACCENT_SOFT, INK, PRIMARY, SECONDARY, font, icon, svg_size
 from setron.ui.versions import VersionsPage, _fit
 from setron.ui.read_worker import ReadRequest
 from setron.ui.source_notice import source_description, observation_description
+
+
+STORED_STATE_LABELS = {ItemState.APPLIED: "포함", ItemState.NOT_APPLIED: "미포함", ItemState.UNKNOWN: "미확인"}
 
 
 def _text(text="", size=13):
@@ -20,6 +29,151 @@ def _text(text="", size=13):
     widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     return widget
+
+
+def _style_raw_table(table):
+    """Figma 원본 표 양식(#dee0e5 외곽선 · #f4f5f8 머리글 · 12px)을 공통 읽기 표에 덧입힌다."""
+    table.setStyleSheet("QTableView {background:white;border:1px solid #dee0e5;border-radius:10px;"
+                        "gridline-color:#dee0e5;selection-background-color:#edf0fd;selection-color:#142033;}"
+                        "QHeaderView::section {background:#f4f5f8;color:#4a5466;border:0;"
+                        "border-bottom:1px solid #dee0e5;padding:10px 12px;font-size:12px;font-weight:600;}"
+                        "QTableView::item {padding:8px 12px;border-bottom:1px solid #dee0e5;}"
+                        f"QTableView:focus {{border:1px solid {PRIMARY};}}")
+    table.verticalHeader().setMinimumSectionSize(38)
+    table.horizontalHeader().setMinimumHeight(38)
+    table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+
+class _FlowLayout(QLayout):
+    """칩을 너비에 맞춰 줄바꿈한다. 좁은 창에서 가로 스크롤을 만들지 않는다."""
+
+    def __init__(self, parent, spacing):
+        super().__init__(parent)
+        self.items, self.gap = [], spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self.items.append(item)
+
+    def count(self):
+        return len(self.items)
+
+    def itemAt(self, index):
+        return self.items[index] if 0 <= index < len(self.items) else None
+
+    def takeAt(self, index):
+        return self.items.pop(index) if 0 <= index < len(self.items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, apply=True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self.items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _arrange(self, rect, *, apply):
+        lines, current, x = [], [], rect.x()
+        for item in self.items:
+            if item.widget() is not None and item.widget().isHidden():
+                continue
+            hint = item.sizeHint()
+            if current and x + hint.width() > rect.right() + 1:
+                lines.append(current)
+                current, x = [], rect.x()
+            current.append((item, x, hint))
+            x += hint.width() + self.gap
+        if current:
+            lines.append(current)
+        y = rect.y()
+        for line in lines:
+            height = max(hint.height() for _, _, hint in line)
+            if apply:
+                for item, left, hint in line:
+                    item.setGeometry(QRect(QPoint(left, y + (height - hint.height()) // 2), hint))
+            y += height + self.gap
+        return max(0, y - self.gap - rect.y())
+
+
+class _ReleaseNoteModel(ReadTableModel):
+    """버전별 묶음의 첫 행에만 버전명을 그리도록 묶음 시작 행을 보관한다."""
+
+    def __init__(self, headings):
+        super().__init__(headings)
+        self.group_starts, self.dates = frozenset(), ()
+
+    def set_groups(self, starts, dates):
+        self.group_starts, self.dates = frozenset(starts), tuple(dates)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.TextAlignmentRole and orientation == Qt.Orientation.Horizontal:
+            return Qt.AlignmentFlag.AlignCenter if section in (1, 3) else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        return super().headerData(section, orientation, role)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        if role == Qt.ItemDataRole.FontRole:
+            return font(12, medium=index.column() == 3)
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (1, 3):
+            return Qt.AlignmentFlag.AlignCenter
+        if role == Qt.ItemDataRole.ForegroundRole and index.column() == 4:
+            return QColor(SECONDARY)
+        return super().data(index, role)
+
+
+class _VersionDelegate(QStyledItemDelegate):
+    """버전명(굵게)과 출시일(보조)을 Figma 원본처럼 두 줄로 표시한다. 같은 버전의 후속 행은 비운다."""
+
+    def paint(self, painter, option, index):
+        model = index.model()
+        painter.save()
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, QColor("#edf0fd"))
+        painter.setPen(QColor("#dee0e5"))
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+        if index.row() in model.group_starts:
+            rect = option.rect.adjusted(12, 9, -8, -9)
+            painter.setPen(QColor(INK))
+            painter.setFont(font(13, medium=True))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, index.data())
+            painter.setPen(QColor(SECONDARY))
+            painter.setFont(font(11))
+            painter.drawText(rect.adjusted(0, 19, 0, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                             model.dates[index.row()])
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(150, 56 if index.row() in index.model().group_starts else 38)
+
+
+def _chip(text):
+    chip = QPushButton(text)
+    chip.setCheckable(True)
+    chip.setCursor(Qt.CursorShape.PointingHandCursor)
+    chip.setFont(font(14, medium=True))
+    chip.setObjectName("familyChip")
+    chip.setFixedHeight(36)
+    chip.setStyleSheet("QPushButton#familyChip {background:transparent;border:1px solid transparent;border-radius:10px;"
+                       f"padding:0 12px;min-height:34px;max-height:34px;color:{INK};}}"
+                       "QPushButton#familyChip:hover {background:#f5f6f8;}"
+                       f"QPushButton#familyChip:checked {{background:{ACCENT_SOFT};border-color:{ACCENT_SOFT};color:{PRIMARY};}}"
+                       f"QPushButton#familyChip:focus {{border:2px solid {PRIMARY};}}")
+    return chip
 
 
 class ItemsPage(QWidget):
@@ -46,31 +200,103 @@ class ItemsPage(QWidget):
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
+        self.family_id, self.release_rows = None, ()
         self.status = StatusBadge("Item 자료 확인 중", "info")
         self.notice = _text()
-        body.addWidget(self.status)
-        body.addWidget(self.notice)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(12)
+        status_row.addWidget(self.status, alignment=Qt.AlignmentFlag.AlignVCenter)
+        status_row.addWidget(self.notice, 1)
+        body.addLayout(status_row)
         self.list_view, self.detail_view = QWidget(), QWidget()
         listing, detail = QVBoxLayout(self.list_view), QVBoxLayout(self.detail_view)
         for layout in (listing, detail):
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(20)
-        card = Card()
-        card.body.addWidget(label("Item 검색", 20, medium=True))
-        card.body.addWidget(_text("변경 내용 또는 원본 Item 번호로 검색합니다. 같은 번호도 Item ID로 구분합니다."))
+            layout.setSpacing(16)
+        # Figma 08 설비군 선택: 저장된 SW 계열만 칩으로 표시한다.
+        card = Card(padding=16)
+        card.setProperty("outlined", True)
+        card.body.setContentsMargins(16, 12, 16, 12)
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        self.family_host = QWidget()
+        self.family_flow = _FlowLayout(self.family_host, 8)
+        self.family_group = QButtonGroup(self)
+        self.family_group.setExclusive(True)
+        self.family_group.idClicked.connect(self.select_family)
+        self.family_hint = QLabel("+ 저장된 계열 자동 표시")
+        self.family_hint.setFont(font(12, medium=True))
+        self.family_hint.setStyleSheet(f"QLabel {{color:{SECONDARY};border:1px dashed #dee0e5;border-radius:8px;padding:6px 10px;}}")
+        self.family_hint.setToolTip("릴리즈 저장 후 다시 불러오면 새 SW 계열이 칩으로 추가됩니다.")
+        top.addWidget(self.family_host, 1)
+        self.import_button = button("릴리즈노트 가져오기")
+        self.import_button.setFixedHeight(40)
+        self.import_button.setToolTip("데이터 가져오기 화면으로 이동합니다.")
+        self.import_button.clicked.connect(self.open_import)
+        top.addWidget(self.import_button, alignment=Qt.AlignmentFlag.AlignTop)
+        card.body.addLayout(top)
+        listing.addWidget(card)
+        # Figma 08 AI 검색 막대: AI 답변은 미연결이므로 기존 키워드 검색만 수행한다.
+        bar = QFrame()
+        bar.setObjectName("itemSearchBar")
+        bar.setStyleSheet(f"QFrame#itemSearchBar {{background:white;border:1.5px solid {PRIMARY};border-radius:12px;}}")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(18, 8, 8, 8)
+        row.setSpacing(12)
+        sparkle = QLabel()
+        sparkle.setPixmap(icon("57f36.svg").pixmap(svg_size("57f36.svg")))
+        sparkle.setFixedSize(svg_size("57f36.svg"))
+        row.addWidget(sparkle)
         self.search = QLineEdit()
         self.search.setAccessibleName("Item 검색")
-        self.search.setPlaceholderText("변경 내용 또는 Item 번호")
-        self.search.setFixedHeight(38)
-        self.search.setStyleSheet("QLineEdit {background:#f7f9fc;border:1px solid #e5eaf3;border-radius:10px;padding:8px;}")
-        card.body.addWidget(self.search)
+        self.search.setPlaceholderText("변경 내용 또는 Item 번호로 검색 · 입력 즉시 아래 목록에 적용")
+        self.search.setFixedHeight(40)
+        self.search.setMinimumWidth(0)
+        self.search.setFont(font(15))
+        self.search.setStyleSheet("QLineEdit {background:transparent;border:0;padding:0;}")
+        row.addWidget(self.search, 1)
+        self.ai_search = button("AI 검색", primary=True)
+        self.ai_search.setFixedSize(80, 40)
+        self.ai_search.setEnabled(False)
+        self.ai_search.setToolTip("AI 답변은 이 화면에 아직 연결되지 않았습니다. 입력 내용은 키워드 검색에만 사용합니다.")
+        row.addWidget(self.ai_search)
+        listing.addWidget(bar)
+        # Figma 08 릴리즈 노트 원본: 저장된 열(버전·No·내용)과 저장 상태·모델 범위만 표시한다.
+        card = Card(padding=24)
+        card.body.setContentsMargins(24, 20, 24, 20)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        self.release_title = label("릴리즈 노트 Item", 17, medium=True, wrap=True)
+        self.release_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.release_subtitle = label("", 12, color=SECONDARY, wrap=True)
+        self.release_subtitle.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        titles.addWidget(self.release_title)
+        titles.addWidget(self.release_subtitle)
+        head.addLayout(titles, 1)
+        self.ai_notice = label("AI 답변 미연결 · 검색어는 키워드 필터로만 적용", 12, color=SECONDARY)
+        head.addWidget(self.ai_notice, alignment=Qt.AlignmentFlag.AlignTop)
+        card.body.addLayout(head)
+        self.release_note_model = _ReleaseNoteModel(("버전명", "No", "Update 내용", "저장 상태", "모델 범위"))
+        self.release_note_table = read_table(self.release_note_model, "릴리즈 노트 Item", (130, 48, 360, 90, 130))
+        _style_raw_table(self.release_note_table)
+        self.release_note_table.setItemDelegateForColumn(0, _VersionDelegate(self.release_note_table))
+        self.release_note_table.clicked.connect(lambda index: self.open_release_row(index.row()))
+        self.release_note_table.activated.connect(lambda index: self.open_release_row(index.row()))
+        card.body.addWidget(self.release_note_table)
+        self.release_note_empty = _text()
+        card.body.addWidget(self.release_note_empty)
         listing.addWidget(card)
-        card = Card()
-        card.body.addWidget(label("Item 목록", 20, medium=True))
-        self.count = _text()
+        card = Card(padding=24)
+        card.body.setContentsMargins(24, 20, 24, 20)
+        card.body.addWidget(label("전체 Item 목록", 17, medium=True))
+        self.count = _text("", 12)
+        self.count.setStyleSheet(f"color:{SECONDARY};")
         card.body.addWidget(self.count)
         self.list_model = ReadTableModel(("No / Item ID", "변경 내용", "확인된 포함 릴리즈", "출처 문서"))
         self.table = read_table(self.list_model, "Item 목록", (170, 440, 190, 280))
+        _style_raw_table(self.table)
         self.table.clicked.connect(lambda index: self.open_row(index.row()))
         self.table.activated.connect(lambda index: self.open_row(index.row()))
         card.body.addWidget(self.table)
@@ -92,7 +318,9 @@ class ItemsPage(QWidget):
         self.back.clicked.connect(self.back_to_list)
         detail.addWidget(self.back, alignment=Qt.AlignmentFlag.AlignLeft)
         card = Card()
+        card.body.setContentsMargins(24, 20, 24, 20)
         self.title, self.content = _text("", 20), _text("", 14)
+        self.title.setFont(font(20, medium=True))
         card.body.addWidget(self.title)
         card.body.addWidget(self.content)
         detail.addWidget(card)
@@ -102,7 +330,8 @@ class ItemsPage(QWidget):
         self.source_model, self.source_table, self.source_note = self._section(
             detail, "Item 출처 · 원본 위치", ("대상 / 필드", "문서 · 리비전", "시트 · 셀", "입력 작업"), (180, 380, 280, 180))
         card = Card()
-        card.body.addWidget(label("설비별 적용 현황", 20, medium=True))
+        card.body.setContentsMargins(24, 20, 24, 20)
+        card.body.addWidget(label("설비별 적용 현황", 17, medium=True))
         self.observation_note, self.summary = _text(), _text()
         card.body.addWidget(self.observation_note)
         card.body.addWidget(self.summary)
@@ -130,6 +359,7 @@ class ItemsPage(QWidget):
         self.distribution.equipment_selected.connect(self.open_equipment)
         self.equipment_model = ReadTableModel(("설비 / ID", "Site", "모델", "적용 상태", "PM별 버전 · 판정 근거"))
         self.equipment_table = read_table(self.equipment_model, "Item 설비별 적용 현황", (200, 120, 180, 120, 470))
+        _style_raw_table(self.equipment_table)
         self.equipment_table.clicked.connect(lambda index: self.open_equipment_row(index.row()))
         self.equipment_table.activated.connect(lambda index: self.open_equipment_row(index.row()))
         card.body.addWidget(self.equipment_table)
@@ -150,10 +380,12 @@ class ItemsPage(QWidget):
 
     def _section(self, layout, title, headings, widths):
         card = Card()
-        card.body.addWidget(label(title, 20, medium=True))
+        card.body.setContentsMargins(24, 20, 24, 20)
+        card.body.addWidget(label(title, 17, medium=True))
         note = _text()
         model = ReadTableModel(headings)
         table = read_table(model, title, widths)
+        _style_raw_table(table)
         card.body.addWidget(note)
         card.body.addWidget(table)
         layout.addWidget(card)
@@ -183,6 +415,7 @@ class ItemsPage(QWidget):
             model.set_rows(())
         self.data = None
         self.search.setEnabled(False)
+        self.render_families()
         self._filter_changed()
         self.refresh.setEnabled(False)
         self.status.setText("Item 자료 불러오는 중")
@@ -211,7 +444,106 @@ class ItemsPage(QWidget):
             self.status.set_tone("info")
             self.notice.setText(source_description(data.versions.source_label))
         self.search.setEnabled(self.data is not None)
+        self.render_families()
         self._filter_changed()
+
+    def render_families(self):
+        """전달된 SW 계열만 칩으로 만든다. 자료가 없으면 칩을 만들지 않는다."""
+        for chip in self.family_group.buttons():
+            self.family_group.removeButton(chip)
+        while self.family_flow.count():
+            widget = self.family_flow.takeAt(0).widget()
+            if widget is not None and widget is not self.family_hint:
+                widget.hide()
+                widget.deleteLater()
+        caption = QLabel("설비군")
+        caption.setFont(font(13, medium=True))
+        caption.setStyleSheet(f"color:{SECONDARY};")
+        caption.setFixedHeight(36)
+        self.family_flow.addWidget(caption)
+        families = {}
+        for pair in (self.data.versions.pairs if self.data else ()):
+            families.setdefault(pair.family_id, pair.family_name)
+        if self.family_id not in families:
+            self.family_id = next(iter(sorted(families)), None)
+        for family_id in sorted(families):
+            chip = _chip(families[family_id])
+            chip.setToolTip(f"SW 계열 ID {family_id} · 이 계열의 릴리즈 노트 Item 보기")
+            chip.setChecked(family_id == self.family_id)
+            self.family_group.addButton(chip, family_id)
+            self.family_flow.addWidget(chip)
+        if not families:
+            caption.setText("설비군 · 전달된 SW 계열 없음" if self.data else "설비군 · 조회 결과 미확인")
+        self.family_flow.addWidget(self.family_hint)
+        self.family_host.updateGeometry()
+
+    def select_family(self, family_id):
+        """선택한 SW 계열의 릴리즈 노트 Item만 표시한다."""
+        self.family_id = family_id
+        button_ = self.family_group.button(family_id)
+        if button_ is not None:
+            button_.setChecked(True)
+        self.render_release_notes()
+
+    def render_release_notes(self):
+        """선택 계열의 저장된 버전별 Item 행을 버전 묶음으로 표시한다. 이전 버전 Item을 상속하지 않는다."""
+        data, family_id = self.data, self.family_id
+        query = self.search.text().strip()
+        ids = {e.item.item_id for e in data.search(query)} if data and query else None
+        self.release_rows = release_note_rows(data, family_id, ids) if data and family_id is not None else ()
+        names = {p.family_id: p.family_name for p in data.versions.pairs} if data else {}
+        name = names.get(family_id)
+        self.release_title.setText(f"{name} · 릴리즈 노트 Item" if name else "릴리즈 노트 Item")
+        docs = ()
+        if data and family_id is not None:
+            docs = tuple(dict.fromkeys(s.document for e in data.versions.releases if e.release.family_id == family_id
+                                       for s in e.sources if s.document))
+        self.release_subtitle.setText(" · ".join(("릴리즈 노트 원본", *(docs or ("출처 문서 미확인",)),
+                                                  "저장된 버전별 Item 행 기준 · JIRA·항목·비고 열 미연결")))
+        rows, starts, dates, previous = [], [], [], None
+        for index, note in enumerate(self.release_rows):
+            release = note.release
+            if release.release_version_id != previous:
+                starts.append(index)
+                previous = release.release_version_id
+            dates.append(" · ".join(filter(None, (
+                release.released_at.isoformat() if release.released_at else "출시일 미확인",
+                "순서 미확인" if release.version_order is None else None))))
+            if note.row is None:
+                rows.append((release.version_raw, "", "저장된 Item 행 없음 · 미포함으로 판정하지 않습니다.", "미확인", ""))
+            else:
+                item = note.entry.item
+                rows.append((release.version_raw, "번호 미확인" if item.item_no is None else str(item.item_no),
+                             item.content, STORED_STATE_LABELS[note.row.state], self.data.scope_label(note.row)))
+        self.release_note_model.set_groups(starts, dates)
+        self.release_note_model.set_rows(rows, tuple(n.entry.item.item_id if n.entry else None for n in self.release_rows))
+        table = self.release_note_table
+        table.resizeRowsToContents()
+        height = sum(table.rowHeight(i) for i in range(len(rows)))
+        table.setFixedHeight(max(120, min(720, height + table.horizontalHeader().height() + 2 * table.frameWidth() + 2)))
+        table.setVisible(bool(rows))
+        self.release_note_empty.setVisible(not rows)
+        self.release_note_empty.setText(
+            "자료 불러오기 실패 · 재시도해 주세요." if data is None else
+            "전달된 SW 계열이 없습니다." if family_id is None else
+            "검색어와 일치하는 이 계열의 저장 행이 없습니다." if query else
+            "이 계열에 전달된 릴리즈가 없습니다. 미포함으로 판정하지 않습니다.")
+
+    def open_release_row(self, row):
+        """릴리즈 노트 행의 Item 상세를 연다. 저장 행이 없는 버전 행은 열지 않는다."""
+        if self.mode != "list" or not 0 <= row < len(self.release_rows) or self.release_rows[row].entry is None:
+            return False
+        return self._open_entry(self.release_rows[row].entry)
+
+    def open_import(self):
+        """기존 데이터 가져오기 화면으로 이동한다. 화면이 없으면 버튼을 비활성화한다."""
+        window = self.window()
+        moved = hasattr(window, "navigate") and getattr(window, "pages", {}).get("import") is not None \
+            and window.navigate("import")
+        if not moved:
+            self.import_button.setEnabled(False)
+            self.import_button.setToolTip("데이터 가져오기 화면이 연결되지 않았습니다.")
+        return bool(moved)
 
     def hideEvent(self, event):
         """화면 이탈 시 진행 중 응답을 무효화한다.
@@ -233,6 +565,7 @@ class ItemsPage(QWidget):
         self.page_index, self.selected_id = 0, None
         self._set_mode("list")
         self.render_list()
+        self.render_release_notes()
 
     def render_list(self):
         """전달된 Item 목록과 조회 결과 미확인을 구분해 표시한다."""
@@ -276,7 +609,9 @@ class ItemsPage(QWidget):
         """
         if self.mode != "list" or not 0 <= row < len(self.visible_entries):
             return False
-        entry = self.visible_entries[row]
+        return self._open_entry(self.visible_entries[row])
+
+    def _open_entry(self, entry):
         self._invalidate_selection()
         item = entry.item
         self.selected_id = item.item_id
@@ -399,3 +734,7 @@ class ItemsPage(QWidget):
         if self.selected_id in self.list_model.ids:
             self.table.setCurrentIndex(self.list_model.index(self.list_model.ids.index(self.selected_id), 0))
             self.table.setFocus()
+        elif self.selected_id in self.release_note_model.ids:
+            self.release_note_table.setCurrentIndex(
+                self.release_note_model.index(self.release_note_model.ids.index(self.selected_id), 0))
+            self.release_note_table.setFocus()

@@ -1,6 +1,7 @@
 """업무 화면과 무관한 공통 표시 컴포넌트. 필터·집계·목표 대화상자는 후속 작업이다."""
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
@@ -59,7 +60,7 @@ class StatusBadge(QLabel):
         background, ink, border = TONES[tone]
         self.setStyleSheet(
             f"color:{ink};background:{background};border:1px solid {border};"
-            "border-radius:6px;padding:3px 8px;"
+            "border-radius:4px;padding:3px 8px;"
         )
 
 
@@ -79,20 +80,25 @@ class PageHeader(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.title = label("대시보드", 24, medium=True)
+        self.title = label("대시보드", 30, medium=True)
+        title_font = self.title.font()
+        title_font.setWeight(QFont.Weight.DemiBold)
+        title_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, -0.6)
+        self.title.setFont(title_font)
         self.actions = {}
         self.toolbar = QWidget()
         actions = QHBoxLayout(self.toolbar)
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(16)
         for key, text, asset in (
-            ("equipment_list", "선택 범위 설비 목록", None),
+            ("equipment_list", "설비 목록", None),
             ("export", "데이터 내보내기", "ef2c5.svg"),
             ("settings", "화면 설정", "b02b9.svg"),
             ("help", "ⓘ 도움말", None),
         ):
             action = button(text, asset=asset)
             action.setObjectName("action_" + key)
+            action.setFixedHeight(40 if key in ("equipment_list", "export") else 36)
             action.setEnabled(key == "help")
             if key != "help":
                 action.setToolTip("담당 기능을 연결한 뒤 활성화됩니다.")

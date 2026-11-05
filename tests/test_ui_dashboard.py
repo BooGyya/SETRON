@@ -194,8 +194,10 @@ def test_kpi_and_matrix_use_the_same_snapshot_and_do_not_treat_risk_as_below(win
     assert "판단 불가 1건" in page.metrics["rate"].caption.text()
     assert page.metrics["risk"].value.text() == "2대"
     assert page.metrics["upgrade"].value.text() == "1대"
-    assert "3/4건" in page.matrix_buttons[len(page.snapshot.rows), 4].text()
-    assert "4대" in page.matrix_buttons[len(page.snapshot.rows), 4].text()
+    # VER4 셀은 'N 이상 / 판단 가능' 건수만 크게 보이고, 대수·달성률은 툴팁과 접근성 이름에 둔다.
+    assert page.matrix_buttons[len(page.snapshot.rows), 4].text() == "3 / 4"
+    assert "N 이상 3건 / N 미만 1건" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
+    assert "분석 4대" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
     assert page.matrix_buttons[len(page.snapshot.rows), 4].accessibleName() == "전체 전체 전체 설비 4대"
 
 
@@ -342,7 +344,8 @@ def test_hpa_only_scope_is_excluded_from_counts_but_remains_available_for_lookup
     assert page.metrics["rate"].value.text() == "계산 불가"
     assert page.snapshot.equipment_ids == (4,)
     cell = page.matrix_buttons[len(page.snapshot.rows), 4]
-    assert cell.text() == "분석 제외\n0/0건 · 0대"
+    assert cell.text() == "분석 제외"
+    assert "N 이상 0건 / N 미만 0건" in cell.toolTip() and "분석 0대 · HPA 제외 1대" in cell.toolTip()
     assert cell.accessibleName() == "전체 전체 전체 설비 0대"
     assert cell.isEnabled()
     spy = QSignalSpy(page.drilldown_requested)
@@ -395,7 +398,8 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
     for metric in page.metrics.values():
         point = metric.mapTo(page, QPoint(0, 0))
         assert point.x() >= 0 and point.x() + metric.width() <= page.width()
-    assert page.kpi_grid.columns == (4 if page.width() >= 1088 else 2)
+    # VER4 상단 지표는 5장(달성률·분석 대상·목표 미달·버전 확인 필요·위험 후보), 최소 폭 200·간격 12로 줄바꿈한다.
+    assert page.kpi_grid.columns == (5 if page.width() >= 1048 else 4 if page.width() >= 836 else 3)
 
 
 def test_real_entrypoint_registers_dashboard_and_heatmap_and_does_not_auto_apply(app):

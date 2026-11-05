@@ -313,16 +313,20 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
     if preview:
         window.set_query_catalog(preview_catalog())
     window.resize(*size)
-    QTest.qWait(60)
     panel = window.query_panel
+    # VER5: 빠른 선택은 '조건 선택'으로 펼친다. 조회 카드 안쪽 여백은 좌우 20px·상하 16px이다.
+    assert not any(row.isVisible() for row in panel.quick_rows)
+    panel.choice_button.setChecked(True)
+    QTest.qWait(60)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()
     for widget in [*panel.combos.values(), *panel.quick_buttons.values(), *panel.actions_row.widgets]:
+        assert widget.isVisible()
         point = widget.mapTo(panel.card, QPoint(0, 0))
-        assert point.x() >= 24
-        assert point.x() + widget.width() <= panel.card.width() - 24
-        assert point.y() >= 24
-        assert point.y() + widget.height() <= panel.card.height() - 24
+        assert point.x() >= 20
+        assert point.x() + widget.width() <= panel.card.width() - 20
+        assert point.y() >= 16
+        assert point.y() + widget.height() <= panel.card.height() - 16
     for item in panel.quick_buttons.values():
         assert item.height() == (36 if item.property("compactChoice") else 40)
     assert panel.fields_row.columns == (4 if panel.fields_row.width() >= 996 else 2)

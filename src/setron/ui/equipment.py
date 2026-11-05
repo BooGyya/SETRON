@@ -1,24 +1,92 @@
 """6번: 한 목록·한 상세 화면. 조회/저장/정정/이력 기능을 새로 시작하지 않는다."""
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox, QGridLayout, QHBoxLayout, QHeaderView, QLineEdit,
+    QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
     QTableView, QVBoxLayout, QWidget, QSizePolicy,
 )
 
 from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
+from setron.features.version.schemas import CompareStatus
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard import MetricCard
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
-from setron.ui.heatmap_data import EquipmentSelection, GoalState
+from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone
 from setron.ui.target_data import target_map
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
 from setron.features.item.schemas import APPLICATION_LABELS
-from setron.ui.theme import PRIMARY, SECONDARY, TONES, font
+from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
 
+
+
+# 색은 히트맵과 같은 규칙(heatmap_data.compare_tone/version_tone): 초록 N 이상 · 노랑 N-1/확인 필요 ·
+# 빨강 N-2 이하(임시 기준) · 회색 분석 제외. 아래는 판정 요약 글자색만 정한다.
+TONE_INK = {"success": "#246b4a", "warning": "#b88000", "danger": "#c23345", "neutral": "#5e6b7a"}
+
+
+def icon_label(asset):
+    """원본 SVG를 루트 크기 그대로 표시한다."""
+    result = QLabel()
+    result.setPixmap(icon(asset).pixmap(svg_size(asset)))
+    result.setFixedSize(svg_size(asset))
+    result.setProperty("assetFile", asset)
+    return result
+
+
+def ignore_width(*widgets):
+    """긴 원문 라벨이 본문 최소 폭을 늘려 가로 스크롤을 만들지 않게 한다."""
+    for widget in widgets:
+        widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        widget.setMinimumWidth(0)
+
+
+class FlowGrid(QWidget):
+    """폭에 맞춰 열 수를 바꾸는 카드 묶음. 표시 배치만 담당한다."""
+
+    def __init__(self, min_width, *, spacing=8, max_columns=12, fill=True):
+        super().__init__()
+        self.min_width, self.max_columns, self.fill = min_width, max_columns, fill
+        self.items, self.columns = [], 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(spacing)
+        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+    def set_widgets(self, widgets):
+        for widget in self.items:
+            self.grid.removeWidget(widget)
+            widget.hide()
+            widget.deleteLater()
+        self.items, self.columns = list(widgets), 0
+        self._arrange(self._fit(self.width()))
+
+    def _fit(self, width):
+        limit = min(self.max_columns, len(self.items)) if self.fill else self.max_columns
+        return max(1, min(max(1, limit), (width + self.grid.horizontalSpacing()) // (self.min_width + self.grid.horizontalSpacing())))
+
+    def minimumSizeHint(self):
+        return QSize(0, self.grid.minimumSize().height())
+
+    def _arrange(self, columns):
+        if columns == self.columns:
+            return
+        for widget in self.items:
+            self.grid.removeWidget(widget)
+        for index in range(max(columns, self.columns, 1)):
+            self.grid.setColumnStretch(index, int(index < columns))
+        for index, widget in enumerate(self.items):
+            self.grid.addWidget(widget, index // columns, index % columns)
+            widget.show()
+        self.columns = columns
+        self.updateGeometry()
+
+    def resizeEvent(self, event):
+        self._arrange(self._fit(event.size().width()))
+        super().resizeEvent(event)
 
 
 def priority_text(entry, thresholds):
@@ -239,28 +307,7 @@ class EquipmentPage(QWidget):
             self.metrics[key] = card
         summary_body.addStretch()
         body.addWidget(self.list_view)
-        self.detail_card = Card()
-        self.detail_title = label("설비 상세", 24, medium=True, wrap=True)
-        self.detail_card.body.addWidget(self.detail_title)
-        self.detail_location = label("", 13, color=SECONDARY, wrap=True)
-        self.detail_card.body.addWidget(self.detail_location)
-        self.detail_summary = label("", 14, wrap=True)
-        self.detail_card.body.addWidget(self.detail_summary)
-        self.scope_note = label("", 13, color=SECONDARY, wrap=True)
-        self.detail_card.body.addWidget(self.scope_note)
-        self.detail_model = ReadTableModel(("모듈 / SW 관측", "설비군 · 계열", "설치 버전 원문", "목표 N", "N 비교", "비교 근거"), numeric_columns=(2, 3))
-        self.detail_table = read_table(self.detail_model, "선택 설비 전체 SW 관측", (165, 190, 230, 200, 130, 255))
-        self.detail_card.body.addWidget(self.detail_table)
-        self.evidence = label("", 13, color=SECONDARY, wrap=True)
-        self.detail_card.body.addWidget(self.evidence)
-        for widget in (self.detail_title, self.detail_location, self.detail_summary, self.scope_note, self.evidence, self.context):
-            widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.item_evidence_model = ReadTableModel(("근거 대상", "확인된 내용", "출처 / 저장 상태", "원본 위치 / 모델 범위"))
-        self.item_evidence_table = read_table(self.item_evidence_model, "선택 Item 근거와 원본 출처", (180, 330, 340, 300))
-        self.item_evidence_table.hide()
-        self.detail_card.body.addWidget(self.item_evidence_table)
-        self.detail_card.body.addWidget(label("모듈 수·필수 SW 목록은 미확정입니다. PM 관측 개수나 목표 달성만으로 설비 전체 구성이 완전하다고 단정하지 않습니다.",
-                                            13, color=SECONDARY, wrap=True))
+        self._build_detail()
         actions = QHBoxLayout()
         self.back_button = button("이전 조회로 돌아가기")
         self.back_button.clicked.connect(self._back)
@@ -269,15 +316,271 @@ class EquipmentPage(QWidget):
         self.history_button = button("선택 설비 관측 이력")
         self.history_button.setEnabled(False)
         self.history_button.setToolTip("관측 이력 화면은 후속 작업입니다.")
-        actions.addWidget(self.back_button)
-        actions.addWidget(self.list_button)
-        actions.addWidget(self.history_button)
-        actions.addStretch()
+        actions.setSpacing(10)
+        for control in (self.back_button, self.list_button, self.history_button):
+            control.setMinimumWidth(0)
+            control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            control.setFixedHeight(40)
+            actions.addWidget(control, 1)
         self.detail_card.body.addLayout(actions)
         body.addWidget(self.detail_card)
         self._reflow(False)
         self._set_mode("list")
         self._render_list()
+
+    # ----- 설비 상세 (VER4 사이드 패널 구성: 헤더 · 위치 띠 · 판정 요약 · 관측된 SW · 판정·원본 근거 · 동작) -----
+
+    def _build_detail(self):
+        self.detail_card = Card()
+        self.detail_card.body.setSpacing(14)
+        heading = QHBoxLayout()
+        heading.setSpacing(10)
+        self.detail_title = label("설비 상세", 24, medium=True, wrap=True)
+        heading.addWidget(self.detail_title, 1)
+        self.detail_goal_badge = StatusBadge("판정 전", "neutral")
+        self.detail_risk_badge = StatusBadge("위험 판정 전", "neutral")
+        heading.addWidget(self.detail_goal_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        heading.addWidget(self.detail_risk_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.detail_card.body.addLayout(heading)
+        self.detail_location = label("", 12, color=SECONDARY, wrap=True)
+        self.detail_card.body.addWidget(self.detail_location)
+        # 위치 띠: Site · Fab · Line · 원본 구역 · 실제 관측일
+        self.meta_strip = QFrame()
+        self.meta_strip.setObjectName("detailMeta")
+        self.meta_strip.setStyleSheet("QFrame#detailMeta {background:white;border:1px solid #dee0e5;border-radius:12px;}")
+        strip_body = QVBoxLayout(self.meta_strip)
+        strip_body.setContentsMargins(12, 12, 12, 12)
+        self.meta_values = {}
+        cells = []
+        for key, asset, title in (("site", "88d90.svg", "Site"), ("fab", "d865c.svg", "Fab"), ("line", "f50ce.svg", "Line"),
+                                  ("area", "c9350.svg", "원본 구역"), ("date", "962ae.svg", "실제 관측일")):
+            cell, value = self._field(asset, title, 6)
+            self.meta_values[key] = value
+            cells.append(cell)
+        meta_grid = FlowGrid(120, spacing=12)
+        meta_grid.set_widgets(cells)
+        strip_body.addWidget(meta_grid)
+        self.detail_card.body.addWidget(self.meta_strip)
+        # 관측 범위 안내: 물리 설비 1대 · SW n건 · 판정 · 우선순위 원문
+        notice = QFrame()
+        notice.setObjectName("detailNotice")
+        notice.setStyleSheet(f"QFrame#detailNotice {{background:{ACCENT_SOFT};border-radius:10px;}}")
+        notice_body = QVBoxLayout(notice)
+        notice_body.setContentsMargins(14, 12, 14, 12)
+        self.detail_summary = label("", 13, wrap=True)
+        notice_body.addWidget(self.detail_summary)
+        self.detail_card.body.addWidget(notice)
+        self.detail_card.body.addWidget(label("판정 요약", 16, medium=True))
+        self.judgement = {}
+        cards = []
+        for key, asset, title in (("goal", "ef142.svg", "등록 SW 판정"), ("risk", "ac064.svg", "위험 판정"),
+                                  ("complete", "d5571.svg", "목록 완전성")):
+            card = QFrame()
+            card.setObjectName("judgementCard")
+            card.setStyleSheet("QFrame#judgementCard {background:white;border:1px solid #dee0e5;border-radius:12px;}")
+            card_body = QVBoxLayout(card)
+            card_body.setContentsMargins(12, 14, 12, 14)
+            card_body.setSpacing(6)
+            head = QHBoxLayout()
+            head.setSpacing(6)
+            head.addWidget(icon_label(asset))
+            head.addWidget(label(title, 12, medium=True, color=SECONDARY))
+            head.addStretch()
+            card_body.addLayout(head)
+            value = label("—", 18, medium=True, wrap=True)
+            caption = label("", 11, color=SECONDARY, wrap=True)
+            ignore_width(value, caption)
+            card_body.addWidget(value)
+            card_body.addWidget(caption)
+            card_body.addStretch()
+            self.judgement[key] = (value, caption)
+            cards.append(card)
+        judgement_grid = FlowGrid(170, spacing=8)
+        judgement_grid.set_widgets(cards)
+        self.detail_card.body.addWidget(judgement_grid)
+        sw_heading = QHBoxLayout()
+        sw_heading.setSpacing(12)
+        self.sw_title = label("관측된 SW", 16, medium=True)
+        sw_heading.addWidget(self.sw_title)
+        sw_heading.addStretch()
+        for color, text in (("#c23345", "목표 미달"), ("#208457", "목표 달성"), ("#b88000", "확인 필요")):
+            dot = QFrame()
+            dot.setFixedSize(8, 8)
+            dot.setStyleSheet(f"background:{color};border-radius:4px;")
+            sw_heading.addWidget(dot)
+            sw_heading.addWidget(label(text, 11, color=SECONDARY))
+        self.detail_card.body.addLayout(sw_heading)
+        self.sw_cards = FlowGrid(380, spacing=12)
+        self.detail_card.body.addWidget(self.sw_cards)
+        self.scope_note = label("", 12, color=SECONDARY, wrap=True)
+        self.detail_card.body.addWidget(self.scope_note)
+        # 판정 · 원본 근거
+        evidence_card = QFrame()
+        evidence_card.setObjectName("evidenceCard")
+        evidence_card.setStyleSheet("QFrame#evidenceCard {background:white;border:1px solid #dee0e5;border-radius:12px;}")
+        evidence_body = QVBoxLayout(evidence_card)
+        evidence_body.setContentsMargins(16, 14, 16, 14)
+        evidence_body.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(icon_label("02346.svg"))
+        head.addWidget(label("판정 · 원본 근거", 15, medium=True))
+        head.addStretch()
+        evidence_body.addLayout(head)
+        self.evidence_rows = QVBoxLayout()
+        self.evidence_rows.setSpacing(8)
+        evidence_body.addLayout(self.evidence_rows)
+        self.evidence = label("", 12, color=SECONDARY, wrap=True)
+        evidence_body.addWidget(self.evidence)
+        self.detail_card.body.addWidget(evidence_card)
+        self.table_title = label("SW 관측 원문 표 · 표시 문자열 그대로", 13, medium=True, color=SECONDARY)
+        self.detail_card.body.addWidget(self.table_title)
+        self.detail_model = ReadTableModel(("모듈 / SW 관측", "설비군 · 계열", "설치 버전 원문", "목표 N", "N 비교", "비교 근거"), numeric_columns=(2, 3))
+        self.detail_table = read_table(self.detail_model, "선택 설비 전체 SW 관측", (165, 190, 230, 200, 130, 255))
+        self.detail_card.body.addWidget(self.detail_table)
+        for widget in (self.detail_title, self.detail_location, self.detail_summary, self.scope_note, self.evidence, self.context):
+            widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.item_evidence_model = ReadTableModel(("근거 대상", "확인된 내용", "출처 / 저장 상태", "원본 위치 / 모델 범위"))
+        self.item_evidence_table = read_table(self.item_evidence_model, "선택 Item 근거와 원본 출처", (180, 330, 340, 300))
+        self.item_evidence_table.hide()
+        self.detail_card.body.addWidget(self.item_evidence_table)
+        note = label("모듈 수·필수 SW 목록은 미확정입니다. PM 관측 개수나 목표 달성만으로 설비 전체 구성이 완전하다고 단정하지 않습니다.",
+                     12, color=SECONDARY, wrap=True)
+        ignore_width(note)
+        self.detail_card.body.addWidget(note)
+
+    @staticmethod
+    def _field(asset, title, spacing=8):
+        cell = QWidget()
+        row = QHBoxLayout(cell)
+        row.setContentsMargins(2, 0, 2, 0)
+        row.setSpacing(spacing)
+        row.addWidget(icon_label(asset), 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(1)
+        text.addWidget(label(title, 11, color=SECONDARY))
+        value = label("—", 13, medium=True, wrap=True)
+        ignore_width(value)
+        text.addWidget(value)
+        row.addLayout(text, 1)
+        return cell, value
+
+    def _set_meta(self, values):
+        for key, value in values.items():
+            known = value not in (None, "")
+            self.meta_values[key].setText(str(value) if known else ("미지정" if key in ("fab", "line") else "미확인"))
+            self.meta_values[key].setStyleSheet(f"color:{INK if known else SECONDARY};")
+
+    def _set_judgement(self, values):
+        for key, (text, caption, color) in values.items():
+            value_label, caption_label = self.judgement[key]
+            value_label.setText(text)
+            value_label.setStyleSheet(f"color:{color};")
+            caption_label.setText(caption)
+
+    def _set_evidence_rows(self, rows):
+        while self.evidence_rows.count():
+            widget = self.evidence_rows.takeAt(0).widget()
+            widget.hide()
+            widget.deleteLater()
+        for asset, title, value in rows:
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(14)
+            tag = QFrame()
+            tag.setObjectName("evidenceLabel")
+            tag.setStyleSheet("QFrame#evidenceLabel {background:#f4f5f8;border-radius:6px;}")
+            tag.setFixedWidth(190)
+            tag_row = QHBoxLayout(tag)
+            tag_row.setContentsMargins(10, 6, 10, 6)
+            tag_row.setSpacing(8)
+            tag_row.addWidget(icon_label(asset))
+            tag_text = label(title, 12, medium=True, wrap=True)
+            ignore_width(tag_text)
+            tag_row.addWidget(tag_text, 1)
+            line.addWidget(tag, 0, Qt.AlignmentFlag.AlignTop)
+            text = label(value, 12, wrap=True, color=INK if value not in ("미연결", "미확인") else SECONDARY)
+            ignore_width(text)
+            line.addWidget(text, 1)
+            self.evidence_rows.addWidget(row)
+
+    SW_TONES = {
+        "danger": ("rgba(194,51,69,0.35)", "#faeff0", "#f6e2e5", "#c23345"),
+        "success": ("rgba(32,132,87,0.35)", "#eef7f1", "#d4ebdf", "#246b4a"),
+        "warning": ("rgba(184,128,0,0.35)", "#fdf6e3", "#fbe5a3", "#856009"),
+        "neutral": ("#dee0e5", "#f4f5f8", "#e9ecf2", SECONDARY),
+    }
+
+    def _render_sw_cards(self, tones=()):
+        """detail_model의 행을 그대로 카드로 표시한다. 표와 같은 문자열만 쓴다."""
+        headings = self.detail_model.headings
+        cards = []
+        for index, row in enumerate(self.detail_model.rows):
+            border, header_bg, pill_bg, ink = self.SW_TONES[tones[index] if index < len(tones) else "neutral"]
+            card = QFrame()
+            card.setObjectName("swCard")
+            card.setStyleSheet(f"QFrame#swCard {{background:white;border:2px solid {border};border-radius:12px;}}")
+            card_body = QVBoxLayout(card)
+            card_body.setContentsMargins(0, 0, 0, 0)
+            card_body.setSpacing(0)
+            header = QFrame()
+            header.setObjectName("swHeader")
+            header.setStyleSheet(f"QFrame#swHeader {{background:{header_bg};border:none;border-top-left-radius:10px;"
+                                 "border-top-right-radius:10px;}")
+            header_row = QHBoxLayout(header)
+            header_row.setContentsMargins(14, 10, 14, 10)
+            header_row.setSpacing(10)
+            chip = label(row[0], 13, medium=True)
+            chip.setStyleSheet("background:#f4f5f8;border-radius:6px;padding:4px 8px;")
+            chip.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            header_row.addWidget(chip)
+            title = label(row[1], 14, medium=True, wrap=True)
+            ignore_width(title)
+            header_row.addWidget(title, 1)
+            pill = label(row[4], 12, medium=True)
+            pill.setStyleSheet(f"background:{pill_bg};color:{ink};border-radius:12px;padding:4px 10px;")
+            header_row.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
+            card_body.addWidget(header)
+            content = QVBoxLayout()
+            content.setContentsMargins(14, 12, 14, 12)
+            content.setSpacing(10)
+            fields = QGridLayout()
+            fields.setHorizontalSpacing(12)
+            fields.setVerticalSpacing(10)
+            for position, (asset, column) in enumerate((("50857.svg", 2), ("2c52c.svg", 3), ("ba1bd.svg", 1))):
+                cell, value = self._field(asset, headings[column])
+                value.setText(row[column])
+                fields.addWidget(cell, position // 2, position % 2)
+            fields.setColumnStretch(0, 1)
+            fields.setColumnStretch(1, 1)
+            content.addLayout(fields)
+            reason = QFrame()
+            reason.setObjectName("swReason")
+            reason.setStyleSheet(f"QFrame#swReason {{background:{header_bg};border:none;border-radius:8px;}}")
+            reason_row = QHBoxLayout(reason)
+            reason_row.setContentsMargins(14, 10, 14, 10)
+            reason_row.setSpacing(14)
+            reason_row.addWidget(label(headings[5], 13, medium=True, color=ink), 0, Qt.AlignmentFlag.AlignTop)
+            reason_text = label(row[5], 12, wrap=True)
+            ignore_width(reason_text)
+            reason_row.addWidget(reason_text, 1)
+            content.addWidget(reason)
+            card_body.addLayout(content)
+            cards.append(card)
+        self.sw_cards.set_widgets(cards)
+        self.sw_title.setText(f"관측된 SW ({len(cards)}건)")
+        self.table_title.setVisible(bool(cards))
+
+    def _reset_detail_extras(self):
+        self.detail_goal_badge.setText("판정 전")
+        self.detail_goal_badge.set_tone("neutral")
+        self.detail_risk_badge.setText("위험 판정 전")
+        self.detail_risk_badge.set_tone("neutral")
+        self._set_meta({key: None for key in self.meta_values})
+        self._set_judgement({key: ("—", "", INK) for key in self.judgement})
+        self._set_evidence_rows(())
+        self._render_sw_cards()
 
     def _reflow(self, wide):
         if self._wide is wide:
@@ -314,6 +617,7 @@ class EquipmentPage(QWidget):
         self.detail_summary.clear()
         self.scope_note.clear()
         self.evidence.clear()
+        self._reset_detail_extras()
         self._set_mode("list")
         self.result_status.setText(text if isinstance(text, str) else "선택지 변경 · 재조회 필요")
         self.result_status.set_tone("warning")
@@ -477,11 +781,11 @@ class EquipmentPage(QWidget):
                                     f"선택 SW 판정: {detail.selected.goal.value} / 설비 전체 등록 SW 판정: {detail.whole.goal.value}\n"
                                     f"설비 위험: {detail.whole.risk_label} · 목표 상태와 별도\n"
                                     + priority_text(self.data.priority.get(detail.record.equipment_id), self.data.thresholds))
-        self.scope_note.setText("아래 표는 선택 설비의 전체 SW 관측입니다. 현재 설비군 밖의 SW도 표시하지만 대시보드·목록의 적용 범위를 넓히지는 않습니다.\n"
+        self.scope_note.setText("관측된 SW 카드와 원문 표는 선택 설비의 전체 SW 관측입니다. 현재 설비군 밖의 SW도 표시하지만 대시보드·목록의 적용 범위를 넓히지는 않습니다.\n"
                                f"일반 분석 기준일 {self.snapshot.base_date} · 현재 적용: {self.snapshot.query.description}"
                                + ("\nHPA 원본 조회는 공통 분석에 포함하지 않습니다." if detail.record.is_hpa else ""))
         models = {mid: g.label for g in self.source.catalog.groups for mid in self.source.bindings[g.key]}
-        rows = []
+        rows, tones = [], []
         if detail.status:
             for family in detail.status.families:
                 for item in family.pms:
@@ -491,6 +795,7 @@ class EquipmentPage(QWidget):
                                  pm.version_raw if pm.version_raw is not None else "미입력",
                                  comparison.target.version_raw if comparison.target else "목표 미확인", comparison.label,
                                  comparison.message or "확인된 릴리즈 순서로 비교"))
+                    tones.append(compare_tone(comparison.status, comparison.steps_below))
         elif detail.record.is_hpa:
             rows = [(pm.pm_name or "모듈 미확정 · 공통 SW",
                      f"{models.get(pm.group_id, detail.record.model_name)} · 계열 {family_name(self.source, pm.family_id)}",
@@ -499,11 +804,70 @@ class EquipmentPage(QWidget):
         self.detail_model.set_rows(rows)
         fit_rows(self.detail_table)
         self.detail_table.setVisible(bool(rows))
+        self._render_sw_cards(tones)
+        self._show_detail_extras(detail, rows)
         extra = "HPA는 분석 제외입니다." if detail.record.is_hpa else "SW 관측이 없습니다." if not rows else "PM 배치 메모로 안전 Item 미적용을 추정하지 않습니다."
         self.evidence.setText(f"{extra}\n위험 근거: 판정 결과만 연결됨 · 규칙·필수 Item·릴리즈 문서·원본 위치 미연결.\n"
                                f"관측 출처: {self.snapshot.source_label} · 실제 관측일 {detail.record.base_date} · 원본 셀 연결은 확인 필요")
         self._set_mode("detail")
         return True
+
+    def _show_detail_extras(self, detail, rows):
+        whole, record = detail.whole, detail.record
+        self.detail_goal_badge.setText(f"설비 전체 {whole.goal.value}")
+        self.detail_goal_badge.set_tone(whole.version_tone)
+        self.detail_risk_badge.setText(whole.risk_label)
+        self.detail_risk_badge.set_tone("danger" if whole.risk is RiskStatus.RISK and whole.goal is not GoalState.EXCLUDED
+                                        else "warning" if whole.risk is RiskStatus.UNKNOWN and whole.goal is not GoalState.EXCLUDED
+                                        else "neutral")
+        self._set_meta({"site": whole.site_label, "fab": whole.fab_label, "line": whole.line_label,
+                        "area": whole.area, "date": record.base_date})
+        counts = [f.status for f in whole.families]
+        if whole.goal is GoalState.EXCLUDED:
+            goal = ("분석 제외", "HPA는 목표 N 비교에서 제외", "#5e6b7a")
+        else:
+            goal = (whole.goal.value,
+                    f"계열 기준 달성 {counts.count(CompareStatus.AT_OR_ABOVE)} / 미달 {counts.count(CompareStatus.BELOW)}"
+                    f" / 확인 필요 {counts.count(CompareStatus.UNDETERMINED)} · 선택 SW {detail.selected.goal.value}",
+                    TONE_INK[whole.version_tone])
+        risk_color = ("#c23345" if whole.risk is RiskStatus.RISK else "#b88000" if whole.risk is RiskStatus.UNKNOWN else "#5e6b7a")
+        self._set_judgement({
+            "goal": goal,
+            "risk": (whole.risk_label, "판정 결과만 연결됨 · 규칙·근거 문서 미연결 · 목표 판정과 별개",
+                     "#5e6b7a" if whole.goal is GoalState.EXCLUDED else risk_color),
+            "complete": ("미확정", "모듈 · 필수 SW 목록 확인 필요", "#5e6b7a"),
+        })
+        targets = " / ".join(dict.fromkeys(row[3] for row in rows if row[3] != "—")) or "미확인"
+        self._set_evidence_rows((
+            ("11605.svg", "실제 관측일", f"{record.base_date} (일반 분석 기준일 {self.snapshot.base_date})"),
+            ("f5960.svg", "원본 모델", record.model_name or "미확인"),
+            ("8cc7b.svg", "비교 목표 N", "HPA 비교 제외" if record.is_hpa else targets),
+            ("f8090.svg", "위치", whole.location),
+            ("3c247.svg", "판정 규칙", "미연결"),
+            ("a2d12.svg", "필수 아이템명", "미연결"),
+            ("ac176.svg", "릴리즈 문서 · 아이템 위치", "미연결"),
+            ("f5960.svg", "관측 출처", self.snapshot.source_label),
+        ))
+
+    def _show_item_extras(self, request, application):
+        record = application.record
+        self.detail_goal_badge.setText("N 비교 안 함")
+        self.detail_goal_badge.set_tone("neutral")
+        self.detail_risk_badge.setText("위험 판정 미연결")
+        self.detail_risk_badge.set_tone("neutral")
+        self._set_meta({"site": record.site, "fab": None, "line": None, "area": None, "date": record.base_date})
+        self._set_judgement({
+            "goal": (application.label, f"선택 Item ID {request.item_id} · 목표 N 비교는 이 보기에서 수행하지 않음", INK),
+            "risk": ("미연결", "Item 적용만으로 안전 여부를 추정하지 않음", "#5e6b7a"),
+            "complete": ("미확정", "모듈 · 필수 SW 목록 확인 필요", "#5e6b7a"),
+        })
+        self._set_evidence_rows((
+            ("11605.svg", "기준일", str(record.base_date)),
+            ("f5960.svg", "원본 모델", record.model_name or "미확인"),
+            ("f8090.svg", "위치", record.site or "미확인"),
+            ("3c247.svg", "판정 규칙", "미연결"),
+            ("ac176.svg", "원본 출처", "아래 Item 근거 표 참조"),
+        ))
 
     def open_item_detail(self, request, *, is_current):
         """같은 상세 위젯으로 Item 관측을 표시한다. A 스냅샷·조회 조건은 변경하지 않는다."""
@@ -535,6 +899,8 @@ class EquipmentPage(QWidget):
             APPLICATION_LABELS[p.application], BASIS_LABELS[p.basis]) for p in application.pms))
         fit_rows(self.detail_table)
         self.detail_table.setVisible(bool(application.pms))
+        self._render_sw_cards()
+        self._show_item_extras(request, application)
         self.evidence.setText("Item 적용 근거는 아래 저장 행·원본 출처를 확인해 주세요. 저장 행이 없는 버전은 미확인입니다.\n"
                               "위험 규칙·필수 Item·위험 해제 판정은 미연결이며 Item 적용만으로 안전 여부를 추정하지 않습니다.\n"
                               "원본 문서/셀 열기는 미연결입니다." + ("\nPM/SW 관측 없음 · 업무 규칙상 대상 외" if not application.pms else ""))
@@ -561,6 +927,7 @@ class EquipmentPage(QWidget):
         self.item_evidence_table.hide()
         for widget in (self.detail_title, self.detail_location, self.detail_summary, self.scope_note, self.evidence):
             widget.clear()
+        self._reset_detail_extras()
         self.list_button.setEnabled(True)
         self.back_button.setText("이전 조회로 돌아가기")
         if previous_mode == "detail" and self._current() and selected is not None:

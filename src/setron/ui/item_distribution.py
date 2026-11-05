@@ -8,7 +8,7 @@ from setron.features.item.schemas import APPLICATION_LABELS, Application
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.heatmap import TileGrid
-from setron.ui.theme import PRIMARY, TONES, font
+from setron.ui.theme import PRIMARY, SECONDARY, TONES, font
 from setron.ui.versions import _fit
 
 
@@ -50,10 +50,10 @@ class ItemTile(QPushButton):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setObjectName("itemTile")
         background, ink, border = TONES[APPLICATION_TONES[result.application]]
-        self.setStyleSheet(f"QPushButton#itemTile {{background:{background};color:{ink};border:1px solid {border};border-radius:6px;}}"
+        self.setStyleSheet(f"QPushButton#itemTile {{background:{background};color:{ink};border:1px solid {background};border-radius:10px;}}"
                            f"QPushButton#itemTile:hover, QPushButton#itemTile:focus, QPushButton#itemTile:checked {{border:2px solid {PRIMARY};}}")
         body = QVBoxLayout(self)
-        body.setContentsMargins(10, 10, 10, 10)
+        body.setContentsMargins(16, 14, 16, 14)
         self.code_label = label(result.record.equipment_code, 13, medium=True, wrap=True)
         self.code_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         body.addWidget(self.code_label)
@@ -80,9 +80,9 @@ class ItemDistribution(QWidget):
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
-        body.addWidget(label("Site별 Item 적용 분포", 20, medium=True))
+        body.addWidget(label("Site별 Item 적용 분포", 15, medium=True))
         body.addWidget(label("적용 / 미적용 / 미확인 / 대상 외 · 색상과 문구를 함께 표시합니다.\n"
-                             "Site의 상태 셀 선택 → 해당 설비 범위 · 타일 선택 → 설비 상세와 Item 근거", 13, wrap=True))
+                             "Site의 상태 셀 선택 → 해당 설비 범위 · 타일 선택 → 설비 상세와 Item 근거", 13, color=SECONDARY, wrap=True))
         self.model = DistributionModel(("Site", *(APPLICATION_LABELS[s] for s in Application)))
         self.table = read_table(self.model, "Site별 Item 적용 히트맵", (220, 145, 145, 145, 145))
         self.table.setItemDelegate(DistributionDelegate(self.table))

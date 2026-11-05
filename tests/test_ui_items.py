@@ -232,3 +232,22 @@ def test_narrow_window_and_long_original_content(window, data, size):
     QTest.qWait(30)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert page.content.text() == "<원문>&" * 250
+
+
+def test_release_note_groups_stored_rows_only_and_opens_detail(window):
+    page = window.pages["items"]
+    assert page.family_id == 10 and page.family_group.button(10).isChecked()
+    rows = page.release_note_model.rows
+    assert [r[0] for r in rows] == ["v99", "v99", "v2", "v3", "v1000"]
+    assert page.release_note_model.ids == (1, 2, 1, 1, None)
+    assert page.release_note_model.group_starts == {0, 2, 3, 4}
+    assert [r[3] for r in rows[:4]] == ["포함", "포함", "미포함", "포함"]
+    # 순서 미확인 버전은 저장 행이 없으므로 이전 버전 Item을 상속하지 않고 미확인으로 남긴다.
+    assert "저장된 Item 행 없음" in rows[4][2] and "순서 미확인" in page.release_note_model.dates[4]
+    assert "JIRA" in page.release_subtitle.text() and "미연결" in page.release_subtitle.text()
+    assert not page.ai_search.isEnabled() and "연결되지 않았습니다" in page.ai_search.toolTip()
+    assert not page.open_release_row(4)
+    assert page.open_release_row(1) and page.mode == "detail" and page.selected_id == 2
+    page.back_to_list()
+    page.search.setText("다른")
+    assert page.release_note_model.ids == (2,)

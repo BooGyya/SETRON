@@ -11,11 +11,11 @@ import json
 import uuid
 import warnings
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox, QGridLayout, QHBoxLayout, QLineEdit, QMessageBox, QSizePolicy, QTableView, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QSizePolicy,
+    QStyle, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget,
 )
 
 from setron.features.ai.schemas import ExtractKind
@@ -31,7 +31,7 @@ from setron.infrastructure import excel_reader
 from setron.infrastructure.ai_client import AIConfigError, ResponseSource
 from setron.infrastructure.excel_reader import ExcelDiscoveryWarning, ExcelReadError, cell_address
 from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.equipment import ReadTableModel, read_table
+from setron.ui.equipment import ReadTable, ReadTableModel, read_table
 from setron.ui.import_demo import example_extractor
 from setron.ui.import_extraction import LiveSheetExtractor, extract_for_review
 from setron.features.excel_import.review_locations import assign_source, refresh_hpa_coverage
@@ -39,7 +39,7 @@ from setron.features.extraction.schemas import ExtractionReview
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_import_review import choose_release_reviews
-from setron.ui.theme import PRIMARY, SECONDARY, font
+from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font
 from setron.ui.versions import _field, _fit
 
 SOURCE_LABELS = {
@@ -47,6 +47,158 @@ SOURCE_LABELS = {
     ResponseSource.REAL: "실제 AI API 응답(REAL)",
     None: "AI 응답 출처 미확인",
 }
+
+
+# 표시 전용 색·문구. 기존 검토 수준(IssueLevel)과 행 상태 문구에서만 고르고 새 판정을 만들지 않는다.
+ISSUE_TONES = {IssueLevel.ERROR: "danger", IssueLevel.REVIEW: "warning", IssueLevel.INFO: "neutral"}
+ISSUE_ACTIONS = {IssueLevel.ERROR: "수정 필요", IssueLevel.REVIEW: "확인", IssueLevel.INFO: "참고"}
+LABEL_TONES = {ISSUE_LABELS[level]: tone for level, tone in ISSUE_TONES.items()}
+DANGER_INK, WARNING_INK = TONES["danger"][1], TONES["warning"][1]
+FIELD_LINE = "#dee0e5"
+STEP_TEXT = "실행 중인 Excel 읽기 → 원본 미리보기 → AI 추출 · 검토 → 저장"
+
+
+def _row_state_tone(text):
+    """행 상태 문구(정상·오류 n·확인 n·수정됨·제외)를 배지 색으로 옮긴다."""
+    if text == "제외":
+        return "neutral"
+    if "오류" in text:
+        return "danger"
+    if "확인" in text:
+        return "warning"
+    return "info" if "수정됨" in text else "success"
+
+
+class _BadgeDelegate(QStyledItemDelegate):
+    """셀 문구를 그대로 작은 배지로 그린다. 문구는 모델 값이며 접근성 텍스트도 그대로 유지한다."""
+
+    def __init__(self, tone_for, parent=None):
+        super().__init__(parent)
+        self.tone_for = tone_for
+
+    def paint(self, painter, option, index):
+        text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        self.initStyleOption(option, index)
+        option.text = ""
+        style = option.widget.style() if option.widget is not None else None
+        if style is not None:
+            style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        if not text:
+            return
+        background, ink, border = TONES[self.tone_for(text)]
+        badge_font = font(12, medium=True)
+        metrics = QFontMetrics(badge_font)
+        width = min(metrics.horizontalAdvance(text) + 16, option.rect.width() - 8)
+        height = metrics.height() + 6
+        rect = QRectF(option.rect.center().x() - width / 2 + 0.5, option.rect.center().y() - height / 2 + 0.5,
+                      width, height)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(border)))
+        painter.setBrush(QColor(background))
+        painter.drawRoundedRect(rect, 4, 4)
+        painter.setFont(badge_font)
+        painter.setPen(QColor(ink))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
+                         metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(width) - 8))
+        painter.restore()
+
+
+class _ReviewRowModel(ReadTableModel):
+    """추출 행 목록. 오류가 있는 값은 빨강, 사용자가 고친 값은 파랑으로만 구분한다."""
+
+    def __init__(self, headings):
+        super().__init__(headings)
+        self.text_colors = {}
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if index.isValid():
+            if role == Qt.ItemDataRole.ForegroundRole and (index.row(), index.column()) in self.text_colors:
+                return QColor(self.text_colors[index.row(), index.column()])
+            if role == Qt.ItemDataRole.TextAlignmentRole and index.column() == 0:
+                return Qt.AlignmentFlag.AlignCenter
+        return super().data(index, role)
+
+
+class _IssueModel(ReadTableModel):
+    """검토 항목 목록. 행 자료(rows)는 기존 9열 그대로이고, 표시 전용 ‘처리’ 열은 검토 수준에서만 만든다."""
+
+    action_column = 9
+
+    def __init__(self, headings):
+        super().__init__(headings)
+        self.levels = ()
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        column = index.column()
+        if role == Qt.ItemDataRole.TextAlignmentRole and column in (0, 1, 3, self.action_column):
+            return Qt.AlignmentFlag.AlignCenter
+        if column != self.action_column:
+            return super().data(index, role)
+        level = self.levels[index.row()] if index.row() < len(self.levels) else None
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.AccessibleTextRole):
+            return ISSUE_ACTIONS.get(level, "")
+        if role == Qt.ItemDataRole.FontRole:
+            return font(13, medium=True)
+        if role == Qt.ItemDataRole.ForegroundRole:
+            return QColor(DANGER_INK if level is IssueLevel.ERROR else INK)
+        return None
+
+
+class _ImportTable(ReadTable):
+    """넓은 창에서는 열을 늘리고, 좁은 창에서는 표 안에서만 가로 스크롤한다(페이지 가로 스크롤 없음)."""
+
+    def resizeEvent(self, event):
+        QTableView.resizeEvent(self, event)
+        width = self.viewport().width()
+        ratio = max(1.0, width / max(1, sum(self.base_widths)))
+        for index, original in enumerate(self.base_widths):
+            self.setColumnWidth(index, int(original * ratio))
+        if self.model() is not None:
+            self.resizeRowsToContents()
+
+
+def _import_table(model, name, widths):
+    """``read_table``과 같은 읽기 전용 설정에 VER5 표 머리·행 간격을 적용한다."""
+    table = _ImportTable(widths)
+    table.setModel(model)
+    table.setAccessibleName(name)
+    table.setMinimumWidth(0)
+    table.setMinimumHeight(140)
+    table.setFont(font(13))
+    table.setWordWrap(True)
+    table.setTextElideMode(Qt.TextElideMode.ElideNone)
+    table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+    table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+    table.setVerticalScrollMode(QTableView.ScrollMode.ScrollPerPixel)
+    table.setHorizontalScrollMode(QTableView.ScrollMode.ScrollPerPixel)
+    table.verticalHeader().hide()
+    table.verticalHeader().setMinimumSectionSize(44)
+    table.horizontalHeader().setMinimumHeight(38)
+    table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    for index, width in enumerate(widths):
+        table.setColumnWidth(index, width)
+    table.setShowGrid(False)
+    table.setStyleSheet(
+        f"QTableView {{background:white;border:1px solid {FIELD_LINE};border-radius:8px;"
+        f"selection-background-color:#eef1fd;selection-color:{INK};}}"
+        f"QHeaderView::section {{background:#f4f5f8;color:{SECONDARY};border:0;border-bottom:1px solid {FIELD_LINE};"
+        "padding:6px 10px;font-size:12px;}"
+        f"QTableView::item {{padding:6px 10px;border-bottom:1px solid #eceef1;}}"
+        f"QTableView:focus {{border:1px solid {PRIMARY};}}")
+    return table
+
+
+def _section(title):
+    """번호가 붙은 단계 카드. 공통 Card의 테두리 형태를 사용한다."""
+    card = Card(padding=28)
+    card.setProperty("outlined", True)
+    card.body.setSpacing(14)
+    card.body.addWidget(label(title, 20, medium=True))
+    return card
 
 
 def _workbook_key(book):
@@ -77,11 +229,20 @@ class SheetGridModel(QAbstractTableModel):
     def __init__(self):
         super().__init__()
         self.snapshot, self.highlight = None, None
+        self.marks = {}  # 셀 주소 → 검토 수준. 검토 항목의 셀만 표시하고 원본 값은 바꾸지 않는다.
 
     def set_snapshot(self, snapshot):
         self.beginResetModel()
-        self.snapshot, self.highlight = snapshot, None
+        self.snapshot, self.highlight, self.marks = snapshot, None, {}
         self.endResetModel()
+
+    def set_marks(self, marks):
+        """검토 항목이 가리키는 셀을 수준별 배경으로 표시한다."""
+        if marks == self.marks:
+            return
+        self.marks = marks
+        if self.rowCount() and self.columnCount():
+            self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1))
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() or self.snapshot is None else min(self.snapshot.row_count, self.max_rows)
@@ -116,8 +277,14 @@ class SheetGridModel(QAbstractTableModel):
             return cell_text(self.snapshot.cells.get(address))
         if role == Qt.ItemDataRole.AccessibleTextRole:
             return f"{address} {cell_text(self.snapshot.cells.get(address))}"
-        if role == Qt.ItemDataRole.BackgroundRole and address == self.highlight:
-            return QColor("#fbe5a3")
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if address == self.highlight:
+                return QColor("#fbe5a3")
+            level = self.marks.get(address)
+            return QColor(TONES["danger"][0]) if level is IssueLevel.ERROR else \
+                QColor("#fdf3d6") if level is IssueLevel.REVIEW else None
+        if role == Qt.ItemDataRole.ForegroundRole and self.marks.get(address) is IssueLevel.ERROR:
+            return QColor(DANGER_INK)
         if role == Qt.ItemDataRole.FontRole:
             return font(12)
         return None
@@ -162,15 +329,25 @@ class ImportPage(QWidget):
         self._release_risk_decisions = set()
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(20)
+        body.setSpacing(16)
+        # 단계 안내 띠: 왼쪽은 고정 단계 문구, 오른쪽은 현재 상태 배지. 상세 안내는 바로 아래 줄에 둔다.
+        self.steps = QFrame()
+        self.steps.setObjectName("importSteps")
+        steps = QHBoxLayout(self.steps)
+        steps.setContentsMargins(16, 8, 10, 8)
+        steps.setSpacing(12)
+        self.steps_label = label(STEP_TEXT, 13, medium=True, color=PRIMARY, wrap=True)
+        self.steps_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        steps.addWidget(self.steps_label, 1)
         self.status = StatusBadge("Excel 미연결", "info")
-        body.addWidget(self.status)
+        steps.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
+        body.addWidget(self.steps)
         self.notice = label("열린 통합문서 불러오기를 누르면 실행 중인 Excel에 연결합니다.", 13, color=SECONDARY, wrap=True)
         self.notice.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.notice.setContentsMargins(4, 0, 4, 0)
         body.addWidget(self.notice)
 
-        select = Card()
-        select.body.addWidget(label("1. Excel 통합문서 · 시트 선택", 20, medium=True))
+        select = _section("1. Excel 통합문서 · 시트 선택")
         select.body.addWidget(label("사용자가 실행해 둔 데스크톱 Excel에서 값을 읽습니다. 파일 업로드·파일 선택은 지원하지 않으며 "
                                     "원본 파일을 수정하거나 복사하지 않습니다.", 13, color=SECONDARY, wrap=True))
         self.workbook_combo, self.sheet_combo, self.kind_combo = QComboBox(), QComboBox(), QComboBox()
@@ -178,7 +355,8 @@ class ImportPage(QWidget):
                              (self.kind_combo, "가져올 자료 종류")):
             widget.setAccessibleName(name)
             widget.setProperty("queryField", True)
-            widget.setFixedHeight(38)
+            widget.setFixedHeight(42)
+            widget.setFont(font(14, medium=True))
             widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             widget.setMinimumContentsLength(10)
         for kind in ExtractKind:
@@ -186,13 +364,14 @@ class ImportPage(QWidget):
         self.list_button = button("열린 통합문서 불러오기")
         self.read_button = button("시트 읽기", primary=True)
         select.body.addWidget(_WrapRow([_field("통합문서", self.workbook_combo), _field("시트", self.sheet_combo),
-                                       _field("자료 종류", self.kind_combo)], 230, fields=True))
+                                       _field("자료 종류", self.kind_combo), QWidget()], 230, fields=True))
+        for widget in (self.list_button, self.read_button):
+            widget.setFixedHeight(40)
         select.body.addWidget(_WrapRow([self.list_button, self.read_button], 200))
         body.addWidget(select)
 
-        preview = Card()
-        preview.body.addWidget(label("2. 원본 미리보기", 20, medium=True))
-        self.preview_info = label("시트를 읽으면 원본 셀 값과 주소가 표시됩니다.", 13, color=SECONDARY, wrap=True)
+        preview = _section("2. 원본 미리보기")
+        self.preview_info = label("시트를 읽으면 원본 셀 값과 주소가 표시됩니다.", 12, color=SECONDARY, wrap=True)
         preview.body.addWidget(self.preview_info)
         self.grid_model = SheetGridModel()
         self.grid = QTableView()
@@ -204,10 +383,18 @@ class ImportPage(QWidget):
         self.grid.setFixedHeight(300)
         self.grid.setMinimumWidth(0)
         self.grid.horizontalHeader().setDefaultSectionSize(120)
-        self.grid.setStyleSheet("QTableView {background:white;gridline-color:#e9eef6;border:1px solid #e9eef6;"
-                                "selection-background-color:#edf0fd;selection-color:#18243c;}"
-                                "QHeaderView::section {background:#f7f9fc;color:#5b6880;border:0;padding:4px;}"
-                                f"QTableView:focus {{border:1px solid {PRIMARY};}}")
+        self.grid.horizontalHeader().setFixedHeight(26)
+        self.grid.verticalHeader().setDefaultSectionSize(28)
+        self.grid.verticalHeader().setMinimumWidth(36)
+        self.grid.verticalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.grid.setStyleSheet(
+            f"QTableView {{background:white;gridline-color:#e5e7eb;border:1px solid {FIELD_LINE};"
+            f"selection-background-color:#edf0fd;selection-color:{INK};}}"
+            f"QHeaderView::section {{background:#f4f5f8;color:{SECONDARY};border:0;border-right:1px solid #e5e7eb;"
+            "border-bottom:1px solid #e5e7eb;padding:2px 4px;font-size:11px;}"
+            "QTableCornerButton::section {background:#f4f5f8;border:0;border-right:1px solid #e5e7eb;"
+            "border-bottom:1px solid #e5e7eb;}"
+            f"QTableView:focus {{border:1px solid {PRIMARY};}}")
         self.grid.clicked.connect(self._show_cell)
         preview.body.addWidget(self.grid)
         self.cell_label = label("", 13, color=SECONDARY, wrap=True)
@@ -215,23 +402,26 @@ class ImportPage(QWidget):
         preview.body.addWidget(self.cell_label)
         body.addWidget(preview)
 
-        review = Card()
-        review.body.addWidget(label("3. AI 추출 결과 검토 · 수정", 20, medium=True))
-        self.extract_button = button("AI로 항목 추출", primary=True)
-        self.source_badge = StatusBadge("AI 추출 전", "neutral")
-        actions = QHBoxLayout()
-        actions.addWidget(self.extract_button)
-        actions.addWidget(self.source_badge)
-        actions.addStretch()
-        review.body.addLayout(actions)
+        review = _section("3. AI 추출 결과 검토 · 수정")
         review.body.addWidget(label("AI 추출값은 원본과 따로 보관합니다. 수정한 값은 ‘수정됨’으로 표시되고 원본 값·셀 위치는 바뀌지 않습니다. "
                                     "AI 결과는 검토 없이 저장하지 않습니다.", 13, color=SECONDARY, wrap=True))
+        self.extract_button = button("AI로 항목 추출", primary=True)
+        self.extract_button.setFixedHeight(40)
+        self.source_badge = StatusBadge("AI 추출 전", "neutral")
+        actions = QHBoxLayout()
+        actions.setSpacing(12)
+        actions.addWidget(self.extract_button)
+        actions.addWidget(self.source_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        actions.addStretch()
+        review.body.addLayout(actions)
         # 시트 공통 정보: 교육용 현황표에는 기준일·사업장 셀이 없어 한 번 입력해 모든 행에 적용한다 (1차 점검 6번).
-        common = QWidget()
+        common = QFrame()
+        common.setObjectName("importCommon")
+        common.setStyleSheet(f"QFrame#importCommon {{background:{SOFT};border:1px solid {FIELD_LINE};border-radius:10px;}}")
         common_layout = QVBoxLayout(common)
-        common_layout.setContentsMargins(0, 0, 0, 0)
-        common_layout.setSpacing(6)
-        common_layout.addWidget(label("시트 공통 정보 · 설비 현황표", 16, medium=True))
+        common_layout.setContentsMargins(20, 16, 20, 16)
+        common_layout.setSpacing(8)
+        common_layout.addWidget(label("시트 공통 정보 · 설비 현황표", 15, medium=True))
         common_layout.addWidget(label("기준일·사업장이 시트에 없으면 여기 입력하고 ‘모든 행에 적용’을 누르세요. 비어 있는 행만 채우고, "
                                       "메모리/파운드리를 비우면 라인에 따라 기본값(장소표)을 씁니다.", 13, color=SECONDARY, wrap=True))
         self.common_date, self.common_site = QLineEdit(), QLineEdit()
@@ -247,27 +437,32 @@ class ImportPage(QWidget):
         self.common_apply_button = button("모든 행에 적용")
         self.common_overwrite = QCheckBox("이미 있는 값도 덮어쓰기")
         common_layout.addWidget(_WrapRow([_field("기준일", self.common_date), _field("사업장", self.common_site),
-                                          _field("메모리/파운드리", self.common_area)], 230, fields=True))
+                                          _field("메모리/파운드리", self.common_area), QWidget()], 230, fields=True))
         common_layout.addWidget(_WrapRow([self.common_apply_button, self.common_overwrite], 220))
         self.common_box = common
         review.body.addWidget(common)
-        self.row_model = ReadTableModel(("행", "상태"))
-        self.row_table = read_table(self.row_model, "추출 행 목록", (70, 150))
+        self.row_model = _ReviewRowModel(("행", "상태"))
+        self.row_table = _import_table(self.row_model, "추출 행 목록", (64, 120))
+        self.row_table.setItemDelegateForColumn(1, _BadgeDelegate(_row_state_tone, self.row_table))
         self.row_table.clicked.connect(lambda index: self.select_row(self.row_model.ids[index.row()]))
         self.row_table.activated.connect(lambda index: self.select_row(self.row_model.ids[index.row()]))
         review.body.addWidget(self.row_table)
         self.row_empty = label("", color=SECONDARY, wrap=True)
         review.body.addWidget(self.row_empty)
-        self.editor = QWidget()
+        # 선택 행 편집 패널: 값 입력 · 원본 셀 주소 상자 · ‘AI 원본’ 설명을 한 줄씩 묶는다.
+        self.editor = QFrame()
+        self.editor.setObjectName("importEditor")
+        self.editor.setStyleSheet("QFrame#importEditor {background:#f4f5f8;border-radius:12px;}")
         editor = QVBoxLayout(self.editor)
-        editor.setContentsMargins(0, 0, 0, 0)
+        editor.setContentsMargins(20, 18, 20, 18)
         editor.setSpacing(12)
-        self.editor_title = label("", 16, medium=True)
+        self.editor_title = label("", 15, medium=True)
         editor.addWidget(self.editor_title)
         self.editor_grid = QGridLayout()
         self.editor_grid.setHorizontalSpacing(12)
-        self.editor_grid.setVerticalSpacing(6)
+        self.editor_grid.setVerticalSpacing(4)
         self.editor_grid.setColumnStretch(1, 1)
+        self.editor_grid.setColumnMinimumWidth(0, 96)
         editor.addLayout(self.editor_grid)
         self.inputs, self.originals, self.source_inputs = {}, {}, {}
         self.apply_edit_button = button("수정 반영", primary=True)
@@ -276,20 +471,27 @@ class ImportPage(QWidget):
         self.apply_edit_button.clicked.connect(self.apply_edits)
         self.revert_button.clicked.connect(self.revert_selected)
         self.exclude_button.clicked.connect(self.toggle_excluded)
+        for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):
+            widget.setFixedHeight(40)
         editor.addWidget(_WrapRow([self.apply_edit_button, self.revert_button, self.exclude_button], 190))
         review.body.addWidget(self.editor)
-        review.body.addWidget(label("검토 항목", 16, medium=True))
-        self.issue_model = ReadTableModel(("구분", "추출 행", "항목", "셀", "내용", "파일", "시트", "Excel 행", "Excel 열"))
-        self.issue_table = read_table(self.issue_model, "검토 항목", (90, 70, 130, 100, 420, 200, 150, 85, 85))
+        review.body.addWidget(label("검토 항목", 15, medium=True))
+        # 모델 열 순서(구분~Excel 열)는 유지하고, 마지막 ‘처리’ 열만 화면에서 ‘내용’ 바로 뒤로 옮긴다.
+        self.issue_model = _IssueModel(("구분", "추출 행", "항목", "셀", "내용", "파일", "시트", "Excel 행", "Excel 열", "처리"))
+        self.issue_table = _import_table(self.issue_model, "검토 항목", (96, 70, 110, 80, 380, 180, 110, 72, 72, 100))
+        self.issue_table.horizontalHeader().moveSection(_IssueModel.action_column, 5)
+        self.issue_table.setItemDelegateForColumn(0, _BadgeDelegate(lambda text: LABEL_TONES.get(text, "neutral"),
+                                                                    self.issue_table))
         self.issue_table.clicked.connect(lambda index: self.open_issue(index.row()))
         self.issue_table.activated.connect(lambda index: self.open_issue(index.row()))
         review.body.addWidget(self.issue_table)
         body.addWidget(review)
 
-        save = Card()
-        save.body.addWidget(label("4. 저장", 20, medium=True))
-        self.save_summary = label("", 13, color=SECONDARY, wrap=True)
+        save = _section("4. 저장")
+        self.save_summary = label("", 14, medium=True, wrap=True)
         save.body.addWidget(self.save_summary)
+        self.save_note = label("", 13, color=SECONDARY, wrap=True)
+        save.body.addWidget(self.save_note)
         self.save_button = button("검토 완료 · 저장", primary=True)
         self.candidate_button = button("번역표 후보 적용")
         self.candidate_button.setToolTip("원문 모델 표기를 데이터 파트 번역표의 등록 모델로 바꾸고 빈 설비군·계열·UI를 채웁니다. "
@@ -297,12 +499,17 @@ class ImportPage(QWidget):
         self.revalidate_button = button("다시 검사")
         self.requery_button = button("대시보드로 이동")
         self.requery_button.setToolTip("이동만 합니다. 조회 결과를 갱신하려면 조회 적용을 다시 눌러 주세요.")
+        for widget in (self.save_button, self.candidate_button, self.revalidate_button, self.requery_button):
+            widget.setFixedHeight(40)
         save.body.addWidget(_WrapRow([self.save_button, self.candidate_button, self.revalidate_button,
                                       self.requery_button], 200))
         self.result_label = label("", 13, wrap=True)
         self.result_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         save.body.addWidget(self.result_label)
+        save.body.addWidget(label("번역표: 원본의 모델 표기를 데이터 파트 번역표의 등록 모델로 바꾸는 규칙입니다. "
+                                  "적용한 값은 사용자 수정으로 기록됩니다.", 12, color="#8b95a8", wrap=True))
         body.addWidget(save)
+        body.addStretch()
 
         self.list_button.clicked.connect(self.load_workbooks)
         self.read_button.clicked.connect(self.read_selected)
@@ -314,6 +521,7 @@ class ImportPage(QWidget):
         self.requery_button.clicked.connect(self.requery_requested.emit)
         self.workbook_combo.currentIndexChanged.connect(self._fill_sheets)
         self.kind_combo.currentIndexChanged.connect(self._kind_changed)
+        self._paint_steps(self.status.tone)
         self._render()
 
     # --- 상태 표시 ---------------------------------------------------------
@@ -321,8 +529,15 @@ class ImportPage(QWidget):
     def _set_status(self, text, tone, notice=None):
         self.status.setText(text)
         self.status.set_tone(tone)
+        self._paint_steps(tone)
         if notice is not None:
             self.notice.setText(notice)
+
+    def _paint_steps(self, tone):
+        """단계 안내 띠 색만 현재 상태에 맞춘다. 저장 완료는 초록, 그 밖에는 기본 파랑."""
+        background, ink = ("#e9f5ee", TONES["success"][1]) if tone == "success" else (ACCENT_SOFT, PRIMARY)
+        self.steps.setStyleSheet(f"QFrame#importSteps {{background:{background};border-radius:8px;}}")
+        self.steps_label.setStyleSheet(f"color:{ink};")
 
     @property
     def kind(self):
@@ -355,15 +570,17 @@ class ImportPage(QWidget):
         self.extract_button.setEnabled(not self.busy and self.snapshot is not None and not self.locked)
         for combo in (self.workbook_combo, self.sheet_combo, self.kind_combo):
             combo.setEnabled(not self.busy)
-        rows, ids = [], []
+        rows, ids, colors = [], [], {}
         if draft is not None:
             headings = ("행", "상태", *(FIELD_LABELS[f] for f in draft.fields))
             if self.row_model.headings != headings:
                 self.row_model.headings = headings
-                for index, width in enumerate((70, 150, *(130 for _ in draft.fields))):
+                widths = (64, 120, *(120 for _ in draft.fields))
+                for index, width in enumerate(widths):
                     self.row_table.setColumnWidth(index, width)
-                self.row_table.base_widths = (70, 150, *(130 for _ in draft.fields))
-            for row in draft.rows:
+                self.row_table.base_widths = widths
+            error_fields = {(i.row_id, i.field) for i in self.issues if i.level is IssueLevel.ERROR and i.field}
+            for line, row in enumerate(draft.rows):
                 counts = [sum(i.row_id == row.row_id and i.level is level for i in self.issues)
                           for level in (IssueLevel.ERROR, IssueLevel.REVIEW)]
                 state = "제외" if row.excluded else " · ".join(
@@ -371,6 +588,12 @@ class ImportPage(QWidget):
                                       "수정됨" if row.edits else "") if part) or "정상"
                 rows.append((str(row.row_id), state, *(self._cell(row, f) for f in draft.fields)))
                 ids.append(row.row_id)
+                for column, name in enumerate(draft.fields, start=2):
+                    if (row.row_id, name) in error_fields:
+                        colors[line, column] = DANGER_INK
+                    elif name in row.edits:
+                        colors[line, column] = PRIMARY
+        self.row_model.text_colors = colors
         self.row_model.set_rows(rows, ids)
         _fit(self.row_table)
         self.row_table.setVisible(bool(rows))
@@ -382,6 +605,7 @@ class ImportPage(QWidget):
         self.common_box.setVisible(self.kind is ExtractKind.EQUIPMENT_STATUS)
         for widget in (self.common_date, self.common_site, self.common_area, self.common_apply_button, self.common_overwrite):
             widget.setEnabled(draft is not None and not self.busy and not self.locked)
+        self.issue_model.levels = tuple(i.level for i in self.issues)
         self.issue_model.set_rows(tuple((ISSUE_LABELS[i.level], str(i.row_id) if i.row_id else "전체",
                                          FIELD_LABELS.get(i.field, "-") if i.field else "-", i.address or "위치 확인 필요", i.message,
                                          i.workbook_name or (draft.workbook_name if draft else "-"),
@@ -390,6 +614,7 @@ class ImportPage(QWidget):
                                          str(i.excel_position[1]) if i.excel_position else "미확인")
                                         for i in self.issues))
         _fit(self.issue_table)
+        self._mark_grid()
         editable = draft is not None and self.selected_row_id in ids and not self.busy and not self.locked
         for field in self.inputs.values():
             field.setReadOnly(self.busy or self.locked)
@@ -398,7 +623,49 @@ class ImportPage(QWidget):
             field.setReadOnly(self.busy or self.locked or bool(row and row.sources.get(name)))
         for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):
             widget.setEnabled(editable)
+        # 읽기 전용 여부를 정한 뒤 스타일을 다시 적용해 잠긴 입력칸이 회색으로 보이게 한다.
+        self._style_editor(draft.row(self.selected_row_id) if draft is not None and self.selected_row_id in ids else None)
         self._render_save()
+
+    def _mark_grid(self):
+        """검토 항목이 가리키는 원본 셀을 미리보기에 표시한다. 오류가 확인 필요보다 우선한다."""
+        marks = {}
+        if self.snapshot is not None:
+            for issue in self.issues:
+                if not issue.address or issue.level not in (IssueLevel.ERROR, IssueLevel.REVIEW):
+                    continue
+                try:
+                    row, col = self.grid_model.position(issue.address.split(":")[0])
+                except ValueError:
+                    continue
+                if 0 <= row < self.grid_model.rowCount() and 0 <= col < self.grid_model.columnCount():
+                    address = self.grid_model.address(row, col)
+                    if marks.get(address) is not IssueLevel.ERROR:
+                        marks[address] = issue.level
+        self.grid_model.set_marks(marks)
+
+    def _style_editor(self, row):
+        """선택 행 입력칸을 검토 상태에 맞춰 표시한다. 오류 칸은 빨간 테두리와 오류 문구, 수정한 칸은 파란 테두리.
+
+        param
+        - row: 현재 편집 중인 행. 없으면 None.
+        """
+        if row is None:
+            return
+        for name, field in self.inputs.items():
+            messages = [i.message for i in self.issues
+                        if i.row_id == row.row_id and i.field == name and i.level is IssueLevel.ERROR]
+            border = TONES["danger"][2] if messages else PRIMARY if name in row.edits else FIELD_LINE
+            ink = DANGER_INK if messages else INK
+            field.setStyleSheet(
+                f"QLineEdit {{background:white;color:{ink};border:1px solid {border};border-radius:8px;padding:0 12px;}}"
+                f"QLineEdit:focus {{border:2px solid {PRIMARY};}}"
+                f"QLineEdit[readOnly=\"true\"] {{background:{SOFT};}}")
+            caption = self.originals.get(name)
+            if caption is not None:
+                base = caption.property("baseText") or ""
+                caption.setText(base + "".join(f" · {message}" for message in messages))
+                caption.setStyleSheet(f"color:{DANGER_INK if messages else SECONDARY};")
 
     @staticmethod
     def _cell(row, name):
@@ -417,13 +684,16 @@ class ImportPage(QWidget):
         self.requery_button.setVisible(self.state == "saved")
         if self.draft is None:
             self.save_summary.setText("AI 추출 결과를 검토한 뒤 저장할 수 있습니다.")
+            self.save_note.setText("")
         else:
             active = len(self.draft.active_rows)
             excluded = len(self.draft.rows) - active
-            self.save_summary.setText(
-                f"저장 대상 {active}행 · 제외 {excluded}행 · 오류 {errors}건 · 확인 필요 {reviews}건\n"
-                + ("필수값 오류가 남으면 묶음 전체를 저장하지 않습니다. 값과 원본 위치를 보완하고 다시 검사해 주세요." if errors else
-                   f"저장 위치: {self.saver.target_label}"))
+            self.save_summary.setText(f"저장 대상 {active}행 · 제외 {excluded}행 · 오류 {errors}건 · 확인 필요 {reviews}건")
+            self.save_note.setText(
+                "필수값 오류가 남으면 묶음 전체를 저장하지 않습니다. 값과 원본 위치를 보완하고 다시 검사해 주세요." if errors else
+                f"저장 위치: {self.saver.target_label}")
+        self.save_note.setStyleSheet(f"color:{DANGER_INK if errors else SECONDARY};")
+        self.save_note.setVisible(bool(self.save_note.text()))
 
     def apply_model_candidates(self):
         """번역표 후보를 확인창에서 승인한 경우에만 적용하고 다시 검증한다.
@@ -577,6 +847,8 @@ class ImportPage(QWidget):
         self.grid_model.set_snapshot(snapshot)
         self.grid.clearSpans()
         self.cell_label.setText("")
+        # 작은 시트는 빈 영역 없이, 큰 시트는 최대 300px 안에서 스크롤한다.
+        self.grid.setFixedHeight(max(120, min(300, 26 + 28 * self.grid_model.rowCount() + 14)))
         if snapshot is None:
             self.preview_info.setText("표시할 원본이 없습니다.")
             return
@@ -795,31 +1067,45 @@ class ImportPage(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self.inputs, self.originals, self.source_inputs = {}, {}, {}
+        box_style = (f"background:white;color:{INK};border:1px solid {FIELD_LINE};border-radius:8px;padding:0 10px;")
         for line, name in enumerate(self.draft.fields):
-            title = label(FIELD_LABELS[name], 13, medium=True)
+            title = label(FIELD_LABELS[name], 13, medium=True, wrap=True)
+            title.setContentsMargins(0, 10, 0, 0)
             field = QLineEdit(row.value(name) or "")
             field.setAccessibleName(f"{row_id}행 {FIELD_LABELS[name]}")
-            field.setFixedHeight(34)
+            field.setFixedHeight(40)
+            field.setFont(font(14, medium=True))
             field.setMinimumWidth(0)
             field.setReadOnly(self.busy or self.locked)
-            field.setStyleSheet("QLineEdit {background:#f7f9fc;border:1px solid #e5eaf3;border-radius:8px;padding:4px 8px;}")
             title.setBuddy(field)
             address = row.sources.get(name)
-            original = label(f"AI 원본: {row.original.get(name) or '빈 값'} · 셀 {address or '위치 미확인'}"
-                             + (" · 수정됨" if name in row.edits else ""), 12, color=SECONDARY, wrap=True)
+            text = (f"AI 원본: {row.original.get(name) or '빈 값'} · 셀 {address or '위치 미확인'}"
+                    + (" · 수정됨" if name in row.edits else ""))
+            original = label(text, 11, color=SECONDARY, wrap=True)
+            original.setProperty("baseText", text)
             original.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            self.editor_grid.addWidget(title, line * 2, 0)
+            self.editor_grid.addWidget(title, line * 2, 0, Qt.AlignmentFlag.AlignTop)
             self.editor_grid.addWidget(field, line * 2, 1)
-            self.editor_grid.addWidget(original, line * 2 + 1, 1)
+            self.editor_grid.addWidget(original, line * 2 + 1, 1, 1, 2)
             self.inputs[name], self.originals[name] = field, original
             if name in {"equipment_code", "version_raw"}:
                 source_field = QLineEdit(address or "")
                 source_field.setAccessibleName(f"{row_id}행 {FIELD_LABELS[name]} 원본 셀")
-                source_field.setPlaceholderText("원본 셀 주소 · 예: C12")
+                source_field.setPlaceholderText("셀 · 예: C12")
                 source_field.setToolTip("위치를 확인할 수 없을 때 원본에서 확인한 셀을 지정하세요. 원본 값은 바꾸지 않습니다.")
                 source_field.setReadOnly(self.busy or self.locked or bool(address))
-                self.editor_grid.addWidget(source_field, line * 2, 2)
+                source_field.setStyleSheet(f"QLineEdit {{{box_style}}} QLineEdit:focus {{border:2px solid {PRIMARY};}}")
                 self.source_inputs[name] = source_field
+                cell_box = source_field
+            else:
+                # 읽기 전용 원본 셀 주소 상자. 주소가 없으면 ‘미확인’으로만 표시한다.
+                cell_box = QLabel(address or "미확인")
+                cell_box.setTextFormat(Qt.TextFormat.PlainText)
+                cell_box.setAccessibleName(f"{row_id}행 {FIELD_LABELS[name]} 원본 셀 {address or '미확인'}")
+                cell_box.setStyleSheet(box_style + ("" if address else f"color:{SECONDARY};"))
+            cell_box.setFont(font(13, medium=True, numeric=True))
+            cell_box.setFixedSize(96, 40)
+            self.editor_grid.addWidget(cell_box, line * 2, 2)
         self.editor_title.setText(f"{row_id}행{' (제외됨)' if row.excluded else ''} 값 확인 · 수정")
         self.exclude_button.setText("이 행 다시 포함" if row.excluded else "이 행 제외")
         for widget in (self.apply_edit_button, self.revert_button, self.exclude_button):

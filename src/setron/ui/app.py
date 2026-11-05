@@ -219,12 +219,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     overview_notice = window.notice.text()
 
     def sync_mode(*_):
+        # VER5 가져오기 화면은 자체 단계 배너·결과 안내를 쓰므로 공통 안내 배지를 겹쳐 보이지 않는다.
+        window.notice.setVisible(window.route != "import" or window.management_saving)
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)
             return
         if window.route == "items":
-            window.header.title.setText("Item 상세" if items.mode == "detail" else "Item 매니저")
+            window.header.title.setText("Item 상세" if items.mode == "detail" else "아이템 매니저")
             window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
             list_action.setEnabled(False)
         elif window.route == "import":
