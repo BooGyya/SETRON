@@ -166,6 +166,9 @@ def _matches(field, extracted, source_text, row_values):
         version = re.sub(r"\s*\(\d{4}[-./]\d{1,2}[-./]\d{1,2}\)\s*$", "", source_text)
         if extracted.strip() == version.strip():
             return True
+        # 한 셀에 콤마로 나열한 버전(예: C4 'v4.56.6.41_e, v4.56.6.41_e _DFB')은 나열된 버전 하나와 정확히 같을 때만 허용한다.
+        if "," in version and extracted.strip() in {part.strip() for part in version.split(",")}:
+            return True
         # 혼합형의 'O3: 버전 / O2: 버전'은 해당 모델에 명시된 완전한 값만 허용한다.
         # 임의 부분 문자열이나 Engine 값, 계열 연결이 없는 값으로 대체하지 않는다.
         model = row_values.get("model_name") or row_values.get("family_name") or ""

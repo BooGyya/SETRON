@@ -435,7 +435,7 @@ class DatabaseImportSaver:
             values = row.values
             model = self._model(tx, values, row)
             models[model["group_name"]] = model
-            family = self._family(tx, model, values, row)
+            family = self._family(tx, model, values, row, equipment=True)
             version = values.get("version_raw")
             _require(bool(version), f"{_where(row)}: SW 버전이 필요합니다.")
             release_id = self._release_id(tx, family["family_id"], version, row.release_version_id)
@@ -540,7 +540,7 @@ class DatabaseImportSaver:
         _require(len(matches) == 1, f"{_where(row)}: 모델 '{raw}'({category})에 대응하는 등록 모델이 없거나 여러 개입니다.")
         return matches[0]
 
-    def _family(self, tx, model: dict, values: Mapping[str, Any], row: SaveRow) -> dict:
+    def _family(self, tx, model: dict, values: Mapping[str, Any], row: SaveRow, *, equipment: bool = False) -> dict:
         """모델 소유 범위·계열명·UI와 명시한 검토 ID가 모두 일치하는 계열을 찾는다.
 
         param
@@ -560,7 +560,7 @@ class DatabaseImportSaver:
         ui_raw = values.get("ui_type")
         ui = UI_TYPES.get((ui_raw or "").replace(" ", "").casefold())
         _require(not ui_raw or ui is not None, f"{_where(row)}: UI 구분 '{ui_raw}'을(를) 확인해 주세요.")
-        if not ui_raw and model["group_name"] == "M-C3":
+        if not ui_raw and model["group_name"] == "M-C3" and equipment:
             # 멘토 확정(2026-10-28): UI 표기가 없는 M-C3는 통합UI. 저장 전 검증(normalization)과 같은 기본값.
             ui = "INTEGRATED"
         owners = {model["group_id"]} | ({model["parent_group_id"]} if model.get("parent_group_id") else set())

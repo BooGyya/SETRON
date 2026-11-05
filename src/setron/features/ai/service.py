@@ -101,6 +101,10 @@ EXTRACT_RULES = (
     "C3 구UI·통합UI를 구분하고, 개조형 대상 모델은 target_models, "
     "원본 적용 기호는 modification_mark에 그대로 보존한다. 적용 모델이 여러 셀에 있으면 "
     "같은 버전·Item의 모델별 행을 만들어 각 원본 위치를 남긴다. 기호의 뜻을 임의로 정하지 않는다.\n"
+    "group_name은 Poly·Oxide·KCTC·HPA 분류를 적은 셀에서만 읽는다. 릴리즈노트의 '항목'·'Module' 열(Engine·PMC·SCD·CTC·UI 등)은 "
+    "SW 모듈 이름이므로 group_name이 아니며 Item 설명의 일부로만 본다.\n"
+    "family_name은 SW 계열을 적은 칸이 있을 때만 쓰고, 없으면 null로 둔다. 제목 셀의 설비군 이름(KCTC 등)이나 "
+    "모델명(M-C4 등)을 family_name에 넣지 않는다. 모델명은 제목 셀에 있으면 그 부분 문자열을 model_name에 쓴다.\n"
 )
 
 T = TypeVar("T")

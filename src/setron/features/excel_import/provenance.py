@@ -129,7 +129,7 @@ def _derived(row, field, raw, kind):
     """출처가 확인된 모델·계열이 확정하는 분류·UI·구조만 별도 셀 없이 허용한다."""
     if field not in _DERIVED:
         return False
-    values = {}
+    values, cell_sources = {}, {}
     for name in ("model_name", "family_name"):
         value = row.values.get(name)
         if value is None:
@@ -139,8 +139,12 @@ def _derived(row, field, raw, kind):
             values[name] = value
         elif sources and all(_matches_saved(name, value, original, row.values, kind, address)
                              for address, original in sources):
-            values[name] = _text(sources[0][1])
-    return normalize(values, kind, 1, {})[0].get(field) == row.values.get(field)
+            # 원본 셀과 대조를 마친 저장값으로 다시 정규화한다. 셀 전체(예: 제목 'KCTC Inline O2 SW Release List')를
+            # 모델명으로 쓰면 모델을 알 수 없어 구조·분류를 확인하지 못한다. 셀 원문은 UI 표기 확인용으로 함께 넘긴다.
+            values[name] = value
+            address, original = sources[0]
+            cell_sources[name] = CellSource("", address, original)
+    return normalize(values, kind, 1, cell_sources)[0].get(field) == row.values.get(field)
 
 
 def _hpa(value):

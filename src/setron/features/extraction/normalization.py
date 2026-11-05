@@ -92,9 +92,19 @@ def normalize(values, kind, row_number, sources):
         else:
             normalized_ui = normalized_ui or family_ui
         family = "C3"
-        if normalized_ui is None and not (ui or "").strip() and result.get("model_name") in {"C3", "M-C3"}:
+        if normalized_ui is None and not (ui or "").strip() and model_source is not None:
+            # 모델 셀 원문에 UI가 적혀 있으면(예: 'M-C3 (구UI)' 셀에서 모델만 'M-C3'로 읽은 경우) 그 표기를 따른다.
+            # 한 셀에 두 표기가 함께 있으면(예: 제목 '… 통합UI 기준 ※ 구UI 파일 확인 중') 정하지 않는다.
+            cell_text = str(model_source.value or "")
+            legacy = bool(re.search(r"구\s*UI", cell_text, re.IGNORECASE))
+            integrated = bool(re.search(r"통합\s*UI", cell_text, re.IGNORECASE))
+            if legacy != integrated:
+                normalized_ui = "LEGACY" if legacy else "INTEGRATED"
+        if (normalized_ui is None and not (ui or "").strip() and result.get("model_name") in {"C3", "M-C3"}
+                and kind is ExtractKind.EQUIPMENT_STATUS):
             # 멘토 확정(2026-10-28 회신, 4차 멘토링 일지): 구UI/통합UI 표기가 없는 M-C3는 모두 통합UI. 구UI가 특별한 설비다.
             # UI 칸에 알 수 없는 글자가 있으면 기본값을 쓰지 않고 확인을 요청한다(표기 '없음'일 때만).
+            # 설비 현황표에만 적용한다. 릴리즈노트는 구UI·통합UI가 다른 문서라 UI를 반드시 확인한다.
             normalized_ui = "INTEGRATED"
         result["ui_type"] = normalized_ui
         if normalized_ui is None:
