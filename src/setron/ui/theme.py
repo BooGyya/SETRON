@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QEvent, QObject, QSize
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QAbstractScrollArea, QAbstractSpinBox, QApplication, QComboBox, QTabBar
 
 
 ASSETS = Path(__file__).parent / "assets"
@@ -42,7 +42,27 @@ def font(size: int = 14, *, medium: bool = False, numeric: bool = False) -> QFon
     return result
 
 
+class WheelGuard(QObject):
+    """콤보·숫자 입력·탭이 마우스 휠로 값이 바뀌지 않게 하고, 휠은 바깥 스크롤로 넘긴다."""
+
+    TARGETS = (QComboBox, QAbstractSpinBox, QTabBar)
+
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.Wheel and isinstance(watched, self.TARGETS):
+            parent = watched.parentWidget()
+            while parent is not None:
+                if isinstance(parent, QAbstractScrollArea) and parent.verticalScrollBar().maximum() > 0:
+                    QApplication.sendEvent(parent.verticalScrollBar(), event)
+                    break
+                parent = parent.parentWidget()
+            return True
+        return False
+
+
 def install_theme(app: QApplication) -> None:
+    # 휠로 조회 조건·보기 탭이 바뀌지 않도록 애플리케이션 전체에 한 번만 건다.
+    if app.findChild(WheelGuard) is None:
+        app.installEventFilter(WheelGuard(app))
     # 여러 창을 만들더라도 폰트는 애플리케이션마다 한 번만 등록한다.
     if not app.property("setronFontsLoaded"):
         for name in ("IBMPlexSansKR-Regular.ttf", "IBMPlexSansKR-Medium.ttf", "Inter.ttf"):
