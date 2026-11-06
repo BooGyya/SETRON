@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from setron.features.version.groups import TIERS_WORST_FIRST, Tier, tier_of
 from setron.features.version.schemas import CompareStatus, VersionComparison
 
 
@@ -62,6 +63,18 @@ class FamilyStatus:
     status: CompareStatus
     pms: tuple[PmComparison, ...]
     pm_mismatch: bool
+
+    @property
+    def tier(self) -> Tier:
+        """색 단계(N+1 이상·N·N-1·N-2 이하·비교 불가). 히트맵·보고서·화면이 같은 색을 쓰도록 여기서만 정한다.
+
+        판정(``status``)과 같은 판정을 받은 PM 중 가장 낮은 단계를 쓴다. 미달이면 미달 PM 중 가장 낮은 단계,
+        달성이면 PM 중 가장 낮은 단계다. 판단 불가면 비교 불가다.
+        """
+        if self.status is CompareStatus.UNDETERMINED:
+            return Tier.UNKNOWN
+        tiers = [tier_of(p.comparison) for p in self.pms if p.comparison.status is self.status]
+        return min(tiers, key=TIERS_WORST_FIRST.index) if tiers else Tier.UNKNOWN
 
 
 @dataclass(frozen=True)

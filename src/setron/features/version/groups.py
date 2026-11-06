@@ -263,6 +263,36 @@ def tier_of(comparison: VersionComparison) -> Tier:
     return Tier.TWO_BELOW if (comparison.steps_below or 1) >= 2 else Tier.ONE_BELOW
 
 
+TIERS_WORST_FIRST: tuple[Tier, ...] = (Tier.TWO_BELOW, Tier.ONE_BELOW, Tier.AT, Tier.ABOVE)
+
+
+def target_label(family, target) -> str:
+    """목표 N 표기. AI 자료·보고서·화면이 같은 문구를 쓰도록 여기서만 만든다.
+
+    param
+    - family: 같은 계열의 릴리즈 목록 (``version.service.FamilyReleases``). 모르면 None.
+    - target: 목표 릴리즈 ID 하나 또는 :class:`VersionGroups`.
+
+    return
+    - 릴리즈 하나면 버전 원문(없으면 "릴리즈 미확인").
+    - N 그룹이면 최신 칸부터 칸별 버전 (예: "N 그룹 · N: v2.3 · N-1: v2.2"). 칸 안은 버전 순서대로 적고,
+      계열에 없는 릴리즈는 "릴리즈 미확인"으로 적는다. N 칸이 비면 "N 그룹 · N 칸 비어 있음 (판단 불가)".
+    """
+    if not isinstance(target, VersionGroups):
+        release = family.get(target) if family is not None and target is not None else None
+        return release.version_raw if release else "릴리즈 미확인"
+    if not target.has_target:
+        return "N 그룹 · N 칸 비어 있음 (판단 불가)"
+    parts = []
+    for slot in sorted(target.slots, reverse=True):
+        found = [family.get(member) for member in target.members(slot)] if family is not None else []
+        names = [r.version_raw for r in sorted((r for r in found if r),
+                                               key=lambda r: (r.version_order is None, r.version_order or 0))]
+        names += ["릴리즈 미확인"] * (len(target.members(slot)) - len(names))
+        parts.append(f"{SLOT_LABELS[slot]}: {', '.join(names)}")
+    return "N 그룹 · " + " · ".join(parts)
+
+
 def suggest_ladder(family, groups: VersionGroups) -> VersionGroups:
     """비어 있는 칸을 버전 순서상 바로 옆 버전 하나씩으로 채운 기본 후보 (사용자가 확인 후 저장).
 
