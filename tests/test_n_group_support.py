@@ -63,6 +63,16 @@ def test_ai_facts_mark_empty_n_slot_and_unknown_release():
     assert texts["O3"] == "N 그룹 · N: v3.1, 릴리즈 미확인"
 
 
+def test_ai_facts_distribution_uses_group_slots():
+    """그룹에서 v2.1은 어느 칸에도 없고 가장 오래돼 N-2 이하, v2.2는 N-1 칸, v2.3은 N 칸이다."""
+    o2 = build_facts(data(targets=GROUPS))["버전 분포"][0]
+
+    assert {v["설치 버전"]: (v["판정"], v["단계"]) for v in o2["버전별 설비 수"]} == {
+        "(버전 없음)": ("판단 불가", "비교 불가"), "v2.1": ("N 미만", "N-2 이하"),
+        "v2.2": ("N 미만", "N-1"), "v2.3": ("N 이상", "N")}
+    assert o2["단계별 설비 수"]["N-1"] == 1 and o2["단계별 설비 수"]["N-2 이하"] == 2
+
+
 def test_export_labels_use_group_slots():
     summary = summarize(RECORDS, FAMILIES, GROUPS)
 

@@ -105,6 +105,24 @@ def test_version_distribution_counts_equipment_per_installed_version():
     }
 
 
+def test_version_distribution_splits_below_by_tier():
+    """목표가 릴리즈 하나(v2.3)여도 한 단계 아래는 N-1, 두 단계 아래는 N-2 이하로 나눠 보낸다."""
+    o2 = FACTS["버전 분포"][0]
+
+    assert {v["설치 버전"]: v["단계"] for v in o2["버전별 설비 수"]} == {
+        "(버전 없음)": "비교 불가", "v2.1": "N-2 이하", "v2.2": "N-1", "v2.3": "N"}
+    assert o2["단계별 설비 수"] == {"N+1 이상": 0, "N": 1, "N-1": 1, "N-2 이하": 2, "비교 불가": 1}
+
+
+def test_counts_include_all_five_tiers_and_rule_text():
+    total = FACTS["전체 현황"]["단계별 건수(설비×계열)"]
+
+    assert list(total) == ["N+1 이상", "N", "N-1", "N-2 이하", "비교 불가"]
+    assert sum(total.values()) == FACTS["전체 현황"]["N 이상"] + FACTS["전체 현황"]["N 미만"] + FACTS["전체 현황"]["판단 불가"]
+    assert all("단계별 건수(설비×계열)" in site for site in FACTS["사업장별 현황"])
+    assert "N-2 이하" in FACTS["조회 조건"]["단계 기준"]
+
+
 def test_risks_are_grouped_by_site_and_reason_without_treating_unknown_as_safe():
     risks = FACTS["위험"]
 
