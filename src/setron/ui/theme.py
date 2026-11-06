@@ -99,6 +99,8 @@ def install_theme(app: QApplication) -> None:
         QPushButton:disabled { color: #8b95a8; background: #f9fafb; border-color: #e9eef6; }
         QPushButton[primary="true"] { border-color: #3c5ce9; color: white;
             background: qlineargradient(x1:0,y1:0,x2:0.3,y2:1,stop:0 #3c5ce9,stop:0.714 #3652ca); }
+        QPushButton[soft="true"] { background: #e8ebfc; border-color: #a8b4fa; color: #3c5ce9; }
+        QPushButton[soft="true"]:hover { background: #dfe4fb; border-color: #3c5ce9; }
         QPushButton[primary="true"]:hover { background: #304dc9; }
         QPushButton[primary="true"]:disabled { background: #d8defb; border-color: #d8defb; color: #5b6880; }
         QPushButton[nav="true"] { padding: 0; min-height: 44px; max-height: 44px; border: 1px solid transparent;

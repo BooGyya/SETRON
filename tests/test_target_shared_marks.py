@@ -34,12 +34,12 @@ def catalog(revision_storage):
     return storage, models, families
 
 
-def save_release(catalog, raw, order, rows, *, owner="M-C4"):
+def save_release(catalog, raw, order, rows, *, owner="M-C4", suffix=None):
     """확정된 표 구조의 합성 셀을 읽어 버전별 Item 표식을 실제 저장한다."""
     storage, models, families = catalog
     headers = ["NormalC4", "DFB", "DEX", "HW연관", "고객사연관"] if owner == "M-C4" else ["O5", "Prime", "HW연관"]
     detail = ReleaseService(storage).register_release(
-        ReleaseInput(family_id=families[owner], version_raw=raw, version_order=order),
+        ReleaseInput(family_id=families[owner], version_raw=raw, version_order=order, version_suffix=suffix),
         tuple(ItemInput(content=f"합성 변경 {raw}/{number}", item_no=number)
               for number in range(1, len(rows) + 1)),
     )
@@ -77,6 +77,38 @@ def test_one_o_in_any_item_admits_the_same_release_for_each_c4_model(catalog):
         assert result.selection_valid and result.reason is None
     assert marks[0][0].header_address == "G2" and marks[0][0].mark_address == "G3"
     assert all_rows(catalog[0], "app_setting") == before  # N 계산은 원본이나 설정을 갱신하지 않음
+
+
+def test_saved_lineage_limits_shared_o_candidates(catalog):
+    base, _, _ = save_release(catalog, "v1", 1, (("O", "O", "O"),))
+    dfb, _, _ = save_release(catalog, "v2_DFB", 2, (("O", "O", "O"),), suffix="DFB")
+    storage = catalog[0]
+    service = TargetService(storage)
+    model_id, family_id = pair(catalog, "M-C4 DFB")
+    confirmed = service.confirm(model_id, family_id, (
+        CandidateConfirmation(dfb, "O 표식", "확인된 순서", source_text="합성 시험 원본"),
+    ))
+    assert [candidate.release_id for candidate in confirmed.candidates] == [base, dfb]
+
+    key = {"setting_key": f"target_applicability.v1:{model_id}:{family_id}"}
+    with storage.transaction() as tx:
+        payload = tx.get("app_setting", key)["setting_value"]
+        tx.update("app_setting", key, {"setting_value": {**payload, "version_lineage": "DFB"}})
+
+    result = candidates(catalog, "M-C4 DFB", selected=base)
+    assert [candidate.release_id for candidate in result.candidates] == [dfb]
+    assert not result.selection_valid and "버전 줄기" in result.reason
+    assert [candidate.release_id for candidate in candidates(catalog, "M-C4").candidates] == [base, dfb]
+
+    reconfirmed = service.confirm(model_id, family_id, (
+        CandidateConfirmation(dfb, "O 표식", "다시 확인한 순서", source_text="합성 시험 원본"),
+    ))
+    assert [candidate.release_id for candidate in reconfirmed.candidates] == [dfb]
+
+    with storage.transaction() as tx:
+        tx.update("app_setting", key, {"setting_value": {**payload, "version_lineage": "UNKNOWN"}})
+    result = candidates(catalog, "M-C4 DFB")
+    assert result.candidates == () and not result.applicability_confirmed
 
 
 @pytest.mark.parametrize("non_applied", ["X", None, "", "   "])

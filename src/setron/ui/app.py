@@ -215,8 +215,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     overview_notice = window.notice.text()
 
     def sync_mode(*_):
-        # VER5 가져오기 화면은 자체 단계 배너·결과 안내를 쓰므로 공통 안내 배지를 겹쳐 보이지 않는다.
-        window.notice.setVisible(window.route != "import" or window.management_saving)
+        # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
+        window.notice.setVisible(window.route not in ("import", "dashboard", "heatmap") or window.management_saving)
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)
@@ -442,6 +442,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     versions.mode_changed.connect(sync_mode)
     items.mode_changed.connect(sync_mode)
     window.page_changed.connect(sync_mode)
+    sync_mode()  # 첫 화면(대시보드)에도 안내 배지 표시 규칙을 바로 적용한다.
     def ensure_loaded(key):
         # 등록 과정에서 취소된 초기 워커 조회는 해당 화면 진입 시 다시 시작한다.
         if key == "versions" and versions.catalog is None and not versions.read_request.busy:
