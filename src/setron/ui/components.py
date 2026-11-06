@@ -1,7 +1,7 @@
 """업무 화면과 무관한 공통 표시 컴포넌트. 필터·집계·목표 대화상자는 후속 작업이다."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QTransform
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
@@ -32,6 +32,25 @@ def button(text: str, *, primary: bool = False, asset: str | None = None) -> QPu
         result.setText(" " + text)
         result.setAccessibleName(text)
     return result
+
+
+class DisclosureArrow(QLabel):
+    """원본 16px 셰브론을 접힘/펼침 방향으로 표시한다. 접어도 슬롯은 유지한다."""
+
+    def __init__(self, *, expanded=False):
+        super().__init__()
+        asset = "c9be0.svg"
+        size = svg_size(asset)
+        self._up = icon(asset).pixmap(size)
+        self._down = self._up.transformed(QTransform().rotate(180), Qt.TransformationMode.SmoothTransformation)
+        self.setFixedSize(size)
+        self.setProperty("assetFile", asset)
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded):
+        self.expanded = bool(expanded)
+        self.setPixmap(self._up if self.expanded else self._down)
+        self.setAccessibleName("접기" if self.expanded else "펼치기")
 
 
 class Card(QFrame):

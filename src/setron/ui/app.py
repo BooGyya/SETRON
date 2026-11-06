@@ -20,6 +20,7 @@ from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env, data_exporter_from_env
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
+from setron.ui.equipment_drawer import EquipmentDrawer
 from setron.ui.target_data import describe_targets, initial_targets
 from setron.ui.group_dialog import VersionGroupDialog
 from setron.ui.target_dialog import TargetDialog
@@ -265,6 +266,53 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("ai", ai, uses_query=False)
     window.register_page("management", management, uses_query=False)
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
+    drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
+    window.equipment_edit_request = ReadRequest(window)
+    drawer.closed.connect(window.equipment_edit_request.cancel)
+
+    def close_drawer(*_):
+        drawer.close_panel(restore_focus=False)
+
+    window.page_changed.connect(lambda key: close_drawer() if key != "heatmap" else None)
+    equipment.mode_changed.connect(lambda mode: close_drawer() if mode != "detail" else None)
+    window.destroyed.connect(window.equipment_edit_request.cancel)
+
+    def open_installed_version_editor(table, key):
+        if (not drawer.isVisible() or window.route != "heatmap" or drawer.request is None
+                or not window.query_state.is_current(drawer.request.query) or window.management_saving
+                or window.management_refresh.busy):
+            return
+        if management.open_record(table, key):
+            window.navigate("management")
+        else:
+            drawer.set_edit_loading(False, "관리 화면의 저장·검토를 마친 뒤 다시 시도해 주세요.")
+
+    def request_installed_version_editor():
+        request = drawer.request
+        if (request is None or not window.query_state.is_current(request.query) or window.route != "heatmap"
+                or not callable(getattr(management_gateway, "equipment_versions", None))):
+            return
+        if (management.busy or management.locked or management.state in {"review", "saving"}
+                or window.management_saving or window.management_refresh.busy):
+            drawer.set_edit_loading(False, "관리 화면의 조회·저장·검토를 마친 뒤 다시 시도해 주세요.")
+            return
+        observation_date = drawer.detail.record.base_date
+        drawer.set_edit_loading(True)
+        window.equipment_edit_request.start(BackgroundRead(lambda: management_gateway.equipment_versions(
+            request.equipment_id, observation_date)))
+
+    def installed_version_choices(choices, error):
+        if (drawer.request is None or not drawer.isVisible() or window.route != "heatmap"
+                or not window.query_state.is_current(drawer.request.query)):
+            return
+        if error is not None:
+            drawer.set_edit_loading(False, "수정할 SW 기록을 읽지 못했습니다. DB 연결을 확인한 뒤 다시 시도해 주세요.")
+        else:
+            drawer.choose_edit_record(choices)
+
+    drawer.edit_requested.connect(request_installed_version_editor)
+    drawer.record_requested.connect(open_installed_version_editor)
+    window.equipment_edit_request.completed.connect(installed_version_choices)
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
     origin_scroll = {}
@@ -317,9 +365,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.navigate("equipment")
 
     def open_detail(request):
-        remember_origin()
+        if window.route != "heatmap":
+            return
         if equipment.open_detail(request, origin="heatmap"):
-            window.navigate("equipment")
+            detail = next(d for d in equipment.data.details if d.record.equipment_id == request.equipment_id)
+            drawer.open_detail(request, detail, equipment.detail_model.rows, equipment.evidence_values,
+                               equipment.snapshot.source_label, return_focus=heatmap.tile_buttons.get(request.equipment_id),
+                               edit_available=callable(getattr(management_gateway, "equipment_versions", None)))
 
     export_action = window.header.actions["export"]
     if db_exporter is not None or management_gateway is not None or data_exporter is not None:

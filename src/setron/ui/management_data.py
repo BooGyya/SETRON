@@ -80,6 +80,35 @@ class ManagementGateway:
         with self._storage() as storage:
             return ManagementService(storage).get_record(table, key)
 
+    def equipment_versions(self, equipment_id, observation_date):
+        """정확한 설비·실제 관측일의 편집 위치를 읽는다. 저장/최근 날짜 대체는 하지 않는다.
+
+        PM이 연결된 SW는 PM별 편집을 사용한다. PM 없는 일반 SW만 SW 행으로 연결하여
+        다른 PM이나 다른 기준일의 버전을 실수로 수정하지 않게 한다.
+        """
+        with self._storage() as storage, storage.transaction() as tx:
+            repository = EquipmentRepository()
+            snapshots = repository.rows(tx, "equipment_snapshot", equipment_id=equipment_id, base_date=observation_date)
+            if len(snapshots) != 1:
+                return ()
+            sid = snapshots[0]["snapshot_id"]
+            software = repository.rows(tx, "equipment_version", snapshot_id=sid)
+            pms = repository.rows(tx, "equipment_pm", snapshot_id=sid)
+            by_id = {row["equipment_version_id"]: row for row in software}
+            choices = []
+            for pm in pms:
+                sw = by_id.get(pm["equipment_version_id"])
+                if sw is None:
+                    raise ValueError("PM의 SW 연결을 확인해야 합니다. 다시 조회해 주세요.")
+                title = f"{pm['pm_name']} · {sw['version_raw'] or '미입력'} · 계열 ID {sw['family_id']}"
+                choices.append(("equipment_pm", {"pm_id": pm["pm_id"]}, title))
+            referenced = {pm["equipment_version_id"] for pm in pms}
+            for sw in software:
+                if sw["equipment_version_id"] not in referenced:
+                    title = f"공통 SW · {sw['version_raw'] or '미입력'} · 계열 ID {sw['family_id']}"
+                    choices.append(("equipment_version", {"equipment_version_id": sw["equipment_version_id"]}, title))
+            return tuple(choices)
+
     def save(self, edits, context=RefreshContext(), applicability=()):
         with self._storage() as storage:
             return ManagementService(storage, context).save(edits, applicability=applicability)

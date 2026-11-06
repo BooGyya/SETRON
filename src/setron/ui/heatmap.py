@@ -74,7 +74,7 @@ class TileButton(QPushButton):
         identity.addStretch()
         self.marker = ""
         if expanded and data.goal is not GoalState.EXCLUDED:
-            self.marker = "위험" if risk else "?" if data.risk is RiskStatus.UNKNOWN else ""
+            self.marker = "위험" if risk else ""
             if self.marker:
                 identity.addWidget(label(self.marker, 10, medium=True, color=RISK_INK if risk else SECONDARY),
                                    0, Qt.AlignmentFlag.AlignTop)
@@ -334,11 +334,11 @@ class HeatmapPage(QWidget):
             item.addWidget(dot)
             item.addWidget(label(text, 12, color=SECONDARY))
             legend.addLayout(item)
-        legend.addWidget(label("? 버전 미확인", 11, color=SECONDARY))
+        legend.addWidget(label("버전 미확인", 11, color=SECONDARY))
         legend.addStretch()
         self.content.body.addLayout(legend)
         legend_note = label("채움색은 목표 N 대비 버전 차이, 굵은 테두리는 위험 판정으로 서로 별개입니다. "
-                            "많이 낮음 기준은 확정 전 임시값입니다. ? 위험 미확인 · 회색: HPA 분석 제외 · "
+                            "많이 낮음 기준은 확정 전 임시값입니다. 위험 상태는 상세 패널에서 확인 · 회색: HPA 분석 제외 · "
                             "파란 테두리: 마우스를 올렸거나 선택한 설비", 11,
                             color=SECONDARY, wrap=True)
         ignore_width(legend_note)

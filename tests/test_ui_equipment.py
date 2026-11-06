@@ -221,10 +221,11 @@ def test_heatmap_direct_detail_and_back_preserve_view_and_selection(window):
     heatmap.view_buttons.button(1).click()
     heatmap.tile_buttons[1].click()
     page = window.pages["equipment"]
-    assert window.route == "equipment" and page.mode == "detail" and page.selected_id == 1
+    assert window.route == "heatmap" and page.mode == "detail" and page.selected_id == 1
+    assert window.equipment_drawer.isVisible()
     assert page.detail_model.rowCount() == 3
     assert "위험 후보" in page.detail_summary.text() and "규칙·필수 Item·릴리즈 문서·원본 위치 미연결" in page.evidence.text()
-    page.back_button.click()
+    window.equipment_drawer.close_button.click()
     assert window.route == "heatmap" and heatmap.view_buttons.checkedId() == 1
     assert heatmap.selected_id == 1 and heatmap.tile_buttons[1].isChecked()
 
@@ -365,7 +366,7 @@ def test_return_to_heatmap_restores_origin_scroll_after_layout(window):
     before = window.scroll.verticalScrollBar().value()
     assert before == 350
     heatmap.tile_buttons[1].click()
-    window.pages["equipment"].back_button.click()
+    window.equipment_drawer.close_button.click()
     QTest.qWait(100)
     assert window.route == "heatmap" and window.scroll.verticalScrollBar().value() == before
 
