@@ -11,7 +11,7 @@ from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_data import count_value, missing_sw_count, upgrade_caption
 from setron.ui.equipment import FlowGrid, ReadTableModel, fit_rows, ignore_width, read_table
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
-from setron.ui.query_state import UNASSIGNED
+from setron.ui.query_state import UNASSIGNED, version_filter_caption
 from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
 
 
@@ -499,6 +499,8 @@ class HeatmapPage(QWidget):
         if selection.group_key is not None:
             parts.append(f"설비군 {name(selection.group_key, catalog.groups)}")
         parts.append(f"목표 N {len(result.target_values)}개")
+        if selection.versions is not None:
+            parts.append(version_filter_caption(selection.versions))
         return " · ".join(parts)
 
     def _matches(self, tile, text):

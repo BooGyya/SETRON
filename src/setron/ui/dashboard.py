@@ -14,7 +14,7 @@ from setron.ui.dashboard_data import (
     DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, count_value, missing_sw_count,
     upgrade_caption,
 )
-from setron.ui.query_state import UNASSIGNED
+from setron.ui.query_state import UNASSIGNED, version_filter_caption
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size
 
 # Figma VER4 대시보드 셀 색 (--met / --below / --soft / --v4-red). 이 화면에서만 쓴다.
@@ -489,6 +489,8 @@ class DashboardPage(QWidget):
         if selection.group_key is not None:
             parts.append(f"설비군 {name(selection.group_key, catalog.groups)}")
         parts.append(f"계열별 N {len(result.target_values)}개")
+        if selection.versions is not None:
+            parts.append(version_filter_caption(selection.versions))
         return " · ".join(parts)
 
     def _select(self, title, ids, *, risk_only=False):

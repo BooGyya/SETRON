@@ -10,6 +10,7 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.targets.groups import with_saved_groups
 from setron.features.version.service import FamilyReleases
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
+from setron.ui.version_filter import matches_versions
 
 
 class HpaClassificationConflict(ValueError):
@@ -252,17 +253,34 @@ class DashboardSource:
             if any(value is not None and (actual is not None if value is UNASSIGNED else actual != value)
                    for value, actual in ((selection.fab_key, location.fab_key), (selection.line_key, location.line_key))):
                 continue
+            if not matches_versions(record, selection.versions):
+                continue
             records.append(record)
             locations.append((record.equipment_id, location))
         return tuple(records), tuple(locations)
 
     def scoped_records(self, query: AppliedQuery) -> tuple[EquipmentRecord, ...]:
-        """모든 관측일에서 조회 조건(위치·설비군)에 맞는 설비 관측. 날짜별 예측(BE-020) 입력으로 쓴다."""
-        return self._scope_records(self.records, query)
+        """같은 조회 설비의 관측 이력. 버전 필터는 기준일에서만 코호트를 정한다.
+
+        과거 버전이 지금 선택한 원문과 달라도 이력을 제거하지 않는다. AI 변경 근거·예측도
+        화면의 날짜별 추이와 같은 물리 설비 집합을 읽으며, 미관측을 0으로 만들지 않는다.
+        """
+        if query.selection.versions is None:
+            return self._scope_records(self.records, query)
+        candidates = _until(self.analysis_dates or self.dates, query.selection.as_of)
+        if not candidates:
+            return ()
+        cohort = {r.equipment_id for r in self._scope_records(
+            tuple(r for r in self.records if r.base_date == candidates[-1]), query)}
+        history_query = replace(query, selection=replace(query.selection, versions=None))
+        return tuple(r for r in self._scope_records(self.records, history_query) if r.equipment_id in cohort)
 
     def _scope_records(self, records, query, group_keys=None, position=None):
         selection = query.selection
         active = {selection.group_key} if selection.group_key is not None else set(self.bindings)
+        # 버전은 조회 설비군 범위의 SW 중 하나가 일치하면 설비 전체를 포함한다.
+        # 표의 개별 셀로 나눌 때 다시 다른 버전 코호트를 만들지 않는다.
+        scope_models = {model for key in active for model in self.bindings[key]}
         if group_keys is not None:
             active &= set(group_keys)
         if not active:
@@ -278,6 +296,10 @@ class DashboardSource:
             if any(value is not None and (actual is not None if value is UNASSIGNED else actual != value)
                    for value, actual in ((selection.fab_key, loc.fab_key), (selection.line_key, loc.line_key))):
                 continue
+            if selection.versions is not None:
+                version_record = replace(record, pms=tuple(pm for pm in record.pms if pm.group_id in scope_models))
+                if not matches_versions(record if record.is_hpa else version_record, selection.versions):
+                    continue
             pms = tuple(pm for pm in record.pms if pm.group_id in model_ids)
             if record.is_hpa:
                 if selection.group_key is None and group_keys is None:

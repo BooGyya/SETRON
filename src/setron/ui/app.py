@@ -23,6 +23,8 @@ from setron.ui.equipment import EquipmentPage
 from setron.ui.target_data import describe_targets, initial_targets
 from setron.ui.group_dialog import VersionGroupDialog
 from setron.ui.target_dialog import TargetDialog
+from setron.ui.version_filter import version_options
+from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.theme import install_theme
 from setron.ui.version_data import catalog_from_dashboard
 from setron.ui.version_demo import demo_version_catalog
@@ -76,6 +78,33 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.set_target_describer(lambda targets: describe_targets(source, targets))
     window.query_panel.set_target_draft(initial_targets(source))
     window.query_panel.goal_button.setEnabled(True)
+    window.query_panel.version_button.setEnabled(True)
+    window.version_filter_dialog = None
+
+    def open_version_filter():
+        if window.version_filter_dialog is not None and window.version_filter_dialog.isVisible():
+            window.version_filter_dialog.raise_()
+            window.version_filter_dialog.activateWindow()
+            return
+        state = window.query_state
+        original, revision = state.draft, state.catalog_revision
+        options = version_options(source)
+        dialog = VersionFilterDialog(options, original.versions,
+                                     is_current=lambda: (state.catalog_revision == revision and state.draft == original
+                                                         and version_options(source) == options), parent=window)
+        window.version_filter_dialog = dialog
+
+        def finish(result):
+            if result == dialog.DialogCode.Accepted:
+                window.query_panel.set_version_filter(dialog.result_filter)
+            if window.version_filter_dialog is dialog:
+                window.version_filter_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(finish)
+        dialog.open()
+
+    window.query_panel.version_button.clicked.connect(open_version_filter)
     window.query_panel.goal_button.setToolTip("모델·계열별 N 칸(N-2 ~ N+2) 입력·저장 · 새 계산은 조회 적용 후")
     window.query_panel.apply_button.setToolTip("선택한 위치·설비군·목표 N으로 합성 예시 결과를 함께 다시 계산합니다. DB 미연결." if demo
                                               else "선택한 위치·설비군·목표 N으로 저장된 자료를 다시 읽어 계산합니다.")

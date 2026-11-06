@@ -42,12 +42,37 @@ class GroupOption:
 
 
 @dataclass(frozen=True)
+class VersionFilter:
+    """조회할 버전 원문들의 OR 조건. 목표 N·릴리즈 대응 표기는 변경하지 않는다."""
+
+    versions: tuple[str, ...] = ()
+    include_missing: bool = False
+
+    def __post_init__(self):
+        if isinstance(self.versions, str):
+            raise ValueError("조회 버전은 문자열 목록이어야 합니다.")
+        values = tuple(self.versions)
+        if any(not isinstance(value, str) or not value.strip() for value in values):
+            raise ValueError("조회 버전 원문이 올바르지 않습니다.")
+        if type(self.include_missing) is not bool:
+            raise ValueError("버전 미등록 포함 여부가 올바르지 않습니다.")
+        object.__setattr__(self, "versions", tuple(sorted(set(values))))
+        if not values and not self.include_missing:
+            raise ValueError("조회할 버전을 하나 이상 선택해 주세요.")
+
+
+def version_filter_caption(value: VersionFilter | None) -> str:
+    return "조회 버전 · 전체" if value is None else f"조회 버전 · {len(value.versions) + value.include_missing}개 선택"
+
+
+@dataclass(frozen=True)
 class QuerySelection:
     site_key: str | None = None
     fab_key: SelectionKey = None
     line_key: SelectionKey = None
     group_key: str | None = None  # UI 설비군 키이며 version_family.family_id가 아님
     as_of: date | None = None  # 기준일. None은 최신 관측(오늘 기준), 날짜는 그날 이전 최신 관측
+    versions: VersionFilter | None = None  # None: 모든 버전. 빈 선택을 전체로 취급하지 않는다.
 
 
 @dataclass(frozen=True)
@@ -157,6 +182,8 @@ class QueryState:
     def validate(self, selection: QuerySelection) -> None:
         if not isinstance(selection, QuerySelection):
             raise ValueError("QuerySelection이 필요합니다.")
+        if selection.versions is not None and not isinstance(selection.versions, VersionFilter):
+            raise ValueError("조회 버전 조건이 올바르지 않습니다.")
         for value, options, field in (
             (selection.site_key, self.catalog.sites, "Site"),
             (selection.group_key, self.catalog.groups, "설비군"),
@@ -240,6 +267,11 @@ class QueryState:
                 o.label for o in options if o.key == value)
             captions.append(f"{name} {title}")
         captions.append("기준일 최신" if selection.as_of is None else f"기준일 {selection.as_of.isoformat()}")
+        if selection.versions is not None:
+            versions = [repr(value) for value in selection.versions.versions]
+            if selection.versions.include_missing:
+                versions.append("버전 미등록")
+            captions.append("조회 버전 " + " | ".join(versions))
         return " · ".join(captions)
 
 
