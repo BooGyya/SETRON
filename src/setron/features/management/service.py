@@ -13,15 +13,20 @@ from sqlalchemy import select
 from setron.features.aging.repository import thresholds_in
 from setron.features.aging.schemas import SETTING_KEY
 from setron.features.aging.service import equipment_age, parse_thresholds
+from setron.features.equipment.read import read_equipment_records
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.schemas import EquipmentSourceCell
 from setron.features.export.schemas import StatusReport, TargetRow
-from setron.features.item.schemas import ItemState, TargetScope
-from setron.features.release.refresh import ReleaseRefreshService, _context_copy, fresh_context_in
+from setron.features.item.schemas import ItemState, TargetScope, VersionItem
+from setron.features.item.service import ItemCatalog
+from setron.features.release.refresh import (ReleaseRefreshService, _context_copy, families_from_rows,
+                                             fresh_context_in, rule_from_row)
 from setron.features.release.refresh_schemas import RefreshContext
 from setron.features.release.schemas import ItemLinkInput
 from setron.features.release.service import ReleaseService
 from setron.features.release.validation import ITEM_EDITABLE, RELEASE_EDITABLE, prepare_links
+from setron.features.risk.impact import DRAFT_RULE_ID, RuleImpact, preview_rule_impact
+from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
 from setron.features.storage.inputs import identifier, require, required_text
 from setron.features.storage.validation import StorageValidationError, decode_record
 from setron.features.targets.service import TargetService, _key as target_key
@@ -232,6 +237,50 @@ class ManagementService:
             audit = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": journal})
             record = self._view(tx, "risk_rule", tx.get("risk_rule", {"risk_rule_id": created["risk_rule_id"]}))
             return ManagementResult((record,), refresh, ages, thresholds, audit["batch_id"])
+
+    def preview_risk_rule(self, values) -> RuleImpact:
+        """위험 정보를 저장하지 않고, 등록했을 때 최신 관측일 설비와 릴리즈에 주는 영향을 계산한다 (BE-015).
+
+        ``values``는 :meth:`create_risk_rule`과 같다. 기본값도 같아서(mapping_status UNRESOLVED 등)
+        저장했을 때와 같은 판정을 미리 보여 준다. 연결·범위 검사에서 걸리면 ``problems``에 사유를 담고
+        영향은 계산하지 않는다. 읽기만 하며 DB·판정 결과를 바꾸지 않는다.
+        """
+        require(isinstance(values, Mapping), "미리 볼 위험 정보가 필요합니다.")
+        require(set(values) <= EDITABLE["risk_rule"], "위험 등록에 쓸 수 없는 항목이 있습니다.")
+        row = {"is_enabled": True, "mapping_status": "UNRESOLVED", "group_id": None, "item_id": None,
+               "release_version_id": None, "start_release_version_id": None, "end_release_version_id": None,
+               **deepcopy(dict(values)), "risk_rule_id": DRAFT_RULE_ID}
+        context = _context_copy(self.context)
+        with self.storage.transaction() as tx:
+            problems = ()
+            try:
+                reference = self._risk_reference(tx, row)  # 등록과 같은 검사를 거치도록 같은 근거를 만든다
+                validate_risk_in(tx, {**row, "target_reference": reference, "risk_rule_id": 1}, context)
+            except (StorageValidationError, LookupError) as error:
+                problems = (str(error),)
+            repository = EquipmentRepository()
+            families = families_from_rows(repository.rows(tx, "version_family"),
+                                          repository.rows(tx, "release_version"), context.aliases)
+            links = repository.rows(tx, "release_version_item")
+            catalog = ItemCatalog(families, tuple(VersionItem(
+                link["release_version_id"], link["item_id"], ItemState(link["item_state"]),
+                TargetScope(link["target_scope"]), tuple(link["target_group_ids"] or ()),
+            ) for link in links))
+            rules = tuple(rule_from_row(rule, families, links) for rule in repository.rows(tx, "risk_rule"))
+            excluded = {g["group_id"] for g in repository.rows(tx, "equipment_group") if not g["analysis_enabled"]}
+            snapshot_rows = repository.rows(tx, "equipment_snapshot")
+            base_date = max((s["base_date"] for s in snapshot_rows), default=None)
+            equipment = {e["equipment_id"]: e for e in repository.rows(tx, "equipment")}
+            records = read_equipment_records(tuple(
+                repository.load(tx, equipment[s["equipment_id"]], s) for s in snapshot_rows
+                if s["base_date"] == base_date), excluded)
+        try:
+            draft = rule_from_row(row, families, links)
+        except (KeyError, ValueError, TypeError):
+            require(bool(problems), "위험 정보의 유형이나 계열을 확인해 주세요.")
+            draft = RiskRule(DRAFT_RULE_ID, RuleType.DIRECT_VERSION, 0, str(row.get("risk_reason") or ""),
+                             mapping_status=MappingStatus.UNRESOLVED)
+        return preview_rule_impact(draft, families, catalog, rules, records, base_date=base_date, problems=problems)
 
     @staticmethod
     def _risk_reference(tx, row):
