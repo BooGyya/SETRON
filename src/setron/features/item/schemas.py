@@ -160,3 +160,50 @@ class ItemSummary:
     @property
     def sites(self) -> tuple[str, ...]:
         return tuple(sorted({e.record.site for e in self.equipment}))
+
+
+@dataclass(frozen=True)
+class FamilyInclusion:
+    """한 계열에서 Item이 포함된 버전 (카드의 "포함 버전").
+
+    - ``first_included``: 확인된 순서상 처음 포함된 버전("최초 포함"). 순서를 아는 버전에 없으면 None이다.
+    - ``included``: 포함(APPLIED)으로 저장된 버전 전부. 순서를 아는 버전 먼저, 순서 미확인 버전은 뒤에 둔다.
+    """
+
+    family_id: int
+    first_included: ReleaseVersion | None
+    included: tuple[ReleaseVersion, ...]
+
+
+@dataclass(frozen=True)
+class ApplicationCount:
+    """적용 현황 대수. 적용률 = 적용 ÷ (적용 + 미적용). 미확인은 분모에서 빼고 따로 센다. 대상 외는 세지 않는다."""
+
+    applied: int = 0
+    not_applied: int = 0
+    unknown: int = 0
+
+    @property
+    def determined(self) -> int:
+        return self.applied + self.not_applied
+
+    @property
+    def rate(self) -> float | None:
+        return self.applied / self.determined if self.determined else None
+
+
+@dataclass(frozen=True)
+class ItemOverview:
+    """아이템 매니저 AI 답변 카드(화면 08-1) 요약: 포함 버전과 적용 현황.
+
+    - ``families``: 계열별 포함 버전.
+    - ``total``·``by_site``: 대상 설비의 적용 대수 (예: "17 / 19대 89%", "평택 10/11").
+    - ``missing``: 미적용 설비 (예: "DM-016 (평택 P2)"). 사업장·라인·호기 순이다.
+    """
+
+    item: Item
+    families: tuple[FamilyInclusion, ...]
+    total: ApplicationCount
+    by_site: tuple[tuple[str, ApplicationCount], ...]
+    missing: tuple[EquipmentApplication, ...]
+    hpa_excluded: int = 0
