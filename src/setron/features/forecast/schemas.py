@@ -55,6 +55,26 @@ LIMITS = (
 
 
 @dataclass(frozen=True)
+class ForecastPoint:
+    """노선도 그래프의 점 하나 (화면 10 "달성률 추이 및 통일 예측").
+
+    ``projected``가 False이면 저장된 현황의 실제 대수(실선), True이면 증가 속도로 이어 그린 예측(점선)이다.
+    """
+
+    day: date
+    applied: int
+    below: int
+    undetermined: int = 0
+    projected: bool = False
+
+    @property
+    def rate(self) -> float | None:
+        """N 이상 적용률 = N 이상 ÷ (N 이상 + N 미만). 판단 불가는 분모에서 뺀다. 계산할 수 없으면 None."""
+        total = self.applied + self.below
+        return self.applied / total if total else None
+
+
+@dataclass(frozen=True)
 class FamilyForecast:
     """계열 하나의 참고 예측. 건수 단위는 설비 1대 × 계열 1건이다.
 
@@ -63,6 +83,7 @@ class FamilyForecast:
     - ``gained``: 끝 N 이상 대수 − 처음 N 이상 대수. ``rate_per_day``는 이를 기간 일수로 나눈 값.
     - ``end_below``: 끝에 남은 N 미만 대수. 잔여 기간 계산의 남은 대수다.
     - ``remaining_days``: 남은 대수를 처리하는 데 걸릴 일수(반올림). 예측하지 않으면 None.
+    - ``history``: 이 계열이 관측된 날짜별 실제 대수. 노선도의 실선이다.
     """
 
     family_id: int
@@ -78,6 +99,7 @@ class FamilyForecast:
     remaining_days: int | None = None
     completion_date: date | None = None
     reasons: tuple[ForecastReason, ...] = ()
+    history: tuple[ForecastPoint, ...] = ()
 
     @property
     def label(self) -> str:
@@ -102,8 +124,12 @@ class FamilyForecast:
 
 @dataclass(frozen=True)
 class ForecastResult:
-    """요청한 기간·범위의 계열별 참고 예측. 날짜가 없으면 ``start_date``·``end_date``는 None이다."""
+    """요청한 기간·범위의 계열별 참고 예측. 날짜가 없으면 ``start_date``·``end_date``는 None이다.
+
+    ``overall``은 모든 계열을 합친 날짜별 실제 대수다. 노선도의 "전체" 비교선으로 쓴다.
+    """
 
     start_date: date | None
     end_date: date | None
     families: tuple[FamilyForecast, ...]
+    overall: tuple[ForecastPoint, ...] = ()

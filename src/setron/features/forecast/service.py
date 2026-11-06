@@ -29,6 +29,7 @@ from setron.features.forecast.schemas import (
     ASSUMPTIONS,
     LIMITS,
     FamilyForecast,
+    ForecastPoint,
     ForecastReason,
     ForecastResult,
     ForecastStatus,
@@ -69,9 +70,31 @@ def forecast(
     counts = {day: _counts(day_records, families, targets) for day, day_records in sorted(by_date.items())}
     target_families = {family_id for _, family_id in targets}
     family_ids = sorted({f for day_counts in counts.values() for f in day_counts})
+    overall = tuple(_point(day, sum(day_counts.values(), Counter())) for day, day_counts in counts.items())
     return ForecastResult(min(by_date), max(by_date), tuple(
         _family(f, {day: c[f] for day, c in counts.items() if f in c}, f in target_families) for f in family_ids
-    ))
+    ), overall)
+
+
+def forecast_line(family: FamilyForecast, *, step_days: int = 30) -> tuple[ForecastPoint, ...]:
+    """노선도 한 줄: 실제 점(실선) 뒤에 참고 완료일까지 예측 점(점선)을 ``step_days`` 간격으로 잇는다.
+
+    예측 점의 N 이상 대수 = 끝 N 이상 + 증가 속도 × 경과 일수(반올림, 남은 대수까지만).
+    마지막 점은 참고 완료일이며 N 미만이 0이다. 예측하지 않은 계열은 실제 점만 돌려준다.
+    판단 불가 대수는 끝 날짜 값을 그대로 둔다 (판단 불가가 풀리는 시점은 예측하지 않는다).
+    """
+    if step_days <= 0:
+        raise ValueError("예측 점 간격은 1일 이상이어야 합니다.")
+    points = list(family.history)
+    if family.status is not ForecastStatus.ESTIMATED or family.completion_date is None:
+        return tuple(points)
+    days = list(range(step_days, family.remaining_days, step_days)) + [family.remaining_days]
+    for elapsed in days:
+        done = family.end_below if elapsed == family.remaining_days else min(
+            family.end_below, round(family.rate_per_day * elapsed))
+        points.append(ForecastPoint(family.end_date + timedelta(days=elapsed), family.end_applied + done,
+                                    family.end_below - done, family.end_undetermined, projected=True))
+    return tuple(points)
 
 
 def forecast_facts(result: ForecastResult, family_names: Mapping[int, str] | None = None) -> dict[str, Any]:
@@ -138,7 +161,8 @@ def _family(family_id: int, counts: Mapping[date, Counter], has_target: bool) ->
     end = counts[last]
     values = dict(family_id=family_id, start_date=first, end_date=last, points=len(counts),
                   start_applied=counts[first][above], end_applied=end[above], end_below=end[below],
-                  end_undetermined=end[CompareStatus.UNDETERMINED])
+                  end_undetermined=end[CompareStatus.UNDETERMINED],
+                  history=tuple(_point(day, counts[day]) for day in sorted(counts)))
 
     def result(status, *reasons, rate=None, days=None):
         completion = last + timedelta(days=days) if days is not None else None
@@ -159,6 +183,11 @@ def _family(family_id: int, counts: Mapping[date, Counter], has_target: bool) ->
         return result(ForecastStatus.NOT_ESTIMABLE, ForecastReason.NO_PROGRESS, *undetermined)
     rate = gained / (last - first).days
     return result(ForecastStatus.ESTIMATED, *undetermined, rate=rate, days=round(values["end_below"] / rate))
+
+
+def _point(day: date, counts: Counter) -> ForecastPoint:
+    return ForecastPoint(day, counts[CompareStatus.AT_OR_ABOVE], counts[CompareStatus.BELOW],
+                         counts[CompareStatus.UNDETERMINED])
 
 
 def _iso(value: date | None) -> str | None:
