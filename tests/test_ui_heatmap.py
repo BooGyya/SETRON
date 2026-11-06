@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.risk.schemas import RiskStatus
-from setron.features.version.schemas import ReleaseVersion
+from setron.features.version.schemas import CompareStatus, ReleaseVersion
 from setron.features.version.service import FamilyReleases
 from setron.ui.app import create_window
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding
@@ -302,3 +302,19 @@ def test_long_raw_version_is_plain_unchanged_and_wraps_inside_tile(window, sourc
         assert point.y() + child.height() <= tile.height()
         if child.wordWrap():
             assert child.heightForWidth(child.width()) <= child.height()
+
+
+@pytest.mark.parametrize("status,steps,tone", [
+    (CompareStatus.AT_OR_ABOVE, None, "success"),
+    (CompareStatus.BELOW, 1, "warning"),
+    (CompareStatus.BELOW, None, "warning"),
+    (CompareStatus.BELOW, 2, "danger"),
+    (CompareStatus.BELOW, 5, "danger"),
+    (CompareStatus.UNDETERMINED, None, "warning"),
+], ids=["N 이상 초록", "N-1 노랑", "단계 모름은 많이 낮음으로 단정하지 않음", "N-2 빨강", "N-5 빨강", "판단 불가 노랑"])
+def test_version_gap_colors_follow_requirement(status, steps, tone):
+    """요구사항 3.2: 기준 버전 적용은 초록, 많이 낮으면 빨강. 임계값은 확정 전 임시 기준(N-2 이하)."""
+    from setron.ui.heatmap_data import FAR_BELOW_STEPS, compare_tone
+
+    assert FAR_BELOW_STEPS == 2
+    assert compare_tone(status, steps) == tone

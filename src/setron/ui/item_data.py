@@ -70,6 +70,45 @@ class ItemManagerData:
         return ", ".join(names[mid] for mid in row.target_group_ids) or "지정 모델 없음"
 
 
+@dataclass(frozen=True)
+class ReleaseNoteRow:
+    """릴리즈 노트 원본 표시용 한 행. 저장된 버전별 Item 행만 옮기며 판정을 만들지 않는다.
+
+    ivar
+    - release: 행이 속한 릴리즈.
+    - entry: 저장 행의 Item. 저장 행이 없는 릴리즈는 None.
+    - row: 이 버전의 저장 행. 저장 행이 없는 릴리즈는 None.
+    """
+
+    release: object
+    entry: object = None
+    row: object = None
+
+
+def release_note_rows(data, family_id, item_ids=None):
+    """한 계열의 릴리즈를 확인된 순서(미확인은 마지막)로, 각 버전의 저장 행만 묶어 반환한다.
+
+    param
+    - data: ItemManagerData.
+    - family_id: 표시할 SW 계열 ID.
+    - item_ids: 검색으로 남길 Item ID 집합. None이면 전체.
+    """
+    versions = data.versions
+    entries = {e.item.item_id: e for e in versions.items}
+    releases = sorted((e.release for e in versions.releases if e.release.family_id == family_id),
+                      key=lambda r: (r.version_order is None, r.version_order or 0, r.release_version_id))
+    result = []
+    for release in releases:
+        rows = sorted((r for r in versions.version_items if r.release_version_id == release.release_version_id
+                       and r.item_id in entries and (item_ids is None or r.item_id in item_ids)),
+                      key=lambda r: (entries[r.item_id].item.item_no is None, entries[r.item_id].item.item_no or 0, r.item_id))
+        if rows:
+            result.extend(ReleaseNoteRow(release, entries[r.item_id], r) for r in rows)
+        elif item_ids is None:
+            result.append(ReleaseNoteRow(release))
+    return tuple(result)
+
+
 def item_data_from_source(versions, source):
     """A와 같은 최신 분석 관측일만 선택한다. HPA의 새 날짜로 일반 관측을 밀어내지 않는다."""
     if not source.dates:

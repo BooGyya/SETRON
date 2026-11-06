@@ -1,11 +1,11 @@
 """VER3 공통 조회 패널. 모든 조작은 초안만 바꾸며 조회 적용 시에만 신호를 보낸다."""
 
-from PySide6.QtCore import QSize, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState
-from setron.ui.theme import SECONDARY
+from setron.ui.theme import INK, SECONDARY
 
 
 class _WrapRow(QWidget):
@@ -69,9 +69,15 @@ class QueryPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(12)
         self.card = Card()
+        self.card.setProperty("outlined", True)
+        self.card.body.setContentsMargins(20, 16, 20, 16)
         self.card.body.setSpacing(12)
         outer.addWidget(self.card)
-        heading = QHBoxLayout()
+        # VER5 조회 패널에는 공정·개인 설정 줄이 없다. 개인 설정 연결 전까지 숨겨 둔다.
+        self.heading = QWidget()
+        self.heading.hide()
+        heading = QHBoxLayout(self.heading)
+        heading.setContentsMargins(0, 0, 0, 0)
         heading.setSpacing(12)
         process_label = label("Etch", 14, medium=True)
         process_label.setFixedWidth(110)
@@ -82,11 +88,12 @@ class QueryPanel(QWidget):
         self.preferences_button.setToolTip("개인별 기본 선택지 설정은 별도 작업입니다.")
         heading.addWidget(self.preferences_button)
         heading.addStretch()
-        self.card.body.addLayout(heading)
+        self.card.body.addWidget(self.heading)
+        # 선택 중 요약은 상태 계산·접근성용으로 유지하고 VER5 화면에서는 적용 줄만 보인다.
         self.draft_summary = label("", 13, color=SECONDARY, wrap=True)
+        self.draft_summary.hide()
         self.card.body.addWidget(self.draft_summary)
-        self.source_label = label("", 13, color=SECONDARY, wrap=True)
-        self.card.body.addWidget(self.source_label)
+        self.source_label = label("", 12, color=SECONDARY, wrap=True)
         fields = []
         for key, caption in (("site_key", "Site"), ("fab_key", "Fab"),
                              ("line_key", "Line"), ("group_key", "설비군")):
@@ -94,7 +101,7 @@ class QueryPanel(QWidget):
             layout = QVBoxLayout(field)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(8)
-            title = label(caption, medium=True)
+            title = label(caption, medium=True, color=INK)
             combo = QComboBox()
             combo.setObjectName("query_" + key)
             combo.setProperty("queryField", True)
@@ -126,15 +133,28 @@ class QueryPanel(QWidget):
         self.goal_button.setFixedHeight(40)
         self.goal_button.setEnabled(False)
         self.goal_button.setToolTip("목표 N 편집은 별도 작업입니다.")
-        self.actions_row = _WrapRow([self.apply_button, self.reset_button, self.goal_button], 190)
+        self.choice_button = button("조건 선택")
+        self.choice_button.setCheckable(True)
+        self.choice_button.setFixedWidth(136)
+        self.choice_button.setFixedHeight(40)
+        self.choice_button.setToolTip("Site·Fab·Line·설비군 빠른 선택을 펼치거나 접습니다.")
+        self.choice_button.toggled.connect(self._show_quick_rows)
+        self.actions_row = _WrapRow([self.apply_button, self.reset_button, self.goal_button, self.choice_button], 150)
         self.card.body.addWidget(self.actions_row)
-        self.card.body.addWidget(label("선택 변경·초기화는 자동 적용되지 않습니다. ‘조회 적용’을 눌러 확정하세요.",
-                                       12, color=SECONDARY, wrap=True))
+        self.hint = label("선택 변경·초기화는 자동 적용되지 않습니다. ‘조회 적용’을 눌러 확정하세요.",
+                          13, color=SECONDARY, wrap=True)
+        self.card.body.addWidget(self.hint)
+        self.card.body.addWidget(self.source_label)
+        applied = QHBoxLayout()
+        applied.setContentsMargins(0, 0, 0, 0)
+        applied.setSpacing(12)
         self.status = StatusBadge("미적용", "info")
-        outer.addWidget(self.status)
+        applied.addWidget(self.status, 0, Qt.AlignmentFlag.AlignTop)
         self.applied_summary = label("", 13, color=SECONDARY, wrap=True)
         self.applied_summary.setAccessibleName("실제 적용 조건")
-        outer.addWidget(self.applied_summary)
+        self.applied_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        applied.addWidget(self.applied_summary, 1)
+        outer.addLayout(applied)
         self.apply_button.clicked.connect(self.apply_draft)
         self.reset_button.clicked.connect(self.reset_draft)
         self._render()
@@ -171,8 +191,13 @@ class QueryPanel(QWidget):
                 self.quick_buttons[field, value] = item
                 widgets.append(item)
             row = _WrapRow(widgets, width)
+            row.setVisible(getattr(self, "choice_button", None) is not None and self.choice_button.isChecked())
             self.quick_rows.append(row)
-            self.card.body.insertWidget(4 + len(self.quick_rows) - 1, row)
+            self.card.body.insertWidget(self.card.body.indexOf(self.fields_row) + len(self.quick_rows), row)
+
+    def _show_quick_rows(self, visible):
+        for row in self.quick_rows:
+            row.setVisible(visible)
 
     def _choose(self, field, index):
         if index >= 0:

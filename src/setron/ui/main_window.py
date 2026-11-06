@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLayout, QMessageBox, QMainWindow, QPushButton, QScrollArea,
+    QFrame, QHBoxLayout, QLayout, QMainWindow, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from setron.ui.components import EmptyState, PageHeader, StatusBadge, label
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryCatalog, QueryState, preview_catalog
-from setron.ui.theme import ASSETS, SECONDARY, font, icon, svg_size
+from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, font, icon, svg_size
 
 
 @dataclass(frozen=True)
@@ -23,18 +23,31 @@ class Menu:
     active_icon: str
 
 
+def _ver5(key: str, owner: str | None = None) -> tuple[str, str]:
+    # Figma VER5 사이드바 원본 아이콘: 기본은 글자색(#142033), 선택은 강조색(#3C5CE9)이다.
+    owner = owner or key
+    return f"ver5/{owner}.svg", f"ver5/active-{owner}.svg"
+
+
 MENUS = (
-    Menu("dashboard", "대시보드", "7742b.svg", "26b8a.svg"),
-    Menu("heatmap", "버전 히트맵", "0e6c6.svg", "f8ba2.svg"),
-    Menu("items", "아이템 매니저", "7b6c5.svg", "77fb3.svg"),
-    Menu("ai", "AI 분석", "a3b3c.svg", "6dc18.svg"),
-    Menu("import", "데이터 가져오기", "30937.svg", "6cfa9.svg"),
-    Menu("replay", "Version Replay", "e4697.svg", "1bd1e.svg"),
-    Menu("versions", "버전 관리", "7b6c5.svg", "77fb3.svg"),
-    Menu("management", "관리 데이터", "db27a.svg", "2543e.svg"),
-    Menu("history", "이력 조회", "d0b8c.svg", "04165.svg"),
-    Menu("reports", "보고서", "b12e4.svg", "49591.svg"),
-    Menu("settings", "기준 · 설정", "db27a.svg", "2543e.svg"),
+    Menu("dashboard", "대시보드", *_ver5("dashboard")),
+    Menu("heatmap", "버전 히트맵", *_ver5("heatmap")),
+    Menu("items", "아이템 매니저", *_ver5("items")),
+    Menu("ai", "AI 분석", *_ver5("ai")),
+    Menu("import", "데이터 가져오기", *_ver5("import")),
+    Menu("replay", "Version Replay", *_ver5("replay")),
+    Menu("versions", "버전 관리", *_ver5("versions")),
+    # VER5 사이드바에 없는 기존 메뉴. 기능을 유지하고 데이터 관리 묶음에 둔다.
+    Menu("management", "관리 데이터", *_ver5("management", "settings")),
+    Menu("history", "이력 조회", *_ver5("history")),
+    Menu("reports", "보고서", *_ver5("reports")),
+    Menu("settings", "기준 · 설정", *_ver5("settings")),
+)
+# 첫 묶음(현황 분석)은 제목 없이 표시한다.
+MENU_GROUPS = (
+    (None, ("dashboard", "heatmap", "items", "ai", "import", "replay")),
+    ("데이터 관리", ("versions", "management", "history")),
+    ("운영 설정", ("reports", "settings")),
 )
 
 
@@ -67,7 +80,7 @@ class NavButton(QPushButton):
         asset = self.menu.active_icon if selected else self.menu.normal_icon
         self.picture.setProperty("assetFile", asset)
         self.picture.setPixmap(icon(asset).pixmap(svg_size(asset)))
-        self.caption.setStyleSheet(f"color: {'white' if selected else SECONDARY if self.isEnabled() else '#8b95a8'};")
+        self.caption.setStyleSheet(f"color: {PRIMARY if selected else INK if self.isEnabled() else '#8b95a8'};")
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -150,7 +163,6 @@ class MainWindow(QMainWindow):
         self.body.setContentsMargins(28, 28, 28, 28)
         self.body.setSpacing(20)
         self.header = PageHeader()
-        self.header.action_requested.connect(self._header_action)
         self.body.addWidget(self.header)
         self.notice = StatusBadge("작업 단위 3 · 공통 조회 조건 · 업무 데이터 미연결", "info")
         self.body.addWidget(self.notice)
@@ -185,7 +197,7 @@ class MainWindow(QMainWindow):
         content.setObjectName("sidebarContent")
         side = QVBoxLayout(content)
         side.setContentsMargins(20, 20, 20, 20)
-        side.setSpacing(6)
+        side.setSpacing(10)
         brand = QHBoxLayout()
         brand.setSpacing(10)
         logo = label("")
@@ -196,7 +208,7 @@ class MainWindow(QMainWindow):
         brand.addWidget(logo)
         divider = QFrame()
         divider.setFixedSize(1, 18)
-        divider.setStyleSheet("background:#e9eef6;")
+        divider.setStyleSheet("background:#d5d7da;")
         brand.addWidget(divider)
         brand_name = label("SETRON", 18, numeric=True)
         brand_font = font(18, numeric=True)
@@ -209,31 +221,23 @@ class MainWindow(QMainWindow):
         brand.setContentsMargins(0, 0, 0, 0)
         signature.setLayout(brand)
         side.addWidget(signature)
-        side.addWidget(label("SW 버전 현황 관리", 13, color=SECONDARY))
-        saved = QVBoxLayout()
-        saved.setSpacing(4)
-        for i, menu in enumerate(MENUS):
-            nav = NavButton(menu)
-            nav.setEnabled(menu.key == "dashboard")
-            nav.setToolTip(menu.title if nav.isEnabled() else menu.title + " · 준비 중")
-            nav.clicked.connect(lambda checked=False, key=menu.key: self.navigate(key))
-            self.nav[menu.key] = nav
-            if i < 6:
-                saved.addWidget(nav)
-                if i == 5:
-                    side.addLayout(saved)
-            else:
-                side.addWidget(nav)
-        status = QFrame()
-        status.setStyleSheet("QFrame {background:#f7f9fc;border-radius:10px;}")
-        status_body = QVBoxLayout(status)
-        status_body.setContentsMargins(12, 12, 12, 12)
-        status_body.setSpacing(4)
-        self.connection_label = label("업무 데이터 미연결", 12, medium=True, color=SECONDARY)
-        self.connection_detail = label("공통 UI 미리보기", 13, color=SECONDARY)
-        status_body.addWidget(self.connection_label)
-        status_body.addWidget(self.connection_detail)
-        side.addWidget(status)
+        side.addWidget(label("SW 버전 현황 관리", 13, color=INK))
+        for title, keys in MENU_GROUPS:
+            group = QVBoxLayout()
+            group.setSpacing(4)
+            if title is not None:
+                caption = label(title, 11, color=INK)
+                caption.setObjectName("navGroup")
+                side.addWidget(caption)
+            for key in keys:
+                menu = self._menus[key]
+                nav = NavButton(menu)
+                nav.setEnabled(menu.key == "dashboard")
+                nav.setToolTip(menu.title if nav.isEnabled() else menu.title + " · 준비 중")
+                nav.clicked.connect(lambda checked=False, key=menu.key: self.navigate(key))
+                self.nav[menu.key] = nav
+                group.addWidget(nav)
+            side.addLayout(group)
         side.addStretch()
         self.sidebar_scroll.setWidget(content)
         outer.addWidget(self.sidebar_scroll)
@@ -311,16 +315,3 @@ class MainWindow(QMainWindow):
             return
         super().closeEvent(event)
 
-    def _header_action(self, key: str) -> None:
-        if key == "help":
-            QMessageBox.information(
-                self, "공통 UI 미리보기 안내",
-                "공통 창·사이드바와 Site·Fab·Line·설비군 조회 조건을 제공합니다.\n\n"
-                "• 업무 화면을 등록하면 해당 메뉴가 활성화됩니다.\n"
-                "• 선택 변경·전체 조건으로 버튼은 선택 중인 조건만 바꿉니다.\n"
-                "• 조회 적용을 눌러야 적용 조건과 요청 번호가 갱신됩니다.\n"
-                "• 조건 적용은 데이터 조회 완료를 의미하지 않습니다.\n"
-                "• 업무 화면의 연결 범위와 예시/실데이터 여부는 각 화면 안내를 확인하세요.\n"
-                "• 예시 결과는 실제 회사 현황이 아닙니다. 목표 N 편집의 적용/저장 범위는 각 화면 안내를 확인하세요.\n"
-                "• 로그인이나 DB·Excel 연결을 시작하지 않습니다.",
-            )
