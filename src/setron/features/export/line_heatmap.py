@@ -22,16 +22,14 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from setron.features.aggregation.schemas import FamilyStatus
 from setron.features.export.schemas import StatusReport
 from setron.features.export.xlsx_cells import ReportTextWriter
-from setron.features.version.groups import TIER_LABELS, Tier, tier_of
-from setron.features.version.schemas import CompareStatus
+from setron.features.version.groups import TIER_LABELS, Tier
 
 LINE_HEATMAP_SHEET = "라인별 히트맵"
 ROWS_PER_COLUMN = 6
 NO_SITE, NO_LINE = "Site 미확인", "라인 미확인"
-# 앱 상태 색상(트리맵과 같음): N 이상 초록, N 미만 노랑, 판단 불가 회색
+# 색 단계별 칸 색 (단계 판정은 FamilyStatus.tier)
 HEATMAP_COLORS = {
     Tier.ABOVE: "1E7B45",      # 진초록
     Tier.AT: "9BD4A9",         # 연초록
@@ -40,7 +38,6 @@ HEATMAP_COLORS = {
     Tier.UNKNOWN: "B8C0CC",    # 회색
 }
 LEGEND = tuple((tier, TIER_LABELS[tier]) for tier in (Tier.ABOVE, Tier.AT, Tier.ONE_BELOW, Tier.TWO_BELOW, Tier.UNKNOWN))
-_WORST_FIRST = (Tier.TWO_BELOW, Tier.ONE_BELOW, Tier.AT, Tier.ABOVE)
 _THIN = Side(style="thin", color="FFFFFF")
 _BOX = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _HEADER_FILL = PatternFill("solid", fgColor="E5EAF3")
@@ -94,7 +91,7 @@ def line_heatmap_groups(report: StatusReport) -> tuple[SiteGroup, ...]:
         line = _label(record.line, NO_LINE)
         for family in equipment.families:
             name = report.family_names.get(family.family_id, f"계열 {family.family_id}")
-            tree[site][name][line].append(HeatmapCell(record.equipment_code, _tier(family)))
+            tree[site][name][line].append(HeatmapCell(record.equipment_code, family.tier))
     return tuple(
         SiteGroup(site, tuple(
             FamilyGroup(family, tuple(
@@ -136,14 +133,6 @@ def write_line_heatmap(sheet: Worksheet, groups: tuple[SiteGroup, ...], text: Re
         row += 3 + ROWS_PER_COLUMN + 2  # 사이트 머리글·계열·라인 머리글 + 칸 + 빈 줄 2개
     for index in range(1, widest + 1):
         sheet.column_dimensions[get_column_letter(index)].width = 11
-
-
-def _tier(family: FamilyStatus) -> Tier:
-    """설비·계열 한 건의 색 단계. 미달이면 미달 PM 중 가장 낮은 단계, 달성이면 PM 중 가장 낮은 단계다."""
-    if family.status is CompareStatus.UNDETERMINED:
-        return Tier.UNKNOWN
-    tiers = [tier_of(p.comparison) for p in family.pms if p.comparison.status is family.status]
-    return min(tiers, key=_WORST_FIRST.index) if tiers else Tier.UNKNOWN
 
 
 def _label(value: str | None, missing: str) -> str:
