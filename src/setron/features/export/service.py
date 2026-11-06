@@ -293,15 +293,24 @@ def _versions(family: FamilyStatus) -> str:
 
 
 def _target(family: FamilyStatus) -> str:
+    """목표 N 표기. N 그룹 판정이면 N 칸의 가장 최신 버전에 "(N 그룹 최신)"을 붙인다."""
     targets = {p.comparison.target.version_raw for p in family.pms if p.comparison.target}
-    return " / ".join(sorted(targets)) or "미지정"
+    text = " / ".join(sorted(targets)) or "미지정"
+    grouped = any(p.comparison.slot is not None for p in family.pms)
+    return f"{text} (N 그룹 최신)" if grouped and targets else text
 
 
 def _family_label(family: FamilyStatus) -> str:
-    """계열 판정. 미달이면 PM 중 가장 낮은 단계를 적고, 단계를 모르는 PM이 있으면 'N 미만'으로 적는다."""
+    """계열 판정. 미달이면 PM 중 가장 낮은 단계를 적고, 단계를 모르는 PM이 있으면 'N 미만'으로 적는다.
+
+    N 그룹 판정이면 칸으로 적는다. 가장 낮은 칸은 "N-2 이하"다 (그보다 오래된 버전도 같은 칸).
+    """
     if family.status is not CompareStatus.BELOW:
         return STATUS_LABELS[family.status]
     below = [p.comparison for p in family.pms if p.comparison.status is CompareStatus.BELOW]
+    slots = [c.slot for c in below if c.slot is not None]
+    if slots and len(slots) == len(below):
+        return "N-2 이하" if min(slots) <= -2 else "N-1"
     if any(c.steps_below is None for c in below):
         return "N 미만"
     return f"N-{max(c.steps_below for c in below)}"

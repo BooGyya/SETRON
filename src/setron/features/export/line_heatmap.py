@@ -7,8 +7,9 @@
 - 계열 묶음은 왼쪽에서 오른쪽으로 놓고, 사이트가 여러 개면 사이트별로 아래로 쌓는다.
 
 칸 하나는 설비 한 대 × 계열 하나(적용률 계산의 한 건)다. O2·O3 혼합 설비는 두 계열에 각각 나온다.
-HPA는 공통 집계와 같이 넣지 않는다. 색은 앱의 판정 색을 쓰며 멘토가 쓰던 색의 뜻이 확인되면
-``HEATMAP_COLORS``만 바꾼다.
+HPA는 공통 집계와 같이 넣지 않는다. 색은 N 그룹 판정의 색 단계(``version.groups.Tier``, 팀 결정 11-05)를 쓴다:
+진초록 N+1 이상 · 연초록 N · 노랑 N-1 · 빨강 N-2 이하 · 회색 비교 불가. 멘토 예시 그림의 네 색과 같은 구분이다.
+목표가 릴리즈 하나여도 같은 버전(N)과 더 최신(N+1 이상), 한 칸 아래와 두 칸 이상 아래를 나눠 칠한다.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from setron.features.aggregation.schemas import FamilyStatus
 from setron.features.export.schemas import StatusReport
 from setron.features.export.xlsx_cells import ReportTextWriter
+from setron.features.version.groups import TIER_LABELS, Tier, tier_of
 from setron.features.version.schemas import CompareStatus
 
 LINE_HEATMAP_SHEET = "라인별 히트맵"
@@ -31,11 +33,14 @@ ROWS_PER_COLUMN = 6
 NO_SITE, NO_LINE = "Site 미확인", "라인 미확인"
 # 앱 상태 색상(트리맵과 같음): N 이상 초록, N 미만 노랑, 판단 불가 회색
 HEATMAP_COLORS = {
-    CompareStatus.AT_OR_ABOVE: "208457",
-    CompareStatus.BELOW: "D5B660",
-    CompareStatus.UNDETERMINED: "B8C0CC",
+    Tier.ABOVE: "1E7B45",      # 진초록
+    Tier.AT: "9BD4A9",         # 연초록
+    Tier.ONE_BELOW: "F2D16B",  # 노랑
+    Tier.TWO_BELOW: "E07A7A",  # 빨강
+    Tier.UNKNOWN: "B8C0CC",    # 회색
 }
-LEGEND = ((CompareStatus.AT_OR_ABOVE, "N 이상"), (CompareStatus.BELOW, "N 미만"), (CompareStatus.UNDETERMINED, "판단 불가"))
+LEGEND = tuple((tier, TIER_LABELS[tier]) for tier in (Tier.ABOVE, Tier.AT, Tier.ONE_BELOW, Tier.TWO_BELOW, Tier.UNKNOWN))
+_WORST_FIRST = (Tier.TWO_BELOW, Tier.ONE_BELOW, Tier.AT, Tier.ABOVE)
 _THIN = Side(style="thin", color="FFFFFF")
 _BOX = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _HEADER_FILL = PatternFill("solid", fgColor="E5EAF3")
@@ -43,10 +48,10 @@ _HEADER_FILL = PatternFill("solid", fgColor="E5EAF3")
 
 @dataclass(frozen=True)
 class HeatmapCell:
-    """칸 하나: 호기 코드와 그 설비·계열의 판정."""
+    """칸 하나: 호기 코드와 그 설비·계열의 색 단계."""
 
     equipment_code: str
-    status: CompareStatus
+    tier: Tier
 
 
 @dataclass(frozen=True)
@@ -89,7 +94,7 @@ def line_heatmap_groups(report: StatusReport) -> tuple[SiteGroup, ...]:
         line = _label(record.line, NO_LINE)
         for family in equipment.families:
             name = report.family_names.get(family.family_id, f"계열 {family.family_id}")
-            tree[site][name][line].append(HeatmapCell(record.equipment_code, _status(family)))
+            tree[site][name][line].append(HeatmapCell(record.equipment_code, _tier(family)))
     return tuple(
         SiteGroup(site, tuple(
             FamilyGroup(family, tuple(
@@ -103,8 +108,8 @@ def write_line_heatmap(sheet: Worksheet, groups: tuple[SiteGroup, ...], text: Re
     """범례와 사이트별 히트맵 블록을 시트에 그린다. 묶음이 없으면 안내 한 줄만 적는다."""
     sheet.title = LINE_HEATMAP_SHEET
     _put(sheet, 1, 1, "범례", text, bold=True)
-    for offset, (status, label) in enumerate(LEGEND):
-        _put(sheet, 1, 2 + offset, label, text, fill=HEATMAP_COLORS[status])
+    for offset, (tier, label) in enumerate(LEGEND):
+        _put(sheet, 1, 2 + offset, label, text, fill=HEATMAP_COLORS[tier])
     _put(sheet, 2, 1, "칸 하나 = 설비 1대 × 계열 1개. O2·O3 혼합 설비는 두 계열에 각각 나옵니다. HPA는 제외합니다.", text)
     if not groups:
         _put(sheet, 4, 1, "표시할 설비가 없습니다.", text)
@@ -122,7 +127,7 @@ def write_line_heatmap(sheet: Worksheet, groups: tuple[SiteGroup, ...], text: Re
                 for index, cell in enumerate(line.cells):
                     target = sheet.cell(row + 3 + index % ROWS_PER_COLUMN, line_column + index // ROWS_PER_COLUMN)
                     text.write(target, cell.equipment_code, LINE_HEATMAP_SHEET)
-                    target.fill = PatternFill("solid", fgColor=HEATMAP_COLORS[cell.status])
+                    target.fill = PatternFill("solid", fgColor=HEATMAP_COLORS[cell.tier])
                     target.alignment = Alignment(horizontal="center", vertical="center")
                     target.border = _BOX
                 line_column += line.width
@@ -133,8 +138,12 @@ def write_line_heatmap(sheet: Worksheet, groups: tuple[SiteGroup, ...], text: Re
         sheet.column_dimensions[get_column_letter(index)].width = 11
 
 
-def _status(family: FamilyStatus) -> CompareStatus:
-    return family.status if family.status in HEATMAP_COLORS else CompareStatus.UNDETERMINED
+def _tier(family: FamilyStatus) -> Tier:
+    """설비·계열 한 건의 색 단계. 미달이면 미달 PM 중 가장 낮은 단계, 달성이면 PM 중 가장 낮은 단계다."""
+    if family.status is CompareStatus.UNDETERMINED:
+        return Tier.UNKNOWN
+    tiers = [tier_of(p.comparison) for p in family.pms if p.comparison.status is family.status]
+    return min(tiers, key=_WORST_FIRST.index) if tiers else Tier.UNKNOWN
 
 
 def _label(value: str | None, missing: str) -> str:

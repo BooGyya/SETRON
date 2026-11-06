@@ -32,6 +32,7 @@ from setron.features.ai.service import analyze
 from setron.features.analysis.schemas import AnalysisInput, AnalysisReport
 from setron.features.item.schemas import ItemState
 from setron.features.risk.schemas import RiskStatus
+from setron.features.version.groups import SLOT_LABELS, VersionGroups
 from setron.features.version.schemas import CompareStatus, ReleaseVersion
 from setron.infrastructure.ai_client import ChatClient
 
@@ -134,11 +135,9 @@ def explain(client: ChatClient, question: str, data: AnalysisInput) -> AnalysisR
 
 def _conditions(data: AnalysisInput, summary: Summary) -> dict[str, Any]:
     targets = []
-    for (group_id, family_id), release_id in sorted(data.targets.items()):
-        family = data.families.get(family_id)
-        release = family.get(release_id) if family else None
+    for (group_id, family_id), target in sorted(data.targets.items(), key=lambda item: item[0]):
         targets.append({"계열": _family_name(data, family_id),
-                        "목표 N": release.version_raw if release else "릴리즈 미확인"})
+                        "목표 N": _target_text(data.families.get(family_id), target)})
     return {
         "기준일": summary.base_date.isoformat() if summary.base_date else None,
         "조회 범위": dict(data.scope),
@@ -210,6 +209,24 @@ def _risks(data: AnalysisInput) -> dict[str, Any]:
                   for site, c in sorted(by_site.items())],
         "사유별": [{"사유": reason, "설비": codes} for reason, codes in by_reason.items()],
     }
+
+
+def _target_text(family, target) -> str:
+    """목표 N 표기. 릴리즈 하나면 버전 원문, N 그룹이면 칸별 버전 (예: "N 그룹 · N: v2, v3 · N-1: v1")."""
+    if not isinstance(target, VersionGroups):
+        release = family.get(target) if family else None
+        return release.version_raw if release else "릴리즈 미확인"
+    if not target.has_target:
+        return "N 그룹 · N 칸 비어 있음 (판단 불가)"
+    parts = []
+    for slot in sorted(target.slots, reverse=True):
+        found = [family.get(member) for member in target.members(slot)] if family else []
+        names = [r.version_raw for r in sorted((r for r in found if r), key=lambda r: (r.version_order is None,
+                                                                                 r.version_order or 0))]
+        missing = len(target.members(slot)) - len(names)
+        names += ["릴리즈 미확인"] * missing
+        parts.append(f"{SLOT_LABELS[slot]}: {', '.join(names)}")
+    return "N 그룹 · " + " · ".join(parts)
 
 
 def _gaps(data: AnalysisInput, summary: Summary) -> list[dict[str, Any]]:
