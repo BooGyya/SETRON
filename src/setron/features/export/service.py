@@ -13,6 +13,8 @@
 적용률은 판단 불가를 분모에서 뺀 값이고(BE-012), 계산할 수 없으면 빈 셀에 '계산 불가'를 적는다.
 - 구성 트리맵: 계열 > 상태(N 이상·N 미만·판단 불가)별 설비·계열 건수. openpyxl이 트리맵을 만들지 못해 저장 뒤
   :mod:`setron.features.export.treemap`이 Excel 2016 이상의 차트(chartEx)를 넣는다. 그 미만 버전에서는 안내 도형이 보인다.
+- 라인별 히트맵: 사이트 → 계열 → 라인 → 호기 칸을 판정 색으로 칠한 표 (5차 멘토 수동 양식,
+  :mod:`setron.features.export.line_heatmap`). 설비가 없어도 범례와 안내를 적은 시트를 만든다.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from setron.features.aggregation.schemas import FamilyStatus, RateCount
 from setron.features.aging.schemas import EquipmentAge
+from setron.features.export.line_heatmap import LINE_HEATMAP_SHEET, line_heatmap_groups, write_line_heatmap
 from setron.features.export.schemas import ExportResult, ExportStatus, StatusReport
 from setron.features.export.treemap import add_treemap
 from setron.features.export.xlsx_cells import ReportTextWriter
@@ -64,6 +67,7 @@ def build_status_report(report: StatusReport) -> Workbook:
         _trend(book.create_sheet("날짜별 추이"), report, text)
     if treemap_rows(report):
         _rows(book.create_sheet(TREEMAP_SHEET), ["계열", "상태", "건수"], treemap_rows(report), text=text)
+    write_line_heatmap(book.create_sheet(LINE_HEATMAP_SHEET), line_heatmap_groups(report), text)
     text.finish()  # 긴값 분할 시트는 여기서 마지막에 만들어진다
     return book
 
