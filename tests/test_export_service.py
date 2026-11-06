@@ -10,6 +10,7 @@ from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.aggregation.service import summarize, summarize_by_date
 from setron.features.aging.schemas import DEFAULT_THRESHOLDS
 from setron.features.aging.service import equipment_age
+from setron.features.export.line_heatmap import HEATMAP_COLORS
 from setron.features.export.schemas import StatusReport, TargetRow
 from setron.features.export.service import build_status_report, save_status_report
 from setron.features.export.xlsx_cells import OVERFLOW_MARKER, OVERFLOW_SHEET, ReportTextWriter
@@ -17,6 +18,7 @@ from setron.features.item.service import ItemCatalog
 from setron.features.priority.service import prioritize
 from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
 from setron.features.risk.service import RiskAssessor
+from setron.features.version.groups import Tier
 from setron.features.version.schemas import ReleaseVersion
 from setron.features.version.service import FamilyReleases
 
@@ -117,18 +119,56 @@ def test_summary_numbers_match_aggregation(saved):
 def test_family_sheet_has_counts_and_a_bar_chart_linked_to_cells(saved):
     sheet = saved["계열별 현황"]
 
-    assert column(sheet, 1) == ["O2", "O3"]
+    assert column(sheet, 1)[:2] == ["O2", "O3"]
     assert [column(sheet, c)[0] for c in (2, 3, 4)] == [1, 2, 1]
     chart = sheet._charts[0]
     refs = [s.val.numRef.f for s in chart.series]
     assert refs == ["'계열별 현황'!$B$2:$B$3", "'계열별 현황'!$C$2:$C$3", "'계열별 현황'!$D$2:$D$3"]
 
 
+def test_family_sheet_adds_tier_table_and_stacked_chart_below(saved):
+    """적용률 표는 그대로 두고 아래에 단계 표를 둔다. 단계 합계는 N 이상·N 미만·판단 불가와 맞는다."""
+    sheet = saved["계열별 현황"]
+    start = next(r for r in range(1, sheet.max_row + 1) if sheet.cell(r, 1).value == "계열별 단계 (건)")
+    header = [sheet.cell(start + 1, c).value for c in range(1, 7)]
+    rows = {sheet.cell(r, 1).value: [sheet.cell(r, c).value for c in range(2, 7)] for r in (start + 2, start + 3)}
+
+    assert header == ["계열", "N+1 이상", "N", "N-1", "N-2 이하", "비교 불가"]
+    for r, name in ((2, "O2"), (3, "O3")):
+        compliant, below, undetermined = (sheet.cell(r, c).value for c in (2, 3, 4))
+        above, at, one, two, unknown = rows[name]
+        assert (above + at, one + two, unknown) == (compliant, below, undetermined)
+    stacked = sheet._charts[1]
+    assert stacked.grouping == "stacked" and len(stacked.series) == 5
+    assert [_rgb(s) for s in stacked.series] == [
+        HEATMAP_COLORS[t] for t in (Tier.ABOVE, Tier.AT, Tier.ONE_BELOW, Tier.TWO_BELOW, Tier.UNKNOWN)]
+
+
+def _rgb(shape):
+    color = shape.graphicalProperties.solidFill.srgbClr
+    return getattr(color, "val", color)
+
+
 def test_composition_pie_chart_uses_all_units_including_undetermined(saved):
     sheet = saved["상태 구성비"]
 
-    assert column(sheet, 2)[:3] == [2, 2, 1]
-    assert sheet._charts[0].series[0].val.numRef.f == "'상태 구성비'!$B$2:$B$4"
+    assert column(sheet, 1)[:5] == ["N+1 이상", "N", "N-1", "N-2 이하", "비교 불가"]
+    assert sum(column(sheet, 2)[:5]) == 5  # 판단 불가까지 모든 설비·계열 건
+    assert column(sheet, 2)[4] == 1
+    pie = sheet._charts[0].series[0]
+    assert pie.val.numRef.f == "'상태 구성비'!$B$2:$B$6"
+    assert [_rgb(p) for p in pie.dPt] == [
+        HEATMAP_COLORS[t] for t in (Tier.ABOVE, Tier.AT, Tier.ONE_BELOW, Tier.TWO_BELOW, Tier.UNKNOWN)]
+
+
+def test_equipment_judgment_cell_is_filled_with_tier_color(saved):
+    sheet = saved["설비별 판정"]
+    judgment = [c.value for c in sheet[1]].index("판정") + 1
+    colors = {sheet.cell(r, judgment).value: sheet.cell(r, judgment).fill.fgColor.rgb[-6:]
+              for r in range(2, sheet.max_row + 1)}
+
+    assert colors["판단 불가"] == HEATMAP_COLORS[Tier.UNKNOWN]
+    assert set(colors.values()) <= set(HEATMAP_COLORS.values())
 
 
 def test_equipment_sheet_has_one_row_per_equipment_and_family(saved):
