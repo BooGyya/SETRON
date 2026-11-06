@@ -11,7 +11,8 @@ from setron.features.export.line_heatmap import (HEATMAP_COLORS, LINE_HEATMAP_SH
 from setron.features.export.schemas import StatusReport
 from setron.features.export.service import save_status_report
 from setron.features.export.xlsx_cells import ReportTextWriter
-from setron.features.version.schemas import CompareStatus, ReleaseVersion
+from setron.features.version.groups import Tier
+from setron.features.version.schemas import ReleaseVersion
 from setron.features.version.service import FamilyReleases
 
 M_O2, M_O3 = 1, 2
@@ -42,7 +43,7 @@ def report(*records):
 
 
 def codes(line):
-    return [(c.equipment_code, c.status) for c in line.cells]
+    return [(c.equipment_code, c.tier) for c in line.cells]
 
 
 def test_groups_follow_site_family_line_order_and_skip_hpa():
@@ -61,8 +62,8 @@ def test_groups_follow_site_family_line_order_and_skip_hpa():
     hwaseong = groups[1].families[0]
     assert hwaseong.family == "O2"
     assert [line.line for line in hwaseong.lines] == ["5L", "12L"]
-    assert codes(hwaseong.lines[0]) == [("ESO-C", CompareStatus.UNDETERMINED)]
-    assert codes(hwaseong.lines[1]) == [("ESO-A", CompareStatus.BELOW), ("ESO-B", CompareStatus.AT_OR_ABOVE)]
+    assert codes(hwaseong.lines[0]) == [("ESO-C", Tier.UNKNOWN)]
+    assert codes(hwaseong.lines[1]) == [("ESO-A", Tier.ONE_BELOW), ("ESO-B", Tier.AT)]
 
 
 def test_mixed_equipment_appears_once_in_each_family():
@@ -70,7 +71,7 @@ def test_mixed_equipment_appears_once_in_each_family():
     groups = line_heatmap_groups(report(record(1, "ESO-MIX", "화성", "16L", o2("v2.1"), o3("v3.1"))))
 
     families = {f.family: codes(f.lines[0]) for f in groups[0].families}
-    assert families == {"O2": [("ESO-MIX", CompareStatus.BELOW)], "O3": [("ESO-MIX", CompareStatus.AT_OR_ABOVE)]}
+    assert families == {"O2": [("ESO-MIX", Tier.ONE_BELOW)], "O3": [("ESO-MIX", Tier.AT)]}
 
 
 def test_missing_site_and_line_are_labeled_and_sorted_last():
@@ -97,7 +98,7 @@ def test_sheet_lays_out_headers_wraps_columns_and_colors_cells():
     sheet = book.active
 
     assert sheet.title == LINE_HEATMAP_SHEET
-    assert [sheet.cell(1, c).value for c in range(1, 5)] == ["범례", "N 이상", "N 미만", "판단 불가"]
+    assert [sheet.cell(1, c).value for c in range(1, 7)] == ["범례", "N+1 이상", "N", "N-1", "N-2 이하", "비교 불가"]
     assert sheet["A4"].value == "화성"
     merged = {str(r) for r in sheet.merged_cells.ranges}
     # O2: 16L 두 열(B..) + 17L 한 열 → A5:C5, 16L 머리글 A6:B6. 빈 열 하나 뒤 O3는 E열.
@@ -107,8 +108,8 @@ def test_sheet_lays_out_headers_wraps_columns_and_colors_cells():
     first, wrapped = sheet.cell(7, 1), sheet.cell(7, 2)
     assert first.value == "ESO-01" and sheet.cell(7 + ROWS_PER_COLUMN - 1, 1).value == f"ESO-{ROWS_PER_COLUMN:02d}"
     assert wrapped.value == f"ESO-{ROWS_PER_COLUMN + 1:02d}"
-    assert first.fill.fgColor.rgb.endswith(HEATMAP_COLORS[CompareStatus.AT_OR_ABOVE])
-    assert sheet["C7"].value == "ESO-50" and sheet["C7"].fill.fgColor.rgb.endswith(HEATMAP_COLORS[CompareStatus.BELOW])
+    assert first.fill.fgColor.rgb.endswith(HEATMAP_COLORS[Tier.AT])
+    assert sheet["C7"].value == "ESO-50" and sheet["C7"].fill.fgColor.rgb.endswith(HEATMAP_COLORS[Tier.ONE_BELOW])
     assert sheet["E7"].value == "ESO-60"
 
 

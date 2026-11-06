@@ -8,6 +8,8 @@
 
 명세에 없어 다음과 같이 정했다.
 - 칸 수는 계열의 확인된 순서(version_order)로 센다. 순서를 모르거나 겹치는 릴리즈는 위치를 정하지 않는다.
+- 목표가 N 그룹(멘토 5차, 팀 결정 11-05)이면 칸 수는 그룹 칸으로 센다. N-2 이하는 모두 2칸이며,
+  같은 2칸 안에서는 3번 기준(버전 위치·출시일)으로 더 오래된 설비가 앞선다.
 - 어느 PM도 버전 위치를 정할 수 없으면 순위를 매기지 않고 '확인 필요'에 둔다. 출시일이 없으면 마지막에 둔다.
 - 모든 기준이 같으면 호기 코드 순서로 둔다. 화면 순서를 고정하려는 것이지 우선순위 근거는 아니다.
 - 노후도(BE-016)는 근거로 함께 보여 주지만 순위에는 쓰지 않는다.
@@ -25,6 +27,7 @@ from setron.features.aging.service import equipment_age
 from setron.features.priority.schemas import PmPosition, PriorityEntry, PriorityGap, PriorityList
 from setron.features.risk.schemas import EquipmentRisk, RiskStatus, RiskSummary
 from setron.features.risk.service import RiskAssessor
+from setron.features.version.groups import VersionGroups, classify
 from setron.features.version.service import FamilyReleases
 
 
@@ -120,8 +123,13 @@ def _position(pm: PmVersion, families: Mapping[int, FamilyReleases], targets: Ta
     index = _index(family)
     if release is None or release.release_version_id not in index:
         return None
-    target_id = targets.get((pm.group_id, pm.family_id))
-    steps = index[target_id] - index[release.release_version_id] if target_id in index else None
+    target = targets.get((pm.group_id, pm.family_id))
+    if isinstance(target, VersionGroups):
+        # N 그룹이면 칸으로 센다: N-1은 1칸, N-2 이하는 2칸, N은 0, N+1 이상은 음수 (groups.classify와 같은 판정)
+        slot = classify(family, target, release)[0] if target.has_target else None
+        steps = -int(slot) if slot is not None else None
+    else:
+        steps = index[target] - index[release.release_version_id] if target in index else None
     return PmPosition(pm, release, index[release.release_version_id], steps)
 
 
