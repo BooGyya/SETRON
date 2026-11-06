@@ -31,14 +31,16 @@ CASES = [("P_PJT_KCTC_SW_정기_Release_List_교육용.xlsx", s, s) for s in ("I
     ("P_PJT_M-O2_SW_정기_Release_List_교육용.xlsx", "Memory", "M-O2"),
     ("P_PJT_M-O2_Foundry_SW_Release_List_교육용.xlsx", "Foundry", "M-O2"),
     ("P_PJT_M-C3_SW_정기_Release_List_교육용.xlsx", "구UI", "M-C3"),
+    ("P_PJT_M-C3_SW_정기_Release_List_교육용.xlsx", "통합UI", "M-C3"),     # 재배포(같은 버전·다른 날짜) → 안내로 합침
     ("P_PJT_M-C3_Foundry_SW_Release_List_교육용.xlsx", "통합UI", "M-C3"),
     ("P_PJT_M-C4_SW_정기_Release_List_교육용.xlsx", "Release List", "M-C4"),
     ("P_PJT_M-C4_Foundry_SW_Release_List_교육용.xlsx", "Release List", "M-C4"),
     ("P_PJT_M-O3_SW_정기_Release_List_교육용.xlsx", "Release", "M-O3"),
     ("P_PJT_M-O5_SW_정기_Release_List_교육용.xlsx", "Release List", "M-O5"),
 ]
-# 데이터 함정: 같은 버전이 다른 출시일로 두 번 나온다(예: v3.52_13 2026-02-02 / 2026-02-06). 저장을 막아야 한다.
-TRAPS = [("P_PJT_M-C3_SW_정기_Release_List_교육용.xlsx", "통합UI", "M-C3", "출시일이 행마다 다릅니다")]
+# 재배포: 같은 버전이 다른 출시일로 두 번 나온다(예: v3.52_13 2026-02-02 / 2026-02-06). 멘토 확인(11/05)으로 같은 버전,
+# 첫 출시일로 합친다. 저장은 막지 않고 안내(RERELEASE)를 남긴다.
+TRAPS = [("P_PJT_M-C3_SW_정기_Release_List_교육용.xlsx", "통합UI", "M-C3", "재배포로 보고 첫 출시일")]
 
 
 def _ai_shaped_draft(path, sheet_name, model):
@@ -99,9 +101,11 @@ def test_release_note_reaches_save(name, sheet_name, model):
 
 
 @pytest.mark.parametrize("name, sheet_name, model, message", TRAPS)
-def test_known_data_traps_are_blocked(name, sheet_name, model, message):
+def test_rereleases_are_merged_with_notice(name, sheet_name, model, message):
     path = DATA / name
     if not path.exists():
         pytest.skip(f"교육용 자료 없음: {path}")
     draft = _ai_shaped_draft(path, sheet_name, model)
-    assert any(message in issue.message for issue in validate(draft, None) if issue.blocks_save)
+    issues = validate(draft, None)
+    assert not [issue for issue in issues if issue.blocks_save]
+    assert any(message in issue.message and issue.code == "RERELEASE" for issue in issues)

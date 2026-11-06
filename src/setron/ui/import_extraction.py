@@ -5,6 +5,7 @@ from setron.features.extraction.schemas import ExtractionReview
 from setron.features.extraction.service import extract_sheet_data, review_extraction_result
 from setron.infrastructure.ai_client import OpenAICompatibleChatClient
 from setron.features.excel_import.source_sheet import sheet_from_snapshot
+from setron.features.rule_extraction import rule_extract
 
 
 class LiveSheetExtractor:
@@ -34,18 +35,34 @@ class LiveSheetExtractor:
             return extract_sheet_data(client, kind, sheet)
 
 
-def extract_for_review(kind, workbook_name, snapshot, *, extractor=None, sheet_extractor=None):
+def rule_extractor(kind, sheet):
+    """정해진 양식(설비 현황표·세로형 릴리즈노트)을 규칙으로 읽는다. 아는 양식이 아니면 None (→ AI 추출).
+
+    화면 셸(app.py)이 업무 모듈을 직접 불러오지 않도록 가져오기 연결 모듈에서 내보낸다.
+    """
+    return rule_extract(kind, sheet)
+
+
+def extract_for_review(kind, workbook_name, snapshot, *, extractor=None, sheet_extractor=None, rules=None):
     """신규·기존 추출 공급자를 동일한 원본 검증 경계로 연결한다.
 
     param
     - kind, workbook_name, snapshot: 추출 종류와 읽은 원본 정보.
     - extractor: 기존 (종류, 시트명, 셀 목록) 공급자. 결과도 원본 검증을 수행.
     - sheet_extractor: SheetData를 받는 실제 추출 공급자.
+    - rules: (종류, SheetData) → 규칙 추출 결과 또는 None. 주면 먼저 시도하고, 정해진 양식이 아니거나
+      원본 대조를 통과하지 못하면 AI 추출로 넘긴다 (팀 결정 2026-11-05: 규칙 우선, 처음 보는 양식만 AI).
 
     return
     - 원본 대조와 누락 검사를 거친 AIResult.
     """
     sheet = sheet_from_snapshot(workbook_name, snapshot)
+    if rules is not None:
+        ruled = rules(kind, sheet)
+        if ruled is not None:
+            review = review_extraction_result(kind, sheet, ruled)
+            if review.ok:
+                return review
     if extractor is not None:
         result = extractor(kind, snapshot.sheet_name, extract_cells(snapshot))
         return review_extraction_result(kind, sheet, result)

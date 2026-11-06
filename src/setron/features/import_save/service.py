@@ -495,10 +495,10 @@ class DatabaseImportSaver:
             _require(allow_existing or next(iter(linked_ids)) is None,
                      f"{version}: 이미 저장된 릴리즈입니다. 전체 누적 노트·파일명·충돌 선택을 확인한 뒤 교체해 주세요.")
             dates = {r.values.get("release_date") for r in group} - {None}
-            _require(len(dates) <= 1, f"{version}: 출시일이 행마다 다릅니다.")
+            # 같은 버전이 다른 날짜로 또 나오면 재배포로 보고 첫 출시일을 쓴다 (멘토 확인 2026-11-05).
             release = ReleaseInput(
                 family_id=family_id, version_raw=version, batch_id=batch_id,
-                released_at=date.fromisoformat(dates.pop()) if dates else None,
+                released_at=date.fromisoformat(min(dates)) if dates else None,
                 source_reference=merge_sources(*(_sources(row, RELEASE_FIELDS) for row in group)),
                 edited_fields=tuple(dict.fromkeys(name for row in group for name in _edited(row, RELEASE_EDITED))),
             )

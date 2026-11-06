@@ -17,6 +17,7 @@ from .service import edit_value
 
 
 _SHEET_UI = {"구ui": "구UI", "통합ui": "통합UI"}
+GIHEUNG_NOTE = "라인 이름의 (기흥)은 위치 표시이고 사업장은 화성으로 둠 (멘토 확인 2026-11-05)"
 SHEET_UI_NOTE = "C3 릴리즈노트의 UI가 비어 있어 시트 이름(구UI/통합UI)으로 둠. 구UI·통합UI는 다른 릴리즈노트이니 시트를 확인하세요"
 
 
@@ -41,6 +42,10 @@ def model_candidate_rows(draft: ImportDraft) -> dict[int, dict[str, str]]:
             if name in changes and name in row.edits and (current.get(name) or "").strip() \
                     and not (name == "group_name" and str(current.get(name)).strip().casefold() == "oxide"):
                 changes.pop(name)
+        if (draft.kind is ExtractKind.EQUIPMENT_STATUS and "site" in draft.fields and "site" not in row.edits
+                and (current.get("site") or "").strip() == "기흥" and "기흥" in (current.get("line") or "")):
+            # 화성 현황표의 'S1 (기흥)'·'1L (기흥)' 라인은 위치 표시이고 사업장은 화성이다 (멘토 확인 2026-11-05).
+            changes["site"] = "화성"
         model = changes.get("model_name", current.get("model_name"))
         if draft.kind is ExtractKind.RELEASE_NOTE and "ui_type" in changes \
                 and not re.search(r"구\s*UI|통합\s*UI", str(current.get("model_name") or ""), re.IGNORECASE):
@@ -71,6 +76,8 @@ def candidate_notes(draft: ImportDraft) -> tuple[str, ...]:
         candidate = find_candidate(row.value("model_name")) if row.row_id in targets else None
         if candidate and candidate.note and candidate.note not in notes:
             notes.append(candidate.note)
+        if row.row_id in targets and targets[row.row_id].get("site") == "화성" and GIHEUNG_NOTE not in notes:
+            notes.append(GIHEUNG_NOTE)
         if row.row_id in targets and "ui_type" in targets[row.row_id] and _sheet_ui(draft) and SHEET_UI_NOTE not in notes:
             notes.append(SHEET_UI_NOTE)
         if (row.row_id in targets and targets[row.row_id].get("group_name") == KCTC

@@ -588,29 +588,36 @@ def _row_family(row: ReviewRow, kind=ExtractKind.EQUIPMENT_STATUS) -> tuple:
 def _release_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
     """같은 계열·릴리즈·원본 Item 번호의 중복과 상충 값을 검사한다.
 
+    같은 버전이 다른 출시일로 여러 번 나오면 재배포로 보고 첫 출시일로 합친다(멘토 확인 2026-11-05).
+    이때 Item은 출시일(블록)마다 따로 보므로, 블록이 다르면 같은 번호라도 충돌이 아니다.
+
     param
     - rows: 제외되지 않은 릴리즈 검토 행.
 
     return
-    - 계열별 출시일·Item 충돌과 중복 확인 목록.
+    - 재배포 안내, 같은 블록 안 Item 충돌, 중복 확인 목록.
     """
     issues = []
     groups = defaultdict(list)
-    items = defaultdict(list)
     for row in rows:
-        version, number = _safe(row, "version_raw"), _safe(row, "item_no")
+        version = _safe(row, "version_raw")
         if version is not None:
-            key = (_row_family(row, ExtractKind.RELEASE_NOTE), version)
-            groups[key].append(row)
-            if number is not None:
-                items[(*key, number)].append(row)
-    for (_, version), members in groups.items():
-        dates = {_safe(r, "release_date") for r in members} - {None}
+            groups[(_row_family(row, ExtractKind.RELEASE_NOTE), version)].append(row)
+    items = defaultdict(list)
+    for (family, version), members in groups.items():
+        dates = sorted({_safe(r, "release_date") for r in members} - {None})
         if len(dates) > 1:
-            for row in members:
-                issues.append(Issue(IssueLevel.ERROR, f"같은 버전({version})의 출시일이 행마다 다릅니다.",
-                                    row.row_id, "release_date", row.sources.get("release_date")))
-    for (_, version, number), members in items.items():
+            first = members[0]
+            issues.append(Issue(IssueLevel.REVIEW,
+                                f"{version}이(가) 출시일 {', '.join(dates)}로 여러 번 나옵니다. "
+                                f"재배포로 보고 첫 출시일 {dates[0]}로 합쳐 저장합니다.",
+                                first.row_id, "release_date", first.sources.get("release_date"), code="RERELEASE"))
+        for row in members:
+            number = _safe(row, "item_no")
+            if number is not None:
+                block = _safe(row, "release_date") if len(dates) > 1 else None
+                items[(family, version, block, number)].append(row)
+    for (_, version, _, number), members in items.items():
         contents = {_safe(r, "content") for r in members}
         if len(contents) > 1:
             for row in members:
