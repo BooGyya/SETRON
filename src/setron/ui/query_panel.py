@@ -40,8 +40,10 @@ class _WrapRow(QWidget):
         for index, widget in enumerate(self.widgets):
             self.grid.addWidget(widget, index // columns, index % columns)
         if self.fields:
+            # 고정 너비 항목(기준 날짜·버튼 묶음)은 늘리지 않고 콤보 칸만 남는 폭을 나눠 쓴다.
             for index in range(columns):
-                self.grid.setColumnStretch(index, 1)
+                fixed = all(w.maximumWidth() < 10000 for w in self.widgets[index::columns])
+                self.grid.setColumnStretch(index, 0 if fixed else 1)
         else:
             self.grid.setColumnStretch(columns, 1)
         self.columns = columns
@@ -50,7 +52,9 @@ class _WrapRow(QWidget):
     def resizeEvent(self, event):
         columns = max(1, min(len(self.widgets), (event.size().width() + 12) // (self.minimum_width + 12)))
         if self.fields:
-            columns = len(self.widgets) if columns >= len(self.widgets) else 2 if columns >= 2 else 1
+            needed = sum(max(w.minimumWidth(), self.minimum_width) if w.maximumWidth() >= 10000 else w.maximumWidth()
+                         for w in self.widgets) + 12 * (len(self.widgets) - 1)
+            columns = len(self.widgets) if event.size().width() >= needed else 2 if columns >= 2 else 1
         self._arrange(columns)
         super().resizeEvent(event)
 
@@ -96,7 +100,7 @@ class QueryPanel(QWidget):
         self.draft_summary.hide()
         self.card.body.addWidget(self.draft_summary)
         self.source_label = label("", 12, color=SECONDARY, wrap=True)
-        fields = []
+        fields = [self._date_field()]
         for key, caption in (("site_key", "Site"), ("fab_key", "Fab"),
                              ("line_key", "Line"), ("group_key", "설비군")):
             field = QWidget()
@@ -118,27 +122,32 @@ class QueryPanel(QWidget):
             layout.addWidget(title)
             layout.addWidget(combo)
             fields.append(field)
-        fields.append(self._date_field())
-        self.fields_row = _WrapRow(fields, 200, fields=True)
+        self.apply_button = button("조회 적용", primary=True)
+        self.apply_button.setFixedSize(90, 38)
+        self.apply_button.setToolTip("선택한 조건을 확정합니다.")
+        # 조건 초기화는 아이콘 버튼. Site~설비군은 전체로, 기준 날짜는 오늘로 되돌린다.
+        self.reset_button = button("", asset="ver5/reset.svg")
+        self.reset_button.setAccessibleName("조건 초기화")
+        self.reset_button.setProperty("soft", True)
+        self.reset_button.setFixedSize(38, 38)
+        self.reset_button.setToolTip("조건 초기화")
+        actions = QWidget()
+        actions_body = QHBoxLayout(actions)
+        actions_body.setContentsMargins(0, 0, 0, 0)
+        actions_body.setSpacing(12)
+        actions_body.addWidget(self.reset_button, 0, Qt.AlignmentFlag.AlignBottom)
+        actions_body.addWidget(self.apply_button, 0, Qt.AlignmentFlag.AlignBottom)
+        actions.setFixedWidth(38 + 12 + 90)
+        fields.append(actions)
+        self.fields_row = _WrapRow(fields, 150, fields=True)
         self.card.body.addWidget(self.fields_row)
         self.quick_rows = []
         self._rebuild_quick_rows()
-        self.apply_button = button("조회 적용", primary=True)
-        self.apply_button.setFixedWidth(230)
-        self.apply_button.setFixedHeight(40)
-        self.apply_button.setToolTip("선택한 조건을 확정합니다. 업무 데이터 조회는 아직 연결되지 않았습니다.")
-        self.reset_button = button("조건 초기화", asset="ver5/reset.svg")
-        self.reset_button.setProperty("soft", True)
-        self.reset_button.setFixedWidth(230)
-        self.reset_button.setFixedHeight(40)
-        self.reset_button.setToolTip("선택만 전체로 초기화합니다. 적용하려면 조회 적용을 눌러 주세요.")
         self.goal_button = button("버전(N) 기준 입력")
-        self.goal_button.setFixedWidth(256)
-        self.goal_button.setFixedHeight(40)
+        self.goal_button.setFixedSize(170, 38)
         self.goal_button.setEnabled(False)
         self.goal_button.setToolTip("목표 N 편집은 별도 작업입니다.")
-        # VER5: 빠른 선택 펼침('조건 선택') 없이 조건 초기화 · 버전(N) 기준 입력 · 조회 적용 순서로 둔다.
-        self.actions_row = _WrapRow([self.reset_button, self.goal_button, self.apply_button], 256)
+        self.actions_row = _WrapRow([self.goal_button], 170)
         self.card.body.addWidget(self.actions_row)
         self.hint = label("선택 변경·초기화는 자동 적용되지 않습니다. ‘조회 적용’을 눌러 확정하세요.",
                           13, color=SECONDARY, wrap=True)
@@ -203,31 +212,21 @@ class QueryPanel(QWidget):
         layout = QVBoxLayout(field)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        title = label("기준일", medium=True, color=INK)
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        title = label("기준 날짜", medium=True, color=INK)
         self.date_edit = QDateEdit()
         self.date_edit.setObjectName("query_as_of")
         self.date_edit.setProperty("queryField", True)
-        self.date_edit.setAccessibleName("기준일")
+        self.date_edit.setAccessibleName("기준 날짜")
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.date_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.date_edit.setFixedHeight(38)
-        self.date_edit.setMinimumWidth(120)
-        self.date_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.date_edit.setToolTip("선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
         self.date_edit.dateChanged.connect(self._choose_date)
         title.setBuddy(self.date_edit)
-        self.today_button = button("오늘")
-        self.today_button.setProperty("soft", True)
-        self.today_button.setFixedSize(64, 38)
-        self.today_button.setToolTip("기준일을 오늘(최신 관측)로 맞춥니다.")
-        self.today_button.clicked.connect(self.set_today)
-        row.addWidget(self.date_edit, 1)
-        row.addWidget(self.today_button)
         layout.addWidget(title)
-        layout.addLayout(row)
+        layout.addWidget(self.date_edit)
+        field.setFixedWidth(160)
         return field
 
     def _choose_date(self, value):
@@ -300,9 +299,9 @@ class QueryPanel(QWidget):
             combo = self.combos[field]
             previous_block = combo.blockSignals(True)
             combo.clear()
-            combo.addItem(caption + " 전체", None)
+            combo.addItem("전체", None)
             if field in ("fab_key", "line_key"):
-                combo.addItem(caption + " 미지정", UNASSIGNED)
+                combo.addItem("미지정", UNASSIGNED)
             for option in options:
                 combo.addItem(option.label, option.key)
             value = getattr(self.state.draft, field)

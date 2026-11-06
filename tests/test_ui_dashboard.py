@@ -194,8 +194,8 @@ def test_kpi_and_matrix_use_the_same_snapshot_and_do_not_treat_risk_as_below(win
     assert "판단 불가 1건" in page.metrics["rate"].caption.text()
     assert page.metrics["risk"].value.text() == "2대"
     assert page.metrics["upgrade"].value.text() == "1대"
-    # VER4 셀은 'N 이상 / 판단 가능' 건수만 크게 보이고, 대수·달성률은 툴팁과 접근성 이름에 둔다.
-    assert page.matrix_buttons[len(page.snapshot.rows), 4].text() == "3 / 4"
+    # Figma 셀은 달성률을 크게, 'N 이상/판단 가능' 건수는 아래 줄에, 대수는 툴팁과 접근성 이름에 둔다.
+    assert page.matrix_buttons[len(page.snapshot.rows), 4].text() == "75%"
     assert "N 이상 3건 / N 미만 1건" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
     assert "분석 4대" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
     assert page.matrix_buttons[len(page.snapshot.rows), 4].accessibleName() == "전체 전체 전체 설비 4대"

@@ -59,16 +59,18 @@ def window():
     app.processEvents()
 
 
-def test_date_field_is_on_first_row_and_today_button_resets(window):
+def test_date_field_is_first_on_first_row_and_reset_returns_today(window):
     panel = window.query_panel
     today = date.today()
     assert panel.date_edit.date().toPython() == today
     assert panel.date_edit.mapTo(panel.card, panel.date_edit.rect().topLeft()).y() == \
         panel.combos["site_key"].mapTo(panel.card, panel.combos["site_key"].rect().topLeft()).y()
+    assert panel.date_edit.mapTo(panel.card, panel.date_edit.rect().topLeft()).x() < \
+        panel.combos["site_key"].mapTo(panel.card, panel.combos["site_key"].rect().topLeft()).x()
     panel.date_edit.setDate(QDate(2026, 8, 30))
     assert window.query_state.draft.as_of == date(2026, 8, 30)
     assert window.query_state.applied is None  # 적용 전에는 결과가 바뀌지 않는다
-    panel.today_button.click()
+    panel.reset_button.click()  # 조건 초기화는 기준 날짜도 오늘(최신 관측)로 되돌린다
     assert window.query_state.draft.as_of is None and panel.date_edit.date().toPython() == today
 
 

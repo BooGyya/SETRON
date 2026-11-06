@@ -217,6 +217,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
         window.notice.setVisible(window.route not in ("import", "dashboard", "heatmap") or window.management_saving)
+        list_action.setVisible(window.route != "dashboard")  # 대시보드는 본문 카드의 "설비 목록 →"을 쓴다(Figma).
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)

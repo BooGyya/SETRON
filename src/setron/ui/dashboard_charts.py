@@ -60,23 +60,27 @@ class DashboardChart(QChartView):
         series = QPieSeries()
         series.setPieSize(0.90)
         series.setHoleSize(0.65)
-        for title, count, color in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#f6dc85", "#c9ced6")):
+        for title, count, color in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#fdf0b8", "#e5e7eb")):
             if count:
                 part = series.append(f"{title} {count}건 ({count / total:.1%})", count)
                 part.setColor(QColor(color))
                 part.setBorderColor(QColor(color))
         chart.addSeries(series)
         self._donut_mode = True
-        chart.legend().show()
-        chart.legend().setFont(font(13))
-        chart.legend().setLabelColor(QColor(SECONDARY))
-        chart.legend().setAlignment(Qt.AlignmentFlag.AlignRight if self.width() >= 800 else Qt.AlignmentFlag.AlignBottom)
-        center = QGraphicsSimpleTextItem(f"{total}건" if total else "자료 없음", chart)
-        center.setFont(font(30, medium=True, numeric=True))
+        chart.legend().hide()  # 범례는 화면 오른쪽 상태 칩으로 표시한다.
+        rate = snapshot.summary.rate
+        center = QGraphicsSimpleTextItem("계산 불가" if rate is None else f"{rate:.1%}", chart)
+        center.setFont(font(34, medium=True, numeric=True))
         center.setBrush(QBrush(QColor(INK)))
+        decided = snapshot.summary.compliant + snapshot.summary.below
+        caption = QGraphicsSimpleTextItem(f"{snapshot.summary.compliant} / {decided}건 목표 달성" if total else "자료 없음", chart)
+        caption.setFont(font(13))
+        caption.setBrush(QBrush(QColor(SECONDARY)))
         def place_center(rect):
-            size = center.boundingRect()
-            center.setPos(rect.center().x() - size.width() / 2, rect.center().y() - size.height() / 2)
+            size, below = center.boundingRect(), caption.boundingRect()
+            top = rect.center().y() - (size.height() + 6 + below.height()) / 2
+            center.setPos(rect.center().x() - size.width() / 2, top)
+            caption.setPos(rect.center().x() - below.width() / 2, top + size.height() + 6)
         chart.plotAreaChanged.connect(place_center)
         self.setAccessibleDescription(" · ".join(f"{name} {value}건" for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)))
 
