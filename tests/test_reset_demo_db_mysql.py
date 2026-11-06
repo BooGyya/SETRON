@@ -42,9 +42,11 @@ def test_reset_drops_data_and_applies_schema_and_seed(schema_database, capsys): 
         assert reset_demo_db.main(["--prefix", "SETRON_TEST_DB_", "--confirm", name]) == 0
 
         out = capsys.readouterr().out
-        assert "초기화 완료 · 관리 테이블 13개" in out and "equipment_group 9행" in out
+        assert "초기화 완료 · 관리 테이블 13개" in out and "equipment_group 14행 · version_family 15행" in out
         assert scalar(schema_database, "SELECT COUNT(*) FROM import_batch") == 0
-        assert scalar(schema_database, "SELECT COUNT(*) FROM version_family") == 9
+        # 시드 v2 (멘토 확정 분류, 11/04): 모델 14개 · 계열 15개
+        assert scalar(schema_database, "SELECT COUNT(*) FROM equipment_group") == 14
+        assert scalar(schema_database, "SELECT COUNT(*) FROM version_family") == 15
         assert scalar(schema_database, "SELECT COUNT(*) FROM app_setting") == 1
         assert scalar(schema_database, "SELECT COUNT(*) FROM information_schema.TABLES "
                                        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'keep_me'") == 1
