@@ -28,6 +28,7 @@ from setron.features.aging.repository import thresholds_in
 from setron.features.release.refresh import families_from_rows, rule_from_row
 from setron.features.risk.schemas import RiskStatus
 from setron.features.risk.service import RiskAssessor
+from setron.features.targets.groups import GroupStore
 from setron.features.targets.service import TargetService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import DatabaseError
@@ -155,6 +156,13 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
                              families=family_releases, targets={}, risks=risks, source_label=label,
                              risk_evaluator=risk_status)
     source.applicability = target_catalog.applicability
+    # 버전(N) 기준 입력에서 저장한 N 그룹. 형식이 깨진 저장값은 그룹 없이(목표 N 하나로) 계산하고 안내한다.
+    source.group_store = GroupStore(storage)
+    try:
+        source.saved_groups = source.group_store.load_many([(p.model_id, p.family_id) for p in target_catalog.pairs])
+    except StorageValidationError as error:
+        source.saved_groups = {}
+        source.source_label += f" · 저장된 N 그룹 확인 필요({error})"
     source.target_reasons = {(pair.model_id, pair.family_id): pair.reason for pair in target_catalog.pairs}
     source.risks_by_date = risks_by_date
     # AI 분석·예측 입력(ui/analysis_data.py)이 대시보드와 같은 위험 판정·Item 자료를 쓰도록 함께 둔다.

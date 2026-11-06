@@ -1,0 +1,96 @@
+"""버전(N) 기준 입력: 줄마다 N 칸 선택, 기본 후보, 막힘/경고, 저장 이력·되돌리기, 저장 그룹으로 계산."""
+
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+from setron.ui.app import create_window
+from setron.ui.group_data import SLOT_LABELS, TIER_LABELS, Slot, Tier
+from setron.ui.group_dialog import SLOT_CHOICES, VersionGroupDialog
+from setron.ui.theme import install_theme
+
+PAIR = (101, 1001)  # 예시 자료 C3 · 계열 1001: v1.0.1(10011) · v1.0.2(10012, 기본 목표) · v1.0.3(10013)
+
+
+@pytest.fixture
+def window():
+    app = QApplication.instance() or QApplication([])
+    install_theme(app)
+    result = create_window()
+    result.resize(1400, 900)
+    result.show()
+    QTest.qWait(20)
+    yield result
+    if result.group_dialog is not None:
+        result.group_dialog.reject()
+    result.close()
+    result.deleteLater()
+    app.processEvents()
+
+
+def open_editor(window) -> VersionGroupDialog:
+    window.query_panel.goal_button.click()
+    QTest.qWait(20)
+    dialog = window.group_dialog
+    assert isinstance(dialog, VersionGroupDialog)
+    dialog.pair_combo.setCurrentIndex(next(i for i, p in enumerate(dialog.pairs) if p.key == PAIR))
+    return dialog
+
+
+def tiers(dialog):
+    return {rid: chip.text() for rid, chip in dialog.tier_labels.items()}
+
+
+def choose(dialog, release_id, slot):
+    dialog.slot_combos[release_id].setCurrentIndex(SLOT_CHOICES.index(slot))
+
+
+def test_rows_follow_version_order_and_single_target_uses_same_tiers(window):
+    dialog = open_editor(window)
+    assert list(dialog.slot_combos) == [10013, 10012, 10011]  # 최신 → 오래된 순
+    assert dialog.slot_combos[10012].currentText() == "N" and dialog.slot_combos[10011].currentText() == "—"
+    # 그룹 저장 전(목표 1개)에도 tier_of 단계로 색을 낸다.
+    assert tiers(dialog) == {10013: TIER_LABELS[Tier.ABOVE], 10012: TIER_LABELS[Tier.AT], 10011: TIER_LABELS[Tier.ONE_BELOW]}
+    assert "저장 이력이 없습니다" in dialog.history.itemAt(0).widget().text()
+
+
+def test_suggest_fills_neighbours_and_empty_n_blocks_save(window):
+    dialog = open_editor(window)
+    assert dialog.suggest()
+    assert dialog.slot_combos[10011].currentText() == SLOT_LABELS[Slot.N_MINUS_1]
+    assert dialog.slot_combos[10013].currentText() == SLOT_LABELS[Slot.N_PLUS_1]
+    choose(dialog, 10012, None)
+    texts = [dialog.issues.itemAt(i).widget().text() for i in range(dialog.issues.count())]
+    assert any(text.startswith("막힘") for text in texts)
+    assert not dialog.save_button.isEnabled() and not dialog.suggest_button.isEnabled()
+
+
+def test_crossed_order_is_warning_not_block(window):
+    dialog = open_editor(window)
+    choose(dialog, 10011, Slot.N_PLUS_1)  # 더 오래된 버전을 더 높은 칸에
+    texts = [dialog.issues.itemAt(i).widget().text() for i in range(dialog.issues.count())]
+    assert any(text.startswith("경고") for text in texts) and dialog.save_button.isEnabled()
+
+
+def test_save_then_apply_uses_saved_groups_and_history_can_revert(window):
+    window.query_panel.apply_draft()
+    before = window.pages["dashboard"].snapshot.summary.compliant
+    dialog = open_editor(window)
+    choose(dialog, 10012, Slot.N_MINUS_1)
+    choose(dialog, 10013, Slot.N)  # 목표를 한 단계 올린다
+    assert tiers(dialog)[10012] == TIER_LABELS[Tier.ONE_BELOW]
+    assert dialog.save() and "조회 적용" in dialog.status.text()
+    assert window.pages["dashboard"].snapshot.summary.compliant == before  # 저장만으로 화면 결과는 바뀌지 않는다
+    window.query_panel.apply_draft()
+    assert window.pages["dashboard"].snapshot.summary.compliant < before
+    first = dialog.store.load(PAIR).history[0]
+    choose(dialog, 10011, Slot.N_MINUS_2)
+    assert dialog.save()
+    assert len(dialog.store.load(PAIR).history) == 2
+    assert dialog.revert(first)
+    saved = dialog.store.load(PAIR)
+    assert len(saved.history) == 3 and saved.groups == first.groups and "되돌림" in saved.history[-1].memo
