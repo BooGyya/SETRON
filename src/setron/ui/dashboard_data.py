@@ -24,6 +24,18 @@ class HpaClassificationConflict(ValueError):
                          "원문 분류를 검토하세요.\n" + details)
 
 
+
+class NoObservationBefore(ValueError):
+    """선택한 기준일 이전에 저장된 관측이 없다. 다른 날짜의 결과로 대신하지 않는다."""
+
+    def __init__(self, day):
+        super().__init__(f"{day.isoformat()} 이전에 저장된 관측 자료가 없습니다. 기준일을 바꾸거나 '오늘'을 눌러 주세요.")
+
+
+def _until(dates, as_of):
+    """기준일(포함) 이전 날짜만 남긴다. as_of가 없으면 전체."""
+    return tuple(dates) if as_of is None else tuple(d for d in dates if d <= as_of)
+
 @dataclass(frozen=True)
 class GroupBinding:
     group_key: str
@@ -182,7 +194,7 @@ class DashboardSource:
         self.dates = tuple(sorted({r.base_date for r in self.records}))
         self.analysis_dates = tuple(sorted({r.base_date for r in self.records if not r.is_hpa}))
 
-    def latest_hpa_records(self) -> tuple[EquipmentRecord, ...]:
+    def latest_hpa_records(self, until: date | None = None) -> tuple[EquipmentRecord, ...]:
         """공통 분석 기준일과 독립적으로 호기별 최신 HPA 원본 관측을 조회한다.
 
         return
@@ -197,6 +209,8 @@ class DashboardSource:
             equipment_id = record.equipment_id
             if record.is_hpa:
                 hpa_ids.add(equipment_id)
+                if until is not None and record.base_date > until:
+                    continue  # 기준일 이후 관측은 그 날짜의 화면에 섞지 않는다.
                 previous = latest.get(equipment_id)
                 if previous is None or record.base_date > previous.base_date:
                     latest[equipment_id] = record
@@ -217,7 +231,7 @@ class DashboardSource:
         return
         - 조건에 맞는 원본 관측과 불변 위치 대응 튜플. 새 구역의 Fab·Line은 추정하지 않는다.
         """
-        latest = self.latest_hpa_records()
+        latest = self.latest_hpa_records(query.selection.as_of)
         selection = query.selection
         if selection.group_key is not None:
             return (), ()
@@ -311,7 +325,10 @@ class DashboardSource:
             raise ValueError("기준 관측일이 없습니다.")
         # HPA만 새 날짜에 저장되어도 일반 설비의 분석 기준일을 밀어내지 않는다.
         # HPA만 있는 자료는 최신 관측을 조회할 수 있게 하되 집계는 0대로 유지한다.
-        day = (self.analysis_dates or self.dates)[-1]
+        candidates = _until(self.analysis_dates or self.dates, query.selection.as_of)
+        if not candidates:
+            raise NoObservationBefore(query.selection.as_of)
+        day = candidates[-1]
         current = tuple(r for r in self.records if r.base_date == day)
         selected = self._scope_records(current, query)
         hpa_lookup, hpa_locations = self._hpa_lookup(query)
@@ -354,7 +371,7 @@ class DashboardSource:
         cohort = {r.equipment_id for r in baseline if not r.is_hpa and
                   (any(pm.group_id in model_ids for pm in r.pms) or (not r.pms and group_keys is None))}
         points = []
-        for day in self.analysis_dates:
+        for day in _until(self.analysis_dates, query.selection.as_of):
             observations = tuple(replace(r, pms=tuple(pm for pm in r.pms if pm.group_id in model_ids))
                                  for r in self.records if not r.is_hpa and r.base_date == day
                                  and r.equipment_id in cohort)

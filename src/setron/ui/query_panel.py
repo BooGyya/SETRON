@@ -1,7 +1,9 @@
 """VER3 공통 조회 패널. 모든 조작은 초안만 바꾸며 조회 적용 시에만 신호를 보낸다."""
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
+from datetime import date
+
+from PySide6.QtCore import QDate, QSize, Qt, Signal
+from PySide6.QtWidgets import QComboBox, QDateEdit, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState
@@ -22,7 +24,7 @@ class _WrapRow(QWidget):
         self.grid.setSpacing(12)
         self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        self._arrange(4 if fields else len(widgets))
+        self._arrange(len(widgets))
 
     def minimumSizeHint(self):
         # 현재 한 줄의 너비를 부모 최소 너비로 강제하면, 좁아져야 발생하는 줄바꿈이 막힌다.
@@ -48,7 +50,7 @@ class _WrapRow(QWidget):
     def resizeEvent(self, event):
         columns = max(1, min(len(self.widgets), (event.size().width() + 12) // (self.minimum_width + 12)))
         if self.fields:
-            columns = 4 if columns >= 4 else 2 if columns >= 2 else 1
+            columns = len(self.widgets) if columns >= len(self.widgets) else 2 if columns >= 2 else 1
         self._arrange(columns)
         super().resizeEvent(event)
 
@@ -116,7 +118,8 @@ class QueryPanel(QWidget):
             layout.addWidget(title)
             layout.addWidget(combo)
             fields.append(field)
-        self.fields_row = _WrapRow(fields, 240, fields=True)
+        fields.append(self._date_field())
+        self.fields_row = _WrapRow(fields, 200, fields=True)
         self.card.body.addWidget(self.fields_row)
         self.quick_rows = []
         self._rebuild_quick_rows()
@@ -194,6 +197,52 @@ class QueryPanel(QWidget):
             self.quick_rows.append(row)
             self.card.body.insertWidget(self.card.body.indexOf(self.fields_row) + len(self.quick_rows), row)
 
+    def _date_field(self):
+        """기준일 선택. 비워 두면(오늘) 최신 관측, 과거 날짜면 그날 이전 최신 관측으로 계산한다."""
+        field = QWidget()
+        layout = QVBoxLayout(field)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        title = label("기준일", medium=True, color=INK)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self.date_edit = QDateEdit()
+        self.date_edit.setObjectName("query_as_of")
+        self.date_edit.setProperty("queryField", True)
+        self.date_edit.setAccessibleName("기준일")
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.date_edit.setFixedHeight(38)
+        self.date_edit.setMinimumWidth(120)
+        self.date_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.date_edit.setToolTip("선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
+        self.date_edit.dateChanged.connect(self._choose_date)
+        title.setBuddy(self.date_edit)
+        self.today_button = button("오늘")
+        self.today_button.setProperty("soft", True)
+        self.today_button.setFixedSize(64, 38)
+        self.today_button.setToolTip("기준일을 오늘(최신 관측)로 맞춥니다.")
+        self.today_button.clicked.connect(self.set_today)
+        row.addWidget(self.date_edit, 1)
+        row.addWidget(self.today_button)
+        layout.addWidget(title)
+        layout.addLayout(row)
+        return field
+
+    def _choose_date(self, value):
+        self.set_as_of(value.toPython())
+
+    def set_today(self):
+        self.set_as_of(None)
+
+    def set_as_of(self, value):
+        previous = self.state.draft
+        self.state.set_as_of(value)
+        self._render()
+        if previous != self.state.draft:
+            self.draft_changed.emit(self.state.draft)
+
     def _choose(self, field, index):
         if index >= 0:
             self.select(field, self.combos[field].itemData(index))
@@ -259,6 +308,12 @@ class QueryPanel(QWidget):
             value = getattr(self.state.draft, field)
             combo.setCurrentIndex(next(i for i in range(combo.count()) if combo.itemData(i) == value))
             combo.blockSignals(previous_block)
+        today = date.today()
+        previous_block = self.date_edit.blockSignals(True)
+        self.date_edit.setMaximumDate(QDate(today.year, today.month, today.day))
+        shown = self.state.draft.as_of or today
+        self.date_edit.setDate(QDate(shown.year, shown.month, shown.day))
+        self.date_edit.blockSignals(previous_block)
         for (field, value), item in self.quick_buttons.items():
             item.setChecked(getattr(self.state.draft, field) == value)
         self.draft_summary.setText("선택 중 · " + self.state.describe(self.state.draft))

@@ -330,4 +330,4 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
         assert point.y() + widget.height() <= panel.card.height() - 16
     for item in panel.quick_buttons.values():
         assert item.height() == (36 if item.property("compactChoice") else 40)
-    assert panel.fields_row.columns == (4 if panel.fields_row.width() >= 996 else 2)
+    assert panel.fields_row.columns == (5 if panel.fields_row.width() >= 1048 else 2)

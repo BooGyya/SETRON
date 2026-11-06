@@ -11,7 +11,8 @@ from setron.features.version.schemas import CompareStatus
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import DashboardChart, series_color
 from setron.ui.dashboard_data import (
-    DashboardDrilldown, DashboardSource, HpaClassificationConflict, count_value, missing_sw_count, upgrade_caption,
+    DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, count_value, missing_sw_count,
+    upgrade_caption,
 )
 from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size
 
@@ -366,6 +367,7 @@ class DashboardPage(QWidget):
             return False
         self.snapshot = None
         self._clear_values()
+        self.failure_reason = None
         self.result_status.setText(f"{self._result_label()} 계산 중")
         self.context.setText("적용 #" + str(query.revision) + " · " + query.description)
         try:
@@ -377,6 +379,13 @@ class DashboardPage(QWidget):
             self.result_status.set_tone("danger")
             self.message.setTextFormat(Qt.TextFormat.PlainText)
             self.message.setText(str(error))
+            return False
+        except NoObservationBefore as error:
+            self.result_status.setText("기준일 이전 자료 없음")
+            self.result_status.set_tone("warning")
+            self.message.setTextFormat(Qt.TextFormat.PlainText)
+            self.message.setText(str(error))
+            self.failure_reason = str(error)
             return False
         except (ValueError, RuntimeError):
             self.result_status.setText("결과 표시 실패 · 다시 적용해 주세요")

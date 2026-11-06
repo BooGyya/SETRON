@@ -462,7 +462,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             heatmap.accept_result(query, dashboard.snapshot)
             list_action.setEnabled(equipment.accept_result(query, dashboard.snapshot))
         else:
-            heatmap.fail_query(query)
+            heatmap.fail_query(query, getattr(dashboard, "failure_reason", None))
             equipment.clear("설비 결과 표시 실패 · 다시 적용해 주세요")
 
     window.query_applied.connect(apply_query)
