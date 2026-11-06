@@ -19,9 +19,12 @@ from collections.abc import Iterable, Mapping
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.item.schemas import (
     Application,
+    ApplicationCount,
     Basis,
     EquipmentApplication,
+    FamilyInclusion,
     Item,
+    ItemOverview,
     ItemState,
     ItemSummary,
     PmApplication,
@@ -151,6 +154,31 @@ class ItemCatalog:
             application = Application.UNKNOWN
         return EquipmentApplication(record, application, pms)
 
+    def overview(self, item: Item, records: Iterable[EquipmentRecord]) -> ItemOverview:
+        """AI 답변 카드용 요약: 계열별 포함 버전과 대상 설비의 적용 현황(전체·사업장별·미적용 목록)."""
+        families = []
+        for fid in sorted(self._rows.get(item.item_id, {})):
+            sorted_releases = self.families[fid].sorted
+            states = {s.release.release_version_id: s for s in self.item_versions(item.item_id)
+                      if s.release.family_id == fid}
+
+            def applied(release):
+                state = states.get(release.release_version_id)
+                return state is not None and state.state is ItemState.APPLIED and state.basis is Basis.STORED
+
+            ordered = tuple(r for r in sorted_releases.ordered if applied(r))
+            unordered = tuple(r for r in sorted_releases.unordered if applied(r))
+            families.append(FamilyInclusion(fid, ordered[0] if ordered else None, ordered + unordered))
+
+        summary = self.summarize(item, records)
+        by_site = tuple((site, _application_count(e for e in summary.equipment if e.record.site == site))
+                        for site in summary.sites)
+        missing = tuple(sorted((e for e in summary.equipment if e.application is Application.NOT_APPLIED),
+                               key=lambda e: (e.record.site, e.record.line or "", e.record.equipment_code)))
+        return ItemOverview(item, tuple(families), _application_count(summary.equipment),
+                            tuple((site, count) for site, count in by_site if count.determined or count.unknown),
+                            missing, summary.hpa_excluded)
+
     def summarize(self, item: Item, records: Iterable[EquipmentRecord]) -> ItemSummary:
         """선택한 Item의 설비별 적용 현황 (FUN-034, FUN-035). HPA는 빼고 뺀 대수만 알린다."""
         records = tuple(records)
@@ -159,3 +187,11 @@ class ItemCatalog:
             tuple(self.equipment_application(item.item_id, r) for r in records if not r.is_hpa),
             hpa_excluded=sum(r.is_hpa for r in records),
         )
+
+
+def _application_count(equipment: Iterable[EquipmentApplication]) -> ApplicationCount:
+    """대상 설비의 판정별 대수. 대상 외는 세지 않는다."""
+    counts = {a: 0 for a in Application}
+    for e in equipment:
+        counts[e.application] += 1
+    return ApplicationCount(counts[Application.APPLIED], counts[Application.NOT_APPLIED], counts[Application.UNKNOWN])
