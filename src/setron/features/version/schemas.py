@@ -117,6 +117,7 @@ class VersionComparison:
     status: CompareStatus
     steps_below: int | None = None
     reason: CompareReason | None = None
+    slot: int | None = None     # N 그룹 판정의 칸(-2 ~ 2, groups.Slot). 목표 1개 판정·판단 불가면 None
 
     @property
     def registered(self) -> bool:
