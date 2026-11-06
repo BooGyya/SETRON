@@ -17,7 +17,7 @@ from setron.features.version.schemas import CompareStatus, ReleaseVersion
 from setron.features.version.service import FamilyReleases
 from setron.ui.app import create_window
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding
-from setron.ui.heatmap import RISK_FILL
+from setron.ui.heatmap import RISK_FILL, TileButton
 from setron.ui.heatmap_data import GoalState, equipment_tiles
 from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
 from setron.ui.theme import TONES, install_theme, svg_size
@@ -180,7 +180,8 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     assert request.query is query and request.base_date == DAY and request.equipment_id == 1
     assert tile.isChecked() and "설비 상세" in page.selection_notice.text()
     assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai", "management"}
-    assert window.route == "equipment" and window.pages["equipment"].mode == "detail"
+    assert window.route == "heatmap" and window.pages["equipment"].mode == "detail"
+    assert window.equipment_drawer.isVisible()
     page.view_buttons.button(1).click()
     assert page.tile_buttons[1].isChecked()
     page.tile_buttons[2].click()
@@ -192,11 +193,26 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
 def test_figma_tiles_show_risk_first_and_markers_and_original_icon_size(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    # Figma: 위험 후보는 분홍 채움을 우선하고 '위험' 표시, 위험 미확인은 '?' 표시. 목표 판정은 타일 문구에 남는다.
+    # 위험 후보의 분홍 채움/'위험' 표시는 유지하고 우측 상단의 '?' 장식만 제거한다.
     assert RISK_FILL in page.tile_buttons[2].styleSheet()
-    assert page.tile_buttons[2].marker == "위험" and page.tile_buttons[3].marker == "?"
+    assert page.tile_buttons[2].marker == "위험" and page.tile_buttons[3].marker == ""
     assert page.tile_buttons[2].data.goal is GoalState.MET
     assert page.risk_button.iconSize() == svg_size("7880d.svg")
+
+
+@pytest.mark.parametrize("view", [0, 1])
+@pytest.mark.parametrize("layout", [0, 1])
+def test_no_question_mark_decoration_in_any_tile_view(window, view, layout):
+    window.query_panel.apply_draft()
+    page = window.pages["heatmap"]
+    page.view_buttons.button(view).click()
+    page.layout_buttons.button(layout).click()
+    tiles = page.findChildren(TileButton)
+    assert tiles and all(tile.marker != "?" for tile in tiles)
+    assert all(child.text() != "?" for tile in tiles for child in tile.findChildren(QLabel))
+    assert not any(child.text().startswith("? ") for child in page.findChildren(QLabel))
+    unknown = next(tile for tile in tiles if tile.data.equipment_id == 3)
+    assert "위험 미확인" in unknown.toolTip() and "정보 부족" in unknown.toolTip()
 
 
 def test_hpa_is_hidden_until_special_equipment_toggle(window):

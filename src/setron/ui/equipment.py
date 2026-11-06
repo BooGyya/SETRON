@@ -479,11 +479,12 @@ class EquipmentPage(QWidget):
             caption_label.setText(caption)
 
     def _set_evidence_rows(self, rows):
+        self.evidence_values = tuple(rows)
         while self.evidence_rows.count():
             widget = self.evidence_rows.takeAt(0).widget()
             widget.hide()
             widget.deleteLater()
-        for asset, title, value in rows:
+        for asset, title, value in self.evidence_values:
             row = QWidget()
             line = QHBoxLayout(row)
             line.setContentsMargins(0, 0, 0, 0)
