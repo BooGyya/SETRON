@@ -21,6 +21,7 @@ from setron.ui.database_source import dashboard_source_from_env, sql_exporter_fr
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
 from setron.ui.target_data import describe_targets, initial_targets
+from setron.ui.group_dialog import VersionGroupDialog
 from setron.ui.target_dialog import TargetDialog
 from setron.ui.theme import install_theme
 from setron.ui.version_data import catalog_from_dashboard
@@ -75,7 +76,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.set_target_describer(lambda targets: describe_targets(source, targets))
     window.query_panel.set_target_draft(initial_targets(source))
     window.query_panel.goal_button.setEnabled(True)
-    window.query_panel.goal_button.setToolTip("모델·계열별 목표 N 임시 선택 · 새 계산은 조회 적용 후 · DB 저장 없음")
+    window.query_panel.goal_button.setToolTip("모델·계열별 N 칸(N-2 ~ N+2) 입력·저장 · 새 계산은 조회 적용 후")
     window.query_panel.apply_button.setToolTip("선택한 위치·설비군·목표 N으로 합성 예시 결과를 함께 다시 계산합니다. DB 미연결." if demo
                                               else "선택한 위치·설비군·목표 N으로 저장된 자료를 다시 읽어 계산합니다.")
     window.target_dialog = None
@@ -109,7 +110,33 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dialog.finished.connect(finish)
         dialog.open()
 
-    window.query_panel.goal_button.clicked.connect(open_targets)
+    window.open_single_targets = open_targets  # 목표 N 하나 임시 선택(기존 편집). N 그룹 저장 전 기본 목표에 쓴다.
+    window.group_dialog = None
+
+    def open_groups():
+        if window.group_dialog is not None and window.group_dialog.isVisible():
+            window.group_dialog.raise_()
+            window.group_dialog.activateWindow()
+            return
+        state = window.query_state
+        if hasattr(source, "refresh"):
+            try:
+                source.refresh()  # DB 공급자는 최신 릴리즈·저장 그룹으로 연다.
+            except RuntimeError as error:
+                window.notice.setText(str(error))
+                return
+        dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=state.draft.group_key, parent=window)
+        window.group_dialog = dialog
+
+        def finish(*_):
+            if window.group_dialog is dialog:
+                window.group_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(finish)
+        dialog.open()
+
+    window.query_panel.goal_button.clicked.connect(open_groups)
     window.query_panel.catalog_changed.connect(lambda *_: window.query_panel.goal_button.setEnabled(window.query_state.catalog == source.catalog))
     dashboard = DashboardPage(window.query_state, source, drilldown_connected=True)
     heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
@@ -217,7 +244,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
         window.notice.setVisible(window.route not in ("import", "dashboard", "heatmap") or window.management_saving)
-        list_action.setVisible(window.route != "dashboard")  # 대시보드는 본문 카드의 "설비 목록 →"을 쓴다(Figma).
+        list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)

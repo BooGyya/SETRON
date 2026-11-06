@@ -17,6 +17,7 @@ from setron.features.version.schemas import CompareStatus, ReleaseVersion
 from setron.features.version.service import FamilyReleases
 from setron.ui.app import create_window
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding
+from setron.ui.heatmap import RISK_FILL
 from setron.ui.heatmap_data import GoalState, equipment_tiles
 from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
 from setron.ui.theme import TONES, install_theme, svg_size
@@ -61,6 +62,8 @@ def window(app, source):
     result = create_window(source)
     result.show()
     result.navigate("heatmap")
+    # 범위 검증은 HPA까지 모두 보이는 상태에서 한다. 기본값(HPA 숨김)은 별도 테스트로 확인한다.
+    result.pages["heatmap"].hpa_button.setChecked(True)
     QTest.qWait(30)
     yield result
     result.close()
@@ -186,14 +189,24 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     assert page.selected_id is None and not any(t.isChecked() for t in page.tile_buttons.values())
 
 
-def test_risk_border_does_not_replace_goal_fill_and_original_icon_size(window):
+def test_figma_tiles_show_risk_first_and_markers_and_original_icon_size(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    assert TONES["success"][0] in page.tile_buttons[2].styleSheet()
-    assert "#c9485e" in page.tile_buttons[2].styleSheet()
-    assert page.tile_buttons[2].code_label.text().startswith("! ")
-    assert page.tile_buttons[3].code_label.text().startswith("? ")
+    # Figma: 위험 후보는 분홍 채움을 우선하고 '위험' 표시, 위험 미확인은 '?' 표시. 목표 판정은 타일 문구에 남는다.
+    assert RISK_FILL in page.tile_buttons[2].styleSheet()
+    assert page.tile_buttons[2].marker == "위험" and page.tile_buttons[3].marker == "?"
+    assert page.tile_buttons[2].data.goal is GoalState.MET
     assert page.risk_button.iconSize() == svg_size("7880d.svg")
+
+
+def test_hpa_is_hidden_until_special_equipment_toggle(window):
+    page = window.pages["heatmap"]
+    page.hpa_button.setChecked(False)
+    window.query_panel.apply_draft()
+    hpa = {t.equipment_id for t in page.tiles if t.goal is GoalState.EXCLUDED}
+    assert hpa and not hpa & set(page.tile_buttons)
+    page.hpa_button.setChecked(True)
+    assert hpa <= set(page.tile_buttons)
 
 
 def test_empty_scope_has_no_stale_tiles_or_fake_success(window):
@@ -268,6 +281,7 @@ def test_default_demo_two_modes_and_catalog_mismatch(app):
     window = create_window()
     window.show()
     window.navigate("heatmap")
+    window.pages["heatmap"].hpa_button.setChecked(True)
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     assert len(page.tile_buttons) == len(page.snapshot.equipment_ids) == 63

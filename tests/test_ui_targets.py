@@ -70,7 +70,7 @@ def changed(values, key=(101, 1001), release_id=10011):
 
 
 def open_dialog(window):
-    window.query_panel.goal_button.click()
+    window.open_single_targets()
     QTest.qWait(20)
     assert window.target_dialog is not None
     return window.target_dialog
@@ -307,7 +307,7 @@ def test_open_dialog_rejects_changed_release_choices(window, source):
 def test_open_twice_reuses_one_dialog_and_prefers_selected_group(window):
     window.query_panel.select("group_key", "o3")
     first = open_dialog(window)
-    window.query_panel.goal_button.click()
+    window.open_single_targets()
     assert window.target_dialog is first and first.pairs[first.pair_combo.currentIndex()].group_key == "o3"
     first.reject()
 

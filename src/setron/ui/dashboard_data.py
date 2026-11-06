@@ -7,6 +7,7 @@ from typing import Callable, Mapping
 from setron.features.aggregation.schemas import EquipmentRecord, Summary
 from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
+from setron.features.targets.groups import with_saved_groups
 from setron.features.version.service import FamilyReleases
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
 
@@ -162,6 +163,8 @@ class DashboardSource:
         self.locations, self.families = dict(locations), dict(families)
         self.targets, self.risks = dict(targets), dict(risks)
         self.risk_evaluator = risk_evaluator
+        # 모델·계열별로 저장한 N 그룹(버전(N) 기준 입력). 있으면 목표 N 하나 대신 이 그룹으로 판정한다.
+        self.saved_groups = {}
         self.source_label = source_label
         self.bindings = {b.group_key: tuple(b.model_ids) for b in bindings}
         group_keys = {o.key for o in catalog.groups}
@@ -284,7 +287,7 @@ class DashboardSource:
         return tuple(result)
 
     def _summary(self, records):
-        return summarize(records, self.families, self.targets)
+        return summarize(records, self.families, with_saved_groups(self.targets, self.saved_groups))
 
     def risk_status(self, record):
         """현재 표시하는 PM 범위로 위험을 판정한다. 고정 예시 자료는 기존 표를 사용한다.
@@ -314,6 +317,7 @@ class DashboardSource:
             scoped = DashboardSource(catalog=self.catalog, bindings=tuple(GroupBinding(k, v) for k, v in self.bindings.items()),
                                      records=self.records, locations=self.locations, families=self.families, targets=targets,
                                      risks=self.risks, source_label=self.source_label, risk_evaluator=self.risk_evaluator)
+            scoped.saved_groups = self.saved_groups
             return scoped._snapshot(query)
         return self._snapshot(query)
 
