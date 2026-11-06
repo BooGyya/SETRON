@@ -314,14 +314,16 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
         window.set_query_catalog(preview_catalog())
     window.resize(*size)
     panel = window.query_panel
-    # VER5: 빠른 선택 줄 없이 콤보와 버튼만 보인다. 조회 카드 안쪽 여백은 좌우 20px·상하 16px이다.
+    # Figma: 첫 줄에 기준 날짜·Site·Fab·Line·설비군·초기화(아이콘)·조회 적용, 둘째 줄에 버전(N) 기준 입력.
     assert not any(row.isVisible() for row in panel.quick_rows)
     assert not hasattr(panel, "choice_button")
-    assert [w.text().strip() for w in panel.actions_row.widgets] == ["조건 초기화", "버전(N) 기준 입력", "조회 적용"]
+    assert panel.reset_button.accessibleName() == "조건 초기화" and panel.apply_button.text() == "조회 적용"
+    assert [w.text().strip() for w in panel.actions_row.widgets] == ["버전(N) 기준 입력"]
     QTest.qWait(60)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()
-    for widget in [*panel.combos.values(), *panel.actions_row.widgets]:
+    for widget in [panel.date_edit, *panel.combos.values(), panel.reset_button, panel.apply_button,
+                   *panel.actions_row.widgets]:
         assert widget.isVisible()
         point = widget.mapTo(panel.card, QPoint(0, 0))
         assert point.x() >= 20
@@ -330,4 +332,4 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
         assert point.y() + widget.height() <= panel.card.height() - 16
     for item in panel.quick_buttons.values():
         assert item.height() == (36 if item.property("compactChoice") else 40)
-    assert panel.fields_row.columns == (5 if panel.fields_row.width() >= 1048 else 2)
+    assert panel.fields_row.columns == (6 if panel.fields_row.width() >= 960 else 2)
