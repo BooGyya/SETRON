@@ -3,15 +3,18 @@
 시트 구성
 - 조회 조건: 기준일, 조회 범위, 모델·계열별 목표 N, 위험·노후도 기준, 생성 시각
 - 요약: 물리 설비 수, HPA 제외 수, 적용률, 업그레이드 필요 수, 판단 불가 건수, 위험 후보 수
-- 계열별 현황: 계열별 N 이상·미달·판단 불가 건수와 적용률, 묶은 막대 차트
-- 상태 구성비: 설비·계열 건수의 상태별 구성, 원형 차트
-- 설비별 판정: 설비 1대 × 계열 1행. 설치 버전 원문, 목표 N, N-k, 사유, 위험, 노후도
+- 계열별 현황: 계열별 N 이상·미달·판단 불가 건수와 적용률, 묶은 막대 차트.
+  그 아래에 계열별 단계(N+1 이상·N·N-1·N-2 이하·비교 불가) 건수와 단계 색 누적 막대 차트
+- 상태 구성비: 설비·계열 건수의 단계별 구성, 단계 색 원형 차트
+- 설비별 판정: 설비 1대 × 계열 1행. 설치 버전 원문, 목표 N, N-k, 사유, 위험, 노후도. 판정 칸은 단계 색으로 칠한다
 - 우선순위: BE-017의 순위 목록과 확인 필요 목록
 - 날짜별 추이: 두 날짜 이상일 때만. 날짜별 적용률 꺾은선 차트
 
 차트는 모두 같은 시트의 표 셀을 참조하므로 Excel에서 셀을 고치면 차트도 바뀐다.
 적용률은 판단 불가를 분모에서 뺀 값이고(BE-012), 계산할 수 없으면 빈 셀에 '계산 불가'를 적는다.
-- 구성 트리맵: 계열 > 상태(N 이상·N 미만·판단 불가)별 설비·계열 건수. openpyxl이 트리맵을 만들지 못해 저장 뒤
+- 단계와 색은 라인별 히트맵과 같다 (``FamilyStatus.tier``, ``line_heatmap.HEATMAP_COLORS``). 단계 합계는
+  N 이상 = N+1 이상 + N, N 미만 = N-1 + N-2 이하, 판단 불가 = 비교 불가로 기존 3단계 건수와 맞는다.
+- 구성 트리맵: 계열 > 단계별 설비·계열 건수. openpyxl이 트리맵을 만들지 못해 저장 뒤
   :mod:`setron.features.export.treemap`이 Excel 2016 이상의 차트(chartEx)를 넣는다. 그 미만 버전에서는 안내 도형이 보인다.
 - 라인별 히트맵: 사이트 → 계열 → 라인 → 호기 칸을 판정 색으로 칠한 표 (5차 멘토 수동 양식,
   :mod:`setron.features.export.line_heatmap`). 설비가 없어도 범례와 안내를 적은 시트를 만든다.
@@ -19,6 +22,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 import os
@@ -27,16 +31,23 @@ from tempfile import NamedTemporaryFile
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
-from openpyxl.styles import Font
+from openpyxl.chart.series import DataPoint
+from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
 from setron.features.aggregation.schemas import FamilyStatus, RateCount
 from setron.features.aging.schemas import EquipmentAge
-from setron.features.export.line_heatmap import LINE_HEATMAP_SHEET, line_heatmap_groups, write_line_heatmap
+from setron.features.export.line_heatmap import (
+    HEATMAP_COLORS,
+    LINE_HEATMAP_SHEET,
+    line_heatmap_groups,
+    write_line_heatmap,
+)
 from setron.features.export.schemas import ExportResult, ExportStatus, StatusReport
 from setron.features.export.treemap import add_treemap
 from setron.features.export.xlsx_cells import ReportTextWriter
 from setron.features.risk.schemas import EquipmentRisk, RiskStatus
+from setron.features.version.groups import TIER_LABELS, Tier
 from setron.features.version.schemas import CompareStatus
 
 STATUS_LABELS = {
@@ -44,6 +55,8 @@ STATUS_LABELS = {
     CompareStatus.BELOW: "N 미만",
     CompareStatus.UNDETERMINED: "판단 불가",
 }
+TIERS = (Tier.ABOVE, Tier.AT, Tier.ONE_BELOW, Tier.TWO_BELOW, Tier.UNKNOWN)  # 최신 → 오래됨, 비교 불가는 마지막
+TIER_NOTE = "N 이상 = N+1 이상 + N, N 미만 = N-1 + N-2 이하, 판단 불가 = 비교 불가. 색은 라인별 히트맵과 같습니다."
 NOT_CALCULATED = "미계산"
 PERCENT = "0.0%"
 
@@ -66,7 +79,7 @@ def build_status_report(report: StatusReport) -> Workbook:
     if len(report.trend) > 1:
         _trend(book.create_sheet("날짜별 추이"), report, text)
     if treemap_rows(report):
-        _rows(book.create_sheet(TREEMAP_SHEET), ["계열", "상태", "건수"], treemap_rows(report), text=text)
+        _rows(book.create_sheet(TREEMAP_SHEET), ["계열", "단계", "건수"], treemap_rows(report), text=text)
     write_line_heatmap(book.create_sheet(LINE_HEATMAP_SHEET), line_heatmap_groups(report), text)
     text.finish()  # 긴값 분할 시트는 여기서 마지막에 만들어진다
     return book
@@ -86,7 +99,7 @@ def save_status_report(report: StatusReport, path: str | Path) -> ExportResult:
         book.save(temporary)
         rows = treemap_rows(report)
         if rows:
-            add_treemap(temporary, TREEMAP_SHEET, rows, title="계열·상태별 구성 (설비·계열 건)", colors=TREEMAP_COLORS)
+            add_treemap(temporary, TREEMAP_SHEET, rows, title="계열·단계별 구성 (설비·계열 건)", colors=TREEMAP_COLORS)
         os.replace(temporary, path)
     except PermissionError:
         message = "파일을 저장할 수 없습니다. 같은 이름의 파일이 Excel에서 열려 있는지, 폴더 쓰기 권한이 있는지 확인해 주세요."
@@ -159,20 +172,62 @@ def _families(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) ->
     chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=len(counts) + 1))
     sheet.add_chart(chart, "H2")
 
+    # 단계별 건수: 적용률 표 아래, 차트 높이(약 15행)를 비켜 놓는다.
+    start = max(len(counts) + 4, 20)
+    sheet.cell(start, 1, "계열별 단계 (건)").font = Font(bold=True)
+    sheet.cell(start, 3, TIER_NOTE)
+    tiers = family_tier_counts(report)
+    _rows(sheet, ["계열", *(TIER_LABELS[t] for t in TIERS)],
+          [[_family_name(report, family_id), *(counter[t] for t in TIERS)] for family_id, counter in tiers],
+          start=start + 1, text=text)
+    for offset, tier in enumerate(TIERS, start=2):
+        _fill(sheet.cell(start + 1, offset), tier)
+    stacked = BarChart()
+    stacked.type, stacked.grouping, stacked.overlap = "bar", "stacked", 100
+    stacked.title = "계열별 단계 구성 (건)"
+    stacked.add_data(Reference(sheet, min_col=2, max_col=1 + len(TIERS), min_row=start + 1,
+                               max_row=start + 1 + len(tiers)), titles_from_data=True)
+    stacked.set_categories(Reference(sheet, min_col=1, min_row=start + 2, max_row=start + 1 + len(tiers)))
+    for series, tier in zip(stacked.series, TIERS):
+        series.graphicalProperties.solidFill = HEATMAP_COLORS[tier]
+    sheet.add_chart(stacked, f"H{start + 1}")
+
 
 def _composition(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
-    summary = report.summary
-    _rows(sheet, ["상태", "건수"], [
-        ["N 이상", summary.compliant],
-        ["N 미만", summary.below],
-        ["판단 불가", summary.undetermined],
-    ], text=text)
+    counter = Counter()
+    for _, counts in family_tier_counts(report):
+        counter.update(counts)
+    _rows(sheet, ["단계", "건수"], [[TIER_LABELS[tier], counter[tier]] for tier in TIERS], text=text)
+    for row, tier in enumerate(TIERS, start=2):
+        _fill(sheet.cell(row, 1), tier)
     sheet["D1"] = "설비 1대 × 계열 1건 기준. 판단 불가도 포함한 전체 건수의 구성이라 적용률과 분모가 다릅니다."
+    sheet["D2"] = TIER_NOTE
     chart = PieChart()
-    chart.title = "상태 구성비 (건)"
-    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=4), titles_from_data=True)
-    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=4))
-    sheet.add_chart(chart, "D3")
+    chart.title = "단계 구성비 (건)"
+    last = len(TIERS) + 1
+    chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=last), titles_from_data=True)
+    chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=last))
+    for index, tier in enumerate(TIERS):
+        point = DataPoint(idx=index)
+        point.graphicalProperties.solidFill = HEATMAP_COLORS[tier]
+        chart.series[0].dPt.append(point)
+    sheet.add_chart(chart, "D4")
+
+
+def family_tier_counts(report: StatusReport) -> list[tuple[int, Counter]]:
+    """계열별 단계 건수(설비 1대 × 계열 1건). 계열과 순서는 적용률 표(``summary.by_family``)와 같다."""
+    counts: dict[int, Counter] = {count.family_id: Counter() for count in report.summary.by_family}
+    for equipment in report.summary.equipment:
+        for family in equipment.families:
+            if family.family_id in counts:
+                counts[family.family_id][family.tier] += 1
+    return list(counts.items())
+
+
+def _fill(cell, tier: Tier) -> None:
+    cell.fill = PatternFill("solid", fgColor=HEATMAP_COLORS[tier])
+    if tier is Tier.ABOVE:  # 진초록 위 글자는 흰색으로
+        cell.font = Font(bold=cell.font.bold, color="FFFFFF")
 
 
 def _equipment(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
@@ -180,7 +235,7 @@ def _equipment(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -
     ages = {a.record.equipment_id: a for a in report.ages} if report.ages is not None else None
     header = ["설비", "Site", "Line", "모델", "계열", "설치 버전", "목표 N", "판정", "사유", "PM 버전 불일치",
               "위험", "위험 사유", "노후도", "경과 기간"]
-    rows = []
+    rows, tiers = [], []
     for equipment in report.summary.equipment:
         record = equipment.record
         risk = _risk_cells(risks.get(record.equipment_id) if risks is not None else None, risks is not None)
@@ -192,7 +247,11 @@ def _equipment(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -
                 _family_name(report, family.family_id), _versions(family), _target(family),
                 _family_label(family), _reason(family), "예" if family.pm_mismatch else "", *risk, *age,
             ])
+            tiers.append(family.tier)
     _rows(sheet, header, rows, text=text)
+    judgment = header.index("판정") + 1
+    for row, tier in enumerate(tiers, start=2):
+        _fill(sheet.cell(row, judgment), tier)
 
 
 def _priority(sheet: Worksheet, report: StatusReport, text: ReportTextWriter) -> None:
@@ -267,18 +326,14 @@ def _percent_column(sheet: Worksheet, column: str, count: int) -> None:
 
 
 TREEMAP_SHEET = "구성 트리맵"
-# 앱 상태 색상(theme.TONES의 테두리색)과 맞춘다: N 이상 초록, N 미만 노랑, 판단 불가 회색
-TREEMAP_COLORS = {"N 이상": "208457", "N 미만": "D5B660", "판단 불가": "B8C0CC"}
+# 라인별 히트맵과 같은 단계 색
+TREEMAP_COLORS = {TIER_LABELS[tier]: HEATMAP_COLORS[tier] for tier in TIERS}
 
 
 def treemap_rows(report: StatusReport) -> list[tuple[str, str, int]]:
-    """트리맵 표: (계열, 상태, 건수). 0건은 넣지 않는다(트리맵에서 크기 0 칸은 보이지 않음)."""
-    rows = []
-    for count in report.summary.by_family:
-        for label, value in (("N 이상", count.compliant), ("N 미만", count.below), ("판단 불가", count.undetermined)):
-            if value:
-                rows.append((_family_name(report, count.family_id), label, value))
-    return rows
+    """트리맵 표: (계열, 단계, 건수). 0건은 넣지 않는다(트리맵에서 크기 0 칸은 보이지 않음)."""
+    return [(_family_name(report, family_id), TIER_LABELS[tier], counter[tier])
+            for family_id, counter in family_tier_counts(report) for tier in TIERS if counter[tier]]
 
 
 def _family_name(report: StatusReport, family_id: int) -> str:

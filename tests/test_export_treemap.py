@@ -9,8 +9,10 @@ import zipfile
 
 from openpyxl import load_workbook
 
+from setron.features.export.line_heatmap import HEATMAP_COLORS
 from setron.features.export.service import TREEMAP_COLORS, TREEMAP_SHEET, save_status_report, treemap_rows
 from setron.features.export.treemap import PARENT_COLOR, _point_colors
+from setron.features.version.groups import Tier
 from test_export_service import report
 
 
@@ -38,11 +40,21 @@ def test_report_has_treemap_sheet_table_and_chart_parts(tmp_path):
 
 def test_point_colors_follow_excel_tree_order():
     """점 번호: 상위 범주 칸, 이어서 그 하위 칸들 (표 순서)."""
-    rows = [("O2", "N 이상", 1), ("O2", "N 미만", 2), ("O3", "N 이상", 1)]
+    rows = [("O2", "N", 1), ("O2", "N-2 이하", 2), ("O3", "N+1 이상", 1)]
     assert _point_colors(rows, TREEMAP_COLORS) == [
-        (0, PARENT_COLOR), (1, TREEMAP_COLORS["N 이상"]), (2, TREEMAP_COLORS["N 미만"]),
-        (3, PARENT_COLOR), (4, TREEMAP_COLORS["N 이상"]),
+        (0, PARENT_COLOR), (1, TREEMAP_COLORS["N"]), (2, TREEMAP_COLORS["N-2 이하"]),
+        (3, PARENT_COLOR), (4, TREEMAP_COLORS["N+1 이상"]),
     ]
+
+
+def test_treemap_rows_use_five_tiers_with_heatmap_colors():
+    rows = treemap_rows(report())
+
+    assert {label for _, label, _ in rows} <= {"N+1 이상", "N", "N-1", "N-2 이하", "비교 불가"}
+    assert sum(value for *_, value in rows) == 5  # 설비·계열 건 전체 (판단 불가 포함)
+    assert TREEMAP_COLORS == {"N+1 이상": HEATMAP_COLORS[Tier.ABOVE], "N": HEATMAP_COLORS[Tier.AT],
+                              "N-1": HEATMAP_COLORS[Tier.ONE_BELOW], "N-2 이하": HEATMAP_COLORS[Tier.TWO_BELOW],
+                              "비교 불가": HEATMAP_COLORS[Tier.UNKNOWN]}
 
 
 def test_report_without_counts_has_no_treemap(tmp_path):
