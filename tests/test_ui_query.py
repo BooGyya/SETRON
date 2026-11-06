@@ -314,11 +314,11 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
         window.set_query_catalog(preview_catalog())
     window.resize(*size)
     panel = window.query_panel
-    # Figma: 첫 줄에 기준 날짜·Site·Fab·Line·설비군·초기화(아이콘)·조회 적용, 둘째 줄에 버전(N) 기준 입력.
+    # 첫 줄은 위치·날짜, 둘째 줄은 목표 N 입력과 독립적인 버전 다중 조회.
     assert not any(row.isVisible() for row in panel.quick_rows)
     assert not hasattr(panel, "choice_button")
     assert panel.reset_button.accessibleName() == "조건 초기화" and panel.apply_button.text() == "조회 적용"
-    assert [w.text().strip() for w in panel.actions_row.widgets] == ["버전(N) 기준 입력"]
+    assert [w.text().strip() for w in panel.actions_row.widgets] == ["버전(N) 기준 입력", "조회 버전 · 전체"]
     QTest.qWait(60)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()

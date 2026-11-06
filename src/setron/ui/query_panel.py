@@ -1,12 +1,13 @@
 """VER3 공통 조회 패널. 모든 조작은 초안만 바꾸며 조회 적용 시에만 신호를 보낸다."""
 
+from dataclasses import replace
 from datetime import date
 
 from PySide6.QtCore import QDate, QSize, Qt, Signal
 from PySide6.QtWidgets import QComboBox, QDateEdit, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState
+from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState, version_filter_caption
 from setron.ui.theme import INK, SECONDARY
 
 
@@ -147,8 +148,14 @@ class QueryPanel(QWidget):
         self.goal_button.setFixedSize(170, 38)
         self.goal_button.setEnabled(False)
         self.goal_button.setToolTip("목표 N 편집은 별도 작업입니다.")
-        self.actions_row = _WrapRow([self.goal_button], 170)
+        self.version_button = button("조회 버전 · 전체")
+        self.version_button.setMinimumSize(190, 38)
+        self.version_button.setEnabled(False)
+        self.version_button.setToolTip("버전 다중 선택 조회 · 목표 N과 별개 · 선택 후 조회 적용")
+        self.actions_row = _WrapRow([self.goal_button, self.version_button], 190)
         self.card.body.addWidget(self.actions_row)
+        self.version_pending = label("버전 선택 변경 · 조회 적용 필요", 12, color=SECONDARY)
+        self.card.body.addWidget(self.version_pending)
         self.hint = label("선택 변경·초기화는 자동 적용되지 않습니다. ‘조회 적용’을 눌러 확정하세요.",
                           13, color=SECONDARY, wrap=True)
         self.card.body.addWidget(self.hint)
@@ -263,6 +270,9 @@ class QueryPanel(QWidget):
     def reset_draft(self):
         self.set_draft(QuerySelection())
 
+    def set_version_filter(self, value):
+        self.set_draft(replace(self.state.draft, versions=value))
+
     def set_target_describer(self, describer):
         self.target_describer = describer
         self._render()
@@ -290,6 +300,10 @@ class QueryPanel(QWidget):
             self.draft_changed.emit(self.state.draft)
 
     def _render(self):
+        self.version_button.setText(version_filter_caption(self.state.draft.versions))
+        self.version_button.setAccessibleName("버전 다중 선택 조회 · " + self.version_button.text())
+        applied_versions = self.state.applied.selection.versions if self.state.applied is not None else None
+        self.version_pending.setVisible(self.state.draft.versions != applied_versions)
         for field, options, caption in (
             ("site_key", self.state.catalog.sites, "Site"),
             ("fab_key", self.state.available_fabs(), "Fab"),
