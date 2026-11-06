@@ -10,6 +10,7 @@ from setron.features.aggregation.service import summarize
 from setron.features.export.query_result import (ALL_COLUMNS, CONDITION_SHEET, RESULT_SHEET, ExportRange,
                                                  QueryColumn, QueryResultExport, build_query_result,
                                                  default_filename, range_counts, save_query_result, source_labels)
+from setron.features.export.schemas import TargetRow
 from setron.features.version.schemas import ReleaseVersion
 from setron.features.version.service import FamilyReleases
 from test_management_service import observe
@@ -56,6 +57,22 @@ def table(sheet):
     return [list(row) for row in sheet.iter_rows(values_only=True)]
 
 
+def condition_values(sheet):
+    """조회 조건 시트의 위쪽 항목·값 줄 (빈 줄 전까지)."""
+    rows = []
+    for row in table(sheet)[1:]:
+        if row[0] is None:
+            break
+        rows.append((row[0], row[1]))
+    return dict(rows)
+
+
+def target_table(sheet):
+    rows = table(sheet)
+    start = next(i for i, row in enumerate(rows) if row[0] == "모델·계열별 목표 N")
+    return [row[:3] for row in rows[start + 2:] if row[0] is not None]
+
+
 def test_range_counts_follow_shown_equipment_and_exclude_hpa():
     assert range_counts(export()) == {ExportRange.SHOWN: 3, ExportRange.ALL: 4}
     assert range_counts(export(shown_ids=None)) == {ExportRange.SHOWN: 4, ExportRange.ALL: 4}
@@ -78,20 +95,26 @@ def test_all_range_includes_compliant_equipment_but_not_hpa():
     assert [r[0] for r in rows[1:]] == ["DM-001", "DM-002", "DM-003", "DM-004", "DM-004"]
 
 
-def test_chosen_columns_keep_screen_order_and_condition_sheet_is_optional():
+def test_chosen_columns_keep_screen_order_and_scope_stays_without_recognized_conditions():
+    """요청 인식 조건을 꺼도 조회 조건 시트는 남기고 질문 줄만 뺀다 (BE-021: 범위·기준일·N 확인)."""
     book = build_query_result(export(), columns=(QueryColumn.JUDGMENT, QueryColumn.EQUIPMENT), include_conditions=False)
 
-    assert book.sheetnames == [RESULT_SHEET]
+    assert book.sheetnames == [RESULT_SHEET, CONDITION_SHEET]
     assert table(book[RESULT_SHEET])[0] == ["설비명", "판정"]
+    values = condition_values(book[CONDITION_SHEET])
+    assert "질문" not in values and "요청 인식" not in values
+    assert values["조회 범위 · Site"] == "평택" and values["기준일"] == "2026-10-21"
+    assert target_table(book[CONDITION_SHEET])
     with pytest.raises(ValueError, match="열을 하나 이상"):
         build_query_result(export(), columns=())
 
 
 def test_condition_sheet_records_question_conditions_range_and_time():
-    values = dict(table(build_query_result(export())[CONDITION_SHEET])[1:])
+    values = condition_values(build_query_result(export())[CONDITION_SHEET])
 
     assert values["질문"] == "평택 O2 중 목표 N 미만인 설비만 보여줘"
-    assert values["요청 인식 · Site"] == "평택" and values["요청 인식 · 판정"] == "목표 N 미만"
+    assert values["요청 인식"].startswith("아래 조회 범위는 AI가")
+    assert values["조회 범위 · Site"] == "평택" and values["조회 범위 · 판정"] == "목표 N 미만"
     assert values["기준일"] == "2026-10-21"
     assert values["내보낸 범위"] == "조회 결과 3대 (4행 · 설비 1대 × 계열 1개)"
     assert values["같은 조건의 전체 설비"] == "4대 · HPA 1대 제외"
@@ -129,3 +152,13 @@ def test_source_labels_use_stored_sheet_cell_and_batch(revision_storage):  # noq
 
     batch = snapshot.software[0].batch_id
     assert labels == {(snapshot.equipment_id, 1): f"현황 · E1 · 입력 작업 {batch}"}
+
+
+def test_target_table_uses_given_targets_or_collects_them_from_results():
+    """모델·계열별 목표 N 표: 넘겨받은 목표를 그대로 쓰고, 없으면 판정에 쓰인 목표를 모은다."""
+    given = export(targets=(TargetRow("M-O2", "O2", "v2.2"), TargetRow("M-O5", "O5", None)))
+    assert target_table(build_query_result(given)[CONDITION_SHEET]) == [
+        ["M-O2", "O2", "v2.2"], ["M-O5", "O5", "미지정 (판단 불가)"]]
+
+    assert target_table(build_query_result(export())[CONDITION_SHEET]) == [
+        ["M-O2", "O2", "v2.2"], ["M-O2", "O3", "v3.1"]]

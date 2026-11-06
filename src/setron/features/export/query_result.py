@@ -3,7 +3,10 @@
 화면에서 고르는 것
 - 내보낼 범위: 조회 결과(답변 표에 보인 설비) / 같은 조건의 전체 설비(목표 달성 설비까지)
 - 포함할 열: 설비명 · 원본 구역 · 설치 버전 · 목표 N · 판정 · 원본 출처
-- 요청 인식 조건: 고르면 두 번째 시트 "조회 조건"에 질문과 조건을 적는다
+- 요청 인식 조건: 고르면 "조회 조건" 시트에 질문과 AI가 인식한 조건 줄을 넣는다
+
+"조회 조건" 시트는 항상 만든다. 명세 BE-021·FUN-030은 파일에서 조회 범위·기준 날짜·모델·계열별 N을
+확인할 수 있어야 한다고 정해 두었으므로, 기준일·범위·모델·계열별 목표 N 표는 체크와 관계없이 넣는다.
 
 행은 설비 1대 × 계열 1개다(적용률 계산 1건과 같음). HPA는 공통 집계와 같이 넣지 않는다.
 원본 출처는 저장된 시트·셀과 입력 작업 번호다. 통합문서 파일 이름은 DB에 저장하지 않아 적지 않는다.
@@ -25,7 +28,7 @@ from openpyxl.styles import Font
 
 from setron.features.aggregation.schemas import Summary
 from setron.features.equipment.schemas import StoredSnapshot
-from setron.features.export.schemas import ExportResult, ExportStatus
+from setron.features.export.schemas import ExportResult, ExportStatus, TargetRow
 from setron.features.export.service import _family_label, _target, _versions
 from setron.features.export.xlsx_cells import ReportTextWriter
 
@@ -57,6 +60,7 @@ class QueryResultExport:
     - ``shown_ids``: 답변 표에 보인 설비 ID. None이면 전체와 같다.
     - ``conditions``: 요청 인식 조건 (이름, 값). 예: ("Site", "평택"), ("설비군", "M-O2").
     - ``sources``: (설비 ID, 계열 ID) → 원본 출처 문구. :func:`source_labels`로 만든다.
+    - ``targets``: 조회에 쓴 모델·계열별 목표 N. 비어 있으면 판정 결과에 쓰인 목표를 모아 적는다.
     """
 
     summary: Summary
@@ -65,6 +69,7 @@ class QueryResultExport:
     shown_ids: tuple[int, ...] | None = None
     family_names: Mapping[int, str] = field(default_factory=dict)
     sources: Mapping[tuple[int, int], str] = field(default_factory=dict)
+    targets: tuple[TargetRow, ...] = ()
     created_at: datetime | None = None
 
 
@@ -84,7 +89,10 @@ def default_filename(export: QueryResultExport) -> str:
 
 def build_query_result(export: QueryResultExport, *, scope: ExportRange = ExportRange.SHOWN,
                        columns: Sequence[QueryColumn] = ALL_COLUMNS, include_conditions: bool = True) -> Workbook:
-    """조회 결과 시트(와 조회 조건 시트)를 만든다. 열은 ``columns`` 순서가 아니라 화면 순서로 둔다."""
+    """조회 결과 시트와 조회 조건 시트를 만든다. 열은 ``columns`` 순서가 아니라 화면 순서로 둔다.
+
+    ``include_conditions``가 False이면 조회 조건 시트에서 질문과 요청 인식 조건 줄만 뺀다.
+    """
     chosen = tuple(c for c in ALL_COLUMNS if c in set(columns))
     if not chosen:
         raise ValueError("포함할 열을 하나 이상 골라 주세요.")
@@ -103,8 +111,8 @@ def build_query_result(export: QueryResultExport, *, scope: ExportRange = Export
     sheet.freeze_panes = "A2"
     for column, name in enumerate(chosen, start=1):
         sheet.column_dimensions[sheet.cell(1, column).column_letter].width = 28 if name is QueryColumn.SOURCE else 16
-    if include_conditions:
-        _conditions(book.create_sheet(CONDITION_SHEET), export, scope, chosen, len(rows), text)
+    _conditions(book.create_sheet(CONDITION_SHEET), export, scope, chosen, len(rows), text,
+                recognized=include_conditions)
     text.finish()
     return book
 
@@ -180,12 +188,18 @@ def _rows(export: QueryResultExport, scope: ExportRange) -> list[dict[QueryColum
 
 
 def _conditions(sheet, export: QueryResultExport, scope: ExportRange, columns: tuple[QueryColumn, ...],
-                count: int, text: ReportTextWriter) -> None:
+                count: int, text: ReportTextWriter, *, recognized: bool) -> None:
+    """조회 조건 시트. 기준일·조회 범위·모델·계열별 목표 N은 항상 적는다 (BE-021).
+
+    ``recognized``이면 질문 원문과, 조회 범위가 AI가 질문에서 인식한 조건이라는 안내를 함께 적는다.
+    """
     counts = range_counts(export)
     created = export.created_at or datetime.now()
+    asked = [("질문", export.question or "(질문 없음)"),
+             ("요청 인식", "아래 조회 범위는 AI가 질문에서 인식한 조건입니다.")] if recognized else []
     rows = [
-        ("질문", export.question or "(질문 없음)"),
-        *(("요청 인식 · " + name, value) for name, value in export.conditions),
+        *asked,
+        *(("조회 범위 · " + name, value) for name, value in export.conditions),
         ("기준일", export.summary.base_date.isoformat() if export.summary.base_date else "기준일 없음"),
         ("내보낸 범위", f"{scope.value} {counts[scope]}대 ({count}행 · 설비 1대 × 계열 1개)"),
         ("같은 조건의 전체 설비", f"{counts[ExportRange.ALL]}대 · HPA {export.summary.hpa_excluded}대 제외"),
@@ -198,5 +212,26 @@ def _conditions(sheet, export: QueryResultExport, scope: ExportRange, columns: t
         text.write(sheet.cell(number, 2), value, "값")
         if number == 1:
             sheet.cell(number, 1).font = sheet.cell(number, 2).font = Font(bold=True)
+    start = len(rows) + 3
+    sheet.cell(start, 1).font = Font(bold=True)
+    text.write(sheet.cell(start, 1), "모델·계열별 목표 N", "항목")
+    for offset, values in enumerate((("모델", "계열", "목표 N"), *_target_rows(export)), start=1):
+        for column, value in enumerate(values, start=1):
+            text.write(sheet.cell(start + offset, column), value, "목표 N")
+            if offset == 1:
+                sheet.cell(start + offset, column).font = Font(bold=True)
     sheet.column_dimensions["A"].width = 24
     sheet.column_dimensions["B"].width = 70
+    sheet.column_dimensions["C"].width = 24
+
+
+def _target_rows(export: QueryResultExport) -> list[tuple[str, str, str]]:
+    """모델·계열별 목표 N 줄. 넘겨받은 목표가 없으면 판정에 쓰인 목표를 (모델, 계열)별로 모은다."""
+    if export.targets:
+        return [(t.model_name, t.family_name, t.version_raw or "미지정 (판단 불가)") for t in export.targets]
+    found = {}
+    for equipment in export.summary.equipment:
+        for family in equipment.families:
+            name = export.family_names.get(family.family_id, f"계열 {family.family_id}")
+            found.setdefault((equipment.record.model_name, name), _target(family))
+    return [(model, family, target) for (model, family), target in sorted(found.items())]

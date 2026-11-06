@@ -175,8 +175,7 @@ class ItemCatalog:
                         for site in summary.sites)
         missing = tuple(sorted((e for e in summary.equipment if e.application is Application.NOT_APPLIED),
                                key=lambda e: (e.record.site, e.record.line or "", e.record.equipment_code)))
-        return ItemOverview(item, tuple(families), _application_count(summary.equipment),
-                            tuple((site, count) for site, count in by_site if count.determined or count.unknown),
+        return ItemOverview(item, tuple(families), _application_count(summary.equipment), by_site,
                             missing, summary.hpa_excluded)
 
     def summarize(self, item: Item, records: Iterable[EquipmentRecord]) -> ItemSummary:
@@ -190,8 +189,9 @@ class ItemCatalog:
 
 
 def _application_count(equipment: Iterable[EquipmentApplication]) -> ApplicationCount:
-    """대상 설비의 판정별 대수. 대상 외는 세지 않는다."""
+    """판정별 대수. 대상 외도 따로 센다 (적용률 분모에는 넣지 않는다)."""
     counts = {a: 0 for a in Application}
     for e in equipment:
         counts[e.application] += 1
-    return ApplicationCount(counts[Application.APPLIED], counts[Application.NOT_APPLIED], counts[Application.UNKNOWN])
+    return ApplicationCount(counts[Application.APPLIED], counts[Application.NOT_APPLIED], counts[Application.UNKNOWN],
+                            counts[Application.NOT_TARGET])
