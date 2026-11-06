@@ -93,6 +93,11 @@ class ManagementGateway:
         with self._storage() as storage:
             return ManagementService(storage, context).create_risk_rule(values)
 
+    def preview_risk_rule(self, values, context=RefreshContext()):
+        """위험 기준을 저장하지 않고 등록했을 때의 영향(릴리즈·설비)을 돌려준다 (BE-015). 값 형식은 ``create_risk_rule``과 같다."""
+        with self._storage() as storage:
+            return ManagementService(storage, context).preview_risk_rule(values)
+
     def version_order_candidates(self, family_id):
         """계열의 릴리즈 기록과 릴리즈노트 나열 순서 후보(데이터 파트 규칙)를 함께 돌려준다. 저장하지 않는다."""
         from setron.features.release.order_candidates import suggest_version_orders
