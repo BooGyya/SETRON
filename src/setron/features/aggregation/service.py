@@ -25,10 +25,12 @@ from setron.features.aggregation.schemas import (
     Summary,
 )
 from setron.features.version.schemas import CompareReason, CompareStatus, VersionComparison
+from setron.features.version.groups import VersionGroups, compare_with_groups
 from setron.features.version.service import FamilyReleases, compare_version
 
-# (모델 ID, 계열 ID) → 목표 N의 릴리즈 ID. 모델·계열마다 따로 지정한다 (REQ-051).
-Targets = Mapping[tuple[int, int], int]
+# (모델 ID, 계열 ID) → 목표 N의 릴리즈 ID 또는 N 그룹(N-2 ~ N+2). 모델·계열마다 따로 지정한다 (REQ-051).
+# N 그룹은 멘토 5차 요청 1번(팀 결정 2026-11-05)이며, 릴리즈 ID 하나인 기존 목표는 그대로 판정한다.
+Targets = Mapping[tuple[int, int], "int | VersionGroups"]
 
 
 def family_status(equipment_id: int, family_id: int, pms: Iterable[PmComparison]) -> FamilyStatus:
@@ -115,8 +117,10 @@ def _compare_pm(pm, families: Mapping[int, FamilyReleases], targets: Targets) ->
         return VersionComparison(
             pm.version_raw, None, None, CompareStatus.UNDETERMINED, reason=CompareReason.NO_RELEASE_DATA
         )
-    target_id = targets.get((pm.group_id, pm.family_id))
-    return compare_version(family, pm.version_raw, target_id, release_version_id=pm.release_version_id)
+    target = targets.get((pm.group_id, pm.family_id))
+    if isinstance(target, VersionGroups):
+        return compare_with_groups(family, pm.version_raw, target, release_version_id=pm.release_version_id)
+    return compare_version(family, pm.version_raw, target, release_version_id=pm.release_version_id)
 
 
 def _count(units: Iterable[FamilyStatus]) -> dict[str, int]:
