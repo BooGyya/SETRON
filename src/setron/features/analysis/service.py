@@ -1,9 +1,9 @@
 """AI 원인·현황 설명에 보낼 자료를 만들고, 답변의 숫자를 자료와 대조한다 (명세 BE-019).
 
 자료 구성 (FUN-036·038·039)
-- 조회 조건: 기준일, 조회 범위, 계열별 목표 N
-- 전체 현황과 사업장별 현황: 사업장마다 공통 집계(``summarize``)를 다시 실행한 값
-- 버전 분포: 계열별 설치 버전마다 설비 수와 판정
+- 조회 조건: 기준일, 조회 범위, 계열별 목표 N, 단계 기준 설명
+- 전체 현황과 사업장별 현황: 사업장마다 공통 집계(``summarize``)를 다시 실행한 값과 단계별 건수
+- 버전 분포: 계열별 단계별 설비 수, 설치 버전마다 설비 수·판정·단계
 - 위험: 사업장별 위험·미확인 설비 수와 사유별 설비
 - 통일 지연 근거: N 미만 설비의 설치 버전과 목표 N 사이에서, 목표 N에는 포함되고 설치 버전에는
   포함되지 않은 Item. 저장된 버전별 Item 상태만 쓴다 (BE-014)
@@ -13,6 +13,8 @@
 
 정한 규칙
 - 적용률은 판단 불가를 분모에서 뺀 값이며, 계산할 수 없으면 None(null)으로 보낸다.
+- 단계는 히트맵 색과 같은 ``FamilyStatus.tier``(N+1 이상·N·N-1·N-2 이하·비교 불가)다. 다섯 단계를 늘 모두 보내
+  0건인 단계도 '없음'으로 설명할 수 있게 한다.
 - 숫자 검사는 답변·근거·추정·미확인 문장의 숫자가 자료 어딘가에 있는지만 본다. 버전 표기(v4.56.6.43,
   41_DFB 같은 접미사 포함)와 0·1은 검사하지 않는다. 계산이 맞는지까지는 보지 않는다.
 """
@@ -32,7 +34,7 @@ from setron.features.ai.service import analyze
 from setron.features.analysis.schemas import AnalysisInput, AnalysisReport
 from setron.features.item.schemas import ItemState
 from setron.features.risk.schemas import RiskStatus
-from setron.features.version.groups import target_label
+from setron.features.version.groups import TIER_LABELS, Tier, target_label
 from setron.features.version.schemas import CompareStatus, ReleaseVersion
 from setron.infrastructure.ai_client import ChatClient
 
@@ -41,6 +43,10 @@ STATUS_LABELS = {
     CompareStatus.BELOW: "N 미만",
     CompareStatus.UNDETERMINED: "판단 불가",
 }
+TIER_ORDER = (Tier.ABOVE, Tier.AT, Tier.ONE_BELOW, Tier.TWO_BELOW, Tier.UNKNOWN)
+TIER_RULE = ("단계: N+1 이상·N·N-1·N-2 이하·비교 불가 (히트맵 색과 같음). 목표가 N 그룹이면 그룹 칸으로 나눈다. "
+             "목표가 릴리즈 하나면 같은 버전은 N, 더 최신은 N+1 이상, 한 단계 아래는 N-1, 두 단계 이상 아래는 N-2 이하다. "
+             "PM이 여러 개면 판정과 같은 PM 중 가장 낮은 단계를 쓴다.")
 MAX_GAP_ITEMS = 20  # 한 계열·설치 버전에 보내는 Item 수 상한. 넘으면 개수만 알린다.
 MAX_CHANGES = 30  # 버전 변경 이력에 보내는 기록 수 상한. 넘으면 개수만 알린다.
 
@@ -143,6 +149,7 @@ def _conditions(data: AnalysisInput, summary: Summary) -> dict[str, Any]:
         "조회 범위": dict(data.scope),
         "계열별 목표 N": targets,
         "적용률 계산": "N 이상 ÷ (N 이상 + N 미만). 판단 불가는 분모에서 뺀다.",
+        "단계 기준": TIER_RULE,
     }
 
 
@@ -152,7 +159,14 @@ def _counts(summary: Summary) -> dict[str, Any]:
         "HPA 제외 설비": summary.hpa_excluded,
         "업그레이드 필요 설비": summary.upgrade_needed,
         **_rates(summary),
+        "단계별 건수(설비×계열)": _tier_counts(f for e in summary.equipment for f in e.families),
     }
+
+
+def _tier_counts(families: Iterable[FamilyStatus]) -> dict[str, int]:
+    """단계별 건수. 다섯 단계를 늘 같은 순서로 모두 적는다."""
+    counts = Counter(family.tier for family in families)
+    return {TIER_LABELS[tier]: counts[tier] for tier in TIER_ORDER}
 
 
 def _rates(count: RateCount) -> dict[str, Any]:
@@ -180,16 +194,21 @@ def _sites(data: AnalysisInput) -> list[dict[str, Any]]:
 
 
 def _distribution(data: AnalysisInput, summary: Summary) -> list[dict[str, Any]]:
-    by_family: dict[int, Counter] = defaultdict(Counter)
+    by_family: dict[int, list[FamilyStatus]] = defaultdict(list)
     for equipment in summary.equipment:
         for family in equipment.families:
-            by_family[family.family_id][(_installed(family), STATUS_LABELS[family.status])] += 1
-    return [
-        {"계열": _family_name(data, family_id),
-         "버전별 설비 수": [{"설치 버전": version, "판정": label, "설비 수": count}
-                        for (version, label), count in sorted(counter.items())]}
-        for family_id, counter in sorted(by_family.items())
-    ]
+            by_family[family.family_id].append(family)
+    result = []
+    for family_id, families in sorted(by_family.items()):
+        counter = Counter((_installed(f), STATUS_LABELS[f.status], f.tier) for f in families)
+        result.append({
+            "계열": _family_name(data, family_id),
+            "단계별 설비 수": _tier_counts(families),
+            "버전별 설비 수": [{"설치 버전": version, "판정": label, "단계": TIER_LABELS[tier], "설비 수": count}
+                           for (version, label, tier), count
+                           in sorted(counter.items(), key=lambda item: (item[0][0], TIER_ORDER.index(item[0][2])))],
+        })
+    return result
 
 
 def _risks(data: AnalysisInput) -> dict[str, Any]:
