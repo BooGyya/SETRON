@@ -117,6 +117,10 @@ def install_theme(app: QApplication) -> None:
                                       border-radius: 10px; padding: 0 12px; }
         QComboBox[queryField="true"]:focus { border: 2px solid #3c5ce9; }
         QComboBox[queryField="true"]::drop-down { border: none; width: 28px; background: transparent; }
+        QDateEdit[queryField="true"] { background: #f9fafb; border: 1px solid #d5d7da; border-radius: 10px;
+            padding: 0 10px; }
+        QDateEdit[queryField="true"]:focus { border: 2px solid #3c5ce9; }
+        QDateEdit[queryField="true"]::drop-down { border: none; width: 28px; background: transparent; }
         QComboBox[queryField="true"] QAbstractItemView { background: white; color: #142033;
                                                        selection-background-color: #edf0fd;
                                                        selection-color: #3c5ce9; padding: 4px; }

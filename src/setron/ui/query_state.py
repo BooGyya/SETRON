@@ -1,6 +1,7 @@
 """공통 조회 조건 계약. 선택(초안)과 적용 스냅샷을 분리하며 DB를 호출하지 않는다."""
 
 from dataclasses import dataclass, replace
+from datetime import date
 from enum import Enum
 
 
@@ -46,6 +47,7 @@ class QuerySelection:
     fab_key: SelectionKey = None
     line_key: SelectionKey = None
     group_key: str | None = None  # UI 설비군 키이며 version_family.family_id가 아님
+    as_of: date | None = None  # 기준일. None은 최신 관측(오늘 기준), 날짜는 그날 이전 최신 관측
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,12 @@ class QueryState:
             ):
                 raise ValueError(f"등록되지 않았거나 상위 조건과 다른 {field}입니다: {value}")
 
+    def set_as_of(self, value: date | None) -> None:
+        """기준일만 바꾼다. 오늘 이후 날짜는 최신 관측(None)과 같으므로 None으로 맞춘다."""
+        if value is not None and value >= date.today():
+            value = None
+        self.set_draft(replace(self.draft, as_of=value))
+
     def select(self, field: str, value: SelectionKey) -> None:
         if field not in QuerySelection.__dataclass_fields__:
             raise ValueError(f"알 수 없는 조회 항목입니다: {field}")
@@ -183,6 +191,8 @@ class QueryState:
         self.set_draft(replace(self.draft, **changes))
 
     def set_draft(self, selection: QuerySelection) -> None:
+        if selection.as_of is not None and type(selection.as_of) is not date:
+            raise ValueError("기준일은 날짜여야 합니다.")
         self.validate(selection)
         self.draft = selection
 
@@ -229,6 +239,7 @@ class QueryState:
             title = "전체" if value is None else "미지정" if value is UNASSIGNED else next(
                 o.label for o in options if o.key == value)
             captions.append(f"{name} {title}")
+        captions.append("기준일 최신" if selection.as_of is None else f"기준일 {selection.as_of.isoformat()}")
         return " · ".join(captions)
 
 

@@ -382,13 +382,13 @@ class HeatmapPage(QWidget):
         self.message.setText("결과를 계산하고 있습니다.")
         return True
 
-    def fail_query(self, query):
+    def fail_query(self, query, reason=None):
         if not self.state.is_current(query):
             return
         self._clear()
         self.result_status.setText("결과 표시 실패 · 다시 적용해 주세요")
         self.result_status.set_tone("danger")
-        self.message.setText("관측 자료·선택지 연결을 확인하고 조회 적용으로 다시 시도해 주세요.")
+        self.message.setText(reason or "관측 자료·선택지 연결을 확인하고 조회 적용으로 다시 시도해 주세요.")
 
     def invalidate(self, *_):
         self._clear()
