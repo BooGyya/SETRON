@@ -53,13 +53,14 @@ def test_unordered_release_is_listed_after_ordered_and_never_first():
     assert [r.release_version_id for r in included.included] == [V42, V43, V44, 399]
 
 
-def test_counts_use_target_equipment_only_and_keep_unknown_out_of_rate():
+def test_counts_split_into_four_states_and_keep_unknown_and_not_target_out_of_rate():
+    """BE-014: 적용·미적용·미확인·대상 외로 나눠 전달한다. O2 설비(6번)는 대상 외로 따로 센다."""
     result = overview(ITEM_A)
 
-    assert result.total == ApplicationCount(applied=3, not_applied=2, unknown=1)
+    assert result.total == ApplicationCount(applied=3, not_applied=2, unknown=1, not_target=1)
     assert result.total.rate == 0.6 and result.hpa_excluded == 1
     assert dict(result.by_site) == {
-        "기흥": ApplicationCount(1, 0, 0), "평택": ApplicationCount(2, 1, 0), "화성": ApplicationCount(0, 1, 1)}
+        "기흥": ApplicationCount(1, 0, 0, 0), "평택": ApplicationCount(2, 1, 0, 0), "화성": ApplicationCount(0, 1, 1, 1)}
 
 
 def test_missing_equipment_is_sorted_by_site_line_and_code():
@@ -69,16 +70,17 @@ def test_missing_equipment_is_sorted_by_site_line_and_code():
         ("DM-002", "평택", "P2"), ("DM-004", "화성", "16L")]
 
 
-def test_listed_scope_counts_only_listed_models():
-    """D는 C4 Plus 전용이라 일반 C4 설비는 버전이 비어 있어도 대상 외로 빠지고 사업장 줄에도 나오지 않는다."""
+def test_listed_scope_counts_other_models_as_not_target():
+    """D는 C4 Plus 전용이라 일반 C4 설비는 버전이 비어 있어도 대상 외로 센다. 미적용과 섞지 않는다."""
     result = overview(ITEM_D)
 
-    assert result.total == ApplicationCount(applied=1, not_applied=0, unknown=0)
-    assert [site for site, _ in result.by_site] == ["기흥"]
+    assert result.total == ApplicationCount(applied=1, not_applied=0, unknown=0, not_target=6)
+    assert result.total.rate == 1.0 and result.missing == ()
+    assert dict(result.by_site)["평택"] == ApplicationCount(0, 0, 0, 3)
 
 
 def test_item_without_rows_has_no_versions_and_no_rate():
     result = overview(ITEM_A, ItemCatalog(families(), []))
 
     assert result.families == () and result.missing == ()
-    assert result.total.rate is None and result.by_site == ()
+    assert result.total == ApplicationCount(not_target=7) and result.total.rate is None
