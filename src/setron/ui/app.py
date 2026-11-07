@@ -41,6 +41,7 @@ from setron.ui.ai_connection import ai_providers_from_env
 from setron.ui.import_demo import DemoExcel, example_extractor
 from setron.ui.chat_data import ChatService
 from setron.ui.chat_page import ChatPage
+from setron.ui.import_delete_gateway import ImportDeleteGateway
 from setron.ui.import_extraction import rule_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -894,6 +895,7 @@ def main(argv: list[str] | None = None) -> int:
                            ai_client=ai.client,
                            # 실제 Excel이면 정해진 양식은 규칙으로 먼저 읽는다. 합성 통합문서(--demo-excel)는 예제 흐름 유지.
                            rule_extractor=None if args.demo_excel else rule_extractor,
+                           import_delete_gateway=None if args.demo_excel else ImportDeleteGateway.from_env(),
                            chat_enabled=True)
     if problem or ai.problem:
         window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))

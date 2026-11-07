@@ -203,11 +203,17 @@ def classify(family, groups: VersionGroups, release: ReleaseVersion) -> tuple[Sl
     if not anchors:
         return None, CompareReason.TARGET_INVALID
     order = release.version_order
+    orders = sorted({r.version_order for r in family.sorted.ordered if r.version_order is not None})
     if order > anchors[-1][0]:
-        return Slot(min(max(anchors[-1][1] + 1, Slot.N_PLUS_1), Slot.N_PLUS_2)), None     # 규칙 3: 모두보다 최신
+        # 규칙 3: 넣은 칸보다 모두 최신이면 가장 위 칸에서 릴리즈 단계만큼 올린다 (최소 N+1, 최대 N+2).
+        steps = sum(1 for value in orders if anchors[-1][0] < value <= order)
+        return Slot(min(max(anchors[-1][1] + steps, Slot.N_PLUS_1), Slot.N_PLUS_2)), None
     older = [slot for anchor_order, slot in anchors if anchor_order < order]
     if not older:
-        return Slot.N_MINUS_2, None                                                      # 규칙 3: 모두보다 오래됨
+        # 규칙 3: 넣은 칸보다 모두 오래되면 가장 아래 칸에서 릴리즈 단계만큼 내린다 (최대 N-2).
+        # N 칸만 채웠을 때 바로 아래 버전은 N-1(노랑), 그 아래는 N-2 이하(빨강) — 목표 하나 판정과 같은 결과.
+        steps = sum(1 for value in orders if order <= value < anchors[0][0])
+        return Slot(max(anchors[0][1] - steps, Slot.N_MINUS_2)), None
     return older[-1], None                                                               # 규칙 2: 바로 아래 칸
 
 

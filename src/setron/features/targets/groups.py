@@ -76,6 +76,7 @@ class SaveResult:
 
     saved: SavedGroups
     warnings: tuple[GroupIssue, ...]
+    changed: bool = True          # False면 지금 기준과 같아 이력을 남기지 않았다
 
 
 def setting_key(pair: Pair) -> str:
@@ -134,6 +135,10 @@ class GroupStore:
         key = {"setting_key": setting_key(pair)}
         current = _locked(tx, key)
         history = _payload_history(current["setting_value"], pair) if current is not None else []
+        warnings = tuple(issue for issue in issues if not issue.blocks)
+        if history and history[-1].get("groups") == groups.to_dict():
+            # 지금 기준과 같은 저장·되돌리기는 이력을 늘리지 않는다 (같은 줄이 계속 쌓이던 문제).
+            return SaveResult(_saved(pair, current["setting_value"]), warnings, changed=False)
         history.append({"saved_at": self.clock().replace(microsecond=0).isoformat(),
                         "memo": memo.strip(), "groups": groups.to_dict()})
         payload = {"schema": SCHEMA, "model_id": pair[0], "family_id": pair[1], "history": history}

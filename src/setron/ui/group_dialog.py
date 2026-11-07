@@ -237,7 +237,10 @@ class VersionGroupDialog(QDialog):
                                          wrap=True))
             return
         entries = list(enumerate(saved.history))
-        for index, entry in reversed(entries):
+        now = saved.history[-1].groups.to_dict()
+        shown = [(index, entry) for index, entry in entries               # 예전에 쌓인 연속 중복은 가장 최근 한 줄만
+                 if index == len(entries) - 1 or entry.groups.to_dict() != entries[index + 1][1].groups.to_dict()]
+        for index, entry in reversed(shown):
             row = QHBoxLayout()
             current = index == len(entries) - 1
             text = f"{entry.saved_at:%Y-%m-%d %H:%M}" + (" · 지금 기준" if current else "") + \
@@ -249,6 +252,9 @@ class VersionGroupDialog(QDialog):
                 revert.setFixedHeight(30)
                 revert.setAccessibleName(f"{entry.saved_at:%Y-%m-%d %H:%M} 기준으로 되돌리기")
                 revert.clicked.connect(lambda checked=False, e=entry: self.revert(e))
+                if entry.groups.to_dict() == now:                             # 지금 기준과 같으면 되돌릴 것이 없다
+                    revert.setEnabled(False)
+                    revert.setToolTip("지금 기준과 같습니다.")
                 row.addWidget(revert, 0, Qt.AlignmentFlag.AlignTop)
             self.history.addLayout(row)
             divider = QFrame()
@@ -289,8 +295,11 @@ class VersionGroupDialog(QDialog):
             self.status.setText(f"저장하지 못했습니다: {error}")
             return False
         self.drafts[pair.key] = {rid: slot for slot, ids in result.saved.groups.slots.items() for rid in ids}
-        self.saved_any = True
         self._render()
+        if not getattr(result, "changed", True):
+            self.status.setText("지금 기준과 같아 저장하지 않았습니다.")
+            return True
+        self.saved_any = True
         warned = f" · 경고 {len(result.warnings)}건" if result.warnings else ""
         self.status.setText(f"저장했습니다{warned}. '조회 적용'을 누르면 새 기준으로 계산합니다.")
         return True

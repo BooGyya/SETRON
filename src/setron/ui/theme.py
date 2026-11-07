@@ -20,6 +20,7 @@ ACCENT_SOFT = "#e8ebfc"
 TONES = {
     "neutral": ("#f0f3f8", SECONDARY, "#e5eaf3"),
     "info": ("#e8ebfc", PRIMARY, "#e8ebfc"),
+    "strong": ("#a9dbbd", "#14532d", "#1f7a4d"),     # 진초록 — N+1 이상 (5단계 색)
     "success": ("#d4ebdf", "#246b4a", "#208457"),
     "warning": ("#fbe5a3", "#856009", "#d5b660"),
     "danger": ("#fce2e7", "#ad344d", "#e58a9b"),

@@ -31,8 +31,12 @@ class MemoryGroupStore:
         issues = check_groups(family, groups)
         if any(issue.blocks for issue in issues):
             raise GroupSaveBlocked(issues)
+        history = self._history.setdefault(pair, [])
+        if history and history[-1].groups.to_dict() == groups.to_dict():
+            return SaveResult(SavedGroups(pair[0], pair[1], tuple(history)),
+                              tuple(issue for issue in issues if not issue.blocks), changed=False)
         entry = GroupHistoryEntry(self.clock().replace(microsecond=0), memo.strip(), groups)
-        self._history.setdefault(pair, []).append(entry)
+        history.append(entry)
         saved = SavedGroups(pair[0], pair[1], tuple(self._history[pair]))
         self.source.saved_groups = {**getattr(self.source, "saved_groups", {}), pair: groups}
         return SaveResult(saved, tuple(issue for issue in issues if not issue.blocks))

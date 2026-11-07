@@ -56,6 +56,7 @@ class CalendarWidget(QCalendarWidget):
         self.setFirstDayOfWeek(Qt.DayOfWeek.Sunday)
         self.setDateRange(QDate(1, 1, 1), QDate(9999, 12, 31))
         self.setNavigationBarVisible(False)
+        self.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)   # 주 번호(5·6·7…) 열 숨김
         self.header = QWidget(self)
         self.header.setObjectName("calendarHeader")
         row = QHBoxLayout(self.header)

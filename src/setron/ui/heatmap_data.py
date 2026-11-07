@@ -5,6 +5,7 @@ from datetime import date
 from enum import Enum
 
 from setron.features.risk.schemas import RiskStatus
+from setron.features.version.groups import TIERS_WORST_FIRST, Tier, tier_of
 from setron.features.version.schemas import CompareStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource, family_name
 from setron.ui.query_state import AppliedQuery
@@ -23,15 +24,27 @@ FAR_BELOW_STEPS = 2
 
 
 def compare_tone(status: CompareStatus, steps_below: int | None) -> str:
-    """버전 비교 표시 색. N 이상 초록, N-1·단계 미확인·판단 불가 노랑, N-2 이하 빨강.
-
-    단계를 모르는 N 미만은 '많이 낮음'으로 단정하지 않고 노랑으로 둔다.
+    """버전 비교 표시 색 (11/05 팀 결정 5단계와 같은 기준). N 이상 초록, N-1·단계 미확인 노랑, N-2 이하 빨강,
+    판단 불가 회색. 단계를 모르는 N 미만은 '많이 낮음'으로 단정하지 않고 노랑으로 둔다.
     """
     if status is CompareStatus.AT_OR_ABOVE:
         return "success"
-    if status is CompareStatus.BELOW and steps_below is not None and steps_below >= FAR_BELOW_STEPS:
+    if status is CompareStatus.UNDETERMINED:
+        return "neutral"
+    if steps_below is not None and steps_below >= FAR_BELOW_STEPS:
         return "danger"
     return "warning"
+
+
+# 5단계 색 (11/05 팀 결정·멘토 확인): 진초록 N+1 이상 · 연초록 N · 노랑 N-1 · 빨강 N-2 이하 · 회색 비교 불가
+TIER_TONES = {Tier.ABOVE: "strong", Tier.AT: "success", Tier.ONE_BELOW: "warning", Tier.TWO_BELOW: "danger",
+              Tier.UNKNOWN: "neutral"}
+
+
+def worst_tier(tiers) -> Tier:
+    """여러 PM·계열 중 가장 낮은 단계. 판정 가능한 단계가 없으면 비교 불가."""
+    known = [t for t in tiers if t in TIERS_WORST_FIRST]
+    return min(known, key=TIERS_WORST_FIRST.index) if known else Tier.UNKNOWN
 
 
 def _max_steps(comparisons) -> int | None:
@@ -55,6 +68,7 @@ class TileFamily:
     versions: tuple[str, ...]
     explanations: tuple[str, ...]
     steps_below: int | None = None  # 이 계열 PM 중 확인된 가장 큰 N 미만 단계. 표시 색에만 쓴다.
+    tier: Tier = Tier.UNKNOWN       # 5단계 색 (tier_of). 판단 불가 PM이 있으면 비교 불가
 
     @property
     def tone(self) -> str:
@@ -81,17 +95,14 @@ class EquipmentTile:
     line_label: str | None = None
     area: str | None = None
     steps_below: int | None = None  # 설비 전체에서 확인된 가장 큰 N 미만 단계. 표시 색에만 쓴다.
+    tier: Tier = Tier.UNKNOWN       # 설비 전체 5단계 (계열 중 가장 낮은 단계). 확인 필요·HPA는 비교 불가
 
     @property
     def version_tone(self) -> str:
-        """타일 채움색. 목표 판정과 같은 기준이며 위험 판정과는 섞지 않는다."""
+        """타일 채움색 (5단계). 목표 판정과 같은 기준이며 위험 판정(테두리)과는 섞지 않는다."""
         if self.goal is GoalState.EXCLUDED:
             return "neutral"
-        if self.goal is GoalState.MET:
-            return "success"
-        if self.goal is GoalState.BELOW and self.steps_below is not None and self.steps_below >= FAR_BELOW_STEPS:
-            return "danger"
-        return "warning"
+        return TIER_TONES[self.tier]
 
     @property
     def risk_label(self):
@@ -178,9 +189,11 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                 target = comparison.target.version_raw if comparison.target else "미확인"
                 explanations.append(f"{p.pm.pm_name or '공통'} 목표 N: {target}"
                                     + (f" · {comparison.message}" if comparison.message else ""))
+            family_tier = (Tier.UNKNOWN if family.status is CompareStatus.UNDETERMINED
+                           else worst_tier(tier_of(p.comparison) for p in family.pms))
             items.append(TileFamily(family.family_id, f"{names} · 계열 {family_name(source, family.family_id)}", family.status,
                                     tuple(versions), tuple(explanations),
-                                    _max_steps(p.comparison for p in family.pms)))
+                                    _max_steps(p.comparison for p in family.pms), family_tier))
         raw_area = record.line if record.is_hpa else loc.raw_area
         location = (f"{sites[loc.site_key]} · Fab {fabs.get(loc.fab_key, '미지정')} · "
                     f"Line {lines.get(loc.line_key, '미지정')} · 원본 구역 {raw_area or '미확인'}")
@@ -192,5 +205,7 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                                     any(f.pm_mismatch for f in families), record.base_date, raw_versions,
                                     record.model_name if record.is_hpa else None,
                                     fabs.get(loc.fab_key), lines.get(loc.line_key), raw_area or None,
-                                    _max_steps(p.comparison for f in families for p in f.pms)))
+                                    _max_steps(p.comparison for f in families for p in f.pms),
+                                    Tier.UNKNOWN if goal in (GoalState.EXCLUDED, GoalState.UNKNOWN)
+                                    else worst_tier(f.tier for f in items)))
     return tuple(result)

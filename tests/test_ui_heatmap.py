@@ -17,7 +17,7 @@ from setron.features.version.schemas import CompareStatus, ReleaseVersion
 from setron.features.version.service import FamilyReleases
 from setron.ui.app import create_window
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding
-from setron.ui.heatmap import RISK_FILL, TileButton
+from setron.ui.heatmap import RISK_FILL, RISK_LINE, TIER_FILL, TileButton
 from setron.ui.heatmap_data import GoalState, equipment_tiles
 from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
 from setron.ui.theme import TONES, install_theme, svg_size
@@ -193,8 +193,10 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
 def test_figma_tiles_show_risk_first_and_markers_and_original_icon_size(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    # 위험 후보의 분홍 채움/'위험' 표시는 유지하고 우측 상단의 '?' 장식만 제거한다.
-    assert RISK_FILL in page.tile_buttons[2].styleSheet()
+    # 위험 후보는 빨강(N-2 이하)과 헷갈리지 않게 채움색 대신 굵은 빨간 테두리와 '위험' 표시로 보인다 (11/07, 5단계 색).
+    style = page.tile_buttons[2].styleSheet()
+    assert f"2px solid {RISK_LINE}" in style and RISK_FILL not in style
+    assert TIER_FILL[page.tile_buttons[2].data.tier] in style
     assert page.tile_buttons[2].marker == "위험" and page.tile_buttons[3].marker == ""
     assert page.tile_buttons[2].data.goal is GoalState.MET
     assert page.risk_button.iconSize() == svg_size("7880d.svg")
@@ -340,11 +342,30 @@ def test_long_raw_version_is_plain_unchanged_and_wraps_inside_tile(window, sourc
     (CompareStatus.BELOW, None, "warning"),
     (CompareStatus.BELOW, 2, "danger"),
     (CompareStatus.BELOW, 5, "danger"),
-    (CompareStatus.UNDETERMINED, None, "warning"),
-], ids=["N 이상 초록", "N-1 노랑", "단계 모름은 많이 낮음으로 단정하지 않음", "N-2 빨강", "N-5 빨강", "판단 불가 노랑"])
+    (CompareStatus.UNDETERMINED, None, "neutral"),
+], ids=["N 이상 초록", "N-1 노랑", "단계 모름은 많이 낮음으로 단정하지 않음", "N-2 빨강", "N-5 빨강", "판단 불가 회색"])
 def test_version_gap_colors_follow_requirement(status, steps, tone):
     """요구사항 3.2: 기준 버전 적용은 초록, 많이 낮으면 빨강. 임계값은 확정 전 임시 기준(N-2 이하)."""
     from setron.ui.heatmap_data import FAR_BELOW_STEPS, compare_tone
 
     assert FAR_BELOW_STEPS == 2
     assert compare_tone(status, steps) == tone
+
+
+
+def test_tiles_use_five_tiers_from_shared_tier_of():
+    """11/05 팀 결정 5단계: 진초록 N+1 이상 · 연초록 N · 노랑 N-1 · 빨강 N-2 이하 · 회색 비교 불가 (tier_of와 같은 기준)."""
+    from setron.features.version.groups import Tier
+    from setron.ui.heatmap_data import EquipmentTile, GoalState as Goal, TIER_TONES, worst_tier
+    from setron.features.risk.schemas import RiskStatus
+
+    assert worst_tier([Tier.ABOVE, Tier.ONE_BELOW, Tier.UNKNOWN]) is Tier.ONE_BELOW
+    assert worst_tier([Tier.UNKNOWN]) is Tier.UNKNOWN and worst_tier([]) is Tier.UNKNOWN
+    assert TIER_TONES == {Tier.ABOVE: "strong", Tier.AT: "success", Tier.ONE_BELOW: "warning", Tier.TWO_BELOW: "danger",
+                          Tier.UNKNOWN: "neutral"}
+    tile = lambda goal, tier: EquipmentTile(1, "E", "s", "화성", "loc", goal, RiskStatus.NO_RISK, (), False, False,  # noqa: E731
+                                            tier=tier)
+    assert tile(Goal.MET, Tier.ABOVE).version_tone == "strong" and tile(Goal.MET, Tier.AT).version_tone == "success"
+    assert tile(Goal.BELOW, Tier.TWO_BELOW).version_tone == "danger" and tile(Goal.UNKNOWN, Tier.UNKNOWN).version_tone == "neutral"
+    assert tile(Goal.EXCLUDED, Tier.ABOVE).version_tone == "neutral"
+    assert len(set(TIER_FILL.values())) == 5

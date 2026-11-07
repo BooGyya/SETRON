@@ -41,7 +41,7 @@ def test_same_period_versions_grouped_as_n_are_all_achieved():
     for raw in ("v2296.9_i", "v2296.9_j", "v2296.9_k"):
         result = compare_with_groups(family(), raw, grp)
         assert result.status is CompareStatus.AT_OR_ABOVE and result.slot == 0 and tier_of(result) is Tier.AT
-    assert tier(family(), grp, "v2296.9_g") is Tier.TWO_BELOW          # 넣은 버전 모두보다 오래됨 → N-2 이하
+    assert tier(family(), grp, "v2296.9_g") is Tier.ONE_BELOW          # 넣은 칸(N) 바로 아래 릴리즈 → N-1 (11/08 규칙 수정)
 
 
 def test_explicit_slots_give_five_colors():
@@ -94,7 +94,7 @@ def test_missing_and_unordered_members_are_reported_and_not_used_as_anchors():
     codes = {i.code for i in check_groups(family(unordered), grp)}
     assert codes == {GroupIssueCode.MISSING_RELEASE, GroupIssueCode.ORDER_UNKNOWN}
     assert tier(family(unordered), grp, "v2296.9_h") is Tier.ONE_BELOW          # 넣은 칸은 그대로
-    assert tier(family(unordered), grp, "v2296.9_j") is Tier.TWO_BELOW          # 기준점은 _k 하나뿐
+    assert tier(family(unordered), grp, "v2296.9_j") is Tier.ONE_BELOW          # 기준점은 _k 하나뿐 → 바로 아래 _j는 N-1
 
 
 def test_same_exceptions_as_single_target_comparison():
@@ -150,3 +150,29 @@ def test_dashboard_summary_uses_groups(target, compliant, below):
     summary = summarize(_hwaseong_inline_o2(), {FAMILY: family()}, {(MODEL, FAMILY): target})
     assert (summary.compliant, summary.below, summary.undetermined) == (compliant, below, 0)
     assert summary.upgrade_needed == below
+
+
+
+def test_single_version_in_n_matches_single_target_tiers_for_every_release():
+    """N 칸에 버전 하나만 넣으면 목표 하나 판정과 모든 릴리즈에서 색 단계가 같다 (11/08: _j가 N-2로 나오던 문제).
+
+    넣은 칸보다 모두 오래되거나 최신인 버전은 가장 가까운 칸에서 릴리즈 몇 단계 떨어졌는지로 정한다.
+    """
+    fam = family()
+    for target in RELEASES[1:-1]:
+        grp = VersionGroups.single(target.release_version_id)
+        for release in RELEASES:
+            single = compare_version(fam, release.version_raw, target.release_version_id)
+            grouped = compare_with_groups(fam, release.version_raw, grp)
+            assert tier_of(grouped) is tier_of(single), (target.version_raw, release.version_raw)
+
+
+def test_steps_below_lowest_slot_and_above_top_slot():
+    names = [r.version_raw for r in RELEASES]
+    k = names.index("v2296.9_k")
+    grp = groups(n=["v2296.9_k"])
+    assert tier(family(), grp, names[k - 1]) is Tier.ONE_BELOW and tier(family(), grp, names[k - 2]) is Tier.TWO_BELOW
+    low = groups(n=["v2296.9_k"], n_1=[names[k - 1]])
+    assert tier(family(), low, names[k - 2]) is Tier.TWO_BELOW                     # N-1 칸 바로 아래 → N-2
+    if k + 1 < len(names):
+        assert tier(family(), grp, names[k + 1]) is Tier.ABOVE

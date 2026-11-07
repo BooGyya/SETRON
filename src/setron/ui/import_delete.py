@@ -280,8 +280,6 @@ class ImportDeletePage(QWidget):
         self.filters_card = filters
         filters.setProperty("outlined", True)
         filters.body.addWidget(label("1. 삭제할 자료와 기간 선택", 20, medium=True))
-        filters.body.addWidget(label("잘못 저장했거나 더 이상 쓰지 않는 자료를 골라 지웁니다. 원본 Excel 파일은 바뀌지 않습니다.",
-                                    13, color=SECONDARY, wrap=True))
         self.kind_combo, self.site_combo, self.family_combo = QComboBox(), QComboBox(), QComboBox()
         self.kind_combo.addItem("설비 현황표", ExtractKind.EQUIPMENT_STATUS)
         self.kind_combo.addItem("릴리즈 노트", ExtractKind.RELEASE_NOTE)
@@ -642,11 +640,10 @@ class ImportDeletePage(QWidget):
                    if self.catalog else ("—", "—", "—"))
         for widget, text in zip(self.stat_values, amounts):
             widget.setText(text)
-        self.effect.setText(("• 선택한 자료가 기준 날짜 목록과 히트맵·추이·Replay 조회에 영향을 줍니다.\n"
-                             "• 다른 Site·시트의 자료가 남은 기준일은 목록에 유지됩니다. 원본 Excel 파일도 유지합니다.\n"
-                             "• 현황표 삭제는 릴리즈 노트를 삭제하지 않습니다." if equipment else
+        self.effect.setText(("" if equipment else
                              "• 선택한 설비군/계열의 릴리즈·Item 연결과 판정에 영향을 줍니다.\n"
                              "• 위험 근거와 목표 N의 처리 여부는 삭제 서비스가 재검증해야 합니다. 원본 Excel은 유지합니다."))
+        self.effect.setVisible(bool(self.effect.text()))
         self.delete_button.setText(f"선택한 {'기준일' if equipment else '릴리즈 묶음'} {len({b.day for b in selected}) if equipment else len(selected)}개 삭제")
         self.delete_button.setEnabled(bool(selected) and not locked)
         self.backup_button.setEnabled(self.property("backupAvailable") is True and not locked)

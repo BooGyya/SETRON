@@ -118,8 +118,18 @@ class PeriodDateField(DateField):
             selected.format.setForeground(panel.palette.highlightedText())
             selected.format.setBackground(panel.palette.highlight())
             selections.append(selected)
-        painter.setPen(panel.palette.text().color())
         origin = QPointF(contents.left(), contents.top() + (contents.height() - line.height()) / 2)
+        if not self.text() and not self.hasFocus() and self.placeholderText():
+            # 비어 있고 입력 중이 아니면 입력 틀(____-__-__) 대신 흐린 안내 글(YYYY-MM-DD)을 그린다.
+            hint = QTextLayout(self.placeholderText(), self.font())
+            hint.beginLayout()
+            hint_line = hint.createLine()
+            hint_line.setLineWidth(max(0, contents.width()))
+            hint.endLayout()
+            painter.setPen(panel.palette.placeholderText().color())
+            hint.draw(painter, origin, [], QRectF(contents))
+            return
+        painter.setPen(panel.palette.text().color())
         layout.draw(painter, origin, selections, QRectF(contents))
 
 
