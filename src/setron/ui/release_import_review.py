@@ -2,9 +2,10 @@
 
 from dataclasses import replace
 
-from PySide6.QtWidgets import QInputDialog, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from setron.features.release.replacement_schemas import ReplacementReview
+from setron.ui.import_dialogs import choose_import_option, import_question
 
 
 def choose_release_reviews(parent, plans, reviews=(), *, risk_decisions=None):
@@ -28,9 +29,9 @@ def choose_release_reviews(parent, plans, reviews=(), *, risk_decisions=None):
             for question in preview.questions:
                 labels = plan.release_labels if question.kind == "release" else plan.item_labels
                 choices = ["기존 항목과 다른 새 항목", *(f"{labels.get(i, '미확인')} (ID {i})" for i in question.candidates)]
-                value, ok = QInputDialog.getItem(parent, "같은 항목인지 확인",
+                value, ok = choose_import_option(parent, "같은 항목인지 확인",
                     f"계열: {plan.family_name}\n새 항목: {_entry_label(plan, question.kind, question.key)}\n{question.reason}",
-                    choices, 0, False)
+                    choices)
                 if not ok:
                     return None, False
                 selected = choices.index(value)
@@ -62,7 +63,7 @@ def choose_release_reviews(parent, plans, reviews=(), *, risk_decisions=None):
                 confirmed.discard(proposal.risk_rule_id)
                 if proposal.risk_rule_id in risk_decisions:
                     continue
-                answer = QMessageBox.warning(parent, "수동 위험 지정 확인 필요",
+                answer = import_question(parent, "수동 위험 지정 확인 필요",
                     f"계열: {plan.family_name}\n위험 지정 ID: {proposal.risk_rule_id}\n"
                     f"위험 사유: {plan.risk_labels.get(proposal.risk_rule_id, '확인 필요')}\n"
                     f"{_risk_evidence(proposal.target_reference)}\n"
@@ -77,7 +78,7 @@ def choose_release_reviews(parent, plans, reviews=(), *, risk_decisions=None):
                 continue
             if not proposal.requires_confirmation or proposal.risk_rule_id in risk_decisions:
                 continue
-            answer = QMessageBox.question(parent, "수동 위험 지정 재연결 확인",
+            answer = import_question(parent, "수동 위험 지정 재연결 확인",
                 f"계열: {plan.family_name}\n위험 지정 ID: {proposal.risk_rule_id}\n"
                 f"사유: {plan.risk_labels.get(proposal.risk_rule_id, '확인 필요')}\n"
                 f"{_risk_targets(plan, proposal)}\n{_risk_evidence(proposal.target_reference)}\n"
@@ -138,8 +139,8 @@ def _pick_value(parent, family, entry, field, current, incoming):
               "version_order": "확인된 릴리즈 순서", "item_mapping_status": "Item 포함 관계 확인 상태",
               "item_no": "Item 원본 번호", "content": "업데이트 내용"}
     options = [f"현재 관리값 유지: {current}", f"새 자료 사용: {incoming}"]
-    value, ok = QInputDialog.getItem(parent, "수정값 충돌 선택",
-        f"계열: {family}\n항목: {entry}\n확인할 값: {fields.get(field, field)}", options, 0, False)
+    value, ok = choose_import_option(parent, "수정값 충돌 선택",
+        f"계열: {family}\n항목: {entry}\n확인할 값: {fields.get(field, field)}", options)
     return ("CURRENT" if options.index(value) == 0 else "INCOMING") if ok else None
 
 

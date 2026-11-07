@@ -89,10 +89,11 @@ def page(window):
 
 
 def read(page, book=EQUIPMENT_BOOK, sheet="Memory"):
+    wait_for_extraction(page)
     page.workbook_combo.setCurrentIndex(page.workbook_combo.findText(book))
     page.sheet_combo.setCurrentIndex(page.sheet_combo.findData(sheet))
     assert page.read_selected()
-    QTest.qWait(10)
+    wait_for_extraction(page)
 
 
 def extracted(page, **kwargs):
@@ -123,6 +124,7 @@ def test_menu_enabled_but_excel_is_connected_only_on_request(window, excel, page
     assert excel.calls == []
     assert not page.read_button.isEnabled() and not page.extract_button.isEnabled()
     page.list_button.click()
+    wait_for_extraction(page)
     assert excel.calls == ["list"] and page.workbook_combo.count() == 2
 
 
@@ -165,8 +167,9 @@ def test_real_reader_signature_receives_selected_pid_and_full_name(page):
     reader = identity_reader([selected])
     page.excel = reader
     page.load_workbooks()
+    wait_for_extraction(page)
     assert page.read_selected()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.snapshot is not None
     reader.read_sheet.assert_called_once_with(
         selected.name, "Memory", app_pid=selected.app_pid, full_name=selected.full_name,
@@ -187,11 +190,12 @@ def test_duplicate_workbook_names_keep_selected_process_and_sheet(page, same_pat
     reader = identity_reader([first, selected])
     page.excel = reader
     page.load_workbooks()
+    wait_for_extraction(page)
     page.workbook_combo.setCurrentIndex(1)
     assert page.workbook_combo.itemText(0) != page.workbook_combo.itemText(1)
     assert page.sheet_combo.currentData() == "선택 시트"
     assert page.read_selected()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.snapshot is not None and page.snapshot.cells["A1"] == 7002
     reader.read_sheet.assert_called_once_with(
         selected.name, "선택 시트", app_pid=7002, full_name=selected.full_name,
@@ -210,13 +214,15 @@ def test_workbook_refresh_preserves_identity_when_list_order_changes(page):
     reader = identity_reader(books)
     page.excel = reader
     page.load_workbooks()
+    wait_for_extraction(page)
     page.workbook_combo.setCurrentIndex(1)
     books.insert(0, WorkbookInfo("동일.xlsx", "C:/third/동일.xlsx", ["새 시트"], 7003))
     page.load_workbooks()
+    wait_for_extraction(page)
     assert page.workbook_combo.currentIndex() == 2
     assert page.sheet_combo.currentData() == "선택 시트"
     assert page.read_selected()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     reader.read_sheet.assert_called_once_with(selected.name, "선택 시트", app_pid=7002, full_name=selected.full_name)
 
 
@@ -224,7 +230,8 @@ def test_excel_not_running_is_reported_without_preview(window, page):
     def not_running():
         raise ExcelNotRunningError(NOT_RUNNING_MESSAGE)
     page.excel.list_open_workbooks = not_running
-    assert not page.load_workbooks()
+    assert page.load_workbooks()  # 요청 수락과 비동기 조회 결과는 구분한다.
+    wait_for_extraction(page)
     assert page.status.tone == "danger" and page.notice.text() == NOT_RUNNING_MESSAGE
     assert not page.read_button.isEnabled() and page.snapshot is None
 
@@ -242,15 +249,17 @@ def test_partial_discovery_warning_is_visible_with_usable_books(page):
     reader.list_open_workbooks = discover
     page.excel = reader
     assert page.load_workbooks()
+    wait_for_extraction(page)
     assert page.workbook_combo.count() == 1 and page.read_button.isEnabled()
     assert page.status.tone == "warning" and "제한된 보기" in page.notice.text()
     assert page.read_selected()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.snapshot is not None
     reader.read_sheet.assert_called_once_with(selected.name, "P1", app_pid=7001, full_name=selected.full_name)
 
     reader.list_open_workbooks = lambda: [selected]
     assert page.load_workbooks()
+    wait_for_extraction(page)
     assert page.status.tone == "info" and "제한된 보기" not in page.notice.text()
 
 
@@ -260,12 +269,13 @@ def test_changed_workbook_selection_clears_preview_and_reports_error(page):
     reader = identity_reader([selected])
     page.excel = reader
     page.load_workbooks()
+    wait_for_extraction(page)
     assert page.read_selected()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.snapshot is not None
     reader.read_sheet.side_effect = excel_reader.WorkbookSelectionChangedError("파일 경로가 바뀌었습니다. 다시 선택하세요.")
     assert page.read_selected()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.snapshot is None and page.status.tone == "danger"
     assert "다시 선택" in page.notice.text() and not page.extract_button.isEnabled()
 
@@ -351,7 +361,7 @@ def test_confirmed_save_shows_saving_then_success_and_prevents_duplicates(window
     assert EQUIPMENT_BOOK in page.confirms[0] and "Memory" in page.confirms[0] and "테스트 메모리 저장소" in page.confirms[0]
     assert page.state == "saving" and page.status.text() == "저장 중"
     assert not page.save_button.isEnabled() and not page.read_button.isEnabled() and not page.save()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.state == "saved" and page.status.tone == "success"
     assert len(saver.saved) == 1 and saver.saved[0].rows[0].edited_fields == ("base_date",)
     assert EQUIPMENT_BOOK not in str(saver.saved[0].raw_data)
@@ -373,11 +383,11 @@ def test_failed_save_keeps_draft_and_retry_uses_same_request(page, saver):
     page.apply_edits()
     request_id = page.request_id
     page.save()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.state == "failed" and page.status.tone == "danger" and "기존 자료는 그대로" in page.result_label.text()
     assert page.save_button.isEnabled() and page.draft.row(1).value("base_date") == "2026-10-21"
     page.save()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.state == "saved" and [r.request_id for r in saver.saved] == [request_id]
 
 
@@ -387,7 +397,7 @@ def test_unknown_commit_result_locks_retry(page, saver):
     page.inputs["base_date"].setText("2026-10-21")
     page.apply_edits()
     page.save()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert page.state == "unknown" and page.status.tone == "warning"
     assert not page.save_button.isEnabled() and not page.save() and not page.extract_button.isEnabled()
     assert saver.saved == []
@@ -431,7 +441,7 @@ def test_release_note_flow_saves_items_without_equipment_fields(page, saver):
     assert "설비 호기" not in page.row_model.headings and "기준일" not in page.row_model.headings
     assert page.save_button.isEnabled()
     page.save()
-    QTest.qWait(10)
+    wait_for_extraction(page)
     assert [r.values["item_no"] for r in saver.saved[0].rows] == [1, 2]
     assert saver.saved[0].rows[0].source_reference["content"] == {"sheet": "Release", "cells": ["D2"]}
 

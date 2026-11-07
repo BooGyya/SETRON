@@ -91,8 +91,10 @@ def prepare(page):
     param
     - page: 검증할 가져오기 화면.
     """
-    assert page.load_workbooks() and page.read_selected()
-    QTest.qWait(20)
+    assert page.load_workbooks()
+    wait_for_extraction(page)
+    assert page.read_selected()
+    wait_for_extraction(page)
     assert page.extract()
     wait_for_extraction(page, timeout=15)
 
@@ -138,7 +140,7 @@ def test_native_sdk_pipeline_saves_hpa_from_selected_original(app, pages):
         assert page.draft.row(2).value("equipment_code") == "TEST-HPA-UI"
         assert page.draft.row(2).value("version_raw") == "vHPA.2_d5 "
         assert page.save_button.isEnabled() and page.save()
-        QTest.qWait(20)
+        wait_for_extraction(page)
         assert saver.saved[0].rows[1].values["version_raw"] == "vHPA.2_d5 "
         assert saver.saved[0].raw_data["cells"]["I7"] is None
     finally:
@@ -165,7 +167,7 @@ def test_blank_hpa_sw_shows_actual_position_and_requires_explicit_completion(pag
     page.select_row(2)
     page.inputs["version_raw"].setText("vHPA.USER")
     assert page.apply_edits() and page.save_button.isEnabled() and page.save()
-    QTest.qWait(20)
+    wait_for_extraction(page)
     assert len(saver.saved[0].rows) == 2
     assert saver.saved[0].raw_data["cells"]["H7"] is None
     assert saver.saved[0].rows[1].values["version_raw"] == "vHPA.USER"
@@ -201,7 +203,7 @@ def test_native_ui_hpa_exclusion_cannot_hide_required_errors_with_missing_classi
             page.inputs[name].setText("HPA")
     page.inputs[missing].setText("TEST-HPA-UI" if missing == "equipment_code" else "vHPA.USER")
     assert page.apply_edits() and page.save_button.isEnabled() and page.save()
-    QTest.qWait(20)
+    wait_for_extraction(page)
     assert len(saver.saved[0].rows) == 2
     assert saver.saved[0].raw_data["cells"]["F7" if missing == "equipment_code" else "H7"] is None
     assert all(saver.saved[0].raw_data["cells"][address] == "HPA" for address in ("D7", "E7", "G7"))
@@ -285,7 +287,7 @@ def test_user_confirms_ambiguous_blank_source_and_invalid_address_keeps_original
     assert not page.apply_edits() and page.draft is before
     page.source_inputs["version_raw"].setText("J7")
     assert page.apply_edits() and page.save_button.isEnabled() and page.save()
-    QTest.qWait(20)
+    wait_for_extraction(page)
     assert saver.saved[0].rows[1].source_reference["version_raw"] == {"sheet": "현황", "cells": ["J7"]}
     assert saver.saved[0].raw_data["cells"]["J7"] is None and saver.saved[0].raw_data["cells"]["H7"] is None
 
@@ -301,8 +303,9 @@ def test_closing_before_scheduled_extraction_does_not_start_the_provider(pages):
     pages.append(page)
     page.show()
     page.load_workbooks()
+    wait_for_extraction(page)
     page.read_selected()
-    QTest.qWait(20)
+    wait_for_extraction(page)
     assert page.extract()
     page.close()
     QTest.qWait(30)
@@ -329,8 +332,9 @@ def test_slow_extraction_keeps_ui_responsive_and_discards_closed_page_result(pag
     page.show()
     try:
         page.load_workbooks()
+        wait_for_extraction(page)
         page.read_selected()
-        QTest.qWait(20)
+        wait_for_extraction(page)
         page.extract()
         end = monotonic() + 3
         while not started.is_set() and monotonic() < end:
