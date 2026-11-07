@@ -491,3 +491,28 @@ def test_model_candidates_are_applied_only_after_confirmation(page):
     assert (row.value("model_name"), row.value("family_name"), row.value("ui_type")) == ("M-C3", "C3", "통합UI")
     assert "model_name" in row.edits and row.original["model_name"] == "M-C3 (6각) (통합UI)"
     assert not page.candidate_button.isEnabled()
+
+
+def test_extraction_keeps_running_while_away_from_the_page(window, page):
+    """추출 중 다른 메뉴로 이동해도 취소하지 않고, 돌아오면 결과가 보인다 (원본 사본으로 추출하므로 안전)."""
+    import threading
+
+    gate = threading.Event()
+    original = page.extractor
+
+    def slow(*args, **kwargs):
+        gate.wait(5)
+        return original(*args, **kwargs)
+
+    page.extractor = slow
+    page.load_workbooks()
+    read(page)
+    assert page.extract()
+    window.navigate("dashboard")
+    QTest.qWait(30)
+    assert not page.isVisible() and page.state == "extracting"
+    gate.set()
+    wait_for_extraction(page)
+    window.navigate("import")
+    QTest.qWait(10)
+    assert page.draft is not None and page.state == "idle"
