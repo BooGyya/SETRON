@@ -16,13 +16,15 @@ from PySide6.QtCore import QDateTime, QEvent, QPoint, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QProgressBar,
 )
 
 from setron.features.chat.report import ReportPart
 from setron.features.chat.schemas import INTENT_LABELS, BarChart, ChatAnswer, Intent, LineChart, Table
 from setron.ui.ai_page import _STYLE, SPARKLE, _UserBubble, _sparkle, _tag
 from setron.ui.chat_export import ExcelExportDialog, ReportDialog, chart_png
+from setron.ui.chat_components import AnswerActions, asset_label, avatar, flow_row, SavedFileToast, VerdictDelegate
+from setron.ui.chat_report_preview import PdfPreviewDialog
 from setron.ui.components import button, label
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -42,7 +44,6 @@ QUICK = (("원인 분석", "그 결과의 원인 분석해줘", "원인 분석�
          ("버전 통일 시점 예측", "그 결과의 통일 시점 예측해줘", "목표 N 통일 시점 예측해줘"),
          ("보고서 생성", "그 결과로 보고서 만들어줘", "이번 달 표준화 보고서 만들어줘"))
 STEPS = ("질문 이해", "데이터 조회", "표·그래프 만들기", "원인·우선순위 계산", "답변 작성")
-_TONES = {"danger": ("#fdecec", "#c62828"), "warning": ("#fff5d9", "#8a5a00"), "success": ("#e7f5ec", "#1e7d3a")}
 _CHAT_STYLE = _STYLE + f"""
 QFrame#aiConversation {{ background: white; border: 1px solid #e3e6ec; border-radius: 12px; }}
 QScrollArea#aiScroll, QWidget#aiMessages {{ background: transparent; }}
@@ -78,29 +79,39 @@ def _chip(text: str, on_click) -> QPushButton:
 
 
 def table_widget(table: Table) -> QTableWidget:
-    """답의 표. 판정 칸은 행 색(tones)으로 배지처럼 칠한다. 8행이 넘으면 표 안에서 스크롤한다."""
+    """실제 텍스트는 유지하고 판정 칸만 둥근 배지로 그린다. 긴 표는 내부 스크롤한다."""
     widget = QTableWidget(len(table.rows), len(table.columns))
     widget.setObjectName("chatTable")
     widget.setHorizontalHeaderLabels(list(table.columns))
+    widget.setStyleSheet("QHeaderView::section {background:#f4f5f8; color:#5b6880; border:0; border-bottom:1px solid #dee0e5; padding:6px;}")
     widget.verticalHeader().setVisible(False)
     widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     widget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     widget.setWordWrap(False)
+    widget.setItemDelegate(VerdictDelegate(widget))
+    widget.setMinimumWidth(0)
+    widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+    widget.verticalHeader().setDefaultSectionSize(36)
     judge = len(table.columns) - 1
     for r, row in enumerate(table.rows):
         tone = table.tones[r] if r < len(table.tones) else None
         for c, value in enumerate(row):
             item = QTableWidgetItem(value)
-            if c == judge and tone in _TONES:
-                background, foreground = _TONES[tone]
-                item.setBackground(QColor(background))
-                item.setForeground(QColor(foreground))
+            item.setToolTip(value)
+            if c == 0:
+                weight = item.font()
+                weight.setBold(True)
+                item.setFont(weight)
+            if c == judge and tone in VerdictDelegate.COLORS:
+                item.setData(Qt.ItemDataRole.UserRole, tone)
+            if c:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             widget.setItem(r, c, item)
     header = widget.horizontalHeader()
-    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-    header.setStretchLastSection(True)
+    header.setMinimumSectionSize(90)
+    header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     rows = min(len(table.rows), 8)
-    widget.setFixedHeight(header.sizeHint().height() + max(rows, 1) * 30 + 4)
+    widget.setFixedHeight(header.sizeHint().height() + max(rows, 1) * 36 + 18)
     return widget
 
 
@@ -116,7 +127,7 @@ def bar_chart(chart: BarChart) -> QChartView:
     series = QStackedBarSeries()
     series.append(normal)
     series.append(picked)
-    series.setLabelsVisible(True)
+    series.setLabelsVisible(all(value is not None for value in chart.values))
     view = _chart_view(chart.title)
     view.chart().legend().hide()                 # 강조는 색으로 보인다 (범례 '달성률·강조'는 혼란만 준다)
     view.chart().addSeries(series)
@@ -194,49 +205,71 @@ def _attach(chart: QChart, series, axis_x, axis_y) -> None:
 class AnswerCard(QWidget):
     """답 카드 하나: 요청 인식 칩·조건 → 요약 → 이해 못 한 조건 → 표·그래프 → 원인 → 주의 → 추천 질문."""
 
-    def __init__(self, result: ChatAnswer, on_question, on_export=None, on_report=None):
+    def __init__(self, result: ChatAnswer, on_question, on_export=None, on_report=None, on_pdf=None, on_navigate=None):
         super().__init__()
         self.answer = result
-        self.export_button = self.report_button = None
+        self.on_navigate = on_navigate
+        self.export_button = self.report_button = self.pdf_button = None
+        self.result_count = self.expand_button = self.footer = None
+        self.is_stale = False
+        search_tables = tuple(t for t in result.tables if t.title == "조회 결과")
+        empty_search = (Intent.SEARCH in result.request.intents and not result.issues
+                        and bool(search_tables) and not any(t.rows for t in search_tables))
+        unavailable = (bool(result.request.intents) and not empty_search and not result.equipment_ids
+                       and not result.charts and not result.report and not result.cause
+                       and (not result.tables or not any(t.rows for t in result.tables)))
+        self.empty_kind = "unrecognized" if not result.request.understood else "unavailable" if unavailable else None
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
-        avatar = _sparkle(36)
-        avatar.setObjectName("aiAvatar")
-        row.addWidget(avatar, 0, Qt.AlignmentFlag.AlignTop)
+        if self.empty_kind is None:
+            row.addWidget(avatar(), 0, Qt.AlignmentFlag.AlignTop)
         frame = QFrame()
         frame.setObjectName("aiAnswer")
         body = QVBoxLayout(frame)
         body.setContentsMargins(22, 18, 22, 18)
         body.setSpacing(12)
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        header.addWidget(label("요청 인식", 12, medium=True, color="rgba(20,32,51,0.6)"))
+        if self.empty_kind == "unrecognized":
+            body.addWidget(_wrap("조건 인식 실패 · 조건을 정확히 이해하지 못했어요", 13, name="chatNote"))
+        elif self.empty_kind == "unavailable":
+            body.addWidget(_wrap("자료 없음 · 조건은 이해했지만 해당 자료가 없어요", 13, name="chatStale"))
         self.intent_tags = [_tag(INTENT_LABELS[i]) for i in result.request.intents]
-        for tag in self.intent_tags:
-            header.addWidget(tag)
-        header.addStretch(1)
+        recognition = flow_row([label("요청 인식", 12, medium=True, color=SECONDARY), *self.intent_tags])
+        recognition.setVisible(self.empty_kind is None)
+        body.addWidget(recognition)
+        self.conditions = _wrap(result.understood, 12, SECONDARY)
+        self.conditions.setVisible(result.request.understood)
+        body.addWidget(self.conditions)
         self.stale = _wrap("이전 자료 기준 · 다시 물어보세요", 12, name="chatStale")
         self.stale.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.stale.hide()
-        header.addWidget(self.stale, 0, Qt.AlignmentFlag.AlignTop)
-        body.addLayout(header)
+        body.addWidget(self.stale)
         self.summary = _wrap(result.summary, 14, INK)
         body.addWidget(self.summary)
         for issue in result.issues:
             body.addWidget(_wrap(f"이해했지만 반영하지 못한 조건 · {issue}", 12, name="chatIssue"))
         self.tables, self.charts = [], []
-        charts = QHBoxLayout()
-        charts.setSpacing(12)
+        chart_cards = []
         for chart in result.charts:
             view = bar_chart(chart) if isinstance(chart, BarChart) else line_chart(chart)
             self.charts.append(view)
-            charts.addWidget(view, 1)
+            holder = QFrame()
+            holder.setStyleSheet("QFrame {background: white; border-radius: 10px;}")
+            column = QVBoxLayout(holder)
+            column.setContentsMargins(8, 8, 8, 8)
+            column.addWidget(view)
+            note = getattr(chart, "note", "")
+            if isinstance(chart, BarChart) and any(v is None for v in chart.values):
+                note = " · ".join(filter(None, (note, "자료 없음: " + ", ".join(n for n, v in zip(chart.labels, chart.values) if v is None))))
+            if note:
+                column.addWidget(_wrap(note, 11, SECONDARY))
+            chart_cards.append(holder)
         if self.charts:
-            body.addLayout(charts)
+            body.addWidget(_WrapRow(chart_cards, 360, fields=True))
         if result.cause:
             title = QHBoxLayout()
             title.addWidget(label("원인 분석", 13, medium=True))
+            title.addWidget(_tag("AI 설명" if result.cause_is_ai else "자료 근거"))
             title.addStretch(1)
             body.addLayout(title)
             body.addWidget(_wrap(result.cause, 13, INK))
@@ -251,47 +284,97 @@ class AnswerCard(QWidget):
             self.tables.append(widget)
             body.addWidget(widget)
         if result.report is not None:
-            body.addWidget(self._report_card(result, on_report))
+            body.addWidget(self._report_card(result, on_report, on_pdf))
         for notice in result.notices:
-            body.addWidget(_wrap(f"※ {notice}", 12, "#8a5a00"))
+            body.addWidget(_wrap(notice, 12, name="chatNote"))
         if result.suggestions:
             body.addWidget(_WrapRow([_chip(question, on_question) for question in result.suggestions], 240))
-        actions = QHBoxLayout()
-        actions.addStretch(1)
+        if (unavailable or result.issues) and result.request.understood and on_navigate is not None:
+            import_button = button("데이터 가져오기")
+            import_button.clicked.connect(lambda: on_navigate("import"))
+            body.addWidget(import_button, 0, Qt.AlignmentFlag.AlignLeft)
+        result_actions, file_actions = [], []
+        if Intent.SEARCH in result.request.intents and search_tables and not result.issues:
+            self.result_count = label(f"조건에 맞는 설비 {len(set(result.equipment_ids))}대", 12, color=SECONDARY)
+            self.result_count.setToolTip("Excel 내보내기도 이 응답의 설비 ID를 기준으로 합니다.")
+            result_actions.append(self.result_count)
+            if result.equipment_ids:
+                self.expand_button = button("전체 보기 >")
+                self.expand_button.clicked.connect(self._all_rows)
+                result_actions.append(self.expand_button)
         intents = set(result.request.intents)
         if on_export is not None and Intent.SEARCH in intents and not result.issues and result.tables:
             self.export_button = button("Excel 내보내기")
             self.export_button.clicked.connect(lambda *_: on_export(self))
-            actions.addWidget(self.export_button)
+            file_actions.append(self.export_button)
         analysis = intents & {Intent.COMPARE, Intent.CHANGE, Intent.CAUSE, Intent.PRIORITY, Intent.FORECAST}
         if on_report is not None and analysis and not result.issues and result.report is None:
             self.report_button = button("보고서로 저장", primary=True)
             self.report_button.clicked.connect(lambda *_: on_report(self))
-            actions.addWidget(self.report_button)
-        if self.export_button or self.report_button:
-            body.addLayout(actions)
+            file_actions.append(self.report_button)
+        if result_actions or file_actions:
+            self.footer = AnswerActions(result_actions, file_actions)
+            body.addWidget(self.footer)
         row.addWidget(frame, 1)
 
-    def _report_card(self, result: ChatAnswer, on_report) -> QFrame:
+    def _report_card(self, result: ChatAnswer, on_report, on_pdf) -> QFrame:
         """'보고서 만들어줘' 답의 파일 카드 (화면 10-3): 파일 이름 · 구성 · Word로 저장."""
         card = QFrame()
         card.setObjectName("aiStarter")
         line = QHBoxLayout(card)
         line.setContentsMargins(16, 12, 16, 12)
         line.setSpacing(12)
+        line.addWidget(asset_label("d5f0a.svg", slot=52))
         text = QVBoxLayout()
         month = result.base_date.strftime("%Y-%m") if result.base_date else ""
-        text.addWidget(label(f"SETRON_표준화_보고서_{month}.docx", 14, medium=True))
+        text.addWidget(_wrap(f"SETRON_표준화_보고서_{month}.docx", 14, bold=True))
         text.addWidget(_wrap(" · ".join(f"{i}. {s}" for i, s in enumerate(result.report.sections, 1)), 12, SECONDARY))
+        text.addWidget(_wrap("저장한 보고서는 보고서 탭에서 확인할 수 있습니다.", 11, SECONDARY))
+        if self.on_navigate is not None:
+            reports = button("보고서 목록 보기")
+            reports.clicked.connect(lambda: self.on_navigate("reports"))
+            text.addWidget(reports, 0, Qt.AlignmentFlag.AlignLeft)
         line.addLayout(text, 1)
         if on_report is not None and not result.issues:
-            self.report_button = button("Word로 저장", primary=True)
+            self.report_button = button("Word 다운로드", primary=True)
             self.report_button.clicked.connect(lambda *_: on_report(self))
             line.addWidget(self.report_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        if on_pdf is not None and not result.issues:
+            self.pdf_button = button("PDF")
+            self.pdf_button.clicked.connect(lambda: on_pdf(self))
+            line.addWidget(self.pdf_button)
         return card
 
+    def _all_rows(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("AI 분석 · 조회 결과 전체 보기")
+        dialog.resize(900, 600)
+        body = QVBoxLayout(dialog)
+        body.addWidget(_wrap(self.answer.understood, 12, SECONDARY))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        for table in self.answer.tables:
+            layout.addWidget(label(table.title, 14, medium=True))
+            widget = table_widget(table)
+            widget.setMinimumHeight(300)
+            widget.setMaximumHeight(16777215)
+            layout.addWidget(widget)
+        scroll.setWidget(content)
+        body.addWidget(scroll, 1)
+        close = button("닫기")
+        close.clicked.connect(dialog.accept)
+        body.addWidget(close)
+        dialog.exec()
+
     def mark_stale(self):
+        self.is_stale = True
         self.stale.show()
+        for widget in (self.export_button, self.report_button, self.pdf_button):
+            if widget is not None:
+                widget.setEnabled(False)
+                widget.setToolTip("자료가 바뀌었습니다. 다시 질문한 뒤 저장해 주세요.")
 
 
 class PendingCard(QWidget):
@@ -304,9 +387,7 @@ class PendingCard(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
-        avatar = _sparkle(36)
-        avatar.setObjectName("aiAvatar")
-        row.addWidget(avatar, 0, Qt.AlignmentFlag.AlignTop)
+        row.addWidget(avatar(), 0, Qt.AlignmentFlag.AlignTop)
         frame = QFrame()
         frame.setObjectName("aiAnswer")
         body = QVBoxLayout(frame)
@@ -322,24 +403,36 @@ class PendingCard(QWidget):
         self.steps = [label(f"○ {step}", 13, color=SECONDARY) for step in STEPS]
         for step in self.steps:
             body.addWidget(step)
+        body.addWidget(_wrap("응답 대기 중 · 단계별 진행률은 제공되지 않습니다.", 11, SECONDARY))
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setFixedHeight(4)
+        self.progress.setTextVisible(False)
+        body.addWidget(self.progress)
+        skeletons = []
+        for _ in range(2):
+            skeleton = QFrame()
+            skeleton.setMinimumWidth(230)
+            skeleton.setFixedHeight(150)
+            bars = QVBoxLayout(skeleton)
+            for width in (140, 220, 180):
+                bar = QFrame()
+                bar.setStyleSheet("background: #e5e8ee; border-radius: 4px;")
+                bar.setFixedHeight(16)
+                bar.setFixedWidth(width)
+                bars.addWidget(bar)
+            skeletons.append(skeleton)
+        self.skeletons = _WrapRow(skeletons, 260)
+        body.addWidget(self.skeletons)
         row.addWidget(frame, 1)
         self.done = 0
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self._advance)
-        self.timer.start(350)
-        self._advance()
-
-    def _advance(self):
-        if self.done < len(STEPS) - 1:
-            self.steps[self.done].setText(f"✓ {STEPS[self.done]}")
-            self.steps[self.done].setStyleSheet(f"color: {INK};")
-            self.done += 1
-            self.steps[self.done].setText(f"◐ {STEPS[self.done]}")
-            self.steps[self.done].setStyleSheet(f"color: {PRIMARY};")
 
     def finish(self, text: str):
         self.timer.stop()
         self.stop_button.hide()
+        self.progress.hide()
+        self.skeletons.hide()
         self.title.setText(text)
         self.title.setStyleSheet(f"color: {SECONDARY};")
 
@@ -413,6 +506,7 @@ class ChatPage(QWidget):
     """
 
     navigate_requested = Signal(str)
+    report_saved = Signal(object)             # 실제 생성된 경로. 분석 엔진·DB 저장 계약과 별개다.
     fresh_data_ready = Signal(object)          # 기존 AI 화면 연결 호환용 (대화 화면은 쓰지 않는다)
 
     def __init__(self, service, *, analysis_allowed=None):
@@ -420,10 +514,14 @@ class ChatPage(QWidget):
         self.service = service
         self.analysis_allowed = analysis_allowed or (lambda: True)
         self.previous = None
+        self._conversation_mode = False
         self.cards: list[AnswerCard] = []
         self.pending: PendingCard | None = None
         self.request = ReadRequest(self)
         self.request.completed.connect(self._completed)
+        self.report_request = ReadRequest(self)
+        self.report_request.completed.connect(self._report_prepared)
+        self._report_context = None
         self.setStyleSheet(_CHAT_STYLE)
         page = QVBoxLayout(self)
         page.setContentsMargins(0, 4, 0, 0)
@@ -456,6 +554,10 @@ class ChatPage(QWidget):
         bottom.setContentsMargins(20, 12, 20, 16)
         bottom.setSpacing(8)
         self.quick_chips = []
+        self.example_chips = [_chip(question, self.send) for _, _, questions in self.starters for question in questions[:1]]
+        examples = flow_row([label("자주 하는 질문", 12, color=SECONDARY), *self.example_chips])
+        examples.hide()
+        bottom.addWidget(examples)
         for title, with_previous, alone in QUICK:
             chip = QPushButton(title)
             chip.setObjectName("aiQuick")
@@ -472,29 +574,28 @@ class ChatPage(QWidget):
             action.triggered.connect(lambda *_, q=action.text(): self.send(q))
         self.faq_button.setMenu(self.faq_menu)
         chips_row = QWidget()
-        line = QHBoxLayout(chips_row)
-        line.setContentsMargins(0, 0, 0, 0)
-        line.setSpacing(8)
+        from setron.ui.chat_components import FlowLayout
+        line = FlowLayout(chips_row)
         heading = label("바로 분석", 12, medium=True, color=SECONDARY)
         line.addWidget(heading)
         for chip in self.quick_chips:
             line.addWidget(chip)
-        line.addStretch(1)
         line.addWidget(self.faq_button)
-        self.new_button = QPushButton("↺ 새 대화")
+        self.new_button = QPushButton("새 대화")
         self.new_button.setObjectName("aiQuick")
         self.new_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_button.setToolTip("지금 대화를 지우고 처음 화면으로 돌아갑니다")
         self.new_button.clicked.connect(lambda *_: self.new_conversation())
         line.addWidget(self.new_button)
         chips_row.hide()                                 # 첫 답이 나온 뒤 보인다 (처음엔 예시 카드)
-        self.chip_rows = [chips_row]
+        self.chip_rows = [examples, chips_row]
         bottom.addWidget(chips_row)
         box = QFrame()
         box.setObjectName("aiInputBox")
         line = QHBoxLayout(box)
         line.setContentsMargins(14, 6, 6, 6)
-        line.addWidget(_sparkle(18))
+        self.input_icon = _sparkle(18)
+        line.addWidget(self.input_icon)
         self.input = QLineEdit()
         self.input.setPlaceholderText("질문을 입력하세요. 예) 화성 C3 버전은 언제 통일될까?")
         self.input.returnPressed.connect(lambda: self.send())
@@ -507,6 +608,13 @@ class ChatPage(QWidget):
         self.status.hide()
         self._blocked_notice = False
         bottom.addWidget(self.status)
+        self.retry_button = button("다시 시도")
+        self.retry_button.hide()
+        self.retry_button.clicked.connect(lambda: self.send(self.last_question))
+        bottom.addWidget(self.retry_button, 0, Qt.AlignmentFlag.AlignRight)
+        self.saved_toast = None
+        self.last_question = ""
+        self.bottom = bottom
         inside.addWidget(area)
         page.addWidget(conversation, 1)
 
@@ -533,12 +641,23 @@ class ChatPage(QWidget):
             QTimer.singleShot(0, self._fit_height)
         return False
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._conversation_mode and event.size().width() != event.oldSize().width():
+            QTimer.singleShot(0, self._fit_height)
+
     def _fit_height(self):
         outer = self._outer_scroll()
         if outer is None or not self.isVisible() or outer.widget() is None:
             return
-        top = self.mapTo(outer.widget(), QPoint(0, 0)).y()
-        self.setMinimumHeight(max(560, outer.viewport().height() - top - 24))
+        top = self.mapTo(outer.viewport(), QPoint(0, 0)).y() + outer.verticalScrollBar().value()
+        available = outer.viewport().height() - top - 24
+        if self._conversation_mode:
+            # 대화 중에는 질문 입력줄이 바깥 스크롤 아래로 밀려나지 않게 고정한다.
+            self.setFixedHeight(max(360, available))
+        else:
+            self.setMaximumHeight(16777215)
+            self.setMinimumHeight(max(560, available))
 
     @property
     def notice_text(self) -> str:
@@ -550,27 +669,150 @@ class ChatPage(QWidget):
     # --- 내보내기 · 보고서 ----------------------------------------------------------------
     def _export(self, card: "AnswerCard"):
         """답의 조회 결과를 Excel로 (화면 10-1)."""
-        dialog = ExcelExportDialog(self.service.export_data(card.answer), self)
+        if card.is_stale:
+            self._notice("자료가 바뀌었습니다. 다시 질문한 뒤 내보내 주세요.")
+            return None
+        try:
+            dialog = ExcelExportDialog(self.service.export_data(card.answer), self)
+        except Exception:
+            self._notice("내보낼 자료를 준비하지 못했습니다. 자료를 다시 조회해 주세요.")
+            return None
         if self.open_dialog(dialog) and dialog.result is not None:
             self._notice(f"Excel로 저장했어요 · {dialog.result.path}")
+            self._saved(dialog.saved_paths, "Excel 내보내기 완료")
         return dialog
 
-    def _report(self, card: "AnswerCard"):
+    def _report_dialog(self, card: "AnswerCard"):
         """답을 Word 보고서로 (화면 10-2). '보고서 만들어줘' 답이면 같은 범위의 여러 분석을 각 장으로 넣는다."""
+        if card.is_stale:
+            self._notice("자료가 바뀌었습니다. 다시 질문한 뒤 보고서를 만들어 주세요.")
+            return None
         if card.answer.report is not None:
-            answers = self.service.report_parts(card.answer)
-            parts = [ReportPart(a, tuple(chart_png(self._chart(c), (900, 420)) for c in a.charts)) for a in answers]
+            answers = card.report_parts
+            parts = [ReportPart(a, tuple(self._chart_image(c) for c in a.charts)) for a in answers]
             month = card.answer.base_date.strftime("%Y-%m") if card.answer.base_date else ""
             dialog = ReportDialog(parts, title=f"SETRON 표준화 보고서 {month}".strip(), parent=self)
         else:
             index = self.cards.index(card)
             previous = [ReportPart(c.answer, tuple(chart_png(v) for v in c.charts)) for c in self.cards[:index]
-                        if c.answer.request.understood and not c.answer.issues]
+                        if c.answer.request.understood and not c.answer.issues and not c.is_stale]
             dialog = ReportDialog([ReportPart(card.answer, tuple(chart_png(v) for v in card.charts))],
                                   previous=previous, parent=self)
+        return dialog
+
+    def _report(self, card: "AnswerCard"):
+        if self._defer_report(card):
+            return None
+        try:
+            dialog = self._report_dialog(card)
+        except Exception:
+            self._notice("보고서 자료를 준비하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+            return None
+        if dialog is None:
+            return None
         if self.open_dialog(dialog) and dialog.result is not None:
             self._notice(f"보고서를 저장했어요 · {dialog.result.path}")
+            self._saved(dialog.saved_paths, self._saved_title(dialog.saved_paths), report=True)
+            if card.answer.report is not None and any(p.suffix == ".docx" for p in dialog.saved_paths):
+                card.report_button.setText("다운로드됨")
+                card.report_button.setIcon(icon("ai-ver5/62b26.svg"))
+                from setron.ui.theme import svg_size
+                card.report_button.setIconSize(svg_size("ai-ver5/62b26.svg"))
+                card.report_button.setProperty("primary", False)
+                card.report_button.setProperty("soft", True)
+                card.report_button.style().unpolish(card.report_button)
+                card.report_button.style().polish(card.report_button)
         return dialog
+
+    @staticmethod
+    def _saved_title(paths):
+        suffixes = {p.suffix.lower() for p in paths}
+        return "Word 다운로드 완료" if suffixes == {".docx"} else "PDF 다운로드 완료" if suffixes == {".pdf"} else "보고서 저장 완료"
+
+    def _pdf(self, card):
+        if self._defer_report(card, pdf=True):
+            return None
+        try:
+            source = self._report_dialog(card)
+            if source is None:
+                return None
+            dialog = PdfPreviewDialog(source.report(), filename=source.files.path(".pdf").name, parent=self)
+            source.deleteLater()
+            if self.open_dialog(dialog) and dialog.result is not None and dialog.result.saved:
+                self._saved((dialog.result.path,), "PDF 다운로드 완료", report=True)
+            return dialog
+        except Exception:
+            self._notice("PDF 미리보기를 준비하지 못했습니다. 다시 시도해 주세요.")
+            return None
+
+    def _defer_report(self, card, *, pdf=False):
+        """회사 AI를 다시 부를 수 있는 보고서 각 장의 준비는 UI 스레드에서 실행하지 않는다."""
+        if card.is_stale or not self.analysis_allowed():
+            self._notice("자료가 바뀌었거나 저장 중입니다. 다시 조회한 뒤 보고서를 만들어 주세요.")
+            return True
+        if self.busy:
+            self._notice("진행 중인 분석이 끝나거나 중지된 뒤 다시 선택해 주세요.")
+            return True
+        if card.answer.report is None or getattr(card, "report_parts", None) is not None:
+            return False
+        self._report_context = (card, pdf)
+        for widget in (card.report_button, card.pdf_button):
+            if widget is not None:
+                widget.setEnabled(False)
+        self.pending = PendingCard()
+        self.pending.title.setText("보고서 자료를 준비하고 있습니다…")
+        self.pending.stop_requested.connect(self.stop)
+        self._append(self.pending)
+        service, answer = self.service, card.answer
+        self.report_request.start(BackgroundRead(lambda: service.report_parts(answer)))
+        self._sync()
+        return True
+
+    def _restore_report_actions(self):
+        context, self._report_context = self._report_context, None
+        if context is not None:
+            card, _ = context
+            for widget in (card.report_button, card.pdf_button):
+                if widget is not None:
+                    widget.setEnabled(not card.is_stale)
+        return context
+
+    def _report_prepared(self, result, error):
+        context = self._restore_report_actions()
+        pending, self.pending = self.pending, None
+        if pending is not None:
+            pending.hide()
+            pending.deleteLater()
+        self._sync()
+        if context is None:
+            return
+        card, pdf = context
+        if card not in self.cards or card.is_stale:
+            return
+        if error is not None or not result or not all(isinstance(value, ChatAnswer) for value in result):
+            self._notice("보고서 자료를 준비하지 못했습니다. 연결 상태를 확인하고 Word 또는 PDF를 다시 선택해 주세요.")
+            return
+        card.report_parts = tuple(result)
+        self._pdf(card) if pdf else self._report(card)
+
+    def _saved(self, paths, title, *, report=False):
+        if not paths or not all(p.is_file() for p in paths):
+            return
+        if self.saved_toast is not None:
+            self.messages.removeWidget(self.saved_toast)
+            self.saved_toast.deleteLater()
+        self.saved_toast = SavedFileToast(paths, title, self)
+        self._append(self.saved_toast)
+        self.saved_toast.show()
+        if report:
+            self.report_saved.emit(tuple(paths))
+
+    def _chart_image(self, chart):
+        view = self._chart(chart)
+        try:
+            return chart_png(view, (900, 420))
+        finally:
+            view.deleteLater()
 
     @staticmethod
     def _chart(chart):
@@ -588,6 +830,9 @@ class ChatPage(QWidget):
             return False
         if self.pending is not None:
             self.request.cancel()
+            self.report_request.cancel()
+            self._restore_report_actions()
+            self.pending.timer.stop()
             self.pending = None
         while self.messages.count() > 1:                  # 마지막은 아래로 밀어 주는 빈 칸
             item = self.messages.takeAt(0)
@@ -595,14 +840,21 @@ class ChatPage(QWidget):
                 item.widget().hide()
                 item.widget().deleteLater()
         self.cards, self.previous = [], None
+        self._conversation_mode = False
+        self.setMaximumHeight(16777215)
+        self.saved_toast = None
         self.starters = self._starters()
         self.empty = EmptyState(self._overview(), self.send, self.starters)
         self.messages.insertWidget(0, self.empty)
         for row in self.chip_rows:
             row.hide()
         self.input.clear()
+        self.scroll.setMinimumHeight(360)
+        self.input_icon.setPixmap(icon(SPARKLE).pixmap(18, 18))
+        self.retry_button.hide()
         self._notice("")
         self._sync()
+        self._fit_height()
         return True
 
     def _overview(self) -> str:
@@ -633,7 +885,12 @@ class ChatPage(QWidget):
             self._notice("관리 데이터를 저장하거나 다시 읽는 중이라 지금은 분석할 수 없습니다. 잠시 후 다시 보내 주세요.")
             return False
         self._notice("")
+        self.retry_button.hide()
+        self.last_question = question
+        self._conversation_mode = True
         self.input.clear()
+        self.scroll.setMinimumHeight(160)
+        self.input_icon.setPixmap(icon("9d5d2.svg").pixmap(18, 18))
         self.empty.hide()
         bubble = _UserBubble()
         self._append(bubble)
@@ -641,6 +898,7 @@ class ChatPage(QWidget):
         self.pending = PendingCard()
         self.pending.stop_requested.connect(self.stop)
         self._append(self.pending)
+        self._fit_height()
         service, previous = self.service, self.previous
         self.request.start(BackgroundRead(lambda: service.ask(question, previous)))
         self._sync()
@@ -651,6 +909,8 @@ class ChatPage(QWidget):
         if self.pending is None:
             return
         self.request.cancel()
+        self.report_request.cancel()
+        self._restore_report_actions()
         self.pending.finish("중지했습니다. 다시 물어보세요.")
         self.pending = None
         self._sync()
@@ -659,6 +919,8 @@ class ChatPage(QWidget):
         """자료가 바뀌었다: 진행 중인 답을 버리고, 이미 받은 답에 '이전 자료 기준'을 표시한다."""
         if self.pending is not None:
             self.request.cancel()
+            self.report_request.cancel()
+            self._restore_report_actions()
             self.pending.finish("자료가 바뀌어 중지했습니다. 다시 물어보세요.")
             self.pending = None
         for card in self.cards:
@@ -673,6 +935,7 @@ class ChatPage(QWidget):
 
     def close(self):
         self.request.cancel()
+        self.report_request.cancel()
         return super().close()
 
     def _completed(self, result, error):
@@ -682,9 +945,10 @@ class ChatPage(QWidget):
             pending.hide()
             pending.deleteLater()
         if error is not None or result is None:
-            self._notice(f"답을 만들지 못했습니다: {error}" if error else "답을 만들지 못했습니다. 다시 물어보세요.")
+            self._notice("답을 만들지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.")
+            self.retry_button.show()
         else:
-            card = AnswerCard(result, self.send, self._export, self._report)
+            card = AnswerCard(result, self.send, self._export, self._report, self._pdf, self.navigate_requested.emit)
             self.cards.append(card)
             self._append(card)
             for row in self.chip_rows:
@@ -703,7 +967,10 @@ class ChatPage(QWidget):
 
     def _sync(self):
         allowed = self.analysis_allowed()
-        for widget in (self.send_button, self.input, self.faq_button, *self.quick_chips):
+        self.input.setEnabled(allowed)     # 분석 중에도 다음 질문 초안은 입력할 수 있다. 자동 전송하지 않는다.
+        self.input.setPlaceholderText("분석 중에도 다음 질문을 입력할 수 있어요" if self.busy else
+                                      "질문을 입력하세요. 예) 화성 C3 버전은 언제 통일될까?")
+        for widget in (self.send_button, self.faq_button, self.retry_button, *self.quick_chips, *self.example_chips):
             widget.setEnabled(allowed and not self.busy)
         if not allowed:
             self._notice("관리 데이터를 저장하거나 다시 읽는 중이라 지금은 분석할 수 없습니다.")

@@ -301,15 +301,18 @@ def test_report_request_gives_word_card_with_all_sections(make_page, tmp_path):
     page.send("이번 달 표준화 보고서 만들어줘")
     wait(page)
     card = page.cards[0]
-    assert card.report_button is not None and card.report_button.text() == "Word로 저장"
+    assert card.report_button is not None and card.report_button.text() == "Word 다운로드"
+    assert card.pdf_button is not None
     opened = _saving_dialogs(page, tmp_path)
     card.report_button.click()
+    wait(page)
     dialog = opened[0]
     assert dialog.title.text() == "SETRON 표준화 보고서 2026-10"
     document = Document(dialog.result.path)
     headings = [p.text for p in document.paragraphs if p.style.name.startswith("Heading 1")]
     assert headings == ["1. 요약 KPI", "2. 구역별 목표 N 달성률", "3. 원인 분석", "4. 업그레이드 우선순위", "5. 통일 시점 예측"]
     assert len(document.inline_shapes) >= 2
+    assert card.report_button.text() == "다운로드됨"
 
 
 def test_answers_with_unresolved_conditions_have_no_save_buttons(make_page):
@@ -317,3 +320,35 @@ def test_answers_with_unresolved_conditions_have_no_save_buttons(make_page):
     page.send("중국 사업장 O2 현황 보여줘")
     wait(page)
     assert page.cards[0].export_button is None and page.cards[0].report_button is None
+
+
+def test_zero_search_shows_zero_without_missing_data_or_full_view(make_page):
+    from PySide6.QtWidgets import QPushButton
+    page = make_page()
+    page.send("화성 15L 목표 N 미만 설비 보여줘")
+    wait(page)
+    card = page.cards[0]
+    assert card.answer.equipment_ids == ()
+    assert card.result_count.text() == "조건에 맞는 설비 0대"
+    assert card.expand_button is None
+    assert card.empty_kind is None            # 자료 없음이 아니라, 정상 조회의 필터 결과 0건
+    assert not any(w.text() == "데이터 가져오기" for w in card.findChildren(QPushButton))
+
+
+def test_zero_search_excel_dialog_and_saved_file_keep_zero(make_page, tmp_path):
+    from openpyxl import load_workbook
+    from setron.features.export.query_result import ExportRange
+    page = make_page()
+    page.send("화성 15L 목표 N 미만 설비 보여줘")
+    wait(page)
+    opened = _saving_dialogs(page, tmp_path)
+    page.cards[0].export_button.click()
+    dialog = opened[0]
+    assert dialog.range_buttons[ExportRange.SHOWN].text().startswith("조회 결과 0대")
+    assert dialog.range_buttons[ExportRange.ALL].text().startswith("같은 조건의 전체 설비 2대")
+    book = load_workbook(dialog.result.path, read_only=True)
+    try:
+        assert book["조회 결과"].max_row == 1
+        assert not list(book["조회 결과"].iter_rows(min_row=2, values_only=True))
+    finally:
+        book.close()

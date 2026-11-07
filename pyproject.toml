@@ -30,6 +30,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 setron = ["ui/assets/*.png", "ui/assets/*.svg", "ui/assets/*.txt", "ui/assets/fonts/*.ttf", "ui/assets/fonts/*.txt",
+          "ui/assets/ai-ver5/*.svg",
           "features/export/chartex/*.xml"]
 
 [tool.pytest.ini_options]
