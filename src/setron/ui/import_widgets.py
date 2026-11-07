@@ -6,12 +6,13 @@ from datetime import date
 from PySide6.QtCore import QDate, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QPainter, QTextCharFormat, QTextLayout
 from PySide6.QtWidgets import (
-    QCalendarWidget, QComboBox, QDialog, QHBoxLayout, QLineEdit, QMenu,
+    QComboBox, QDialog, QHBoxLayout, QLineEdit, QMenu,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QWidgetAction, QHeaderView, QSizePolicy,
     QStyle, QStyleOptionFrame, QToolButton,
 )
 
 from setron.ui.components import Card, button, label
+from setron.ui.calendar_widgets import CalendarWidget
 from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, icon, svg_size
 
@@ -55,16 +56,22 @@ class DateField(QLineEdit):
     def open_calendar(self):
         if self.isReadOnly() or not self.isEnabled():
             return
-        menu = QMenu(self)
-        calendar = QCalendarWidget(menu)
-        calendar.setGridVisible(True)
+        if not hasattr(self, "calendar_menu"):
+            menu = QMenu(self)
+            calendar = CalendarWidget(menu)
+            calendar.setGridVisible(True)
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(calendar)
+            menu.addAction(action)
+            choose = lambda day: (self.setText(day.toString("yyyy-MM-dd")), menu.close())
+            calendar.clicked.connect(choose)
+            calendar.activated.connect(choose)
+            self.calendar_menu = menu
+        menu = self.calendar_menu
+        calendar = menu.actions()[0].defaultWidget()
         current = QDate.fromString(self.text(), "yyyy-MM-dd")
         calendar.setSelectedDate(current if current.isValid() else QDate.currentDate())
-        action = QWidgetAction(menu)
-        action.setDefaultWidget(calendar)
-        menu.addAction(action)
-        calendar.clicked.connect(lambda day: (self.setText(day.toString("yyyy-MM-dd")), menu.close()))
-        self.calendar_menu = menu
+        calendar.showSelectedDate()
         menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
 
 

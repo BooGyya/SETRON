@@ -6,7 +6,7 @@ import json
 
 from PySide6.QtCore import QDate, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDateEdit, QFormLayout, QHBoxLayout, QHeaderView, QLineEdit, QListWidget,
+    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QHeaderView, QLineEdit, QListWidget,
     QListWidgetItem, QPlainTextEdit, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -16,6 +16,7 @@ from setron.features.release.refresh_schemas import RefreshContext
 from setron.features.targets.schemas import CandidateConfirmation
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseConnectionError, DatabaseSaveError
 from setron.ui.components import Card, StatusBadge, button, label
+from setron.ui.calendar_widgets import DateEdit
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.management_data import (
     ENUMS, FIELD_NAMES, KINDS, OPTIONAL_IDS, OPTIONAL_TEXT, display_value,
@@ -100,7 +101,7 @@ class ValueEditor(QWidget):
             self.empty.setChecked(current is None)
             layout.addWidget(self.empty)
             if field == "released_at":
-                self.kind, self.editor = "date", QDateEdit()
+                self.kind, self.editor = "date", DateEdit()
                 self.editor.setDateRange(QDate(1000, 1, 1), QDate(9999, 12, 31))
                 self.editor.setCalendarPopup(True)
                 self.editor.setDisplayFormat("yyyy-MM-dd")

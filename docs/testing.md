@@ -433,3 +433,25 @@ uv run --locked --no-sync python -m pytest tests/test_replay_data_ui.py tests/te
 ```
 
 합성 관측·느린 가짜 읽기 공급자로 검증하며 실제 회사 AI/DB/Excel을 호출하거나 저장 자료를 변경하지 않는다. 조회 작업만 워커에서 실행하고 위젯·차트 생성과 재생 타이머는 UI 스레드에서 실행한다. 원본 SVG 크기와 1600×960·1100×800·960×600, 150% 배율 렌더링도 확인한다.
+
+## 공통 달력·Replay 조회 버튼 정렬
+
+`ui/calendar_widgets.py`의 `CalendarWidget`은 기존 Qt 날짜 표와 키보드 동작을 유지하면서 연도 → 월 순서의 공통 헤더를 제공한다. 연도·월 모두 드롭다운이며 목록 안에서 스크롤할 수 있다. 연도 목록은 9999개 항목 객체를 생성하지 않는 모델을 사용하고 최대 10개 행 높이로 표시한다. 자체 목록 스타일은 앱의 전역 스타일을 소유하거나 변경하지 않는다.
+
+적용 위치는 공통 조회 패널(대시보드·히트맵·설비 목록)의 기준 날짜, 가져오기 공통 기준일, 저장 자료 삭제의 시작/종료일, Replay 시작/종료일, 관리 데이터의 출시일이다. `DateEdit`은 네이티브 QDateEdit의 날짜 범위와 입력·확정 동작을 유지한다. `DateField`/`PeriodDateField`는 기존 8자리 입력·첫 자리 클릭·블록 커서 숨김·빈 값 의미를 유지하고 공통 팝업만 재사용한다. 연도·월 탐색만으로 날짜를 새로 확정하지 않는다.
+
+Replay의 초기화·조회 적용은 필드 행 전체 가운데가 아닌 인접한 콤보 입력칸의 상·하단에 맞춘다. 좁은 창에서 조건이 두 열로 줄바꿈되어도 같은 정렬과 38px 높이를 유지한다.
+
+`tests/test_ui_calendar_widgets.py`는 연도/월 순서·실제 휠 스크롤·숫자 키 이동·윤년·기간 경계·연도 전환·날짜 확정·팝업 재사용·6주 표시·모든 화면의 공통 달력 사용·버튼 정렬을 검증한다. 기존 날짜 입력·기간 검사·조회·휠·관리 데이터·Replay 테스트도 함께 확인한다. DB·Excel·AI와 연결하지 않는 프론트 검증이다.
+
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+uv run --locked --no-sync python -m pytest tests/test_ui_calendar_widgets.py tests/test_ui_import_date_entry.py tests/test_ui_import_delete_layout.py tests/test_ui_query_date.py tests/test_ui_wheel.py -q
+uv run --locked --no-sync python -m pytest tests/test_ui_replay_ver5.py tests/test_ui_management.py tests/test_ui_query.py -q
+```
+
+100%·150% 배율에서 Replay의 1600×960·1100×800·960×600 배치, 공통 조회·Replay·관리 데이터의 날짜 팝업과 연도 목록을 렌더링 확인한다. 네이티브 달력의 숨긴 탐색 막대 대신 넣은 헤더 높이를 크기 계산에 반영해 마지막 주가 잘리지 않게 한다.
+
+2026-11-08 검증 결과: 위 두 묶음 각각 **58개·93개 통과**. 드롭다운 화살표·동일 행 크기 최적화의 최종 상태에서도 신규 달력 테스트 **18개를 재실행해 통과**했다. 렌더링·문법 컴파일·공백 검사도 통과했다.
+
+구현 참고: [Qt 달력의 페이지·날짜 선택 API](https://doc.qt.io/qt-6/qcalendarwidget.html), [날짜 입력기의 공통 달력 연결](https://doc.qt.io/qt-6/qdatetimeedit.html#setCalendarWidget), [콤보 목록 표시 개수](https://doc.qt.io/qt-6/qcombobox.html#maxVisibleItems-prop), [독립된 QProxyStyle 적용](https://doc.qt.io/qt-6/qproxystyle.html).

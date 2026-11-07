@@ -4,9 +4,10 @@ from dataclasses import replace
 from datetime import date
 
 from PySide6.QtCore import QDate, QSize, Qt, Signal
-from PySide6.QtWidgets import QComboBox, QDateEdit, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, StatusBadge, button, label
+from setron.ui.calendar_widgets import DateEdit
 from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState, version_filter_caption
 from setron.ui.theme import INK, SECONDARY
 
@@ -220,7 +221,7 @@ class QueryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         title = label("기준 날짜", medium=True, color=INK)
-        self.date_edit = QDateEdit()
+        self.date_edit = DateEdit()
         self.date_edit.setObjectName("query_as_of")
         self.date_edit.setProperty("queryField", True)
         self.date_edit.setAccessibleName("기준 날짜")
