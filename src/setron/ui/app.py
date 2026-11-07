@@ -7,6 +7,7 @@
 
 import argparse
 import sys
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -52,7 +53,8 @@ from setron.ui.management_integration import export_failure, report_filter
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
                   db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None,
-                  rule_extractor=None, chat_enabled: bool = False) -> MainWindow:
+                  rule_extractor=None, chat_enabled: bool = False, import_comparison_loader=None,
+                  import_delete_gateway=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -69,6 +71,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - db_exporter: ``path``를 받아 DB 전체를 .sql로 저장하고 ExportResult를 돌려주는 함수. None이면 내보내기 비활성.
     - data_exporter: 현재 관리값을 읽기 쉬운 Excel로 내보내는 공급자.
     - management_gateway: 워커에서 관리 기록 조회·묶음 저장·XLSX 출력을 실행하는 공급자.
+    - import_comparison_loader: 확인된 동일 범위의 직전 저장본 비교를 제공하는 선택적 읽기 공급자.
+    - import_delete_gateway: 삭제 목록·원자적 삭제를 제공하는 선택적 서비스. 기본 미연결이며 UI에서 SQL을 실행하지 않음.
 
     return
     - 실제 DB 연결을 자동 생성하지 않는 MainWindow.
@@ -209,7 +213,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     if extractor is None and sheet_extractor is None and isinstance(excel, DemoExcel):
         extractor = example_extractor
     importer = ImportPage(excel, extractor, import_saver, refresh_context_provider=release_refresh_context,
-                          sheet_extractor=sheet_extractor, rule_extractor=rule_extractor)
+                          sheet_extractor=sheet_extractor, rule_extractor=rule_extractor,
+                          comparison_loader=import_comparison_loader, delete_gateway=import_delete_gateway)
+    def configure_import_choices():
+        importer.configure_choices(dates=source.dates, sites=(s.label for s in source.catalog.sites),
+                                   families=(family_name(source, key) for key in source.families))
+    configure_import_choices()
     window.release_refresh_context = release_refresh_context
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
     item_risk_save_pending = False
@@ -274,7 +283,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     if ai_analyzer is not None:
         hooks["explainer"] = None  # 분석 공급자를 직접 넘기면 그 공급자로 분석한다
     analysis_allowed = lambda: not (management.busy or management.locked or window.management_saving  # noqa: E731
-                                     or window.management_refresh.busy)
+                                     or window.management_refresh.busy or importer.state == "saving"
+                                     or importer.deletion.phase == "deleting")
     if chat_enabled:
         # 대화형 AI 분석(VER4 10-1~10-5). 대시보드와 같은 자료·목표 N·저장한 N 그룹으로 답하고 조건은 바꾸지 않는다.
         def chat_targets():
@@ -480,6 +490,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         return result
 
     window.export_sql = export_sql
+    importer.deletion.setProperty("backupAvailable", db_exporter is not None)
+    importer.deletion.backup_button.setEnabled(db_exporter is not None)
+    if db_exporter is not None:
+        importer.deletion.backup_requested.connect(export_sql)
     def export_data(path=None):
         """현재 관리값을 원격 develop의 요약 Excel 형식으로 내보낸다."""
         interactive = path is None
@@ -664,6 +678,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.page_changed.connect(lambda key: ai.refresh() if key == "ai" else None)
     ai.navigate_requested.connect(window.navigate)
     importer.requery_requested.connect(lambda: window.navigate("dashboard"))
+    importer.navigate_requested.connect(window.navigate)
+    def show_saved_date(day):
+        window.query_panel.set_draft(replace(window.query_state.draft, as_of=day))
+        window.navigate("dashboard")
+    importer.date_selected.connect(show_saved_date)
     window.query_panel.catalog_changed.connect(dashboard.invalidate)
     window.query_panel.catalog_changed.connect(heatmap.invalidate)
     window.query_panel.catalog_changed.connect(equipment.clear)
@@ -784,7 +803,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     management.request.completed.connect(lambda *_: ai.refresh())
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
-    window.close_guard = lambda: management.state != "saving"
+    window.close_guard = lambda: (management.state != "saving" and importer.state != "saving"
+                                 and importer.deletion.phase != "deleting")
 
     def invalidate_saved_results(receipt):
         """DB 저장 후 이전 판정·대기 중 AI 요청을 폐기하고 N 재확인을 안내한다.
@@ -818,6 +838,19 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.notice.setText("DB 저장 완료 · 기존 조회 결과 갱신 필요 · 목표 N 선택은 유지했습니다.")
 
     importer.saved.connect(invalidate_saved_results)
+    importer.saved.connect(lambda *_: configure_import_choices())
+    def after_import_delete(result):
+        cancel_management_refresh()
+        refresh_query_catalog()
+        dashboard.invalidate()
+        heatmap.invalidate()
+        equipment.clear("저장 자료 삭제 · 조회 적용으로 다시 확인해 주세요.")
+        ai.invalidate_data()
+        versions.refresh_after_save()
+        items.refresh_after_save()
+        list_action.setEnabled(False)
+        configure_import_choices()
+    importer.deletion.deleted.connect(after_import_delete)
     return window
 
 
