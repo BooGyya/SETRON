@@ -34,9 +34,11 @@ from setron.ui.item_data import ItemManagerData, item_data_from_source
 from setron.ui.items import ItemsPage
 from setron.ui.ai_data import FreshAnalysisData, facts_from_snapshot
 from setron.ui.ai_page import AIPage
-from setron.ui.analysis_data import analysis_hooks, choice_parser
+from setron.ui.analysis_data import analysis_hooks, choice_parser, snapshot_targets
 from setron.ui.ai_connection import ai_providers_from_env
 from setron.ui.import_demo import DemoExcel, example_extractor
+from setron.ui.chat_data import ChatService
+from setron.ui.chat_page import ChatPage
 from setron.ui.import_extraction import rule_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -49,7 +51,7 @@ from setron.ui.management_integration import export_failure, report_filter
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
                   db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None,
-                  rule_extractor=None) -> MainWindow:
+                  rule_extractor=None, chat_enabled: bool = False) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -253,11 +255,18 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     hooks = analysis_hooks(source, current_snapshot, ai_client)
     if ai_analyzer is not None:
         hooks["explainer"] = None  # 분석 공급자를 직접 넘기면 그 공급자로 분석한다
-    ai = AIPage(window.query_state, ai_parser, ai_analyzer, apply_ai_selection, current_facts,
-                fresh_loader=fresh_analysis_loader if hasattr(source, "refresh") else None,
-                analysis_allowed=lambda: not (management.busy or management.locked or window.management_saving
-                                               or window.management_refresh.busy),
-                **hooks)
+    analysis_allowed = lambda: not (management.busy or management.locked or window.management_saving  # noqa: E731
+                                     or window.management_refresh.busy)
+    if chat_enabled:
+        # 대화형 AI 분석(VER4 10-1~10-5). 대시보드와 같은 자료·목표 N·저장한 N 그룹으로 답하고 조건은 바꾸지 않는다.
+        def chat_targets():
+            snapshot = dashboard.snapshot
+            return snapshot_targets(snapshot) if snapshot is not None else dict(getattr(source, "targets", {}))
+        ai = ChatPage(ChatService(source, chat_targets, ai_client), analysis_allowed=analysis_allowed)
+    else:
+        ai = AIPage(window.query_state, ai_parser, ai_analyzer, apply_ai_selection, current_facts,
+                    fresh_loader=fresh_analysis_loader if hasattr(source, "refresh") else None,
+                    analysis_allowed=analysis_allowed, **hooks)
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
     window.register_page("versions", versions, uses_query=False)
@@ -320,7 +329,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        window.notice.setVisible(window.route not in ("import", "dashboard", "heatmap") or window.management_saving)
+        quiet = ("import", "dashboard", "heatmap") + (("ai",) if chat_enabled else ())   # 대화 화면은 배지 없이
+        window.notice.setVisible(window.route not in quiet or window.management_saving)
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
@@ -334,7 +344,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · {importer.extraction_label} · 저장 위치: {importer.saver.target_label}")
             list_action.setEnabled(False)
         elif window.route == "ai":
-            window.notice.setText("AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음")
+            window.notice.setText(getattr(ai, "notice_text", "AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음"))
             list_action.setEnabled(False)
         elif window.route == "versions":
             window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
@@ -751,7 +761,8 @@ def main(argv: list[str] | None = None) -> int:
                            data_exporter=data_exporter_from_env(), extractor=ai.extractor,
                            ai_client=ai.client,
                            # 실제 Excel이면 정해진 양식은 규칙으로 먼저 읽는다. 합성 통합문서(--demo-excel)는 예제 흐름 유지.
-                           rule_extractor=None if args.demo_excel else rule_extractor)
+                           rule_extractor=None if args.demo_excel else rule_extractor,
+                           chat_enabled=True)
     if problem or ai.problem:
         window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
     if screen := app.primaryScreen():

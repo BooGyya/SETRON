@@ -6,7 +6,8 @@
 """
 
 from .answers import ChatData, answer
+from .polish import polish
 from .recognize import recognize
 from .schemas import ChatAnswer, ChatRequest, Intent
 
-__all__ = ["ChatAnswer", "ChatData", "ChatRequest", "Intent", "answer", "recognize"]
+__all__ = ["ChatAnswer", "ChatData", "ChatRequest", "Intent", "answer", "polish", "recognize"]

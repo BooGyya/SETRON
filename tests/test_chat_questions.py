@@ -179,17 +179,27 @@ def test_cause_uses_ai_text_only_when_numbers_match():
     from setron.features.ai.schemas import AIResult, AIStatus, AITask, AnalysisAnswer
     from setron.features.analysis.schemas import AnalysisReport
 
+    from setron.infrastructure.ai_client import ResponseSource
+
     def explainer(question, data):
-        return AnalysisReport(AIResult(AITask.ANALYSIS, AIStatus.OK, "", AnalysisAnswer("16L은 C3 통합UI 1대가 미달입니다.")), {})
+        return AnalysisReport(AIResult(AITask.ANALYSIS, AIStatus.OK, "", AnalysisAnswer("16L은 C3 통합UI 1대가 미달입니다."),
+                                       ResponseSource.REAL), {})
 
     def wrong(question, data):
-        return AnalysisReport(AIResult(AITask.ANALYSIS, AIStatus.OK, "", AnalysisAnswer("99대가 미달입니다.")), {}, ("99",))
+        return AnalysisReport(AIResult(AITask.ANALYSIS, AIStatus.OK, "", AnalysisAnswer("99대가 미달입니다."),
+                                       ResponseSource.REAL), {}, ("99",))
+
+    def example(question, data):
+        return AnalysisReport(AIResult(AITask.ANALYSIS, AIStatus.OK, "", AnalysisAnswer("예제 고정 설명"),
+                                       ResponseSource.EXAMPLE), {})
 
     question = recognize("16L 원인 분석해줘", CATALOG)
     good = answer(question, ChatData(DATA.records, CATALOG, TARGETS, DATA.family_names, explainer=explainer))
     assert good.cause_is_ai and good.cause == "16L은 C3 통합UI 1대가 미달입니다."
     bad = answer(question, ChatData(DATA.records, CATALOG, TARGETS, DATA.family_names, explainer=wrong))
     assert not bad.cause_is_ai and any("자료에 없는 숫자" in n for n in bad.notices)
+    fixed = answer(question, ChatData(DATA.records, CATALOG, TARGETS, DATA.family_names, explainer=example))
+    assert not fixed.cause_is_ai and "예제 고정 설명" not in fixed.cause          # 예제 응답은 원인으로 쓰지 않는다
 
 
 def test_priority_without_risk_rules_is_marked():
@@ -228,10 +238,14 @@ def test_report_card():
 
 # --- 이해 못 한 조건·말 ------------------------------------------------------------------
 @pytest.mark.parametrize("question, word", [("중국 사업장 O2 현황 알려줘", "중국"), ("O7 설비 몇 대야?", "O7"),
+                                            ("평택 P9 미달 설비 보여줘", "P9"), ("화성 18L 현황", "18L"),
                                             ("v9.9.9 쓰는 설비 보여줘", "v9.9.9"), ("3월 평택 현황", "3월")])
 def test_unknown_names_are_shown_not_dropped(question, word):
     result = ask(question)
     assert any(word in issue for issue in result.issues)
+    # 말한 조건을 못 쓰면 더 넓은 범위로 답하지 않고, 지금 자료의 선택지를 알려 준다
+    assert not result.tables and not result.charts
+    assert "답하지 않았어요" in result.summary and "사업장 평택·화성" in result.summary
 
 
 @pytest.mark.parametrize("question", ["안녕", "고마워"])
@@ -266,3 +280,88 @@ def test_korean_particles_follow_pronunciation():
     assert [_josa(w, "은/는") for w in ("15L", "C3 통합UI", "O2", "16L C3 통합UI", "평택", "확인 필요")] == \
         ["15L은", "C3 통합UI는", "O2는", "16L C3 통합UI는", "평택은", "확인 필요는"]
     assert "16L C3 통합UI는 이 기간에" in ask("목표 N 달성률이 가장 낮은 원본 구역을 분석해줘").summary
+
+
+# --- 이어지는 질문 ------------------------------------------------------------------------
+def follow(first, then):
+    previous = recognize(first, CATALOG)
+    return answer(recognize(then, CATALOG, previous=previous), DATA)
+
+
+def test_follow_up_narrows_previous_conditions():
+    result = follow("평택 O2 중 목표 N 미만인 설비만 보여줘", "그중에 P3만")
+    assert result.request.follow_up and result.understood.startswith("앞 질문 이어서")
+    assert codes(result) == ["DM-029"] and "Site = 평택" in result.understood and "원본 구역 = P3" in result.understood
+
+
+def test_follow_up_switching_site_drops_previous_lines():
+    result = follow("평택 P3 목표 N 미만 설비 보여줘", "그럼 화성은?")
+    assert result.request.conditions.sites == ("화성",) and result.request.conditions.lines == ()
+    assert sorted(codes(result)) == ["H-003"]
+
+
+def test_follow_up_can_change_the_request_kind():
+    result = follow("목표 N 달성률이 가장 낮은 원본 구역을 분석해줘", "그럼 어디부터 업그레이드해?")
+    assert result.request.follow_up and result.request.intents == (Intent.PRIORITY,)
+
+
+def test_new_full_question_does_not_inherit():
+    previous = recognize("평택 P3 목표 N 미만 설비 보여줘", CATALOG)
+    fresh = recognize("15L과 16L 달성률 비교해줘", CATALOG, previous=previous)
+    assert not fresh.follow_up and fresh.conditions.sites == ()
+
+
+def test_short_condition_only_question_follows_previous():
+    result = follow("평택 O2 중 목표 N 미만인 설비만 보여줘", "P1만")
+    assert result.request.follow_up and codes(result) == ["DM-009"]
+
+
+# --- 요약 다듬기 --------------------------------------------------------------------------
+class _Client:
+    def __init__(self, text, source=None):
+        from setron.infrastructure.ai_client import ResponseSource
+        self.text, self.source = text, source or ResponseSource.REAL
+
+    def complete(self, messages):
+        from setron.infrastructure.ai_client import ChatReply
+        return ChatReply(self.text, self.source)
+
+
+def test_polish_keeps_numbers_or_falls_back():
+    from setron.features.chat import polish
+    from setron.infrastructure.ai_client import ResponseSource
+    base = ask("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    good = polish(base, _Client("평택 M-O2 설비 6대 가운데 목표 N에 못 미친 설비는 2대로, P1 1대 · P3 1대입니다."))
+    assert good.polished and "가운데" in good.summary
+    for wrong in ("평택 M-O2 설비 6대 중 3대가 미달입니다. (P1 1대 · P3 1대)",       # 숫자 바뀜
+                  "평택 M-O2 설비 중 미달은 2대입니다.",                              # 숫자 빠짐
+                  ""):
+        assert polish(base, _Client(wrong)) == base
+    assert polish(base, _Client(good.summary, ResponseSource.EXAMPLE)) == base     # 예제 응답은 쓰지 않음
+    assert polish(base, None) == base
+
+
+def test_priority_puts_dashboard_risk_first():
+    from setron.features.risk.schemas import RiskStatus
+    data = ChatData(DATA.records, CATALOG, TARGETS, DATA.family_names, risks={11: RiskStatus.RISK})
+    result = answer(recognize("어디부터 업그레이드해야 해?", CATALOG), data)
+    table = next(t for t in result.tables if t.title == "업그레이드 우선순위 추천")
+    assert table.rows[0][1] == "H-003" and table.rows[0][5] == "높음" and table.rows[0][4].startswith("위험 후보")
+    assert not any("위험 기준이 없어" in n for n in result.notices)
+
+
+def test_records_without_lines_compare_by_site_and_say_unknown_area():
+    from dataclasses import replace as dc_replace
+    from setron.features.chat import ChatData
+    records = tuple(dc_replace(r, line=None) for r in DATA.records)
+    data = ChatData(records, CATALOG, TARGETS, DATA.family_names)
+    result = answer(recognize("달성률이 가장 낮은 원본 구역은?", CATALOG), data)
+    assert result.charts[0].labels == ("평택", "화성") and "-" not in result.summary
+
+
+def test_line_spread_is_skipped_when_records_have_no_lines():
+    from dataclasses import replace as dc_replace
+    from setron.features.chat import ChatData
+    data = ChatData(tuple(dc_replace(r, line=None) for r in DATA.records), CATALOG, TARGETS, DATA.family_names)
+    result = answer(recognize("평택 목표 N 미만 설비 보여줘", CATALOG), data)
+    assert result.summary.endswith("입니다.") and "(-" not in result.summary
