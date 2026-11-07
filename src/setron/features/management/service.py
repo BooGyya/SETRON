@@ -216,6 +216,8 @@ class ManagementService:
         재연결 근거(target_reference)는 등록 시점의 계열·Item·버전 이름으로 만든다. 연결이 맞지 않으면 저장하지 않는다.
         """
         require(isinstance(values, Mapping), "등록할 위험 정보가 필요합니다.")
+        values = deepcopy(dict(values))
+        presentation = values.pop("item_manager", None)
         allowed = {"rule_type", "family_id", "group_id", "item_id", "release_version_id", "start_release_version_id",
                    "end_release_version_id", "risk_reason", "is_enabled", "mapping_status"}
         require(set(values) <= allowed, "위험 등록에 쓸 수 없는 항목이 있습니다.")
@@ -224,6 +226,8 @@ class ManagementService:
         with self.storage.transaction() as tx:
             self._lock(tx)
             row["target_reference"] = self._risk_reference(tx, row)
+            if presentation is not None:
+                row["target_reference"]["item_manager"] = presentation
             # 같은 검사를 등록 전에 거쳐 잘못된 연결을 DB에 남기지 않는다 (ID는 임시값).
             validate_risk_in(tx, {**row, "risk_rule_id": 1}, context)
             created = tx.insert("risk_rule", row)
@@ -246,6 +250,8 @@ class ManagementService:
         영향은 계산하지 않는다. 읽기만 하며 DB·판정 결과를 바꾸지 않는다.
         """
         require(isinstance(values, Mapping), "미리 볼 위험 정보가 필요합니다.")
+        values = deepcopy(dict(values))
+        presentation = values.pop("item_manager", None)
         require(set(values) <= EDITABLE["risk_rule"], "위험 등록에 쓸 수 없는 항목이 있습니다.")
         row = {"is_enabled": True, "mapping_status": "UNRESOLVED", "group_id": None, "item_id": None,
                "release_version_id": None, "start_release_version_id": None, "end_release_version_id": None,
@@ -255,8 +261,11 @@ class ManagementService:
             problems = ()
             try:
                 reference = self._risk_reference(tx, row)  # 등록과 같은 검사를 거치도록 같은 근거를 만든다
+                if presentation is not None:
+                    reference["item_manager"] = presentation
+                row["target_reference"] = reference
                 validate_risk_in(tx, {**row, "target_reference": reference, "risk_rule_id": 1}, context)
-            except (StorageValidationError, LookupError) as error:
+            except (StorageValidationError, LookupError, ValueError) as error:
                 problems = (str(error),)
             repository = EquipmentRepository()
             families = families_from_rows(repository.rows(tx, "version_family"),

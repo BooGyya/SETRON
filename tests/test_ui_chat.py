@@ -173,7 +173,10 @@ def test_real_app_uses_chat_page_with_dashboard_source(app):
         assert not window.notice.isVisible()                             # 대화 화면은 위쪽 배지 없이
         window.navigate("items")
         QTest.qWait(20)
-        assert window.notice.isVisible()                                 # 다른 메뉴는 그대로
+        assert not window.notice.isVisible()                             # VER5 Item 화면도 중복 설명 배지 없이
+        window.navigate("versions")
+        QTest.qWait(20)
+        assert window.notice.isVisible()                                 # 그 외 기존 메뉴 안내는 유지
         window.navigate("ai")
         QTest.qWait(20)
         page.empty.cards[0].buttons[0].click()                           # 예시 카드: 평택 P3 목표 N 미만

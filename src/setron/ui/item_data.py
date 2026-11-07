@@ -4,21 +4,9 @@ from dataclasses import dataclass
 from datetime import date
 
 from setron.features.aggregation.schemas import EquipmentRecord
-from setron.features.item.schemas import Application, Basis, TargetScope
+from setron.features.item.schemas import Application, BASIS_LABELS, TargetScope
 from setron.features.item.service import ItemCatalog, search_items
 from setron.ui.version_data import VersionCatalog
-
-
-BASIS_LABELS = {
-    Basis.STORED: "저장된 버전별 Item 상태",
-    Basis.NOT_STORED: "이 버전의 저장 행 없음",
-    Basis.NOT_IN_FAMILY: "이 계열의 대상 Item 아님",
-    Basis.NOT_LISTED: "지정 모델 범위 밖",
-    Basis.NO_RELEASE_DATA: "릴리즈 자료 없음",
-    Basis.MISSING_VERSION: "관측 SW 버전 없음",
-    Basis.NOT_REGISTERED: "등록 릴리즈 대응 없음",
-    Basis.SCOPE_UNKNOWN: "모델 적용 범위 미확인",
-}
 
 
 @dataclass(frozen=True)
@@ -38,6 +26,7 @@ class ItemManagerData:
     base_date: date | None = None
     observations_connected: bool = False
     observation_label: str = "관측 자료 출처 설명 미제공"
+    risk_rules: tuple = ()
 
     def __post_init__(self):
         if not isinstance(self.versions, VersionCatalog):
@@ -112,10 +101,11 @@ def release_note_rows(data, family_id, item_ids=None):
 def item_data_from_source(versions, source):
     """A와 같은 최신 분석 관측일만 선택한다. HPA의 새 날짜로 일반 관측을 밀어내지 않는다."""
     if not source.dates:
-        return ItemManagerData(versions, observation_label=source.source_label + " · 관측 기준일 없음")
+        return ItemManagerData(versions, observation_label=source.source_label + " · 관측 기준일 없음",
+                               risk_rules=tuple(getattr(getattr(source, "assessor", None), "rules", ())))
     day = (source.analysis_dates or source.dates)[-1]
     return ItemManagerData(versions, tuple(r for r in source.records if r.base_date == day),
-                           day, True, source.source_label)
+                           day, True, source.source_label, tuple(getattr(getattr(source, "assessor", None), "rules", ())))
 
 
 @dataclass(frozen=True)
@@ -168,7 +158,7 @@ def item_evidence_rows(request, application):
         seen.add(release.release_version_id)
         state = catalog.version_state(request.item_id, release)
         rows.append((f"릴리즈 ID {release.release_version_id}", release.version_raw,
-                     "버전별 Item 저장 행" if state.source else "이 버전의 저장 행 없음",
+                     BASIS_LABELS[state.basis] + (f" · 근거 릴리즈 ID {state.source.release_version_id}" if state.source else ""),
                      "모델 범위: " + data.scope_label(state.source)))
         sources(f"릴리즈 {release.release_version_id}", data.versions.entry(release.release_version_id).sources)
     return tuple(rows)

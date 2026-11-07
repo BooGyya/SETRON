@@ -83,6 +83,8 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
                        for row in repository.rows(tx, "equipment_snapshot"))
         links = repository.rows(tx, "release_version_item")
         items = repository.rows(tx, "item")
+        from setron.ui.item_original import original_item_rows
+        original_rows = original_item_rows(tx, items)
         rules = repository.rows(tx, "risk_rule")
         pairs = tuple(sorted({(model_id, sw.family_id) for value in stored for sw in value.software
                               for model_id in ([pm.group_id for pm in sw.pms] if sw.pms else [value.group_id])
@@ -173,6 +175,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
     source.model_names = {row["group_id"]: row["group_name"] for row in groups}
     source.version_catalog = _version_catalog(groups, families, releases, items, links, stored,
                                              target_catalog.applicability, label)
+    source.version_catalog = replace(source.version_catalog, original_rows=original_rows)
     return source
 
 

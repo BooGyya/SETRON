@@ -136,6 +136,11 @@ def validate_risk_in(tx, row, context=None):
     families = _families(family_rows, release_rows, context.aliases)
     family_row = next((family for family in family_rows if family["family_id"] == values["family_id"]), None)
     require(family_row is not None, "위험 정보의 버전 계열이 등록 자료에 없습니다.")
+    from setron.features.risk.item_scope import validate_scope_in
+    try:
+        validate_scope_in(tx, values.get("target_reference"), values["family_id"])
+    except ValueError as error:
+        require(False, str(error))
     owner = tx.get("equipment_group", {"group_id": family_row["group_id"]})
     if values.get("group_id") is not None:
         group = tx.get("equipment_group", {"group_id": values["group_id"]})

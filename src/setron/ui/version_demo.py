@@ -29,7 +29,7 @@ def demo_version_catalog(source):
                                     TargetScope.LISTED, family_models))
             if position == 0:
                 rows.append(VersionItem(release.release_version_id, fid * 10 + 3, ItemState.APPLIED, TargetScope.UNKNOWN))
-            # 이후 버전에 3번 Item 행을 넣지 않는다. 최신이라는 이유로 포함을 상속하면 안 된다.
+            # 이후에는 누적되지만 모델 범위 UNKNOWN은 그대로여서 설비 적용은 미확인이다.
         entries.extend(base.entry(r.release_version_id) for r in family.sorted.unordered)
     return VersionCatalog(base.pairs, tuple(entries), tuple(items), tuple(rows),
                           "합성 예시 데이터 · DB 미연결 · 문서명·셀 주소도 예시")

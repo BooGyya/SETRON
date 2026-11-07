@@ -76,11 +76,19 @@ class RiskAssessor:
         self.catalog = catalog
         self.rules = tuple(r for r in rules if r.is_enabled)
 
-    def pm_findings(self, pm: PmVersion) -> tuple[RiskFinding, ...]:
+    def pm_findings(self, pm: PmVersion, record: EquipmentRecord | None = None) -> tuple[RiskFinding, ...]:
         """PM 하나에 해당하는 위험 지정을 모두 적용하고 위험·미확인 결과만 돌려준다."""
         findings = []
         for rule in self.rules:
             if rule.family_id != pm.family_id or (rule.group_id is not None and rule.group_id != pm.group_id):
+                continue
+            if rule.target_model_ids and pm.group_id not in rule.target_model_ids:
+                continue
+            if record is None and (rule.target_site is not None or rule.target_line is not None):
+                findings.append(RiskFinding(rule, RiskStatus.UNKNOWN, FindingBasis.SCOPE_UNKNOWN, pm=pm))
+                continue
+            if record is not None and ((rule.target_site is not None and record.site != rule.target_site)
+                                      or (rule.target_line is not None and record.line != rule.target_line)):
                 continue
             finding = self._judge_pm(rule, pm)
             if finding is not None:
@@ -89,7 +97,7 @@ class RiskAssessor:
 
     def equipment_risk(self, record: EquipmentRecord) -> EquipmentRisk:
         """하나라도 위험이면 위험, 위험 없이 미확인이 있으면 미확인, 그 외는 위험 없음이다."""
-        findings = tuple(f for pm in record.pms for f in self.pm_findings(pm))
+        findings = tuple(f for pm in record.pms for f in self.pm_findings(pm, record))
         statuses = {f.status for f in findings}
         if RiskStatus.RISK in statuses:
             status = RiskStatus.RISK

@@ -73,6 +73,7 @@ class QuerySelection:
     group_key: str | None = None  # UI 설비군 키이며 version_family.family_id가 아님
     as_of: date | None = None  # 기준일. None은 최신 관측(오늘 기준), 날짜는 그날 이전 최신 관측
     versions: VersionFilter | None = None  # None: 모든 버전. 빈 선택을 전체로 취급하지 않는다.
+    item_family_id: int | None = None  # Item 답변에서 이동한 명시적 SW 계열 범위. 전체 조건으로 초기화하면 해제.
 
 
 @dataclass(frozen=True)
@@ -184,6 +185,8 @@ class QueryState:
             raise ValueError("QuerySelection이 필요합니다.")
         if selection.versions is not None and not isinstance(selection.versions, VersionFilter):
             raise ValueError("조회 버전 조건이 올바르지 않습니다.")
+        if selection.item_family_id is not None and (type(selection.item_family_id) is not int or selection.item_family_id <= 0):
+            raise ValueError("Item 조회 계열이 올바르지 않습니다.")
         for value, options, field in (
             (selection.site_key, self.catalog.sites, "Site"),
             (selection.group_key, self.catalog.groups, "설비군"),
@@ -208,13 +211,15 @@ class QueryState:
     def select(self, field: str, value: SelectionKey) -> None:
         if field not in QuerySelection.__dataclass_fields__:
             raise ValueError(f"알 수 없는 조회 항목입니다: {field}")
-        if getattr(self.draft, field) == value:
+        if getattr(self.draft, field) == value and not (field == "group_key" and self.draft.item_family_id is not None):
             return
         changes = {field: value}
         if field == "site_key":
             changes.update(fab_key=None, line_key=None)
         elif field == "fab_key":
             changes.update(line_key=None)
+        elif field == "group_key":
+            changes.update(item_family_id=None)
         self.set_draft(replace(self.draft, **changes))
 
     def set_draft(self, selection: QuerySelection) -> None:
@@ -272,6 +277,8 @@ class QueryState:
             if selection.versions.include_missing:
                 versions.append("버전 미등록")
             captions.append("조회 버전 " + " | ".join(versions))
+        if selection.item_family_id is not None:
+            captions.append(f"Item 분석 계열 ID {selection.item_family_id}")
         return " · ".join(captions)
 
 

@@ -1,10 +1,10 @@
 """Item이 포함된 버전과 적용 설비를 찾는다 (명세 BE-014).
 
 포함 판정 규칙 (REQ-026, FUN-034):
-1. 버전별 Item 상태는 저장된 `release_version_item` 행만 쓴다.
-2. 행이 없는 버전은 미확인이다. ``version_order``만으로 이전 버전의 상태를 이어받지 않는다
-   (공통 스키마 규칙 H). 누적 포함·제외 조건·별도 버전 흐름은 릴리즈를 저장할 때 확인해 버전마다
-   행으로 넣는다. 예: v2에서 A, v3에서 B가 추가되면 v3에는 A·B 행이 모두 저장된다.
+1. 명시적으로 저장된 버전별 상태를 우선한다.
+2. 2026-11-07 사용자 확인: 같은 계열의 업데이트는 누적된다. 행이 없는 후속 버전은
+   확인된 순서상의 직전 포함 상태와 모델 범위를 이어받는다. 최초 포함 이전은 미적용이다.
+   순서 미확인·중복·명시적 미확인/미포함 뒤의 공백은 추정하지 않는다.
 3. 이 계열의 릴리즈에 행이 하나도 없는 Item은 이 계열의 대상이 아니다. 다른 계열의 Item은 가져오지 않는다.
 
 모델 범위는 판정에 쓴 저장 행의 ``target_scope``로 정한다. LISTED 목록에 없는 모델은 대상 외,
@@ -94,9 +94,28 @@ class ItemCatalog:
             return VersionItemState(release, ItemState.NOT_APPLIED, Basis.NOT_IN_FAMILY)
 
         stored = rows.get(release.release_version_id)
-        if stored is None:
+        if stored is not None:
+            return VersionItemState(release, stored.state, Basis.STORED, stored)
+        current = family.get(release.release_version_id)
+        if current is None or current.version_order is None:
             return VersionItemState(release, ItemState.UNKNOWN, Basis.NOT_STORED)
-        return VersionItemState(release, stored.state, Basis.STORED, stored)
+        ordered = [(family.get(rid), row) for rid, row in rows.items()]
+        if any(r.version_order is None for r, _ in ordered):
+            return VersionItemState(release, ItemState.UNKNOWN, Basis.NOT_STORED)
+        previous = [(r, row) for r, row in ordered if r.version_order < current.version_order]
+        if previous:
+            origin, source = max(previous, key=lambda pair: pair[0].version_order)
+            if (source.state is ItemState.APPLIED and not any(
+                    origin.version_order <= order <= current.version_order
+                    for order in family.sorted.duplicated_orders)):
+                return VersionItemState(release, ItemState.APPLIED, Basis.INHERITED, source)
+        else:
+            origin, source = min(ordered, key=lambda pair: pair[0].version_order)
+            if (source.state is ItemState.APPLIED and not any(
+                    current.version_order <= order <= origin.version_order
+                    for order in family.sorted.duplicated_orders)):
+                return VersionItemState(release, ItemState.NOT_APPLIED, Basis.BEFORE_INCLUDED, source)
+        return VersionItemState(release, ItemState.UNKNOWN, Basis.NOT_STORED)
 
     def pm_application(self, item_id: int, pm: PmVersion) -> PmApplication:
         """PM 하나에 Item이 적용됐는지 판정한다. 모델 범위까지 반영한다."""
@@ -164,11 +183,12 @@ class ItemCatalog:
 
             def applied(release):
                 state = states.get(release.release_version_id)
-                return state is not None and state.state is ItemState.APPLIED and state.basis is Basis.STORED
+                return state is not None and state.state is ItemState.APPLIED
 
             ordered = tuple(r for r in sorted_releases.ordered if applied(r))
             unordered = tuple(r for r in sorted_releases.unordered if applied(r))
-            families.append(FamilyInclusion(fid, ordered[0] if ordered else None, ordered + unordered))
+            first = ordered[0] if ordered and ordered[0].version_order not in sorted_releases.duplicated_orders else None
+            families.append(FamilyInclusion(fid, first, ordered + unordered))
 
         summary = self.summarize(item, records)
         by_site = tuple((site, _application_count(e for e in summary.equipment if e.record.site == site))

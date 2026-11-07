@@ -237,7 +237,7 @@ class DashboardSource:
         """
         latest = self.latest_hpa_records(query.selection.as_of)
         selection = query.selection
-        if selection.group_key is not None:
+        if selection.group_key is not None or selection.item_family_id is not None:
             return (), ()
         sites = {option.label: option.key for option in self.catalog.sites}
         records, locations = [], []
@@ -288,6 +288,11 @@ class DashboardSource:
         model_ids = {model for key in active for model in self.bindings[key]}
         result = []
         for record in records:
+            if selection.item_family_id is not None:
+                pms = tuple(pm for pm in record.pms if pm.family_id == selection.item_family_id)
+                if record.is_hpa or not pms:
+                    continue
+                record = replace(record, pms=pms)
             loc = self.locations[record.equipment_id]
             if selection.site_key is not None and loc.site_key != selection.site_key:
                 continue
@@ -347,6 +352,8 @@ class DashboardSource:
         from setron.ui.query_state import QueryState
 
         QueryState(self.catalog).validate(query.selection)
+        if query.selection.item_family_id is not None and query.selection.item_family_id not in self.families:
+            raise ValueError("Item 분석 계열이 현재 자료에 없습니다. 다시 조회해 주세요.")
         if not self.dates:
             raise ValueError("기준 관측일이 없습니다.")
         # HPA만 새 날짜에 저장되어도 일반 설비의 분석 기준일을 밀어내지 않는다.

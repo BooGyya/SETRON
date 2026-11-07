@@ -20,4 +20,5 @@ def report_filter(snapshot, source):
         site_names=sites,
         equipment_ids=tuple(record.equipment_id for record in snapshot.selected_records),
         model_ids=models,
+        family_ids=(snapshot.query.selection.item_family_id,) if snapshot.query.selection.item_family_id is not None else None,
     )
