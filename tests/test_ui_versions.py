@@ -115,6 +115,7 @@ def window(app, catalog):
     result.resize(1600, 960)
     result.show()
     result.navigate("versions")
+    result.pages["versions"].select_tab(1)  # VER5는 설치 버전 탭이 기본. 이 파일은 릴리즈 읽기를 검증한다.
     QTest.qWait(30)
     yield result
     result.close()
@@ -124,7 +125,8 @@ def window(app, catalog):
 
 def test_menu_route_and_keyboard_detail_preserve_a_state(window, app):
     page = window.pages["versions"]
-    assert window.header.title.text() == "릴리즈 버전 목록"
+    assert window.header.title.text() == "버전 관리"
+    assert page.tabs.currentIndex() == 1
     assert not window.query_panel.isVisible()
     assert not window.header.actions["equipment_list"].isEnabled()
     state = window.query_state
@@ -134,7 +136,8 @@ def test_menu_route_and_keyboard_detail_preserve_a_state(window, app):
     QTest.keyClick(page.table, Qt.Key.Key_Return)
     app.processEvents()
     assert page.mode == "detail" and page.selected_id == 102
-    assert window.header.title.text() == "릴리즈 버전 상세"
+    assert window.header.title.text() == "버전 관리"
+    assert page.tabs.currentIndex() == 1
     assert "v2+Hotfix_DFB" == page.detail_title.text()
     assert (state.draft, state.target_draft, state.applied) == before
     QTest.mouseClick(page.back, Qt.MouseButton.LeftButton)
@@ -234,7 +237,7 @@ def test_reload_does_not_keep_removed_model_or_stale_release(window, catalog):
 def test_zero_included_count_does_not_claim_mapping_complete(window, catalog):
     page = window.pages["versions"]
     assert "매핑 미완료" in page.list_model.rows[0][3]
-    assert page.list_model.rows[2][3] == "3건"
+    assert page.list_model.rows[2][3].startswith("3건\n")  # 주요 Item 원문과 확인 건수를 함께 표시한다.
     page.loader = lambda: VersionCatalog(catalog.pairs, catalog.releases)
     page.reload()
     page.open_row(0)
