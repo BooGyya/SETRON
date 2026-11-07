@@ -27,6 +27,14 @@ class EngineService:
             self.gate.wait(5)
         return answer(recognize(question, CATALOG, previous=previous), DATA)
 
+    def export_data(self, result):
+        from setron.features.chat.export import query_export
+        return query_export(result, DATA)
+
+    def report_parts(self, result):
+        from setron.features.chat.answers import report_answers
+        return report_answers(result.request, DATA)
+
 
 @pytest.fixture
 def app():
@@ -231,3 +239,78 @@ def test_real_app_starter_questions_come_from_current_data(app):
         window.close()
         window.deleteLater()
         app.processEvents()
+
+
+
+def _saving_dialogs(page, folder, *, previous=False):
+    """창을 띄우지 않고 저장 위치만 바꿔 저장 버튼을 누른 것처럼 처리한다."""
+    opened = []
+
+    def run(dialog):
+        dialog.files.folder.setText(str(folder))
+        if previous and hasattr(dialog, "include_previous"):
+            dialog.include_previous.setChecked(True)
+        opened.append(dialog)
+        return dialog.save()
+    page.open_dialog = run
+    return opened
+
+
+def test_search_answer_exports_excel(make_page, tmp_path):
+    from openpyxl import load_workbook
+    page = make_page()
+    page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    wait(page)
+    card = page.cards[0]
+    assert card.export_button is not None and card.report_button is None
+    opened = _saving_dialogs(page, tmp_path)
+    card.export_button.click()
+    dialog = opened[0]
+    assert dialog.range_buttons[next(iter(dialog.range_buttons))].text().startswith("조회 결과 2대")
+    assert not dialog.columns[__import__("setron.features.export.query_result", fromlist=["QueryColumn"]).QueryColumn.SOURCE].isEnabled()
+    path = dialog.result.path
+    assert path.exists() and load_workbook(path)["조회 결과"].max_row == 3
+    assert page.status.isVisible() and "Excel로 저장했어요" in page.status.text()
+
+
+def test_analysis_answer_saves_word_with_previous_questions(make_page, tmp_path):
+    from docx import Document
+    page = make_page()
+    page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    wait(page)
+    page.send("목표 N 달성률이 가장 낮은 원본 구역을 분석해줘")
+    wait(page)
+    card = page.cards[1]
+    assert card.report_button is not None and card.export_button is None
+    opened = _saving_dialogs(page, tmp_path, previous=True)
+    card.report_button.click()
+    dialog = opened[0]
+    assert dialog.include_previous.text() == "이전 질문 1개 포함"
+    document = Document(dialog.result.path)
+    text = "\n".join(p.text for p in document.paragraphs)
+    assert "1. 평택 M-O2 목표 N 미만 설비 현황" in text and "2. 목표 N 달성률 가장 낮은 원본 구역 분석" in text
+    assert dialog.title.text() == "목표 N 달성률 가장 낮은 원본 구역 분석" and len(document.inline_shapes) == 2
+
+
+def test_report_request_gives_word_card_with_all_sections(make_page, tmp_path):
+    from docx import Document
+    page = make_page()
+    page.send("이번 달 표준화 보고서 만들어줘")
+    wait(page)
+    card = page.cards[0]
+    assert card.report_button is not None and card.report_button.text() == "Word로 저장"
+    opened = _saving_dialogs(page, tmp_path)
+    card.report_button.click()
+    dialog = opened[0]
+    assert dialog.title.text() == "SETRON 표준화 보고서 2026-10"
+    document = Document(dialog.result.path)
+    headings = [p.text for p in document.paragraphs if p.style.name.startswith("Heading 1")]
+    assert headings == ["1. 요약 KPI", "2. 구역별 목표 N 달성률", "3. 원인 분석", "4. 업그레이드 우선순위", "5. 통일 시점 예측"]
+    assert len(document.inline_shapes) >= 2
+
+
+def test_answers_with_unresolved_conditions_have_no_save_buttons(make_page):
+    page = make_page()
+    page.send("중국 사업장 O2 현황 보여줘")
+    wait(page)
+    assert page.cards[0].export_button is None and page.cards[0].report_button is None

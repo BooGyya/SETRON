@@ -37,6 +37,7 @@ _REASONS = {
     CompareReason.ORDER_UNKNOWN: "버전 순서 미확정", CompareReason.ORDER_CONFLICT: "버전 순서 겹침",
     CompareReason.TARGET_INVALID: "목표 N 확인 필요", CompareReason.OTHER_FAMILY: "다른 계열 릴리즈",
 }
+REPORT_SECTIONS = ("요약 KPI", "구역별 목표 N 달성률", "원인 분석", "업그레이드 우선순위", "통일 시점 예측")
 _TIER_ORDER = {Tier.TWO_BELOW: 0, Tier.ONE_BELOW: 1, Tier.AT: 2, Tier.ABOVE: 3}
 
 _DIGIT_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False, "5": False, "6": True, "7": True, "8": True, "9": False}
@@ -474,10 +475,56 @@ def _version_info(request: ChatRequest, data: ChatData, scope: _Scope) -> tuple[
 def _report(request: ChatRequest, data: ChatData, scope: _Scope) -> tuple[str, ReportSpec]:
     month = scope.base or date.today()
     summary = summarize([r for r in scope.records if not r.is_hpa], data.catalog.releases, data.targets)
-    spec = ReportSpec(f"SETRON 표준화 보고서 {month:%Y-%m}", (
-        "요약 KPI", "원본 구역별 달성률 그래프", "위험 후보", "업그레이드 우선순위", "통일 시점 예측"))
+    spec = ReportSpec(f"SETRON 표준화 보고서 {month:%Y-%m}", REPORT_SECTIONS)
     return (f"{month:%Y년 %m월} 표준화 보고서 구성을 준비했습니다. 설비 {summary.equipment_count}대 · 목표 N 달성률 "
-            f"{_pct(summary.rate)}. Word 또는 PDF로 저장할 수 있습니다."), spec
+            f"{_pct(summary.rate)}. Word로 저장할 수 있습니다."), spec
+
+
+REPORT_INTENTS = (Intent.COMPARE, Intent.CAUSE, Intent.PRIORITY, Intent.FORECAST)
+
+
+def report_answers(request: ChatRequest, data: ChatData) -> tuple[ChatAnswer, ...]:
+    """'보고서 만들어줘': 같은 범위로 요약·구역별 달성률·원인·우선순위·통일 예측을 차례로 만든다 (보고서 각 장)."""
+    from dataclasses import replace as _replace
+    scope = _scope(request, data)
+    summary = summarize([r for r in scope.records if not r.is_hpa], data.catalog.releases, data.targets)
+    kpi = (f"{scope.subject} 설비 {summary.equipment_count}대 · 목표 N 달성률 {_pct(summary.rate)} "
+           f"(목표 이상 {summary.compliant}건 · 미만 {summary.below}건 · 확인 필요 {summary.undetermined}건) · "
+           f"업그레이드 필요 {summary.upgrade_needed}대")
+    parts = [ChatAnswer(_replace(request, intents=(), question="요약 KPI"), scope.understood, kpi, scope.base,
+                        issues=scope.issues, title="요약 KPI")]
+    for intent, title in zip(REPORT_INTENTS, REPORT_SECTIONS[1:]):
+        parts.append(_replace(answer(_replace(request, intents=(intent,), question=title), data), title=title))
+    return tuple(parts)
+
+
+def _title(request: ChatRequest, scope: _Scope, compared: GroupBy | None) -> str:
+    """보고서다운 제목. 질문 문장 대신 요청 종류와 범위로 만든다 (기준일은 보고서 부제에 적는다)."""
+    subject = "" if scope.subject == "전체" else f"{scope.subject} "
+    intents = set(request.intents)
+    question = request.question.replace("제일", "가장")
+    if Intent.REPORT in intents:
+        return f"SETRON 표준화 보고서 {scope.base:%Y-%m}" if scope.base else "SETRON 표준화 보고서"
+    if Intent.COMPARE in intents:
+        label = GROUP_BY_LABELS[compared or request.group_by or GroupBy.LINE]
+        if "가장 높" in question:
+            return f"{subject}목표 N 달성률 가장 높은 {label} 분석"
+        if "가장 낮" in question or "어디가" in question or Intent.CAUSE in intents:
+            return f"{subject}목표 N 달성률 가장 낮은 {label} 분석"
+        return f"{subject}{label}별 목표 N 달성률 비교"
+    if Intent.CHANGE in intents:
+        return f"{subject}목표 N 달성률 변화 분석"
+    if Intent.CAUSE in intents:
+        return f"{subject}목표 N 미달 원인 분석"
+    if Intent.PRIORITY in intents:
+        return f"{subject}업그레이드 우선순위"
+    if Intent.FORECAST in intents:
+        return f"{subject}버전 통일 시점 예측"
+    if Intent.VERSION_INFO in intents:
+        return f"{subject}버전 현황"
+    if request.verdict is not None:
+        return f"{subject}{VERDICT_LABELS[request.verdict]} 설비 현황"
+    return f"{subject}설비 현황"
 
 
 def _listing(values, limit: int) -> str:
@@ -565,7 +612,8 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         summary = ""
     return ChatAnswer(request, scope.understood,
                       summary, scope.base, tuple(tables), tuple(charts), cause, cause_is_ai, report,
-                      tuple(dict.fromkeys(notices)), scope.issues, (), tuple(equipment_ids))
+                      tuple(dict.fromkeys(notices)), scope.issues, (), tuple(equipment_ids),
+                      title=_title(request, scope, focus[0] if focus else None))
 
 
 _josa = josa      # 이전 이름 (테스트 호환)

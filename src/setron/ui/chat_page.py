@@ -15,12 +15,14 @@ from PySide6.QtCharts import (
 from PySide6.QtCore import QDateTime, QEvent, QPoint, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
+    QAbstractItemView, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from setron.features.chat.schemas import INTENT_LABELS, BarChart, ChatAnswer, LineChart, Table
+from setron.features.chat.report import ReportPart
+from setron.features.chat.schemas import INTENT_LABELS, BarChart, ChatAnswer, Intent, LineChart, Table
 from setron.ui.ai_page import _STYLE, SPARKLE, _UserBubble, _sparkle, _tag
+from setron.ui.chat_export import ExcelExportDialog, ReportDialog, chart_png
 from setron.ui.components import button, label
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -192,9 +194,10 @@ def _attach(chart: QChart, series, axis_x, axis_y) -> None:
 class AnswerCard(QWidget):
     """답 카드 하나: 요청 인식 칩·조건 → 요약 → 이해 못 한 조건 → 표·그래프 → 원인 → 주의 → 추천 질문."""
 
-    def __init__(self, result: ChatAnswer, on_question):
+    def __init__(self, result: ChatAnswer, on_question, on_export=None, on_report=None):
         super().__init__()
         self.answer = result
+        self.export_button = self.report_button = None
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
@@ -217,10 +220,6 @@ class AnswerCard(QWidget):
         self.stale.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.stale.hide()
         header.addWidget(self.stale, 0, Qt.AlignmentFlag.AlignTop)
-        if any("판단 기준 확정 전" in n for n in result.notices):
-            note = _wrap("판단 기준 확정 전", 12, name="chatNote")
-            note.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-            header.addWidget(note, 0, Qt.AlignmentFlag.AlignTop)
         body.addLayout(header)
         self.summary = _wrap(result.summary, 14, INK)
         body.addWidget(self.summary)
@@ -238,7 +237,6 @@ class AnswerCard(QWidget):
         if result.cause:
             title = QHBoxLayout()
             title.addWidget(label("원인 분석", 13, medium=True))
-            title.addWidget(_tag("AI 설명 · 숫자 확인 통과" if result.cause_is_ai else "자료 근거"))
             title.addStretch(1)
             body.addLayout(title)
             body.addWidget(_wrap(result.cause, 13, INK))
@@ -253,13 +251,44 @@ class AnswerCard(QWidget):
             self.tables.append(widget)
             body.addWidget(widget)
         if result.report is not None:
-            body.addWidget(label(result.report.title, 13, medium=True))
-            body.addWidget(_wrap(" · ".join(f"{i}. {s}" for i, s in enumerate(result.report.sections, 1)), 12, SECONDARY))
+            body.addWidget(self._report_card(result, on_report))
         for notice in result.notices:
             body.addWidget(_wrap(f"※ {notice}", 12, "#8a5a00"))
         if result.suggestions:
             body.addWidget(_WrapRow([_chip(question, on_question) for question in result.suggestions], 240))
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        intents = set(result.request.intents)
+        if on_export is not None and Intent.SEARCH in intents and not result.issues and result.tables:
+            self.export_button = button("Excel 내보내기")
+            self.export_button.clicked.connect(lambda *_: on_export(self))
+            actions.addWidget(self.export_button)
+        analysis = intents & {Intent.COMPARE, Intent.CHANGE, Intent.CAUSE, Intent.PRIORITY, Intent.FORECAST}
+        if on_report is not None and analysis and not result.issues and result.report is None:
+            self.report_button = button("보고서로 저장", primary=True)
+            self.report_button.clicked.connect(lambda *_: on_report(self))
+            actions.addWidget(self.report_button)
+        if self.export_button or self.report_button:
+            body.addLayout(actions)
         row.addWidget(frame, 1)
+
+    def _report_card(self, result: ChatAnswer, on_report) -> QFrame:
+        """'보고서 만들어줘' 답의 파일 카드 (화면 10-3): 파일 이름 · 구성 · Word로 저장."""
+        card = QFrame()
+        card.setObjectName("aiStarter")
+        line = QHBoxLayout(card)
+        line.setContentsMargins(16, 12, 16, 12)
+        line.setSpacing(12)
+        text = QVBoxLayout()
+        month = result.base_date.strftime("%Y-%m") if result.base_date else ""
+        text.addWidget(label(f"SETRON_표준화_보고서_{month}.docx", 14, medium=True))
+        text.addWidget(_wrap(" · ".join(f"{i}. {s}" for i, s in enumerate(result.report.sections, 1)), 12, SECONDARY))
+        line.addLayout(text, 1)
+        if on_report is not None and not result.issues:
+            self.report_button = button("Word로 저장", primary=True)
+            self.report_button.clicked.connect(lambda *_: on_report(self))
+            line.addWidget(self.report_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        return card
 
     def mark_stale(self):
         self.stale.show()
@@ -413,6 +442,7 @@ class ChatPage(QWidget):
         self.messages.setContentsMargins(24, 20, 24, 20)
         self.messages.setSpacing(18)
         self.confirm = lambda text: QMessageBox.question(self, "새 대화", text) == QMessageBox.StandardButton.Yes
+        self.open_dialog = lambda dialog: dialog.exec() == QDialog.DialogCode.Accepted
         self.starters = self._starters()
         self.empty = EmptyState(self._overview(), self.send, self.starters)
         self.messages.addWidget(self.empty)
@@ -517,6 +547,35 @@ class ChatPage(QWidget):
             return "AI 분석 · 실제 AI 연결 · 숫자는 대시보드와 같은 DB 집계 · 대시보드 조건을 바꾸지 않음"
         return "AI 분석 · AI 미연결(원인 설명·문장 다듬기 없이 집계로 답함) · 대시보드 조건을 바꾸지 않음"
 
+    # --- 내보내기 · 보고서 ----------------------------------------------------------------
+    def _export(self, card: "AnswerCard"):
+        """답의 조회 결과를 Excel로 (화면 10-1)."""
+        dialog = ExcelExportDialog(self.service.export_data(card.answer), self)
+        if self.open_dialog(dialog) and dialog.result is not None:
+            self._notice(f"Excel로 저장했어요 · {dialog.result.path}")
+        return dialog
+
+    def _report(self, card: "AnswerCard"):
+        """답을 Word 보고서로 (화면 10-2). '보고서 만들어줘' 답이면 같은 범위의 여러 분석을 각 장으로 넣는다."""
+        if card.answer.report is not None:
+            answers = self.service.report_parts(card.answer)
+            parts = [ReportPart(a, tuple(chart_png(self._chart(c), (900, 420)) for c in a.charts)) for a in answers]
+            month = card.answer.base_date.strftime("%Y-%m") if card.answer.base_date else ""
+            dialog = ReportDialog(parts, title=f"SETRON 표준화 보고서 {month}".strip(), parent=self)
+        else:
+            index = self.cards.index(card)
+            previous = [ReportPart(c.answer, tuple(chart_png(v) for v in c.charts)) for c in self.cards[:index]
+                        if c.answer.request.understood and not c.answer.issues]
+            dialog = ReportDialog([ReportPart(card.answer, tuple(chart_png(v) for v in card.charts))],
+                                  previous=previous, parent=self)
+        if self.open_dialog(dialog) and dialog.result is not None:
+            self._notice(f"보고서를 저장했어요 · {dialog.result.path}")
+        return dialog
+
+    @staticmethod
+    def _chart(chart):
+        return bar_chart(chart) if isinstance(chart, BarChart) else line_chart(chart)
+
     def _starters(self):
         try:
             return self.service.starters() or STARTERS
@@ -617,7 +676,7 @@ class ChatPage(QWidget):
         if error is not None or result is None:
             self._notice(f"답을 만들지 못했습니다: {error}" if error else "답을 만들지 못했습니다. 다시 물어보세요.")
         else:
-            card = AnswerCard(result, self.send)
+            card = AnswerCard(result, self.send, self._export, self._report)
             self.cards.append(card)
             self._append(card)
             for row in self.chip_rows:

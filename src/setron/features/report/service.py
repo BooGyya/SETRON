@@ -27,6 +27,8 @@ from docx import Document
 from docx.document import Document as DocxDocument
 from docx.shared import Inches
 
+from setron.features.export.docx_fonts import use_korean_font
+
 from setron.features.analysis.schemas import AnalysisReport
 from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.features.report.schemas import ReportSection, WordReport
@@ -66,6 +68,7 @@ def default_title(question: str, analysis: AnalysisReport) -> str:
 def build_word_report(report: WordReport) -> DocxDocument:
     """보고서 내용을 Word 문서로 만든다. 파일로 저장하지는 않는다."""
     document = Document()
+    use_korean_font(document)                 # 기본 서식의 한글 글꼴(MS Mincho)로는 한글이 □로 깨진다
     facts = report.analysis.facts
     created = report.created_at or datetime.now()
     chosen = set(report.sections) & set(available_sections(report))
