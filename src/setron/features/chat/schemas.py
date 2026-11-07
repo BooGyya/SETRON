@@ -60,6 +60,7 @@ class ChatRequest:
     verdict: Verdict | None = None
     group_by: GroupBy | None = None
     understood: bool = True                     # False면 분석 질문이 아님 (인사 등)
+    follow_up: bool = False                     # 앞 질문의 조건을 이어받음 ("그중에 P3만", "그럼 화성은?")
 
 
 @dataclass(frozen=True)
@@ -122,3 +123,4 @@ class ChatAnswer:
     issues: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
     equipment_ids: tuple[int, ...] = ()
+    polished: bool = False                      # 요약 문장을 AI가 다듬었음 (숫자·이름은 원문과 같음을 확인)

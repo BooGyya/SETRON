@@ -40,7 +40,10 @@ _VERDICT: tuple[tuple[Verdict, tuple[str, ...]], ...] = (
 )
 _GROUP_BY = ((GroupBy.LINE, ("구역", "라인")), (GroupBy.SITE, ("사업장", "site")), (GroupBy.MODEL, ("모델별", "설비군별")))
 _SMALLTALK = ("안녕", "고마", "감사", "수고", "반가")
+_FOLLOW = ("그중", "그 중", "그럼", "거기서", "거기에서", "여기서", "이 중", "이중에", "그 설비", "그 구역", "그 라인",
+           "방금", "그거", "그것", "이어서", "그 결과")
 _KNOWN_SITE_WORDS = ("화성", "평택", "기흥", "천안", "온양", "중국", "미국", "시안", "오스틴", "청주", "이천")
+_LINE_TOKEN = re.compile(r"(?<![A-Za-z0-9])((?:P|S|V|M)\d{1,2}F?|\d{1,2}L|NRD|MFAB)(?![A-Za-z0-9])")
 _GROUP_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:M-)?([OC][0-9])(?![0-9])")
 _VERSION = re.compile(r"(?<![\w.])[vV]\d[\w.\-+]*")
 _DATE = re.compile(r"(20\d\d)[-./](\d{1,2})[-./](\d{1,2})")
@@ -135,6 +138,11 @@ def extract_conditions(question: str, catalog) -> QueryConditions:
     for word in _KNOWN_SITE_WORDS:
         if word in question and word not in catalog.sites and word not in sites:
             unresolved.append(word)
+    for match in _LINE_TOKEN.finditer(question):             # 라인처럼 생겼는데 선택지에 없으면 보여 준다 (조용히 무시하지 않음)
+        start, end = match.span()
+        if not any(s < end and start < e for s, e in taken):
+            unresolved.append(match.group(0))
+            taken.append((start, end))
     for match in _GROUP_TOKEN.finditer(question):
         start, end = match.span()
         if not any(s < end and start < e for s, e in taken):
@@ -165,8 +173,20 @@ def _union(*values: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(v for value in values for v in value))
 
 
-def recognize(question: str, catalog, ai_conditions: QueryConditions | None = None) -> ChatRequest:
-    """질문 하나를 요청 종류와 조건으로 나눈다. AI가 찾은 조건이 있으면 규칙으로 찾은 조건과 합친다."""
+def recognize(question: str, catalog, ai_conditions: QueryConditions | None = None,
+              previous: ChatRequest | None = None) -> ChatRequest:
+    """질문 하나를 요청 종류와 조건으로 나눈다.
+
+    param
+    - question: 사용자 질문.
+    - catalog: ``query.schemas.QueryCatalog``.
+    - ai_conditions: AI가 찾은 조건(있으면 규칙 결과와 합친다).
+    - previous: 바로 앞 질문의 이해 결과. "그중에 P3만", "그럼 화성은?"처럼 이어 묻는 질문이면 앞 조건을 이어받고
+      새로 말한 조건만 바꾼다. 사업장을 바꾸면 앞의 라인은 버린다(라인은 사업장마다 다르다).
+
+    return
+    - 요청 종류·조건·판정·영역·묶는 기준.
+    """
     rule = extract_conditions(question, catalog)
     ai = ai_conditions or QueryConditions()
     conditions = QueryConditions(
@@ -175,13 +195,29 @@ def recognize(question: str, catalog, ai_conditions: QueryConditions | None = No
         items=_union(ai.items), base_date=rule.base_date or ai.base_date, target_view=ai.target_view,
         unresolved=_union(rule.unresolved, ai.unresolved))
     intents = detect_intents(question)
+    verdict, areas, group_by = detect_verdict(question), detect_areas(question), detect_group_by(question)
     has_conditions = any((conditions.sites, conditions.lines, conditions.groups, conditions.families,
-                          conditions.versions, conditions.items))
-    if not intents and (has_conditions or detect_verdict(question) or detect_areas(question)):
+                          conditions.versions, conditions.items, conditions.base_date))
+    text = _norm(question)
+    follow = previous is not None and previous.understood and (
+        _has(text, _FOLLOW) or (not intents and (has_conditions or verdict or areas)))
+    if follow:
+        old = previous.conditions
+        site_changed = bool(conditions.sites) and set(conditions.sites) != set(old.sites)
+        conditions = QueryConditions(
+            sites=conditions.sites or old.sites,
+            lines=conditions.lines or (() if site_changed else old.lines),
+            groups=conditions.groups or old.groups, models=conditions.models or old.models,
+            families=conditions.families or old.families, versions=conditions.versions or old.versions,
+            items=conditions.items or old.items, base_date=conditions.base_date or old.base_date,
+            target_view=conditions.target_view, unresolved=conditions.unresolved)
+        return ChatRequest(question=question, intents=intents or previous.intents, conditions=conditions,
+                           areas=areas or previous.areas, verdict=verdict or previous.verdict,
+                           group_by=group_by or previous.group_by, understood=True, follow_up=True)
+    if not intents and (has_conditions or verdict or areas):
         intents = (Intent.SEARCH,)
     if not intents and conditions.versions:
         intents = (Intent.VERSION_INFO,)
-    understood = bool(intents) or not _has(_norm(question), _SMALLTALK)
-    return ChatRequest(question=question, intents=intents, conditions=conditions, areas=detect_areas(question),
-                       verdict=detect_verdict(question), group_by=detect_group_by(question),
-                       understood=understood and bool(intents))
+    understood = bool(intents) or not _has(text, _SMALLTALK)
+    return ChatRequest(question=question, intents=intents, conditions=conditions, areas=areas, verdict=verdict,
+                       group_by=group_by, understood=understood and bool(intents))

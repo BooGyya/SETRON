@@ -43,7 +43,7 @@ _DIGIT_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False, "5": Fa
 _LETTER_FINAL = set("LMNRlmnr")          # 엘·엠·엔·알처럼 받침으로 끝나는 영문 글자
 
 
-def _josa(word: str, pair: str) -> str:
+def josa(word: str, pair: str) -> str:
     """이름 뒤 조사(은/는, 이/가, 을/를). 영문·숫자는 읽는 소리로 받침을 정한다 (15L은, C3 통합UI는, O2는)."""
     tail = word.rstrip(" )]")[-1:] if word else ""
     if "가" <= tail <= "힣":
@@ -73,6 +73,7 @@ class ChatData:
     assessor: RiskAssessor | None = None
     thresholds: object | None = None
     explainer: Callable | None = None
+    risks: Mapping[int, object] = field(default_factory=dict)   # equipment_id → RiskStatus (대시보드와 같은 판정)
 
 
 @dataclass
@@ -138,6 +139,8 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
         parts.append("판정 = " + VERDICT_LABELS[request.verdict])
     if not parts:
         parts.append("범위: 전체 Site")
+    if request.follow_up:
+        parts.insert(0, "앞 질문 이어서")
     parts.append(f"기준일 {base.isoformat()}" if base else "기준일 없음")
     return _Scope(base, dates, every, on_base, statuses, sum(1 for r in on_base if r.is_hpa), issues, " · ".join(parts),
                   " ".join(subject) or "전체", tuple(resolved.sites), tuple(resolved.lines))
@@ -194,10 +197,10 @@ def _search(request: ChatRequest, data: ChatData, scope: _Scope) -> tuple[str, l
     subject = scope.subject
     summary = summarize([r for r in scope.records if not r.is_hpa], data.catalog.releases, data.targets)
     if request.verdict:
-        by_line = Counter(record.line or "-" for record, _ in rows)
+        by_line = Counter(record.line for record, _ in rows if _has_line(record))
         spread = " · ".join(f"{line} {count}대" for line, count in sorted(by_line.items()))
-        text = (f"{subject} 설비 {total}대 중 {_josa(VERDICT_LABELS[request.verdict], '은/는')} {len(codes)}대입니다."
-                + (f" ({spread})" if codes else ""))
+        text = (f"{subject} 설비 {total}대 중 {josa(VERDICT_LABELS[request.verdict], '은/는')} {len(codes)}대입니다."
+                + (f" ({spread})" if codes and spread else ""))
     else:
         text = (f"{subject} 설비는 {total}대입니다. 목표 N 이상 {summary.compliant}건 · 미만 {summary.below}건 · "
                 f"확인 필요 {summary.undetermined}건.")
@@ -208,8 +211,16 @@ def _search(request: ChatRequest, data: ChatData, scope: _Scope) -> tuple[str, l
     return text, [table], codes
 
 
+_NO_LINE = "구역 미확인"
+
+
+def _has_line(record) -> bool:
+    return bool((record.line or "").strip().strip("-").strip())
+
+
 def _key(record, group_by: GroupBy) -> str:
-    return {GroupBy.LINE: record.line or "-", GroupBy.SITE: record.site, GroupBy.MODEL: record.model_name}[group_by]
+    line = record.line if _has_line(record) else _NO_LINE
+    return {GroupBy.LINE: line, GroupBy.SITE: record.site, GroupBy.MODEL: record.model_name}[group_by]
 
 
 def _grouped(scope: _Scope, group_by: GroupBy, records=None) -> dict[str, list]:
@@ -229,6 +240,8 @@ def _grouped(scope: _Scope, group_by: GroupBy, records=None) -> dict[str, list]:
 
 def _compare(request: ChatRequest, data: ChatData, scope: _Scope):
     group_by = request.group_by or (GroupBy.SITE if len(scope.sites) > 1 and not scope.lines else GroupBy.LINE)
+    if group_by is GroupBy.LINE and not any(_has_line(r) for r in scope.records):
+        group_by = GroupBy.SITE              # 원본 구역이 적힌 설비가 없으면 사업장별로 비교한다
     rates = {}
     for key, records in _grouped(scope, group_by).items():
         rates[key] = summarize(records, data.catalog.releases, data.targets)
@@ -311,7 +324,7 @@ def _cause(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tuple[
     for (family, version), count in below.most_common(3):
         facts.append(f"{where}의 {family} 설비 {count}대가 {version}에 머물러 있습니다.")
     for reason, count in unknown.most_common(2):
-        facts.append(f"{where} 설비 {count}대는 {reason}(으)로 판정할 수 없습니다.")
+        facts.append(f"{where} 설비 {count}대는 판정할 수 없습니다 ({reason}).")
     earlier = sorted(d for d in scope.dates if scope.base and d < scope.base)
     if earlier and below:
         first = earlier[0]
@@ -333,9 +346,10 @@ def _cause(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tuple[
             scope=tuple((part.split(" = ")[0], part.split(" = ")[-1]) for part in scope.understood.split(" · ")),
             history=tuple(r for r in scope.all_dates if r.base_date <= scope.base)))
         result = getattr(report, "result", None)
-        if result is not None and result.ok and result.data is not None and report.numbers_match:
+        real = getattr(result, "source", None) is not None and getattr(result.source, "value", result.source) == "REAL"
+        if result is not None and result.ok and real and result.data is not None and report.numbers_match:
             text, is_ai = result.data.answer, True
-        elif result is not None and result.ok:
+        elif result is not None and result.ok and real:
             notices.append("AI 설명에 자료에 없는 숫자가 있어 자료 근거 문장으로 대신 보여 줍니다.")
     return text, is_ai, [table], notices
 
@@ -350,10 +364,11 @@ def _priority(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tup
     needing = []
     for entry in result.ranked:
         steps = max((p.steps_behind for p in entry.positions if p.steps_behind is not None), default=None)
-        if entry.risk.findings or steps is None or steps > 0:   # 목표 이상이고 위험도 없으면 올릴 필요가 없다
+        if _risky(data, entry) or steps is None or steps > 0:   # 목표 이상이고 위험도 없으면 올릴 필요가 없다
             needing.append((entry, steps))
+    needing.sort(key=lambda pair: (not _risky(data, pair[0]), pair[0].rank))   # 위험 후보 먼저, 그다음 기존 순위
     for entry, steps in needing[:10]:
-        risky = bool(entry.risk.findings)
+        risky = _risky(data, entry)
         if steps is None and not risky:
             rows.append((str(entry.rank), entry.record.equipment_code, entry.record.line or "-",
                          ", ".join(sorted({p.release.version_raw for p in entry.positions})) or "-",
@@ -371,7 +386,8 @@ def _priority(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tup
     for entry in result.needs_check[:5]:
         rows.append(("-", entry.record.equipment_code, entry.record.line or "-", "확인 필요", "버전 위치를 알 수 없음", "확인 필요"))
         tones.append("warning")
-    notices = [] if result.has_rules else ["등록된 위험 기준이 없어 버전 위치(목표까지 남은 칸)로만 정렬했습니다 · 판단 기준 확정 전"]
+    has_rules = result.has_rules or any(getattr(v, "value", v) == "RISK" for v in data.risks.values())
+    notices = [] if has_rules else ["등록된 위험 기준이 없어 버전 위치(목표까지 남은 칸)로만 정렬했습니다 · 판단 기준 확정 전"]
     if not needing:
         return "업그레이드가 필요한 설비가 없습니다.", [Table("업그레이드 우선순위", ("순위", "설비명", "원본 구역", "현재 → 목표 N", "근거", "우선도"), tuple(rows), tuple(tones))], notices
     top = [e for e in result.ranked if any((p.steps_behind or 0) > 0 for p in e.positions)][:2]
@@ -389,6 +405,11 @@ def _priority(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tup
                  f"{_pct(compliant / determined)} → {_pct(min(compliant + lifted, determined) / determined)}가 됩니다.")
     return text, [Table("업그레이드 우선순위 추천", ("순위", "설비명", "원본 구역", "현재 → 목표 N", "근거", "우선도"),
                         tuple(rows), tuple(tones))], notices
+
+
+def _risky(data: ChatData, entry) -> bool:
+    status = data.risks.get(entry.record.equipment_id)
+    return bool(entry.risk.findings) or getattr(status, "value", status) == "RISK"
 
 
 def _forecast(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tuple[str, list, list[str]]:
@@ -423,9 +444,9 @@ def _forecast(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tup
         text = (f"현재 속도라면 {name} 미달 {family.end_below}대가 모두 목표 N에 이르는 시점은 약 {when:%Y-%m}로 "
                 f"예상됩니다 (참고).")
     elif family.end_below == 0:
-        text = f"{_josa(name, '은/는')} 이미 모든 설비가 목표 N 이상입니다."
+        text = f"{josa(name, '은/는')} 이미 모든 설비가 목표 N 이상입니다."
     else:
-        text = f"{_josa(name, '은/는')} 이 기간에 목표 N 이상 설비가 늘지 않아 통일 시점을 예측할 수 없습니다."
+        text = f"{josa(name, '은/는')} 이 기간에 목표 N 이상 설비가 늘지 않아 통일 시점을 예측할 수 없습니다."
     return text, [chart], ["통일 예측은 지금까지의 속도로 계산한 참고값입니다."]
 
 
@@ -459,6 +480,27 @@ def _report(request: ChatRequest, data: ChatData, scope: _Scope) -> tuple[str, R
             f"{_pct(summary.rate)}. Word 또는 PDF로 저장할 수 있습니다."), spec
 
 
+def _listing(values, limit: int) -> str:
+    values = list(values)
+    return "·".join(values[:limit]) + (f" 외 {len(values) - limit}개" if len(values) > limit else "")
+
+
+def _missing(data: ChatData) -> str:
+    """조건을 못 쓴 질문의 답: 답하지 않은 이유와 지금 자료에 있는 선택지."""
+    catalog = data.catalog
+    parts = []
+    if catalog.sites:
+        parts.append(f"사업장 {_listing(catalog.sites, 6)}")
+    if catalog.lines:
+        parts.append(f"라인 {_listing(catalog.lines, 10)}")
+    if catalog.groups:
+        parts.append(f"모델 {_listing((g.model_name or g.name for g in catalog.groups), 8)}")
+    if catalog.dates:
+        parts.append(f"기준일 {_listing((d.isoformat() for d in sorted(catalog.dates, reverse=True)), 4)}")
+    available = " / ".join(parts) if parts else "저장된 설비 현황이 없습니다"
+    return f"질문의 조건 중 지금 자료에서 찾지 못한 것이 있어 답하지 않았어요. 지금 자료: {available}."
+
+
 def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     """요청 하나에 대한 답 묶음을 만든다.
 
@@ -477,6 +519,10 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     cause, cause_is_ai, report, equipment_ids, focus = None, False, None, (), None
     if scope.hpa:
         notices.append(f"HPA {scope.hpa}대는 분석에서 제외했습니다.")
+    if scope.issues:
+        # 말한 조건을 못 쓰면 더 넓은 범위로 답하지 않는다 (평택을 물었는데 전체 숫자를 주면 오해를 부른다).
+        return ChatAnswer(request, scope.understood, _missing(data), scope.base, issues=scope.issues,
+                          suggestions=SUGGESTIONS[:4])
     if not scope.records:
         return ChatAnswer(request, scope.understood, "조건에 맞는 설비가 없습니다.", scope.base, issues=scope.issues,
                           suggestions=SUGGESTIONS[:4])
@@ -510,7 +556,16 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
             sentences.append(text)
     if not equipment_ids:
         equipment_ids = tuple(sorted(scope.statuses))
-    summary = " ".join(sentences) if sentences else (cause or "")
+    if sentences:
+        summary = " ".join(sentences)
+    elif cause:
+        # 원인만 물은 질문: 같은 글을 두 번 보이지 않게 요약은 한 줄 안내, 자세한 내용은 원인 칸에만
+        summary = f"{scope.subject} 범위의 목표 N 미달·판정 불가 원인을 자료에서 정리했어요."
+    else:
+        summary = ""
     return ChatAnswer(request, scope.understood,
                       summary, scope.base, tuple(tables), tuple(charts), cause, cause_is_ai, report,
                       tuple(dict.fromkeys(notices)), scope.issues, (), tuple(equipment_ids))
+
+
+_josa = josa      # 이전 이름 (테스트 호환)

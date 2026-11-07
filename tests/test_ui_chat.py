@@ -1,0 +1,233 @@
+"""AI 분석 대화 화면 (ui.chat_page) — 질문·답 쌓기, 이어 묻기, 중지, 자료 변경, 저장 중 잠금, 실제 앱 연결."""
+
+import threading
+from time import monotonic
+
+import pytest
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+from setron.features.chat import answer, recognize
+from setron.ui.app import create_window
+from setron.ui.chat_data import chat_catalog
+from setron.ui.chat_page import AnswerCard, ChatPage
+from setron.ui.theme import install_theme
+from test_chat_questions import CATALOG, DATA
+
+
+class EngineService:
+    """테스트용: 질문 모음과 같은 시연 모양 자료로 엔진을 그대로 돌린다. gate가 있으면 열릴 때까지 기다린다."""
+
+    def __init__(self, gate=None):
+        self.gate, self.calls = gate, []
+
+    def ask(self, question, previous=None):
+        self.calls.append(question)
+        if self.gate is not None:
+            self.gate.wait(5)
+        return answer(recognize(question, CATALOG, previous=previous), DATA)
+
+
+@pytest.fixture
+def app():
+    result = QApplication.instance() or QApplication([])
+    install_theme(result)
+    yield result
+
+
+def wait(page, timeout=5):
+    end = monotonic() + timeout
+    while page.busy and monotonic() < end:
+        QTest.qWait(10)
+    QTest.qWait(10)
+    assert not page.busy
+
+
+@pytest.fixture
+def make_page(app):
+    pages = []
+
+    def make(service=None, allowed=None):
+        page = ChatPage(service or EngineService(), analysis_allowed=allowed)
+        page.resize(1300, 900)
+        page.show()
+        pages.append(page)
+        return page
+    yield make
+    for page in pages:
+        page.close()
+        page.deleteLater()
+    app.processEvents()
+
+
+def test_question_and_answer_stack_up(make_page):
+    page = make_page()
+    assert page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    wait(page)
+    assert len(page.cards) == 1
+    card = page.cards[0]
+    assert "평택 M-O2 설비 6대 중 목표 N 미만은 2대입니다." in card.summary.text()
+    assert [t.text() for t in card.intent_tags] == ["자연어 검색"]
+    table = card.tables[0]
+    codes = sorted(table.item(r, 0).text() for r in range(table.rowCount()))
+    assert codes == ["DM-009", "DM-029"] and table.item(0, table.columnCount() - 1).text() == "목표 미달"
+    page.send("15L과 16L 달성률 비교해줘")
+    wait(page)
+    assert len(page.cards) == 2 and page.cards[1].charts                 # 앞 답은 그대로 남는다
+
+
+def test_full_analysis_draws_bar_and_line_charts_and_cause(make_page):
+    page = make_page()
+    page.send("목표 N 달성률이 가장 낮은 원본 구역을 분석해줘")
+    wait(page)
+    card = page.cards[0]
+    assert len(card.charts) == 2
+    assert [t.text() for t in card.intent_tags] == ["표준화율 분석", "원인 분석", "업그레이드 우선순위", "버전 통일 예측"]
+    assert any(t.horizontalHeaderItem(0).text() == "순위" for t in card.tables)
+
+
+def test_follow_up_question_uses_previous_conditions(make_page):
+    page = make_page()
+    page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    wait(page)
+    page.send("그중에 P3만")
+    wait(page)
+    card = page.cards[1]
+    assert card.answer.request.follow_up and card.answer.understood.startswith("앞 질문 이어서")
+    table = card.tables[0]
+    assert [table.item(r, 0).text() for r in range(table.rowCount())] == ["DM-029"]
+
+
+def test_quick_chip_continues_from_previous_answer(make_page):
+    page = make_page()
+    page.send("평택 P3 목표 N 미만 설비 보여줘")
+    wait(page)
+    page.quick_chips[0].click()                                          # 원인 분석 → 그 결과의 원인
+    wait(page)
+    assert page.service.calls[-1] == "그 결과의 원인 분석해줘"
+    assert page.cards[1].answer.request.follow_up and page.cards[1].answer.cause
+
+
+def test_stop_discards_late_answer(make_page):
+    gate = threading.Event()
+    page = make_page(EngineService(gate))
+    page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    assert page.busy and not page.send_button.isEnabled()
+    page.stop()
+    assert not page.busy and page.send_button.isEnabled()
+    gate.set()
+    QTest.qWait(200)
+    assert page.cards == []
+
+
+def test_data_change_marks_answers_stale_and_drops_running_answer(make_page):
+    page = make_page()
+    page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    wait(page)
+    gate = threading.Event()
+    page.service = EngineService(gate)
+    page.send("15L과 16L 달성률 비교해줘")
+    page.invalidate_data()
+    gate.set()
+    QTest.qWait(200)
+    assert len(page.cards) == 1 and page.cards[0].stale.isVisible() and page.previous is None
+
+
+def test_blocked_while_management_is_saving(make_page):
+    allowed = {"value": False}
+    page = make_page(allowed=lambda: allowed["value"])
+    page.refresh()
+    assert not page.send("평택 현황 보여줘") and not page.send_button.isEnabled() and page.status.isVisible()
+    allowed["value"] = True
+    page.refresh()
+    assert page.send_button.isEnabled() and not page.status.isVisible()
+
+
+def test_smalltalk_shows_suggestions_that_can_be_clicked(make_page):
+    page = make_page()
+    page.send("안녕")
+    wait(page)
+    assert page.cards[0].answer.suggestions
+
+
+def test_real_app_uses_chat_page_with_dashboard_source(app):
+    window = create_window(chat_enabled=True)
+    window.resize(1500, 950)
+    window.show()
+    try:
+        window.navigate("ai")
+        page = window.pages["ai"]
+        assert isinstance(page, ChatPage)
+        catalog = chat_catalog(page.service.source)
+        assert catalog.sites and catalog.groups and len({g.name for g in catalog.groups}) == len(catalog.groups)
+        assert page.empty.isVisible() and not any(row.isVisible() for row in page.chip_rows)
+        assert "설비" in page.empty.overview.text() and "기준일" in page.empty.overview.text()
+        assert not window.notice.isVisible()                             # 대화 화면은 위쪽 배지 없이
+        window.navigate("items")
+        QTest.qWait(20)
+        assert window.notice.isVisible()                                 # 다른 메뉴는 그대로
+        window.navigate("ai")
+        QTest.qWait(20)
+        page.empty.cards[0].buttons[0].click()                           # 예시 카드: 평택 P3 목표 N 미만
+        wait(page, 10)
+        assert page.cards and page.cards[0].answer.summary
+        assert not page.empty.isVisible() and all(row.isVisible() for row in page.chip_rows)
+        page.send("어디부터 업그레이드해야 해?")
+        wait(page, 10)
+        assert isinstance(page.cards[-1], AnswerCard)
+    finally:
+        window.close()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_new_conversation_returns_to_start_screen(make_page):
+    page = make_page()
+    page.confirm = lambda text: True
+    page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    wait(page)
+    assert page.cards and page.chip_rows[0].isVisible() and page.new_button.isVisible()
+    assert page.new_conversation()
+    QTest.qWait(20)
+    assert page.cards == [] and page.previous is None and page.empty.isVisible()
+    assert not page.chip_rows[0].isVisible()
+    page.send("그중에 P3만")                                               # 이어 묻기 대상이 없으니 새 질문
+    wait(page)
+    assert not page.cards[0].answer.request.follow_up
+
+
+def test_new_conversation_can_be_cancelled_and_stops_running_answer(make_page):
+    gate = threading.Event()
+    page = make_page(EngineService(gate))
+    page.send("평택 O2 중 목표 N 미만인 설비만 보여줘")
+    page.confirm = lambda text: False
+    assert not page.new_conversation() and page.busy
+    page.confirm = lambda text: True
+    assert page.new_conversation() and not page.busy
+    gate.set()
+    QTest.qWait(200)
+    assert page.cards == []
+
+
+def test_cause_only_question_does_not_repeat_the_same_text(make_page):
+    page = make_page()
+    page.send("16L 원인 분석해줘")
+    wait(page)
+    result = page.cards[0].answer
+    assert result.cause and result.summary != result.cause and "원인을 자료에서 정리했어요" in result.summary
+
+
+def test_real_app_starter_questions_come_from_current_data(app):
+    window = create_window(chat_enabled=True)
+    window.show()
+    try:
+        page = window.pages["ai"]
+        questions = [b.text() for card in page.empty.cards for b in card.buttons]
+        assert len(questions) == 8 and [a.text() for a in page.faq_actions] == questions
+        for question in questions:                                       # 예시는 지금 자료에서 항상 답이 나와야 한다
+            result = page.service.ask(question)
+            assert result.request.understood and not result.issues, (question, result.issues)
+    finally:
+        window.close()
+        window.deleteLater()
+        app.processEvents()
