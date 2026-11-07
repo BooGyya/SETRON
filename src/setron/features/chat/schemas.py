@@ -124,3 +124,4 @@ class ChatAnswer:
     suggestions: tuple[str, ...] = ()
     equipment_ids: tuple[int, ...] = ()
     polished: bool = False                      # 요약 문장을 AI가 다듬었음 (숫자·이름은 원문과 같음을 확인)
+    title: str = ""                             # 보고서·파일용 제목 (예: "목표 N 달성률 가장 낮은 원본 구역 분석")

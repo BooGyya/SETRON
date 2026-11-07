@@ -14,7 +14,8 @@ from setron.features.analysis.service import explain
 from collections import Counter
 
 from setron.features.chat import ChatAnswer, ChatData, ChatRequest, answer, polish, recognize
-from setron.features.chat.answers import josa
+from setron.features.chat.answers import josa, report_answers
+from setron.features.chat.export import query_export
 from setron.features.query.schemas import FamilyChoice, GroupChoice, QueryCatalog
 from setron.features.targets.groups import with_saved_groups
 from setron.ui.analysis_data import family_names
@@ -120,3 +121,11 @@ class ChatService:
         data = self.data()
         request = recognize(question, data.catalog, previous=previous)
         return polish(answer(request, data), self.client)
+
+    def export_data(self, result: ChatAnswer):
+        """답 → Excel 내보내기 자료. 원본 출처(셀 위치)는 자료 출처에 없어 비워 둔다."""
+        return query_export(result, self.data())
+
+    def report_parts(self, result: ChatAnswer) -> tuple[ChatAnswer, ...]:
+        """'보고서 만들어줘' 답 → 보고서 각 장(요약 KPI·구역별 달성률·원인·우선순위·통일 예측)."""
+        return report_answers(result.request, self.data())
