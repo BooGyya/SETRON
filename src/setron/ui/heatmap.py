@@ -10,17 +10,23 @@ from setron.features.risk.schemas import RiskStatus
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_data import count_value, missing_sw_count, upgrade_caption
 from setron.ui.equipment import FlowGrid, ReadTableModel, fit_rows, ignore_width, read_table
+from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
 from setron.ui.query_state import UNASSIGNED, version_filter_caption
 from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
 
 
-# Figma VER4 히트맵 타일: 위험 후보는 분홍으로 우선 표시하고, 그 밖에는 목표 판정(달성·미달·확인 필요) 색.
+# 타일 채움색은 5단계(11/05 팀 결정·멘토 확인): 진초록 N+1 이상 · 연초록 N · 노랑 N-1 · 빨강 N-2 이하 · 회색 비교 불가·HPA.
+# 위험 후보는 빨강(N-2 이하)과 헷갈리지 않게 채움색 대신 굵은 빨간 테두리로 보인다 (범례 설명과 같은 규칙).
 RISK_LINE = "#c9485e"
 RISK_INK = "#ad344d"
 RISK_FILL = "#fde2e7"
 GOAL_FILL = {GoalState.MET: "#ddf4e5", GoalState.BELOW: "#fff0b7", GoalState.UNKNOWN: "#eceef1",
              GoalState.EXCLUDED: "#eceef1"}
+TIER_FILL = {Tier.ABOVE: "#a9dbbd", Tier.AT: "#ddf4e5", Tier.ONE_BELOW: "#fff0b7", Tier.TWO_BELOW: "#fbd3da",
+             Tier.UNKNOWN: "#eceef1"}
+TIER_LEGEND = ((Tier.ABOVE, "N+1 이상"), (Tier.AT, "N 달성"), (Tier.ONE_BELOW, "N-1"), (Tier.TWO_BELOW, "N-2 이하"),
+               (Tier.UNKNOWN, "비교 불가 · HPA"))
 GOAL_SHORT = {GoalState.MET: "달성", GoalState.BELOW: "미달", GoalState.UNKNOWN: "확인 필요",
               GoalState.EXCLUDED: "분석 제외"}
 
@@ -56,10 +62,11 @@ class TileButton(QPushButton):
         self.setAccessibleName(data.description)
         self.setAccessibleDescription("Space 또는 클릭으로 설비 선택")
         self.setToolTip(data.description)
-        risk = data.risk is RiskStatus.RISK
-        background = RISK_FILL if risk and data.goal is not GoalState.EXCLUDED else GOAL_FILL[data.goal]
+        risk = data.risk is RiskStatus.RISK and data.goal is not GoalState.EXCLUDED
+        background = GOAL_FILL[data.goal] if data.goal is GoalState.EXCLUDED else TIER_FILL[data.tier]
+        border = f"2px solid {RISK_LINE}" if risk else f"1px solid {background}"
         self.setStyleSheet(
-            f"QPushButton#equipmentTile {{background:{background};border:1px solid {background};"
+            f"QPushButton#equipmentTile {{background:{background};border:{border};"
             "border-radius:4px;padding:0;min-height:0;}"
             f"QPushButton#equipmentTile:hover {{border-color:{PRIMARY};}}"
             f"QPushButton#equipmentTile:focus, QPushButton#equipmentTile:checked {{outline:none;border:2px solid {PRIMARY};}}"
@@ -324,21 +331,21 @@ class HeatmapPage(QWidget):
 
         legend = QHBoxLayout()
         legend.setSpacing(20)
-        for color, text in ((GOAL_FILL[GoalState.MET], "목표 달성"), (GOAL_FILL[GoalState.BELOW], "목표 미달"),
-                            ("#a3aab5", "확인 필요"), (RISK_LINE, "위험 후보 우선")):
+        legend_items = [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보 (빨간 테두리)")]
+        for color, text in legend_items:
             item = QHBoxLayout()
             item.setSpacing(6)
             dot = QFrame()
             dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background:{color};border-radius:5px;")
+            dot.setStyleSheet(f"background:{color};border-radius:5px;" if color else
+                              f"background:white;border:2px solid {RISK_LINE};border-radius:3px;")
             item.addWidget(dot)
             item.addWidget(label(text, 12, color=SECONDARY))
             legend.addLayout(item)
-        legend.addWidget(label("버전 미확인", 11, color=SECONDARY))
         legend.addStretch()
         self.content.body.addLayout(legend)
         legend_note = label("채움색은 목표 N 대비 버전 차이, 굵은 테두리는 위험 판정으로 서로 별개입니다. "
-                            "많이 낮음 기준은 확정 전 임시값입니다. 위험 상태는 상세 패널에서 확인 · 회색: HPA 분석 제외 · "
+                            "5단계는 11/05 팀 결정(멘토 확인)입니다. 위험 상태는 상세 패널에서 확인 · 회색: 비교 불가·HPA 분석 제외 · "
                             "파란 테두리: 마우스를 올렸거나 선택한 설비", 11,
                             color=SECONDARY, wrap=True)
         ignore_width(legend_note)

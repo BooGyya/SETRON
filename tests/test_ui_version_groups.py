@@ -94,3 +94,15 @@ def test_save_then_apply_uses_saved_groups_and_history_can_revert(window):
     assert dialog.revert(first)
     saved = dialog.store.load(PAIR)
     assert len(saved.history) == 3 and saved.groups == first.groups and "되돌림" in saved.history[-1].memo
+
+
+def test_repeated_save_and_revert_to_current_do_not_pile_up(window):
+    """같은 기준을 다시 저장하거나 지금 기준과 같은 이력으로 되돌리면 이력이 늘지 않고, 그런 이력의 되돌리기는 꺼진다."""
+    dialog = open_editor(window)
+    choose(dialog, 10013, Slot.N)
+    assert dialog.save()
+    count = len(dialog.store.load(PAIR).history)
+    assert dialog.save() and "같아 저장하지 않았습니다" in dialog.status.text()
+    assert len(dialog.store.load(PAIR).history) == count
+    current = dialog.store.load(PAIR).history[-1]
+    assert dialog.revert(current) and len(dialog.store.load(PAIR).history) == count

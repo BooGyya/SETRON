@@ -196,3 +196,17 @@ def test_saved_groups_change_aggregation_result():
 
     assert status(single, "v2.2") is CompareStatus.BELOW
     assert status(grouped, "v2.2") is CompareStatus.AT_OR_ABOVE
+
+
+def test_saving_the_same_groups_again_does_not_add_history():
+    """같은 내용을 다시 저장하거나 지금 기준으로 되돌리면 이력을 늘리지 않는다 (11/08: 같은 줄이 계속 쌓이던 문제)."""
+    storage = FakeStorage()
+    store = GroupStore(storage, clock=clock())
+    first = store.save(PAIR, GROUPS, O2, memo="처음")
+    again = store.save(PAIR, VersionGroups(dict(GROUPS.slots)), O2, memo="같은 내용")
+    assert first.changed and not again.changed
+    assert len(store.load(PAIR).history) == 1 and again.saved.groups == GROUPS
+    second = VersionGroups({Slot.N: frozenset({V22, V23})})
+    assert store.save(PAIR, second, O2).changed and len(store.load(PAIR).history) == 2
+    assert store.save(PAIR, GROUPS, O2, memo="되돌림").changed                 # 다른 내용으로 되돌리기는 남긴다
+    assert not store.save(PAIR, GROUPS, O2, memo="되돌림").changed and len(store.load(PAIR).history) == 3

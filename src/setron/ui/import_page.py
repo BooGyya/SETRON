@@ -428,15 +428,13 @@ class ImportPage(QWidget):
             banner.addWidget(action)
         self.saved_banner.hide()
         body.addWidget(self.saved_banner)
-        self.notice = label("열린 통합문서 불러오기를 누르면 실행 중인 Excel에 연결합니다.", 13, color=SECONDARY, wrap=True)
+        self.notice = label("", 13, color=SECONDARY, wrap=True)       # 오류·진행 상태만 보인다 (처음 안내 문장 없음)
         self.notice.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.notice.setContentsMargins(4, 0, 4, 0)
         body.addWidget(self.notice)
 
         select = _section("1. Excel 통합문서 · 시트 선택")
         self.step_cards = [select]
-        select.body.addWidget(label("사용자가 실행해 둔 데스크톱 Excel에서 값을 읽습니다. 파일 업로드·파일 선택은 지원하지 않으며 "
-                                    "원본 파일을 수정하거나 복사하지 않습니다.", 13, color=SECONDARY, wrap=True))
         self.workbook_combo, self.sheet_combo, self.kind_combo = QComboBox(), QComboBox(), QComboBox()
         for widget, name in ((self.workbook_combo, "통합문서 선택"), (self.sheet_combo, "시트 선택"),
                              (self.kind_combo, "가져올 자료 종류")):
@@ -460,7 +458,7 @@ class ImportPage(QWidget):
 
         preview = _section("2. 원본 미리보기")
         self.step_cards.append(preview)
-        self.preview_info = label("시트를 읽으면 원본 셀 값과 주소가 표시됩니다.", 12, color=SECONDARY, wrap=True)
+        self.preview_info = label("", 12, color=SECONDARY, wrap=True)   # 시트를 읽으면 범위·병합 정보가 나온다
         preview.body.addWidget(self.preview_info)
         self.grid_model = SheetGridModel()
         self.grid = QTableView()
@@ -493,8 +491,6 @@ class ImportPage(QWidget):
 
         review = _section("3. AI 추출 결과 검토 · 수정")
         self.step_cards.append(review)
-        review.body.addWidget(label("AI 추출값은 원본과 따로 보관합니다. 수정한 값은 ‘수정됨’으로 표시되고 원본 값·셀 위치는 바뀌지 않습니다. "
-                                    "AI 결과는 검토 없이 저장하지 않습니다.", 13, color=SECONDARY, wrap=True))
         self.extract_button = button("항목 추출 (규칙 → AI)" if self.rule_extractor is not None else "AI로 항목 추출", primary=True)
         self.extract_button.setFixedHeight(40)
         self.source_badge = StatusBadge("AI 추출 전", "neutral")
@@ -512,8 +508,6 @@ class ImportPage(QWidget):
         common_layout.setContentsMargins(20, 16, 20, 16)
         common_layout.setSpacing(8)
         common_layout.addWidget(label("기준 날짜 · Site", 15, medium=True))
-        common_layout.addWidget(label("기준일·사업장이 시트에 없으면 여기 입력하고 ‘모든 행에 적용’을 누르세요. 비어 있는 행만 채우고, "
-                                      "메모리/파운드리를 비우면 라인에 따라 기본값(장소표)을 씁니다.", 13, color=SECONDARY, wrap=True))
         self.common_date, self.common_site = PeriodDateField(), QLineEdit()
         self.common_date.setPlaceholderText("기준일 YYYY-MM-DD")
         self.common_site.setPlaceholderText("사업장 (예: 화성, 평택)")
@@ -634,8 +628,6 @@ class ImportPage(QWidget):
         self.result_label = label("", 13, wrap=True)
         self.result_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         save.body.addWidget(self.result_label)
-        save.body.addWidget(label("번역표: 원본의 모델 표기를 데이터 파트 번역표의 등록 모델로 바꾸는 규칙입니다. "
-                                  "적용한 값은 사용자 수정으로 기록됩니다.", 12, color="#8b95a8", wrap=True))
         body.addWidget(save)
         body.addStretch()
         self.import_scroll.setWidget(self.import_content)
@@ -926,7 +918,7 @@ class ImportPage(QWidget):
         self.row_table.setVisible(bool(rows))
         self.row_empty.setVisible(not rows)
         self.row_empty.setText("추출 중입니다. 결과를 준비하고 있습니다." if self.state == "extracting" else
-                              f"시트를 읽은 뒤 {self.extract_button.text()}을 눌러 주세요." if draft is None else "추출된 행이 없습니다.")
+                              "" if draft is None else "추출된 행이 없습니다.")
         if self.selected_row_id in ids:
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
@@ -1041,7 +1033,7 @@ class ImportPage(QWidget):
         self.candidate_button.setEnabled(bool(candidates) and not self.busy and not self.locked)
         self.requery_button.setVisible(self.state == "saved")
         if self.draft is None:
-            self.save_summary.setText("AI 추출 결과를 검토한 뒤 저장할 수 있습니다.")
+            self.save_summary.setText("")
             self.save_note.setText("")
         else:
             active = len(self.draft.active_rows)
