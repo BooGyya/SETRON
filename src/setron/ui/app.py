@@ -291,6 +291,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("items", items, uses_query=False)
     window.register_page("import", importer, uses_query=False)
     window.register_page("ai", ai, uses_query=False)
+    if chat_enabled:
+        from setron.ui.chat_report_library import ChatReportLibrary
+        ai_reports = ChatReportLibrary()
+        ai.report_saved.connect(ai_reports.add)
+        window.register_page("reports", ai_reports, uses_query=False)
     window.register_page("management", management, uses_query=False)
 
     def navigate_item_answer(route, answer):
@@ -394,7 +399,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap", "items") + (("ai",) if chat_enabled else ())
+        quiet = ("import", "dashboard", "heatmap", "items") + (("ai", "reports") if chat_enabled else ())
         window.notice.setVisible(window.route not in quiet or window.management_saving)
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
@@ -410,6 +415,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             list_action.setEnabled(False)
         elif window.route == "ai":
             window.notice.setText(getattr(ai, "notice_text", "AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음"))
+            list_action.setEnabled(False)
+        elif chat_enabled and window.route == "reports":
             list_action.setEnabled(False)
         elif window.route == "versions":
             window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")

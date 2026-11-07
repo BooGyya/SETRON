@@ -601,7 +601,8 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         elif intent is Intent.REPORT:
             text, report = _report(request, data, scope)
             sentences.append(text)
-    if not equipment_ids:
+    # 검색의 빈 ID는 정상적인 0건 결과다. 검색을 요청하지 않은 분석만 전체 범위를 사용한다.
+    if Intent.SEARCH not in request.intents:
         equipment_ids = tuple(sorted(scope.statuses))
     if sentences:
         summary = " ".join(sentences)
