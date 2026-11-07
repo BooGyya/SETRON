@@ -310,7 +310,9 @@ def test_closing_before_scheduled_extraction_does_not_start_the_provider(pages):
 
 
 def test_slow_extraction_keeps_ui_responsive_and_discards_closed_page_result(pages):
-    """추출 중 UI 이벤트·중복 차단과 화면 이탈 후 지연 응답 폐기를 확인한다.
+    """추출 중 UI 이벤트·중복 차단과 화면을 닫은 뒤 지연 응답 폐기를 확인한다.
+
+    화면을 숨기기만 하면(다른 메뉴 이동·최소화) 추출은 계속된다 — test_ui_import 참고 (2026-11-07).
 
     param
     - pages: 생성한 시험 화면의 정리 목록.
@@ -338,7 +340,7 @@ def test_slow_extraction_keeps_ui_responsive_and_discards_closed_page_result(pag
         QTimer.singleShot(0, lambda: ticks.append(True))
         QTest.qWait(20)
         assert ticks == [True]
-        page.hide()
+        page.close()
         release.set()
         assert QThreadPool.globalInstance().waitForDone(3000)
         QTest.qWait(20)

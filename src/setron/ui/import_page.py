@@ -1041,7 +1041,7 @@ class ImportPage(QWidget):
         self._render()
 
     def _cancel_extraction(self):
-        """화면을 떠난 뒤 도착한 추출 결과를 폐기하고 재추출을 안내한다."""
+        """앱을 닫을 때 진행 중인 추출 결과를 받지 않는다 (화면 이동·최소화로는 취소하지 않는다)."""
         if self.state != "extracting":
             return
         self.extraction_request.cancel()
@@ -1051,8 +1051,15 @@ class ImportPage(QWidget):
         self._render()
 
     def hideEvent(self, event):
-        self._cancel_extraction()
-        self._cancel_review()
+        """화면이 숨겨져도 추출은 계속한다. 기존 자료 검사만 앱 안에서 다른 화면으로 옮길 때 다시 하게 한다.
+
+        - 추출은 시트 읽기 때 떠 둔 원본 사본으로 하므로, 다른 화면에 다녀와도 결과가 바뀌지 않는다.
+          돌아오면 결과가 보인다 (멘토 5차 전 확인: 추출 중 창을 바꾸면 취소되던 문제).
+        - 창 최소화·다른 프로그램 전환처럼 운영체제가 보낸 숨김(spontaneous)은 화면을 떠난 것이 아니다.
+        - 기존 자료 검사(DB 대조)는 다른 화면에서 저장이 바뀔 수 있어, 앱 안 이동일 때만 취소하고 다시 검사하게 한다.
+        """
+        if not event.spontaneous():
+            self._cancel_review()
         super().hideEvent(event)
 
     def closeEvent(self, event):
