@@ -45,6 +45,7 @@ from setron.ui.import_extraction import rule_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_refresh import capture_release_context, is_database_import_saver
+from setron.ui.replay_page import ReplayPage
 from setron.ui.management_page import ManagementPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter
@@ -220,6 +221,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                                    families=(family_name(source, key) for key in source.families))
     configure_import_choices()
     window.release_refresh_context = release_refresh_context
+    def replay_targets():
+        applied = window.query_state.applied
+        return (applied.targets if applied is not None and applied.targets is not None else
+                initial_targets(source))
+    replay = ReplayPage(source, targets_provider=replay_targets)
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
     item_risk_save_pending = False
     def submit_item_risk(values):
@@ -300,6 +306,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("versions", versions, uses_query=False)
     window.register_page("items", items, uses_query=False)
     window.register_page("import", importer, uses_query=False)
+    window.register_page("replay", replay, uses_query=False)
     window.register_page("ai", ai, uses_query=False)
     if chat_enabled:
         from setron.ui.chat_report_library import ChatReportLibrary
@@ -409,8 +416,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap", "items") + (("ai", "reports") if chat_enabled else ())
+        quiet = ("import", "dashboard", "heatmap", "items", "replay") + (("ai", "reports") if chat_enabled else ())
         window.notice.setVisible(window.route not in quiet or window.management_saving)
+        window.header.toolbar.setVisible(window.route != "replay")
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
@@ -422,6 +430,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             list_action.setEnabled(False)
         elif window.route == "import":
             window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · {importer.extraction_label} · 저장 위치: {importer.saver.target_label}")
+            list_action.setEnabled(False)
+        elif window.route == "replay":
             list_action.setEnabled(False)
         elif window.route == "ai":
             window.notice.setText(getattr(ai, "notice_text", "AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음"))
@@ -654,6 +664,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             versions.reload()
         elif key == "items" and items.data is None and not items.read_request.busy:
             items.reload()
+        elif key == "replay":
+            replay.enter()
     window.page_changed.connect(ensure_loaded)
     window.header.action_requested.connect(open_all)
 
@@ -686,6 +698,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.catalog_changed.connect(dashboard.invalidate)
     window.query_panel.catalog_changed.connect(heatmap.invalidate)
     window.query_panel.catalog_changed.connect(equipment.clear)
+    window.query_panel.catalog_changed.connect(replay.invalidate)
     window.query_panel.catalog_changed.connect(lambda *_: list_action.setEnabled(False))
 
     def accept_current_snapshot(snapshot):
@@ -711,10 +724,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         cancel_management_refresh()
         dashboard.invalidate()
         heatmap.invalidate()
+        replay.invalidate()
         equipment.clear("관리 데이터 저장 중 · 현재 자료 확인 대기")
         list_action.setEnabled(False)
         versions.setEnabled(False)
         items.setEnabled(False)
+        replay.setEnabled(False)
         ai.invalidate_data()
         sync_mode()
 
@@ -765,6 +780,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.management_last_success = result is not None
         versions.setEnabled(True)
         items.setEnabled(True)
+        replay.setEnabled(True)
+        replay.invalidate()
         versions.refresh_after_save()
         items.refresh_after_save()
         ai.invalidate_data()
@@ -819,6 +836,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dashboard.invalidate()
         ai.invalidate_data()
         heatmap.invalidate()
+        replay.invalidate()
         equipment.clear("저장 자료 변경 · 조회 적용으로 다시 확인해 주세요.")
         list_action.setEnabled(False)
         versions.refresh_after_save()
@@ -844,6 +862,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         refresh_query_catalog()
         dashboard.invalidate()
         heatmap.invalidate()
+        replay.invalidate()
         equipment.clear("저장 자료 삭제 · 조회 적용으로 다시 확인해 주세요.")
         ai.invalidate_data()
         versions.refresh_after_save()
