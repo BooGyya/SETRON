@@ -420,3 +420,16 @@ Figma의 현재 4단계 가져오기·저장 완료·데이터 상태·기간별
 `tests/test_ui_import_date_entry.py`는 가져오기 기준일·삭제 시작일·종료일의 클릭 위치와 무관한 첫 자리 입력, 클릭 시 기존 날짜 보존, 위치/점멸에 따른 블록 커서 미표시의 실제 이미지 비교, 텍스트 선택 표시와 기존 키보드/달력 동작, 다른 입력칸과의 표시 범위 분리를 검사한다. `tests/test_ui_import_common.py`는 잘못된 기준일의 적용 차단과 기존 Site 목록 선택·직접 입력의 초안 보존도 확인한다.
 
 `tests/test_ui_import_delete_steps.py`는 삭제 전용 3단계 고정 탭과 가져오기 4단계 분리, 클릭/키보드 이동·현재 영역 강조, 초안과 삭제 선택 보존, 거짓 완료 표시 없음, 1600×960·1100×800·960×600 및 좁은 단계 표시를 검사한다. 미연결 안내 문구는 숨기되 미조회 건수 ‘—’와 실제 삭제 차단은 유지한다. 테스트에서 운영 자료를 삭제하지 않는다.
+
+## VER5 Version Replay 화면 검증
+
+[설계 위치와 프론트 확인 안내](replay-ver5.md)는 `6. Version Replay`의 현재 대표 화면·버전 다중 선택 팝업을 구현 위치에 대응한다. 숨겨진 이전 화면을 중복 구현하지 않는다.
+
+`tests/test_replay_data_ui.py`는 실제 저장 관측일만 포함하는 기간 조회, 동일한 범위·고정 N/위험 기준, 버전 OR 조회, 관측 공백·0건·HPA 제외, 전체 SW 상세·물리 대수 중복 방지를 검사한다. `tests/test_ui_replay_ver5.py`는 날짜/차트 점 선택·재생/정지/초기화/끝 처리, 범례의 표시 전용 동작, 팝업 선택·취소·재적용, 빈 결과/잘못된 날짜/느린 응답/실패·재시도·늦은 응답 차단, 같은 날짜 상세, 자료 변경 무효화, 초기 차트 배치·버튼 높이·스크롤 보존과 창 폭별 가로 넘침을 검사한다.
+
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+uv run --locked --no-sync python -m pytest tests/test_replay_data_ui.py tests/test_ui_replay_ver5.py tests/test_ui_common.py tests/test_ui_dashboard.py tests/test_ui_heatmap.py tests/test_ui_equipment_drawer.py tests/test_ui_query.py -q
+```
+
+합성 관측·느린 가짜 읽기 공급자로 검증하며 실제 회사 AI/DB/Excel을 호출하거나 저장 자료를 변경하지 않는다. 조회 작업만 워커에서 실행하고 위젯·차트 생성과 재생 타이머는 UI 스레드에서 실행한다. 원본 SVG 크기와 1600×960·1100×800·960×600, 150% 배율 렌더링도 확인한다.
