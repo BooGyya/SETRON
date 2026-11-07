@@ -616,6 +616,14 @@ class ChatPage(QWidget):
     def busy(self) -> bool:
         return self.pending is not None
 
+    def prefill(self, question: str) -> bool:
+        """다른 화면의 질문 초안만 전달한다. 기존 대화·조회 조건을 바꾸거나 자동 전송하지 않는다."""
+        if self.busy:
+            return False
+        self.input.setText(question)
+        self.input.setFocus()
+        return True
+
     def send(self, text: str | None = None) -> bool:
         """질문을 보낸다. 처리 중이거나 관리 데이터 저장 중이면 보내지 않는다."""
         question = (text if text is not None else self.input.text()).strip()

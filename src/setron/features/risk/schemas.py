@@ -1,6 +1,7 @@
 """위험 설비 판정의 입력과 결과 형식 (명세 BE-015).
 
-입력은 ERD `risk_rule`(:class:`RiskRule`)이다. 재연결 근거(`target_reference`)는 판정에 쓰지 않아 뺐다.
+입력은 ERD `risk_rule`(:class:`RiskRule`)이다. `target_reference.item_manager`의 명시적 범위는
+모델·Site·Line 제한으로 읽으며 나머지 원본 재연결 근거와 표시 정보는 위험 판단에 사용하지 않는다.
 위험 여부는 N 대비 격차나 노후도와 따로 판단한다 (REQ-008).
 """
 
@@ -33,6 +34,8 @@ class RiskRule:
     - ``start_release_version_id``: 결함 위험 시작 버전(포함). None이면 미확인이다.
     - ``end_release_version_id``: 결함 위험 해제 버전(제외). None이면 아직 해제되지 않은 것으로 본다.
     - ``mapping_status``: UNRESOLVED이면 대상 연결이 불확실하므로 해당 계열 설비를 미확인으로 둔다.
+    - ``target_model_ids``·``target_site``·``target_line``: Item 관리에서 선택한 추가 범위. 비어 있으면 전체다.
+      Line은 원문으로만 비교하며 Fab으로 추정하지 않는다. 이름·분류·메모는 표시용이다.
     """
 
     risk_rule_id: int
@@ -46,6 +49,12 @@ class RiskRule:
     end_release_version_id: int | None = None
     is_enabled: bool = True
     mapping_status: MappingStatus = MappingStatus.UNRESOLVED
+    target_model_ids: tuple[int, ...] = ()
+    target_site: str | None = None
+    target_line: str | None = None
+    display_name: str = ""
+    category: str = ""
+    memo: str = ""
 
 
 class RiskStatus(str, Enum):
@@ -73,6 +82,7 @@ class FindingBasis(str, Enum):
     VERSION_UNKNOWN = "VERSION_UNKNOWN"
     TARGET_INCOMPLETE = "TARGET_INCOMPLETE"
     MAPPING_UNRESOLVED = "MAPPING_UNRESOLVED"
+    SCOPE_UNKNOWN = "SCOPE_UNKNOWN"
 
 
 BASIS_MESSAGES = {
@@ -85,6 +95,7 @@ BASIS_MESSAGES = {
     FindingBasis.VERSION_UNKNOWN: "버전이 비어 있거나 릴리즈에 없어 위험 기준을 확인할 수 없습니다.",
     FindingBasis.TARGET_INCOMPLETE: "위험 지정의 대상 Item 또는 버전이 비어 있습니다.",
     FindingBasis.MAPPING_UNRESOLVED: "위험 지정의 대상 연결이 확인되지 않았습니다.",
+    FindingBasis.SCOPE_UNKNOWN: "위치 범위를 판정할 설비 관측이 없습니다.",
 }
 
 

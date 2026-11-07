@@ -331,8 +331,8 @@ class VersionsPage(QWidget):
         item_rows = self.catalog.item_rows(r.release_version_id, self.model_filter.currentData())
         self.item_model.set_rows(tuple((f"{i.item.item_no if i.item.item_no is not None else '번호 미확인'} · ID {i.item.item_id}",
                                        i.item.content, state, scope, application) for i, state, scope, application in item_rows))
-        self.item_note.setText("포함/미포함은 이 릴리즈의 저장 상태입니다. 선택 모델 판정은 모델 범위를 함께 확인한 결과이며 실제 설비 적용 현황은 아닙니다.\n"
-                               "같은 계열의 Item에 저장 행이 없으면 미확인입니다. 최신 버전이라는 이유로 이전 Item을 상속하지 않습니다.")
+        self.item_note.setText("같은 계열의 포함 버전 이상은 확인된 순서와 모델 범위로 누적 적용합니다. 명시적 저장 상태는 우선합니다.\n"
+                               "순서·적용 범위 미확인은 추정하지 않습니다. 선택 모델 판정은 실제 설비 관측과 구분합니다.")
         self.item_empty.setVisible(not item_rows)
         self.item_empty.setText("확인된 포함 Item이 없습니다." if entry.items_verified else "Item 자료 미연결 또는 매핑 미확인 · Item이 없다고 확정하지 않습니다.")
         self.item_table.setVisible(bool(item_rows))

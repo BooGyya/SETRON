@@ -296,9 +296,15 @@ def rule_from_row(row, families, links):
     """
     names = ("risk_rule_id", "family_id", "risk_reason", "group_id", "item_id", "release_version_id",
              "start_release_version_id", "end_release_version_id", "is_enabled")
+    from setron.features.risk.item_scope import scope_fields
+    try:
+        scope = scope_fields(row.get("target_reference"))
+        scope_invalid = False
+    except (ValueError, TypeError):
+        scope, scope_invalid = {}, True
     rule = RiskRule(**{name: row[name] for name in names}, rule_type=RuleType(row["rule_type"]),
-                    mapping_status=MappingStatus(row["mapping_status"]))
-    invalid = bool(validate_rule(rule, families))
+                    mapping_status=MappingStatus(row["mapping_status"]), **scope)
+    invalid = scope_invalid or bool(validate_rule(rule, families))
     family = families.get(rule.family_id)
     if rule.item_id is not None:
         invalid |= family is None or not any(

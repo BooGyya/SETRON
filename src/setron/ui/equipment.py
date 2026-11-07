@@ -157,7 +157,8 @@ class ReadTable(QTableView):
         width = self.viewport().width()
         ratio = width / sum(self.base_widths) if width >= 900 else 1
         for index, original in enumerate(self.base_widths):
-            self.setColumnWidth(index, int(original * ratio))
+            minimum = getattr(self, "minimum_column_widths", {}).get(index, 0)
+            self.setColumnWidth(index, max(minimum, int(original * ratio)))
         if self.model() is not None:
             self.resizeRowsToContents()
 

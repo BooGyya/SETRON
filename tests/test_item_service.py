@@ -104,16 +104,31 @@ def test_version_before_item_was_added_is_not_applied(catalog):
     assert (result.application, result.basis) == (Application.NOT_APPLIED, Basis.STORED)
 
 
-def test_missing_row_is_unknown_not_inherited_from_version_order():
-    """공통 스키마 규칙 H: version_order만으로 이전 버전의 Item 상태를 이어받지 않는다."""
+def test_confirmed_later_version_inherits_item_with_original_scope():
+    """2026-11-07 확인: 같은 계열은 포함 버전 이상 누적, 최초 포함 이전은 미적용이다."""
     catalog = ItemCatalog(families(), [row(V42, ITEM_A)])
 
     later = catalog.pm_application(ITEM_A, pm("v4.56.6.43"))
     earlier = catalog.pm_application(ITEM_A, pm("v4.56.6.41"))
 
-    assert (later.application, later.basis) == (Application.UNKNOWN, Basis.NOT_STORED)
-    assert (earlier.application, earlier.basis) == (Application.UNKNOWN, Basis.NOT_STORED)
-    assert (later.label, later.basis_label) == ("미확인", "이 버전의 저장 행 없음")
+    assert (later.application, later.basis) == (Application.APPLIED, Basis.INHERITED)
+    assert (earlier.application, earlier.basis) == (Application.NOT_APPLIED, Basis.BEFORE_INCLUDED)
+    assert (later.label, later.basis_label) == ("적용", "같은 계열의 이전 포함 버전에서 누적 적용")
+
+
+def test_cumulative_item_does_not_guess_order_family_or_scope():
+    unknown = ReleaseVersion(999, F_C4, "vunknown", None)
+    duplicate = ReleaseVersion(998, F_C4, "vbranch", 3)
+    catalog = ItemCatalog(families(unknown), [row(V42, ITEM_A, scope=TargetScope.LISTED, groups=(M_C4_PLUS,))])
+    assert catalog.pm_application(ITEM_A, pm("v4.56.6.43", M_C4_PLUS)).application is Application.APPLIED
+    assert catalog.pm_application(ITEM_A, pm("v4.56.6.43", M_C4)).application is Application.NOT_TARGET
+    assert catalog.pm_application(ITEM_A, pm("vunknown", M_C4_PLUS)).application is Application.UNKNOWN
+    assert catalog.pm_application(ITEM_A, pm("v2.1", M_O2, F_O2)).application is Application.NOT_TARGET
+    conflict = ItemCatalog(families(duplicate), [row(V42, ITEM_A)])
+    assert conflict.pm_application(ITEM_A, pm("v4.56.6.44")).application is Application.UNKNOWN
+    explicit = ItemCatalog(families(), [row(V42, ITEM_A), row(V43, ITEM_A, ItemState.UNKNOWN)])
+    assert explicit.pm_application(ITEM_A, pm("v4.56.6.44")).application is Application.UNKNOWN
+    assert explicit.pm_application(ITEM_A, pm("v4.56.6.43")).basis is Basis.STORED
 
 
 def test_every_basis_has_a_label():

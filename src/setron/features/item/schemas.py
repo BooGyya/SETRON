@@ -51,6 +51,8 @@ class Basis(str, Enum):
     """판정 근거."""
 
     STORED = "STORED"              # 이 버전의 Item 상태가 저장되어 있음
+    INHERITED = "INHERITED"        # 같은 계열의 확인된 이전 포함 버전에서 누적
+    BEFORE_INCLUDED = "BEFORE_INCLUDED"  # 확인된 최초 포함 이전
     NOT_STORED = "NOT_STORED"      # 이 계열에 Item이 있지만 이 버전의 상태는 저장되지 않음
     NOT_IN_FAMILY = "NOT_IN_FAMILY"  # 이 계열의 릴리즈에 없는 Item
     NOT_LISTED = "NOT_LISTED"      # 적용 모델 목록에 없음
@@ -63,6 +65,8 @@ class Basis(str, Enum):
 # 화면에 보여주는 판정 근거 문구. Item 화면(ui/item_data.py)의 문구와 같다.
 BASIS_LABELS = {
     Basis.STORED: "저장된 버전별 Item 상태",
+    Basis.INHERITED: "같은 계열의 이전 포함 버전에서 누적 적용",
+    Basis.BEFORE_INCLUDED: "최초 포함 버전 이전",
     Basis.NOT_STORED: "이 버전의 저장 행 없음",
     Basis.NOT_IN_FAMILY: "이 계열의 대상 Item 아님",
     Basis.NOT_LISTED: "지정 모델 범위 밖",
@@ -100,7 +104,7 @@ class VersionItem:
 class VersionItemState:
     """릴리즈 버전 하나에 Item이 포함되는지 (모델 범위 적용 전).
 
-    ``source``는 판정에 쓴 이 버전의 저장 행이며, 저장 행이 없으면 None이다.
+    ``source``는 명시적 또는 누적 판정에 쓴 저장 행이다. 상속 시 원래 포함 버전의 행을 보존한다.
     """
 
     release: ReleaseVersion
@@ -167,7 +171,7 @@ class FamilyInclusion:
     """한 계열에서 Item이 포함된 버전 (카드의 "포함 버전").
 
     - ``first_included``: 확인된 순서상 처음 포함된 버전("최초 포함"). 순서를 아는 버전에 없으면 None이다.
-    - ``included``: 포함(APPLIED)으로 저장된 버전 전부. 순서를 아는 버전 먼저, 순서 미확인 버전은 뒤에 둔다.
+    - ``included``: 명시적 또는 누적 포함(APPLIED) 버전 전부. 순서를 아는 버전 먼저, 순서 미확인은 뒤에 둔다.
     """
 
     family_id: int

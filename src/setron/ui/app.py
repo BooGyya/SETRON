@@ -21,7 +21,8 @@ from setron.ui.database_source import dashboard_source_from_env, sql_exporter_fr
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
 from setron.ui.equipment_drawer import EquipmentDrawer
-from setron.ui.target_data import describe_targets, initial_targets
+from setron.ui.target_data import describe_targets, initial_targets, target_pairs, validate_targets
+from setron.ui.query_state import QuerySelection, TargetN
 from setron.ui.group_dialog import VersionGroupDialog
 from setron.ui.target_dialog import TargetDialog
 from setron.ui.version_filter import version_options
@@ -195,7 +196,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             item_loader = BackgroundRead(source.load_item_data)
         elif isinstance(version_loader, BackgroundRead):
             item_loader = BackgroundRead(item_loader)
-    items = ItemsPage(item_loader)
+    items = ItemsPage(item_loader, ai_client=ai_client)
     # 저장 서비스·회사 AI 연결 전: 각 화면의 기본값은 메모리 저장소와 예제 응답이며 출처를 표시한다.
     def release_refresh_context():
         """GUI 스레드에서 현재 적용 N을 불변 저장 요청용 조건으로 복사한다.
@@ -211,6 +212,23 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                           sheet_extractor=sheet_extractor, rule_extractor=rule_extractor)
     window.release_refresh_context = release_refresh_context
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
+    item_risk_save_pending = False
+    def submit_item_risk(values):
+        nonlocal item_risk_save_pending
+        if (management.busy or management.locked or management.state in {"review", "saving"}
+                or management.pending or management.pending_applicability):
+            return False
+        try:
+            if management._changes():
+                return False
+        except ValueError:
+            return False
+        item_risk_save_pending = True
+        started = management.create_risk_rule(values)
+        if not started:
+            item_risk_save_pending = False
+        return started
+    items.manager.configure(management_gateway, release_refresh_context, submit_item_risk)
     window.management_gateway = management_gateway
     window.management_refresh = ReadRequest(window)
     window.management_refresh_query = None
@@ -274,6 +292,53 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("import", importer, uses_query=False)
     window.register_page("ai", ai, uses_query=False)
     window.register_page("management", management, uses_query=False)
+
+    def navigate_item_answer(route, answer):
+        if answer is None or answer is not items.answer or answer.data is not items.data:
+            return False
+        if route == "ai":
+            name = next((p.family_name for p in answer.data.versions.pairs if p.family_id == answer.family_id), str(answer.family_id))
+            draft = f"{name} · {answer.question}\n관련 Item: " + ", ".join(str(i) for i in answer.item_ids)
+            if isinstance(ai, ChatPage):
+                if not ai.prefill(draft):
+                    items.answer_card.navigation_note.setText("AI 분석에서 진행 중인 질문을 완료한 뒤 다시 이동해 주세요.")
+                    return False
+            else:
+                ai._prefill(draft)
+            return window.navigate("ai")
+        if route not in {"dashboard", "heatmap"}:
+            return False
+        try:
+            family = source.families.get(answer.family_id)
+            first = next((r for r in answer.versions if r.version_order is not None), None)
+            if family is None or first is None or family.get(first.release_version_id) != first:
+                raise ValueError("현재 조회 자료에서 포함 기준 버전을 확인할 수 없습니다. 다시 불러와 주세요.")
+            pairs = tuple(p for p in target_pairs(source) if p.family_id == answer.family_id)
+            if not pairs:
+                raise ValueError("이 계열에 연결된 조회 대상 모델이 없습니다.")
+            if any(p.key in getattr(source, "saved_groups", {}) for p in pairs):
+                raise ValueError("저장된 N 그룹이 우선 적용 중입니다. 기준·설정에서 그룹을 확인한 뒤 이동해 주세요.")
+            for pair in pairs:
+                if not any(o.release.release_version_id == first.release_version_id and o.unavailable_reason is None for o in pair.options):
+                    raise ValueError("모델별 포함 기준 버전의 적용 근거·순서를 먼저 확인해 주세요.")
+            applied = window.query_state.applied
+            selected = applied.targets if window.query_state.applied_is_current and applied.targets is not None else initial_targets(source)
+            targets = validate_targets(source, tuple(TargetN(t.model_id, t.family_id, first.release_version_id)
+                if t.family_id == answer.family_id else t for t in selected))
+            groups = {p.group_key for p in pairs}
+            selection = QuerySelection(group_key=next(iter(groups)) if len(groups) == 1 else None,
+                                       as_of=answer.data.base_date, item_family_id=answer.family_id)
+            window.query_state.validate(selection)
+        except ValueError as error:
+            items.answer_card.navigation_note.setText(str(error))
+            return False
+        window.query_panel.set_target_draft(targets)
+        window.query_panel.set_draft(selection)
+        window.query_panel.apply_draft()
+        return window.navigate(route)
+
+    items.answer_navigation.connect(navigate_item_answer)
+    window.navigate_item_answer = navigate_item_answer
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
     drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
     window.equipment_edit_request = ReadRequest(window)
@@ -329,7 +394,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap") + (("ai",) if chat_enabled else ())   # 대화 화면은 배지 없이
+        quiet = ("import", "dashboard", "heatmap", "items") + (("ai",) if chat_enabled else ())
         window.notice.setVisible(window.route not in quiet or window.management_saving)
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
@@ -337,7 +402,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             list_action.setEnabled(False)
             return
         if window.route == "items":
-            window.header.title.setText("Item 상세" if items.mode == "detail" else "아이템 매니저")
+            window.header.title.setText("Item 상세" if items.mode == "detail" and items.tabs.currentIndex() == 0 else "아이템 매니저")
             window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
             list_action.setEnabled(False)
         elif window.route == "import":
@@ -701,6 +766,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     management.saved.connect(after_management_save)
     management.save_uncertain.connect(uncertain_management_save)
     management.save_failed.connect(lambda: after_management_save(None))
+    def item_save_notice(text, tone):
+        nonlocal item_risk_save_pending
+        if item_risk_save_pending:
+            items.show_save_feedback(text, tone)
+            item_risk_save_pending = False
+    management.saved.connect(lambda *_: item_save_notice("저장 완료 · 현재 자료로 다시 조회합니다.", "success"))
+    management.save_failed.connect(lambda: item_save_notice("저장 실패 · 기존 자료 유지 · 관리 데이터에서 오류를 확인해 주세요.", "danger"))
+    management.save_uncertain.connect(lambda: item_save_notice("저장 결과 미확인 · 중복 등록하지 말고 관리 데이터와 DB 기록을 확인해 주세요.", "warning"))
     management.request.completed.connect(lambda *_: ai.refresh())
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save

@@ -62,6 +62,7 @@ class VersionCatalog:
     items: tuple[ItemEntry, ...] = ()
     version_items: tuple[VersionItem, ...] = ()
     source_label: str = "자료 출처 설명 미제공"
+    original_rows: tuple = ()  # 보관된 Excel 원본 행. 없으면 현재 관리값 표로 구분해 표시한다.
 
     def __post_init__(self):
         pairs = {(p.model_id, p.family_id) for p in self.pairs}
@@ -154,12 +155,17 @@ class VersionCatalog:
                      ", ".join(labels[mid] for mid in row.target_group_ids) or "지정 모델 없음")
             application = catalog.pm_application(item.item.item_id, PmVersion(None, model_id, r.family_id, r.version_raw, release_id))
             result.append((item, "미확인 · 저장 행 없음" if row is None else
-                           {ItemState.APPLIED: "포함", ItemState.NOT_APPLIED: "미포함", ItemState.UNKNOWN: "미확인"}[row.state],
+                           {ItemState.APPLIED: "포함", ItemState.NOT_APPLIED: "미포함", ItemState.UNKNOWN: "미확인"}[state.state]
+                           + (" · 누적" if state.basis.value == "INHERITED" else " · 최초 포함 이전" if state.basis.value == "BEFORE_INCLUDED" else ""),
                            scope, APPLICATION_LABELS[application.application]))
         return tuple(result)
 
     def included_count(self, release_id):
-        return sum(row.release_version_id == release_id and row.state is ItemState.APPLIED for row in self.version_items)
+        entry = self.entry(release_id)
+        if entry is None:
+            return 0
+        catalog = ItemCatalog(self.families(), self.version_items)
+        return sum(catalog.version_state(item.item.item_id, entry.release).state is ItemState.APPLIED for item in self.items)
 
 
 def catalog_from_dashboard(source):

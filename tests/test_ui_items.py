@@ -244,8 +244,8 @@ def test_release_note_groups_stored_rows_only_and_opens_detail(window):
     assert [r[3] for r in rows[:4]] == ["포함", "포함", "미포함", "포함"]
     # 순서 미확인 버전은 저장 행이 없으므로 이전 버전 Item을 상속하지 않고 미확인으로 남긴다.
     assert "저장된 Item 행 없음" in rows[4][2] and "순서 미확인" in page.release_note_model.dates[4]
-    assert "JIRA" in page.release_subtitle.text() and "미연결" in page.release_subtitle.text()
-    assert not page.ai_search.isEnabled() and "연결되지 않았습니다" in page.ai_search.toolTip()
+    assert "원본 행 미연결" in page.release_subtitle.text() and "관리값" in page.release_subtitle.text()
+    assert page.ai_search.isEnabled()
     assert not page.open_release_row(4)
     assert page.open_release_row(1) and page.mode == "detail" and page.selected_id == 2
     page.back_to_list()
