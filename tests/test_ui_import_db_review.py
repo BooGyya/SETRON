@@ -181,7 +181,9 @@ def test_revalidate_keeps_review_edits_and_refreshes_database_after_reconnect(pa
     assert any(issue.field == "version_raw" and issue.previous_value == "v3" and issue.current_value == "v4"
                for issue in page.issues)
     assert not any(issue.code == "REFERENCE_LOAD_FAILED" for issue in page.issues)
-    assert page.save_button.isEnabled()
+    # VER5: 재검토가 성공해도 편집창의 미반영 입력을 버린 채 저장하지 않는다.
+    assert not page.save_button.isEnabled()
+    assert not page.save() and "수정 반영" in page.notice.text()
 
 
 @pytest.mark.parametrize("state", ["reading", "extracting", "validating", "saving", "saved", "unknown"])
