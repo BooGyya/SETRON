@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.ui.release_import_review import choose_release_reviews
+import setron.ui.release_import_review as review_ui
 from test_release_import_integration import import_request, reviewed_request
 from test_release_replacement import original
 from test_release_revision import all_rows, revision_storage
@@ -44,8 +45,7 @@ def test_missing_risk_target_is_explained_and_preserved_unresolved(app, missing_
         assert default is QMessageBox.StandardButton.Cancel
         return QMessageBox.StandardButton.Ok
 
-    monkeypatch.setattr(QMessageBox, "warning", acknowledge)
-    monkeypatch.setattr(QMessageBox, "question", lambda *args: pytest.fail("복원 불가 위험을 연결하려 했습니다."))
+    monkeypatch.setattr(review_ui, "import_question", acknowledge)
     decisions = set()
     chosen, again = choose_release_reviews(None, plans, request.release_reviews, risk_decisions=decisions)
     assert again is False and chosen[0].risk_confirmations == () and decisions == {rule_id}
@@ -60,7 +60,7 @@ def test_missing_risk_warning_can_cancel_without_approving_or_writing(app, missi
     """미확인 위험을 확인하던 중 취소하면 교체를 진행하지 않는다."""
     storage, saver, request, plans, rule_id = missing_risk
     before = {name: all_rows(storage, name) for name in ("release_version", "item", "risk_rule", "import_batch")}
-    monkeypatch.setattr(QMessageBox, "warning", lambda *args: QMessageBox.StandardButton.Cancel)
+    monkeypatch.setattr(review_ui, "import_question", lambda *args: QMessageBox.StandardButton.Cancel)
     decisions = set()
     assert choose_release_reviews(None, plans, request.release_reviews, risk_decisions=decisions) == (None, False)
     assert not decisions
@@ -71,7 +71,7 @@ def test_acknowledged_missing_risk_is_not_asked_again_or_confirmed(app, missing_
     """다른 계열 검토로 재호출돼도 같은 미확인 위험의 안내를 반복하지 않는다."""
     storage, saver, request, plans, rule_id = missing_risk
     calls = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda *args: calls.append(args) or QMessageBox.StandardButton.Ok)
+    monkeypatch.setattr(review_ui, "import_question", lambda *args: calls.append(args) or QMessageBox.StandardButton.Ok)
     decisions = set()
     chosen, _ = choose_release_reviews(None, plans, request.release_reviews, risk_decisions=decisions)
     chosen, again = choose_release_reviews(None, plans, chosen, risk_decisions=decisions)
@@ -90,7 +90,6 @@ def test_verified_unchanged_risk_does_not_need_extra_warning(app, revision_stora
     plans = saver.preview_release_import(request, request.release_reviews)
     proposal = plans[0].preview.risk_reconnections[0]
     assert proposal.can_restore is True and proposal.requires_confirmation is False
-    monkeypatch.setattr(QMessageBox, "warning", lambda *args: pytest.fail("확인된 위험에 경고가 표시됐습니다."))
-    monkeypatch.setattr(QMessageBox, "question", lambda *args: pytest.fail("그대로 유지할 위험을 재확인했습니다."))
+    monkeypatch.setattr(review_ui, "import_question", lambda *args: pytest.fail("그대로 유지할 위험을 재확인했습니다."))
     chosen, again = choose_release_reviews(None, plans, request.release_reviews)
     assert again is False and chosen == request.release_reviews

@@ -26,11 +26,12 @@ def test_same_named_workbooks_keep_distinct_identity_in_review_and_save_request(
     page = ImportPage(excel=reader, extractor=extract)
     try:
         page.load_workbooks()
+        wait_for_extraction(page)
         ids = []
         for index, book in enumerate(books):
             page.workbook_combo.setCurrentIndex(index)
             assert page.read_selected()
-            QTest.qWait(10)
+            wait_for_extraction(page)
             assert page.extract()
             wait_for_extraction(page)
             assert page.draft is not None

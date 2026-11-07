@@ -1,5 +1,6 @@
 """가져오기 화면의 시트 공통 정보(기준일·사업장·메모리/파운드리) 적용 검증 (1차 점검 6번)."""
 
+import pytest
 from PySide6.QtTest import QTest
 
 from setron.features.ai.schemas import ExtractKind
@@ -47,3 +48,25 @@ def test_common_values_require_valid_date(page):
     page.common_site.clear()
     assert not page.apply_common()
     assert "공통 정보 없음" in page.status.text()
+
+
+@pytest.mark.parametrize("digits", ["20260230", "20261301", "202611", "00000101"])
+def test_common_date_mask_does_not_accept_invalid_dates_for_applying_rows(page, digits):
+    original = extracted(page)
+    page.common_date.clear()
+    page.common_date.setFocus()
+    QTest.keyClicks(page.common_date, digits)
+    assert not page.apply_common()
+    assert page.draft is original and "기준일 형식" in page.status.text()
+
+
+def test_site_still_supports_selection_and_explicit_new_site_without_applying_it(page):
+    original = extracted(page)
+    page.configure_choices(sites=("화성", "평택"))
+    combo = page.common_site_combo
+    assert combo.isEditable()
+    combo.setCurrentIndex(combo.findText("평택"))
+    assert page.common_site.text() == "평택"
+    page.common_site.selectAll()
+    QTest.keyClicks(page.common_site, "New Site")
+    assert page.common_site.text() == "New Site" and page.draft is original

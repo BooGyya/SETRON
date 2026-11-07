@@ -10,12 +10,11 @@ from dataclasses import replace
 import json
 import re
 import uuid
-import warnings
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QSizePolicy,
+    QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QSizePolicy,
     QScrollArea, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QTableView, QVBoxLayout, QWidget,
 )
 
@@ -23,14 +22,15 @@ from setron.features.ai.schemas import ExtractKind
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.excel_import.reference import ReferenceData
 from setron.features.excel_import.candidates import apply_model_candidates, candidate_notes, model_candidate_rows
-from setron.features.excel_import.schemas import FIELD_LABELS, ISSUE_LABELS, KIND_LABELS, Issue, IssueLevel
+from setron.features.excel_import.schemas import FIELD_LABELS, ISSUE_LABELS, KIND_LABELS, Issue, IssueLevel, SaveReceipt
 from setron.features.excel_import.service import (
     build_save_request, cell_text, describe_save_error, draft_from_review, edit_value, parse_date,
-    MemoryImportSaver, has_errors, parse_address, revert_row, set_excluded, snapshot_sheet, validate,
+    MemoryImportSaver, has_errors, parse_address, revert_row, set_excluded, validate,
 )
 from setron.infrastructure import excel_reader
 from setron.infrastructure.ai_client import AIConfigError, ResponseSource
-from setron.infrastructure.excel_reader import ExcelDiscoveryWarning, ExcelReadError, cell_address
+from setron.infrastructure.database import DatabaseCommitUnknownError
+from setron.infrastructure.excel_reader import ExcelReadError, cell_address
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTable, ReadTableModel, read_table
 from setron.ui.import_demo import example_extractor
@@ -41,7 +41,9 @@ from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_import_review import choose_release_reviews
 from setron.ui.import_delete import ImportDeletePage
-from setron.ui.import_widgets import ComparisonCard, DateField, ImportComparison, ImportDataStateDialog, ImportSteps, import_combo_style, picture
+from setron.ui.import_widgets import ComparisonCard, PeriodDateField, ImportComparison, ImportDataStateDialog, ImportSteps, import_combo_style, picture
+from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
+from setron.ui.import_tasks import discover_workbooks, read_workbook
 from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font
 from setron.ui.versions import _field, _fit
 
@@ -315,7 +317,7 @@ class ImportPage(QWidget):
 
     def __init__(self, excel=None, extractor=None, saver=None, *, reference=None, confirm=None,
                  refresh_context_provider=None, release_review_chooser=None, sheet_extractor=None, rule_extractor=None,
-                 comparison_loader=None, delete_gateway=None):
+                 comparison_loader=None, delete_gateway=None, reset_confirm=None):
         super().__init__()
         self.excel = excel if excel is not None else excel_reader
         self.extractor = extractor
@@ -324,6 +326,7 @@ class ImportPage(QWidget):
         self.saver = saver or MemoryImportSaver("메모리 저장소 · DB 미연결 · 조회 화면 자료에 반영되지 않음")
         self.reference = reference
         self.confirm = confirm or self._ask
+        self.reset_confirm = reset_confirm or self._ask_reset
         self.refresh_context_provider = refresh_context_provider
         self.release_review_chooser = release_review_chooser or choose_release_reviews
         self.workbooks, self.snapshot, self.workbook_name = (), None, None
@@ -331,6 +334,12 @@ class ImportPage(QWidget):
         self.draft, self.issues, self.selected_row_id = None, (), None
         self.reviewed_issues = set()
         self.state, self.generation, self.request_id, self.receipt = "idle", 0, None, None
+        self.excel_request = ReadRequest(self)
+        self.excel_request.completed.connect(self._excel_completed)
+        self._excel_context = None
+        self.save_request = ReadRequest(self)
+        self.save_request.completed.connect(self._save_completed)
+        self.progress_dialog = ImportProgressDialog(self)
         self.review_request = ReadRequest(self)
         self.review_request.completed.connect(self._review_completed)
         self._review_context = None
@@ -360,6 +369,10 @@ class ImportPage(QWidget):
                                "QTabBar::tab:selected {color:#3c5ce9;border-bottom:2px solid #3c5ce9;}")
         tab_row.addWidget(self.tabs)
         tab_row.addStretch()
+        self.reset_button = button("가져오기 초기화")
+        self.reset_button.setToolTip("현재 가져오기만 초기화합니다. 원본 Excel과 저장된 데이터는 유지됩니다.")
+        self.reset_button.clicked.connect(self.reset_import)
+        tab_row.addWidget(self.reset_button)
         self.data_state_button = button("데이터 상태 보기")
         self.data_state_button.clicked.connect(self.open_data_state)
         tab_row.addWidget(self.data_state_button)
@@ -389,6 +402,18 @@ class ImportPage(QWidget):
         self.status = StatusBadge("Excel 미연결", "info")
         steps.addWidget(self.status, 0, Qt.AlignmentFlag.AlignVCenter)
         outer.addWidget(self.steps)
+        self.delete_steps = QFrame()
+        self.delete_steps.setObjectName("deleteSteps")
+        self.delete_steps.setStyleSheet("QFrame#deleteSteps {background:white;border:1px solid #dee0e5;border-radius:8px;}")
+        delete_steps = QHBoxLayout(self.delete_steps)
+        delete_steps.setContentsMargins(16, 8, 10, 8)
+        self.delete_progress_steps = ImportSteps(
+            titles=("삭제 범위 선택", "삭제 대상 확인", "삭제 영향 확인"), show_completion=False)
+        self.delete_progress_steps.setAccessibleName("저장된 데이터 삭제 단계")
+        self.delete_progress_steps.jump_requested.connect(self.jump_to_delete_step)
+        delete_steps.addWidget(self.delete_progress_steps)
+        self.delete_steps.hide()
+        outer.addWidget(self.delete_steps)
         self.saved_banner = QFrame()
         self.saved_banner.setStyleSheet("QFrame {background:#e9f4ee;border-radius:8px;}")
         banner = QHBoxLayout(self.saved_banner)
@@ -489,7 +514,7 @@ class ImportPage(QWidget):
         common_layout.addWidget(label("기준 날짜 · Site", 15, medium=True))
         common_layout.addWidget(label("기준일·사업장이 시트에 없으면 여기 입력하고 ‘모든 행에 적용’을 누르세요. 비어 있는 행만 채우고, "
                                       "메모리/파운드리를 비우면 라인에 따라 기본값(장소표)을 씁니다.", 13, color=SECONDARY, wrap=True))
-        self.common_date, self.common_site = DateField(), QLineEdit()
+        self.common_date, self.common_site = PeriodDateField(), QLineEdit()
         self.common_date.setPlaceholderText("기준일 YYYY-MM-DD")
         self.common_site.setPlaceholderText("사업장 (예: 화성, 평택)")
         self.common_site_combo = QComboBox()
@@ -616,11 +641,14 @@ class ImportPage(QWidget):
         self.import_scroll.setWidget(self.import_content)
         self.deletion = ImportDeletePage(delete_gateway)
         self.delete_scroll.setWidget(self.deletion)
+        self.delete_scroll.verticalScrollBar().valueChanged.connect(self._sync_delete_step)
+        self.delete_scroll.verticalScrollBar().rangeChanged.connect(lambda *_: self._sync_delete_step())
         self.workspace.addWidget(self.import_scroll)
         self.workspace.addWidget(self.delete_scroll)
         outer.addWidget(self.workspace, 1)
         self.tabs.currentChanged.connect(self._tab_changed)
         self.deletion.busy_changed.connect(self._sync_tabs)
+        self.deletion.busy_changed.connect(self._sync_progress)
         self.deletion.cancel_requested.connect(lambda: self.tabs.setCurrentIndex(0))
 
         self.list_button.clicked.connect(self.load_workbooks)
@@ -654,8 +682,58 @@ class ImportPage(QWidget):
         if 0 <= index < len(self.step_cards):
             self.import_scroll.verticalScrollBar().setValue(max(0, self.step_cards[index].y() - 12))
 
+    def jump_to_delete_step(self, index):
+        """삭제 단계 탭은 해당 영역으로 이동할 뿐 조회·선택·삭제를 실행하지 않는다."""
+        if 0 <= index < len(self.deletion.step_cards):
+            position = max(0, self.deletion.step_cards[index].y() - 12) if index else 0
+            self.delete_scroll.verticalScrollBar().setValue(position)
+            self.delete_progress_steps.set_stage(index)
+
+    def _sync_delete_step(self, *_):
+        if self.workspace.currentIndex() != 1:
+            return
+        bar = self.delete_scroll.verticalScrollBar()
+        stage = 0
+        if bar.maximum() > 0 and bar.value() == bar.maximum():
+            stage = len(self.deletion.step_cards) - 1
+        else:
+            for index, card in enumerate(self.deletion.step_cards):
+                if card.y() <= bar.value() + 12:
+                    stage = index
+        self.delete_progress_steps.set_stage(stage)
+
     def _sync_tabs(self):
         self.tabs.setEnabled(not self.busy and not self.deletion.busy)
+        self.reset_button.setVisible(self.tabs.currentIndex() == 0)
+        self.reset_button.setEnabled(self._can_reset_import())
+
+    def _can_reset_import(self):
+        return (self.tabs.currentIndex() == 0 and not self.busy and not self.deletion.busy
+                and self.state != "unknown")
+
+    def _sync_progress(self):
+        state = self.state
+        operations = {
+            "listing": ("열린 통합문서 확인 중", "실행 중인 Excel에서 통합문서와 시트 목록을 읽고 있습니다."),
+            "reading": ("시트 읽는 중", "선택한 시트의 값과 원본 셀 위치를 읽고 있습니다."),
+            "extracting": ("항목 추출 중" if self.rule_extractor is not None else "AI 추출 중", "추출 결과와 원본을 대조하고 있습니다."),
+            "validating": ("기존 자료 확인 중", "저장된 자료와 현재 검토값을 비교하고 있습니다."),
+            "saving": ("변경분 저장 중", "검토한 자료를 저장하고 있습니다. 완료 전에는 앱을 종료하지 마세요."),
+        }
+        if state in operations:
+            title, text = operations[state]
+            key = (state, self.generation, self.request_id)
+        elif self.comparison_request.busy:
+            title, text = "직전 저장본 비교 중", "동일한 범위의 직전 저장본과 변경분을 비교하고 있습니다."
+            key = ("comparison", self.comparison_request.generation)
+        elif self.deletion.busy:
+            title, text = (("저장 자료 삭제 중", "선택한 자료를 삭제하고 있습니다. 완료 전에는 앱을 종료하지 마세요.")
+                           if self.deletion.phase == "deleting" else ("저장 자료 조회 중", "삭제 대상 목록을 읽고 있습니다."))
+            key = ("delete", self.deletion.phase, self.deletion.request.generation)
+        else:
+            self.progress_dialog.set_operation(None)
+            return
+        self.progress_dialog.set_operation(key, title, text, visible=self.isVisible())
 
     def _tab_changed(self, index):
         if self.busy or self.deletion.busy:
@@ -665,6 +743,8 @@ class ImportPage(QWidget):
             return
         self.workspace.setCurrentIndex(index)
         self.steps.setVisible(index == 0)
+        self.delete_steps.setVisible(index == 1)
+        self._sync_tabs()
         if index == 1 and self.deletion.catalog is None:
             self.deletion.reload()
 
@@ -691,6 +771,7 @@ class ImportPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(0, self._fit_height)
+        QTimer.singleShot(0, self._sync_progress)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -781,7 +862,7 @@ class ImportPage(QWidget):
 
     @property
     def busy(self):
-        return self.state in ("reading", "extracting", "validating", "saving") or self.comparison_request.busy
+        return self.state in ("listing", "reading", "extracting", "validating", "saving") or self.comparison_request.busy
 
     @property
     def locked(self):
@@ -844,7 +925,8 @@ class ImportPage(QWidget):
         _fit(self.row_table)
         self.row_table.setVisible(bool(rows))
         self.row_empty.setVisible(not rows)
-        self.row_empty.setText(f"시트를 읽은 뒤 {self.extract_button.text()}을 눌러 주세요." if draft is None else "추출된 행이 없습니다.")
+        self.row_empty.setText("추출 중입니다. 결과를 준비하고 있습니다." if self.state == "extracting" else
+                              f"시트를 읽은 뒤 {self.extract_button.text()}을 눌러 주세요." if draft is None else "추출된 행이 없습니다.")
         if self.selected_row_id in ids:
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
@@ -888,6 +970,7 @@ class ImportPage(QWidget):
         if self.receipt is not None:
             self.saved_caption.setText(f"저장 완료 · {self.workbook_name or ''} · "
                                        f"{self.receipt.row_count}건 · {self.receipt.target_label}")
+        self._sync_progress()
 
     def _mark_grid(self):
         """검토 항목이 가리키는 원본 셀을 미리보기에 표시한다. 오류가 확인 필요보다 우선한다."""
@@ -1005,30 +1088,27 @@ class ImportPage(QWidget):
     # --- C-1 Excel 선택·미리보기 ----------------------------------------------
 
     def load_workbooks(self):
-        """열린 통합문서 목록을 갱신하고 파일명·프로세스·전체 경로로 기존 선택을 유지한다.
-
-        return
-        - 선택 가능한 통합문서가 있으면 True.
-        """
+        """목록 읽기를 예약한다. True는 요청 수락이며 목록 조회 성공을 뜻하지 않는다."""
         if self.busy:
             return False
-        try:
-            with warnings.catch_warnings(record=True) as notices:
-                warnings.simplefilter("always", ExcelDiscoveryWarning)
-                self.workbooks = tuple(self.excel.list_open_workbooks())
-        except ExcelReadError as exc:
+        self._excel_context = ("list", self.generation, self.workbook_combo.currentData(), self.state)
+        self.state = "listing"
+        self._set_status("통합문서 확인 중", "info", "실행 중인 Excel의 통합문서 목록을 읽고 있습니다.")
+        self._render()
+        excel = self.excel
+        self.excel_request.start(BackgroundRead(lambda: discover_workbooks(excel, com=excel is excel_reader)))
+        return True
+
+    def _workbooks_completed(self, result, error, previous):
+        if error is not None:
             self.workbooks = ()
-            self._set_status("Excel 연결 실패", "danger", str(exc))
-        except Exception:
-            self.workbooks = ()
-            self._set_status("Excel 연결 실패", "danger", "Excel에서 통합문서 목록을 읽지 못했습니다. Excel 상태를 확인하고 다시 시도하세요.")
+            self._set_status("Excel 연결 실패", "danger", str(error) if isinstance(error, ExcelReadError) else
+                             "Excel에서 통합문서 목록을 읽지 못했습니다. Excel 상태를 확인하고 다시 시도하세요.")
         else:
-            messages = [str(notice.message) for notice in notices
-                        if issubclass(notice.category, ExcelDiscoveryWarning)]
+            self.workbooks, messages = result
             self._set_status(f"열린 통합문서 {len(self.workbooks)}개", "warning" if messages else "info",
                              "통합문서와 시트를 고른 뒤 시트 읽기를 눌러 주세요."
                              + ("\n" + "\n".join(messages) if messages else ""))
-        previous = self.workbook_combo.currentData()
         self.workbook_combo.blockSignals(True)
         self.workbook_combo.clear()
         names = Counter(book.name for book in self.workbooks)
@@ -1042,7 +1122,6 @@ class ImportPage(QWidget):
         self.workbook_combo.setCurrentIndex(index if index >= 0 else 0 if self.workbooks else -1)
         self.workbook_combo.blockSignals(False)
         self._fill_sheets()
-        return bool(self.workbooks)
 
     def _selected_workbook(self):
         """현재 선택 키와 일치하는 통합문서 정보를 찾는다.
@@ -1065,7 +1144,64 @@ class ImportPage(QWidget):
             self.sheet_combo.setCurrentIndex(index)
         self._render()
 
+    def _ask_reset(self, text):
+        dialog = ImportConfirmDialog(text, self, title="가져오기 초기화", action_text="확인")
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        dialog.deleteLater()
+        return accepted
+
+    def reset_import(self):
+        """저장/원본은 건드리지 않고 현재 가져오기 세션만 비운다."""
+        if not self._can_reset_import():
+            return False
+        context = (self.generation, self.draft, self.snapshot, self.state, self.request_id)
+        has_work = (bool(self.workbooks) or self.snapshot is not None or self.draft is not None
+                    or bool(self.common_date.text() or self.common_site.text() or self.release_family.currentText())
+                    or self.common_area.currentIndex() > 0 or self.common_overwrite.isChecked()
+                    or self.kind_combo.currentIndex() > 0)
+        if has_work and not self.reset_confirm(
+                "통합문서·시트 선택, 원본 미리보기, 추출 결과와 미저장 수정 내용을 초기화합니다.\n"
+                "미저장 내용은 복구할 수 없습니다.\n\n원본 Excel과 이미 저장된 데이터는 변경하지 않습니다.\n초기화할까요?"):
+            return False
+        # 확인창이 열린 사이 다른 작업이 시작되거나 결과가 바뀌면 버리지 않는다.
+        if (not self._can_reset_import()
+                or context != (self.generation, self.draft, self.snapshot, self.state, self.request_id)):
+            return False
+        self._reset_draft()
+        self.workbooks, self.snapshot, self.workbook_name, self.workbook_id = (), None, None, None
+        for combo in (self.workbook_combo, self.sheet_combo, self.kind_combo):
+            combo.blockSignals(True)
+        self.workbook_combo.clear()
+        self.sheet_combo.clear()
+        self.kind_combo.setCurrentIndex(0)
+        for combo in (self.workbook_combo, self.sheet_combo, self.kind_combo):
+            combo.blockSignals(False)
+        self.common_date.clear()
+        self.common_site_combo.setCurrentIndex(0)
+        self.common_site.clear()
+        self.common_area.setCurrentIndex(0)
+        self.common_overwrite.setChecked(False)
+        self.release_family.setCurrentIndex(0)
+        self.release_family.setEditText("")
+        self._release_risk_decisions.clear()
+        while self.editor_grid.count():
+            widget = self.editor_grid.takeAt(0).widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
+        self.inputs, self.originals, self.source_inputs = {}, {}, {}
+        self.saved_caption.clear()
+        self._show_snapshot()
+        self._set_status("Excel 미연결", "info", "가져오기를 초기화했습니다. 열린 통합문서를 다시 불러오세요.")
+        self._render()
+        self.import_scroll.verticalScrollBar().setValue(0)
+        return True
+
     def _reset_draft(self):
+        if self.state == "saving":
+            return False
+        self.excel_request.cancel()
+        self._excel_context = None
         self.comparison_request.cancel()
         self._comparison_context = None
         self.comparison_card.show_comparison(None)
@@ -1082,6 +1218,7 @@ class ImportPage(QWidget):
         self.result_label.setText("")
         self.source_badge.setText("AI 추출 전")
         self.source_badge.set_tone("neutral")
+        self._sync_progress()
 
     def read_selected(self):
         """선택 정보를 고정해 해당 통합문서의 시트 읽기를 예약한다.
@@ -1093,6 +1230,8 @@ class ImportPage(QWidget):
         if self.busy or workbook is None or sheet is None:
             return False
         self._reset_draft()
+        self.snapshot = None
+        self._show_snapshot()
         self.state = "reading"
         self._set_status("시트 읽는 중", "info", f"{workbook.name} · {sheet}")
         self._render()
@@ -1108,23 +1247,31 @@ class ImportPage(QWidget):
         - workbook: 선택 목록에서 고정한 WorkbookInfo.
         - sheet: 선택한 원본 시트 이름.
         """
-        if generation != self.generation:
+        if generation != self.generation or self.state != "reading":
+            return
+        self._excel_context = ("sheet", generation, workbook, sheet)
+        excel = self.excel
+        self.excel_request.start(BackgroundRead(lambda: read_workbook(excel, workbook, sheet, com=excel is excel_reader)))
+
+    def _excel_completed(self, result, error):
+        context, self._excel_context = self._excel_context, None
+        if context is None or context[1] != self.generation:
             return
         self.state = "idle"
-        try:
-            data = self.excel.read_sheet(workbook.name, sheet, app_pid=workbook.app_pid, full_name=workbook.full_name)
-            snapshot = snapshot_sheet(data)
-        except ExcelReadError as exc:
+        if context[0] == "list":
+            self.state = context[3]
+            self._workbooks_completed(result, error, context[2])
+            return
+        workbook = context[2]
+        if error is not None:
             self.snapshot = None
-            self._set_status("시트 읽기 실패", "danger", str(exc))
-        except Exception:
-            self.snapshot = None
-            self._set_status("시트 읽기 실패", "danger", "시트를 읽지 못했습니다. Excel에서 파일이 열려 있는지 확인하고 다시 시도하세요.")
+            self._set_status("시트 읽기 실패", "danger", str(error) if isinstance(error, ExcelReadError) else
+                             "시트를 읽지 못했습니다. Excel에서 파일이 열려 있는지 확인하고 다시 시도하세요.")
         else:
-            self.snapshot, self.workbook_name = snapshot, data.workbook_name
+            self.workbook_name, self.snapshot = result
             self.workbook_id = _workbook_key(workbook)
             self._set_status("원본 미리보기 · 읽기 전용", "info",
-                             f"{self.workbook_name} · {snapshot.sheet_name} · 읽은 시점의 값입니다. Excel에서 고치면 다시 읽어 주세요.")
+                             f"{self.workbook_name} · {self.snapshot.sheet_name} · 읽은 시점의 값입니다. Excel에서 고치면 다시 읽어 주세요.")
         self._show_snapshot()
         self._render()
 
@@ -1192,6 +1339,8 @@ class ImportPage(QWidget):
             return False
         self._reset_draft()
         self.state = "extracting"
+        self.source_badge.setText("추출 중 · 규칙 → AI" if self.rule_extractor is not None else "AI 추출 중")
+        self.source_badge.set_tone("info")
         count = sum(value is not None and bool(cell_text(value).strip()) for value in self.snapshot.cells.values())
         self._set_status("추출 중", "info",
                          f"{self.snapshot.sheet_name}을(를) 정해진 양식이면 규칙으로 바로 읽고, 아니면 값이 있는 셀 {count}개를 AI에 보냅니다."
@@ -1241,6 +1390,8 @@ class ImportPage(QWidget):
             except Exception:
                 result, draft = None, None
         if draft is None:
+            self.source_badge.setText("AI 추출 실패")
+            self.source_badge.set_tone("danger")
             self._set_status("AI 추출 실패", "danger",
                              str(error) if isinstance(error, AIConfigError) else
                              result.message if result is not None else "AI 추출 결과를 처리하지 못했습니다. 다시 시도하세요.")
@@ -1255,7 +1406,8 @@ class ImportPage(QWidget):
             for name, value in context.items():
                 if value and not row.value(name):
                     self.draft = edit_value(self.draft, row.row_id, name, value)
-        self.source_badge.setText(SOURCE_LABELS.get(draft.ai_source, SOURCE_LABELS[None]))
+        self.source_badge.setText(("추출 완료 · " if draft.ai_source is ResponseSource.RULE else "AI 추출 완료 · ")
+                                  + SOURCE_LABELS.get(draft.ai_source, SOURCE_LABELS[None]))
         self.source_badge.set_tone("info" if draft.ai_source in {ResponseSource.REAL, ResponseSource.RULE} else "warning")
         self._changed(initial=True)
         if draft.rows:
@@ -1349,6 +1501,8 @@ class ImportPage(QWidget):
         self.extraction_request.cancel()
         self._extraction_context = None
         self.state = "idle"
+        self.source_badge.setText("AI 추출 취소")
+        self.source_badge.set_tone("warning")
         self._set_status("AI 추출 취소", "warning", "화면을 떠나 추출 결과 수신을 취소했습니다. 다시 추출해 주세요.")
         self._render()
 
@@ -1361,6 +1515,7 @@ class ImportPage(QWidget):
         - 기존 자료 검사(DB 대조)는 다른 화면에서 저장이 바뀔 수 있어, 앱 안 이동일 때만 취소하고 다시 검사하게 한다.
         """
         if not event.spontaneous():
+            self.progress_dialog.hide()
             comparison_pending = self.comparison_request.busy
             self.comparison_request.cancel()
             self._comparison_context = None
@@ -1372,6 +1527,14 @@ class ImportPage(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event):
+        if self.state == "saving" or self.deletion.phase == "deleting":
+            event.ignore()
+            return
+        self.excel_request.cancel()
+        self._excel_context = None
+        if self.state in {"listing", "reading"}:
+            self.state = "idle"
+        self.progress_dialog.set_operation(None)
         self.comparison_request.cancel()
         self._comparison_context = None
         self._cancel_extraction()
@@ -1595,10 +1758,12 @@ class ImportPage(QWidget):
         return self.reference
 
     def _ask(self, text):
-        answer = QMessageBox.question(self, "가져오기 저장 확인", text,
-                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                      QMessageBox.StandardButton.No)
-        return answer == QMessageBox.StandardButton.Yes
+        candidate = "번역표" in text and "적용할까요?" in text
+        dialog = ImportConfirmDialog(text, self, title="번역표 후보 적용 확인" if candidate else "가져오기 저장 확인",
+                                     action_text="적용" if candidate else "저장")
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        dialog.deleteLater()
+        return accepted
 
     def save(self):
         if self.draft is None or self.busy or self.locked or has_errors(self.issues):
@@ -1671,6 +1836,7 @@ class ImportPage(QWidget):
             self._set_status("릴리즈 교체 검토 실패", "danger", "교체 검토 결과의 형식을 확인한 뒤 다시 저장해 주세요.")
             self._render()
             return
+        self.progress_dialog.set_operation(None)
         selected, again = self.release_review_chooser(self, plans, request.release_reviews,
                                                      risk_decisions=self._release_risk_decisions)
         if selected is None:
@@ -1698,10 +1864,14 @@ class ImportPage(QWidget):
         QTimer.singleShot(0, lambda: self._save(request))
 
     def _save(self, request):
-        try:
-            receipt = self.saver.save(request)
-        except Exception as exc:
-            state, message = describe_save_error(exc)
+        saver, captured = self.saver, deepcopy(request)
+        self.save_request.start(BackgroundRead(lambda: saver.save(captured)))
+
+    def _save_completed(self, receipt, error):
+        if error is None and not isinstance(receipt, SaveReceipt):
+            error = DatabaseCommitUnknownError("저장 결과 형식을 확인할 수 없습니다. 중복 저장하지 말고 저장 기록을 확인해 주세요.")
+        if error is not None:
+            state, message = describe_save_error(error)
             if state == "unknown":
                 self.state = "unknown"
                 self._set_status("저장 결과 확인 필요", "warning", "다시 저장하지 마세요. 연결 복구 후 저장된 내용을 확인해 주세요.")

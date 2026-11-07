@@ -132,7 +132,7 @@ def test_confirmation_uses_reviewed_reference_and_file_name_without_unseen_refre
     reviewed = page.reference
     page.saver.reference_data = existing_reference(version="v3", line="변경된 라인")
     assert page.save()
-    QTest.qWait(10)
+    wait_review(page)
     assert page.state == "saved"
     assert page.reference is reviewed and len(page.saver.load_calls) == 1
     request, = page.saver.saved

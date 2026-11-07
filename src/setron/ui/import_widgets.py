@@ -3,11 +3,12 @@
 from dataclasses import dataclass
 from datetime import date
 
-from PySide6.QtCore import QDate, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QDate, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QPainter, QTextCharFormat, QTextLayout
 from PySide6.QtWidgets import (
     QCalendarWidget, QComboBox, QDialog, QHBoxLayout, QLineEdit, QMenu,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QWidgetAction, QHeaderView,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QWidgetAction, QHeaderView, QSizePolicy,
+    QStyle, QStyleOptionFrame, QToolButton,
 )
 
 from setron.ui.components import Card, button, label
@@ -32,10 +33,12 @@ def picture(name):
 
 
 class DateField(QLineEdit):
-    """문자 입력과 달력 선택을 함께 제공한다. 공란을 오늘로 자동 확정하지 않는다."""
+    """숫자 8자리 입력과 달력 선택. 구분자를 자동 표시하며 공란을 오늘로 확정하지 않는다."""
 
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
+        # 입력·붙여넣기·삭제·되돌리기는 Qt가 처리하고 숫자 8칸과 구분자만 허용한다.
+        self.setInputMask("0000-00-00;_")
         self.calendar_action = self.addAction(icon("import-ver5/fdb91.svg"), QLineEdit.ActionPosition.TrailingPosition)
         self.calendar_action.setToolTip("달력에서 날짜 선택")
         self.calendar_action.setText("달력에서 날짜 선택")
@@ -43,6 +46,11 @@ class DateField(QLineEdit):
         self.setPlaceholderText("YYYY-MM-DD")
         self.setStyleSheet("QLineEdit {background:#f9fafb;border:1px solid #d5d7da;border-radius:8px;padding:0 10px;}"
                            "QLineEdit:focus {border:2px solid #3c5ce9;}")
+
+    def text(self):
+        # 입력 마스크의 고정 구분자 '--'는 입력값이나 날짜로 취급하지 않는다.
+        value = super().text()
+        return value if value.replace("-", "") else ""
 
     def open_calendar(self):
         if self.isReadOnly() or not self.isEnabled():
@@ -60,35 +68,90 @@ class DateField(QLineEdit):
         menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
 
 
+class PeriodDateField(DateField):
+    """기준일·기간 입력: 클릭은 첫 자리부터, 편집은 Qt 기본 동작, 블록 커서만 생략한다."""
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self._press_position = event.position().toPoint()
+        if event.button() == Qt.MouseButton.LeftButton and not self.isReadOnly():
+            self.setCursorPosition(0)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if (event.button() == Qt.MouseButton.LeftButton and not self.isReadOnly()
+                and event.position().toPoint() == getattr(self, "_press_position", None)):
+            self.setCursorPosition(0)
+
+    def paintEvent(self, event):
+        # 입력 마스크는 커서를 한 글자 크기의 검은 선택 배경으로 그린다.
+        # 값·포커스·입력 상태를 건드리지 않고 같은 Qt 프레임과 텍스트를 커서 없이 그린다.
+        panel = QStyleOptionFrame()
+        self.initStyleOption(panel)
+        painter = QPainter(self)
+        self.style().drawPrimitive(QStyle.PrimitiveElement.PE_PanelLineEdit, panel, painter, self)
+        contents = self.style().subElementRect(QStyle.SubElement.SE_LineEditContents, panel, self)
+        contents = contents.marginsRemoved(self.textMargins())
+        # 기존 달력 액션의 실제 위치를 사용해 글자와 아이콘이 겹치지 않게 한다.
+        for action in self.findChildren(QToolButton):
+            if action.isVisibleTo(self):
+                contents.setRight(min(contents.right(), action.x() - 4))
+        contents.adjust(2, 0, -2, 0)
+        layout = QTextLayout(self.displayText(), self.font())
+        layout.beginLayout()
+        line = layout.createLine()
+        line.setLineWidth(max(0, contents.width()))
+        layout.endLayout()
+        selections = []
+        if self.hasSelectedText():
+            selected = QTextLayout.FormatRange()
+            selected.start = self.selectionStart()
+            selected.length = self.selectionEnd() - self.selectionStart()
+            selected.format = QTextCharFormat()
+            selected.format.setForeground(panel.palette.highlightedText())
+            selected.format.setBackground(panel.palette.highlight())
+            selections.append(selected)
+        painter.setPen(panel.palette.text().color())
+        origin = QPointF(contents.left(), contents.top() + (contents.height() - line.height()) / 2)
+        layout.draw(painter, origin, selections, QRectF(contents))
+
+
 class ImportSteps(QWidget):
     """실제로 완료한 단계만 체크한다. 단계 선택은 해당 카드로 스크롤할 뿐이다."""
 
     jump_requested = Signal(int)
     TITLES = ("시트 선택", "원본 미리보기", "AI 추출 검토", "변경분 확인 · 저장")
 
-    def __init__(self):
+    def __init__(self, *, titles=None, show_completion=True):
         super().__init__()
+        self.titles = tuple(titles) if titles is not None else self.TITLES
+        self.show_completion = show_completion
         self.buttons = []
-        self.markers, self.captions = [], []
+        self.markers, self.captions, self.completions = [], [], []
         row = QVBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        for index, title in enumerate(self.TITLES):
+        for index, title in enumerate(self.titles):
             item = button("")
+            item.setCheckable(not show_completion)
             contents = QHBoxLayout(item)
-            contents.setContentsMargins(8, 4, 8, 4)
-            contents.setSpacing(4)
+            contents.setContentsMargins(12, 4, 12, 4)
+            contents.setSpacing(6)
+            contents.setAlignment(Qt.AlignmentFlag.AlignCenter)
             marker = label(str(index + 1), 13)
-            marker_font = QFont("Segoe UI Symbol")
-            marker_font.setPixelSize(13)
-            marker.setFont(marker_font)
+            marker.setFixedWidth(12)
+            marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
             caption = label(title, 12, medium=True)
-            for child in (marker, caption):
+            complete = label("완료", 10, medium=True)
+            for child in (marker, caption, complete):
                 child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                # 남는 버튼 폭을 글자 사이에 분배하지 않고 한 묶음으로 배치한다.
+                child.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
                 contents.addWidget(child)
             self.markers.append(marker)
             self.captions.append(caption)
+            self.completions.append(complete)
             item.setMinimumWidth(contents.sizeHint().width())
-            item.setFixedHeight(30)
+            item.setFixedHeight(34)
             item.setAccessibleName(f"{index + 1}단계 {title}로 이동")
             item.clicked.connect(lambda checked=False, i=index: self.jump_requested.emit(i))
             self.buttons.append(item)
@@ -98,12 +161,18 @@ class ImportSteps(QWidget):
     def set_stage(self, stage):
         self.stage = stage
         for index, item in enumerate(self.buttons):
-            done = index < stage
-            self.markers[index].setText("✓" if done else str(index + 1))
+            done = self.show_completion and index < stage
+            self.markers[index].setText(str(index + 1))
+            self.completions[index].setVisible(done)
+            state = ("완료" if done else "진행 중" if index == stage else "대기") if self.show_completion else (
+                "선택됨" if index == stage else "이동")
+            item.setAccessibleName(f"{index + 1}단계 {self.titles[index]} · {state}")
+            if item.isCheckable():
+                item.setChecked(index == stage)
             bg, ink = ("#e5f5eb", "#1f8c59") if done else ("#e8edfc", PRIMARY) if index == stage else ("#f4f5f8", SECONDARY)
             item.setStyleSheet(f"QPushButton {{background:{bg};color:{ink};border:0;border-radius:12px;padding:4px 8px;}}"
                               f"QPushButton:focus {{border:1px solid {PRIMARY};}}")
-            for text in (self.markers[index], self.captions[index]):
+            for text in (self.markers[index], self.captions[index], self.completions[index]):
                 text.setStyleSheet(f"color:{ink};")
 
 

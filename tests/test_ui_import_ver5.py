@@ -283,7 +283,7 @@ def test_saved_banner_routes_only_after_success_and_locks_second_save(own):
     page._changed()
     assert not page.saved_banner.isVisibleTo(page)
     assert page.save()
-    QTest.qWait(30)
+    wait_for_extraction(page)
     assert page.receipt is not None and page.saved_banner.isVisibleTo(page)
     assert page.progress_steps.stage == 4 and not page.save_button.isEnabled()
     assert not page.save()
@@ -307,7 +307,8 @@ def test_data_status_distinguishes_four_states_and_date_selection(own):
 def test_default_delete_never_calls_or_invents_database(own):
     page = own(ImportDeletePage())
     assert not page.reload() and page.catalog is None
-    assert "미연결" in page.notice.text() and "—" in page.counts.text()
+    assert not page.notice.text() and not page.notice.isVisibleTo(page)
+    assert "—" in page.counts.text()
     assert not page.delete_button.isEnabled() and not page.backup_button.isEnabled()
 
 

@@ -7,20 +7,69 @@
 from dataclasses import dataclass
 from datetime import date
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
-    QLineEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
-    QProxyStyle, QStyle, QStyleFactory,
+    QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+    QLayout, QLineEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QProxyStyle, QSizePolicy, QStyle, QStyleFactory,
 )
 
 from setron.features.ai.schemas import ExtractKind
 from setron.ui.components import Card, button, label
-from setron.ui.import_widgets import DateField, import_combo_style, picture
+from setron.ui.import_widgets import PeriodDateField, import_combo_style, picture
+from setron.ui.import_dialogs import ImportDialog
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.theme import SECONDARY, icon, svg_size
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font, icon, svg_size
+
+
+class _DeleteFilterRow(QWidget):
+    """보이는 필드만 왼쪽부터 배치한다. 숨긴 필드의 빈 열을 남기지 않는다."""
+
+    def __init__(self, equipment_fields, release_fields):
+        super().__init__()
+        self.equipment_fields, self.release_fields = equipment_fields, release_fields
+        self.fields = ()
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(16)
+        # 숨긴 삭제 탭의 이전 열 너비가 가져오기 화면의 최소 폭을 강제하지 않게 한다.
+        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        for field in dict.fromkeys((*equipment_fields, *release_fields)):
+            field.setParent(self)
+        self.show_kind(True)
+
+    def show_kind(self, equipment):
+        active = self.equipment_fields if equipment else self.release_fields
+        if self.fields == active:
+            return
+        for field in dict.fromkeys((*self.equipment_fields, *self.release_fields)):
+            self.grid.removeWidget(field)
+            field.setVisible(field in active)
+        self.fields = active
+        self._arrange()
+
+    def _arrange(self):
+        needed = sum(field.maximumWidth() for field in self.fields) + 16 * (len(self.fields) - 1)
+        two_columns = sum(max(field.maximumWidth() for field in self.fields[index::2])
+                          for index in range(min(2, len(self.fields)))) + 16
+        columns = len(self.fields) if self.width() >= needed else 2 if self.width() >= two_columns else 1
+        for column in range(6):
+            self.grid.setColumnStretch(column, 0)
+        for index, field in enumerate(self.fields):
+            self.grid.removeWidget(field)
+            self.grid.addWidget(field, index // columns, index % columns, Qt.AlignmentFlag.AlignLeft)
+        self.grid.setColumnStretch(columns, 1)
+        self.updateGeometry()
+
+    def minimumSizeHint(self):
+        return QSize(0, self.grid.minimumSize().height())
+
+    def resizeEvent(self, event):
+        self._arrange()
+        super().resizeEvent(event)
 
 
 class _DeleteCheckStyle(QProxyStyle):
@@ -149,17 +198,13 @@ DANGER_STYLE = ("QPushButton {background:#c23345;color:white;border:1px solid #c
                 "QPushButton:focus {border:2px solid #142033;}")
 
 
-class DeleteConfirmDialog(QDialog):
+class DeleteConfirmDialog(ImportDialog):
     """실제 선택 범위를 다시 표시하고 ‘삭제’의 정확한 입력과 별도 클릭을 요구한다."""
 
     def __init__(self, plan, batches, *, connected, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("저장된 데이터 삭제 확인")
-        self.setStyleSheet("QDialog {background:white;}")
-        self.setMinimumWidth(440)
-        self.resize(580, 320)
-        body = QVBoxLayout(self)
-        body.setContentsMargins(24, 22, 24, 22)
+        super().__init__("저장된 데이터 삭제 확인", parent)
+        self.heading.hide()
+        body = self.body
         header = QHBoxLayout()
         icon_slot = QFrame()
         icon_slot.setFixedSize(40, 40)
@@ -228,45 +273,83 @@ class ImportDeletePage(QWidget):
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
-        self.notice = label("삭제 서비스를 연결하면 저장된 자료 목록을 조회할 수 있습니다.", 13, color=SECONDARY, wrap=True)
+        self.notice = label("", 13, color=SECONDARY, wrap=True)
+        self.notice.hide()
         body.addWidget(self.notice)
         filters = Card(padding=24)
+        self.filters_card = filters
         filters.setProperty("outlined", True)
         filters.body.addWidget(label("1. 삭제할 자료와 기간 선택", 20, medium=True))
-        filters.body.addWidget(label("원본 Excel 파일은 바뀌지 않습니다. 삭제할 자료와 기간을 확인하세요.", 13, color=SECONDARY, wrap=True))
+        filters.body.addWidget(label("잘못 저장했거나 더 이상 쓰지 않는 자료를 골라 지웁니다. 원본 Excel 파일은 바뀌지 않습니다.",
+                                    13, color=SECONDARY, wrap=True))
         self.kind_combo, self.site_combo, self.family_combo = QComboBox(), QComboBox(), QComboBox()
         self.kind_combo.addItem("설비 현황표", ExtractKind.EQUIPMENT_STATUS)
         self.kind_combo.addItem("릴리즈 노트", ExtractKind.RELEASE_NOTE)
         self.site_combo.addItem("전체", None)
         self.family_combo.addItem("설비군/계열 선택", None)
-        self.start, self.end = DateField(), DateField()
+        self.start, self.end = PeriodDateField(), PeriodDateField()
         from setron.ui.versions import _field
         self.start_box, self.end_box = _field("시작일", self.start), _field("종료일", self.end)
         self.site_box, self.family_box = _field("Site", self.site_combo), _field("설비군/계열", self.family_combo)
-        filters.body.addWidget(_WrapRow([_field("자료 종류", self.kind_combo), self.site_box, self.start_box, self.end_box, self.family_box], 190, fields=True))
+        self.kind_box = _field("자료 종류", self.kind_combo)
+        self.end_group = QWidget()
+        date_end = QHBoxLayout(self.end_group)
+        date_end.setContentsMargins(0, 0, 0, 0)
+        date_end.setSpacing(12)
+        separator = label("~", 18, medium=True, color=SECONDARY)
+        separator.setFixedSize(12, 42)
+        date_end.addWidget(separator, 0, Qt.AlignmentFlag.AlignBottom)
+        date_end.addWidget(self.end_box)
+        for field, width in ((self.kind_box, 200), (self.site_box, 160), (self.start_box, 190),
+                             (self.end_group, 214), (self.family_box, 200)):
+            field.setFixedWidth(width)
+        self.fields_row = _DeleteFilterRow((self.kind_box, self.site_box, self.start_box, self.end_group),
+                                           (self.kind_box, self.family_box))
+        filters.body.addWidget(self.fields_row)
+        self.quick_choices = QWidget()
+        quick_layout = QHBoxLayout(self.quick_choices)
+        quick_layout.setContentsMargins(0, 0, 0, 0)
+        quick_layout.setSpacing(8)
+        self.quick_label = label("빠른 선택", 12, medium=True, color=SECONDARY)
+        quick_layout.addWidget(self.quick_label, 0, Qt.AlignmentFlag.AlignTop)
         self.quick_buttons = []
         self.quick_group = QButtonGroup(self)
         for text, mode in (("가장 최근 기준일", "latest"), ("최근 1개월", "month"), ("최근 3개월", "quarter"), ("직접 선택", "manual")):
             item = button(text)
             item.setCheckable(True)
-            item.setStyleSheet("QPushButton:checked {background:#e8ebfc;color:#3c5ce9;border-color:#3c5ce9;}")
+            item.setFont(font(12, medium=True))
+            item.setFixedHeight(32)
+            item.setStyleSheet(f"QPushButton {{background:white;color:{INK};border:1px solid {LINE};"
+                              "border-radius:16px;padding:0 12px;min-height:30px;}"
+                              f"QPushButton:checked {{background:#ebeffd;color:{PRIMARY};border-color:{PRIMARY};}}"
+                              f"QPushButton:focus {{border:2px solid {PRIMARY};}}")
             self.quick_group.addButton(item)
             item.clicked.connect(lambda checked=False, value=mode: self.quick_range(value))
             self.quick_buttons.append(item)
         self.quick_buttons[-1].setChecked(True)
-        self.reload_button = button("저장된 자료 조회")
-        self.reload_button.clicked.connect(self.reload)
-        filters.body.addWidget(_WrapRow([*self.quick_buttons, self.reload_button], 145))
+        quick_wrap = _WrapRow(self.quick_buttons, 120)
+        quick_wrap.grid.setSpacing(8)
+        quick_layout.addWidget(quick_wrap, 1)
+        self.quick_label.setContentsMargins(0, 8, 0, 0)
+        filters.body.addWidget(self.quick_choices)
         self.kind_notice = label("릴리즈 노트는 기간 대신 확인된 설비군/계열을 선택합니다.", 12, color=SECONDARY, wrap=True)
         filters.body.addWidget(self.kind_notice)
-        self.range_message = label("", 12, color="#c23345", wrap=True)
+        self.range_message = label("", 12, color=SECONDARY, wrap=True)
         self.range_message.hide()
         filters.body.addWidget(self.range_message)
+        self.reload_button = button("저장된 자료 조회")
+        self.reload_button.setFixedHeight(40)
+        self.reload_button.clicked.connect(self.reload)
+        # 조회는 기간 선택 칩이 아니라 별도의 실행 액션이다.
+        filters.body.addWidget(self.reload_button, 0, Qt.AlignmentFlag.AlignRight)
         body.addWidget(filters)
         listing = Card(padding=24)
         listing.setProperty("outlined", True)
-        listing.body.addWidget(label("2. 삭제될 기준일 확인", 20, medium=True))
+        self.listing_title = label("2. 삭제될 기준일 확인", 20, medium=True)
+        listing.body.addWidget(self.listing_title)
         self.table = QTableWidget(0, 7)
+        # 스타일을 사용하는 헤더/행 체크박스가 먼저 정리되도록 테이블이 소유한다.
+        self._check_style.setParent(self.table)
         self.table.setHorizontalHeaderLabels(["", "기준일 / 설비군", "Site · 시트", "설비 수 / 행 수", "저장일", "저장 방식", "상태"])
         self.table.setAccessibleName("삭제 대상 저장 묶음")
         self.table.setMinimumWidth(0)
@@ -297,32 +380,66 @@ class ImportDeletePage(QWidget):
         impact.setProperty("outlined", True)
         impact.body.addWidget(label("3. 삭제 영향 확인", 20, medium=True))
         self.counts = label("삭제할 기준일 — · 삭제할 현황표 행 — · 남는 기준일 —", 16, medium=True, wrap=True)
-        impact.body.addWidget(self.counts)
+        self.counts.setParent(self)
+        self.counts.hide()  # 기존 요약 계약은 보존하고 화면에는 Figma의 세 지표 묶음으로 표시한다.
+        self.impact_stats = QWidget()
+        stats = QHBoxLayout(self.impact_stats)
+        stats.setContentsMargins(0, 0, 0, 0)
+        stats.setSpacing(28)
+        self.stat_boxes, self.stat_titles, self.stat_values = [], [], []
+        for title in ("삭제할 기준일", "삭제할 현황표 행", "남는 기준일"):
+            box = QWidget()
+            layout = QVBoxLayout(box)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(2)
+            caption = label(title, 12, color=SECONDARY)
+            value = label("—", 20, medium=True, color=INK if title == "남는 기준일" else "#c23345")
+            layout.addWidget(caption)
+            layout.addWidget(value)
+            stats.addWidget(box)
+            self.stat_boxes.append(box)
+            self.stat_titles.append(caption)
+            self.stat_values.append(value)
+        stats.addStretch()
+        impact.body.addWidget(self.impact_stats)
         self.effect = label("삭제할 자료를 먼저 선택해 주세요.", 13, wrap=True)
         impact.body.addWidget(self.effect)
-        self.warning = label("삭제한 자료는 되돌릴 수 없습니다. 필요하면 먼저 DB 내보내기로 백업하세요.", 13, color="#856009", wrap=True)
-        impact.body.addWidget(self.warning)
+        self.backup_tip = QFrame()
+        self.backup_tip.setObjectName("deleteBackupTip")
+        self.backup_tip.setStyleSheet("QFrame#deleteBackupTip {background:#f6f0e0;border:0;border-radius:8px;}")
+        backup_row = QHBoxLayout(self.backup_tip)
+        backup_row.setContentsMargins(14, 10, 14, 10)
+        backup_row.setSpacing(10)
+        self.warning = label("삭제한 자료는 되돌릴 수 없어요. 필요하면 먼저 DB 내보내기로 백업하세요", 13, color="#9e6b00", wrap=True)
+        self.warning.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        backup_row.addWidget(self.warning, 1)
         self.backup_button = button("DB 내보내기")
         self.backup_button.setEnabled(False)
         self.backup_button.setToolTip("DB 내보내기 공급자가 연결되면 사용할 수 있습니다.")
         self.backup_button.clicked.connect(self.backup_requested.emit)
+        self.backup_button.setFixedHeight(40)
+        backup_row.addWidget(self.backup_button)
+        impact.body.addWidget(self.backup_tip)
         self.cancel_button, self.delete_button = button("취소"), button("선택한 자료 삭제")
         self.delete_button.setStyleSheet(DANGER_STYLE)
         self.cancel_button.clicked.connect(lambda: (self.clear_selection(), self.cancel_requested.emit()))
         self.delete_button.clicked.connect(self.confirm_delete)
-        impact.body.addWidget(self.backup_button, 0, Qt.AlignmentFlag.AlignRight)
         footer = QHBoxLayout()
         footer.addStretch()
         footer.addWidget(self.cancel_button)
         footer.addWidget(self.delete_button)
         impact.body.addLayout(footer)
         body.addWidget(impact)
+        self.step_cards = (filters, listing, impact)
+        for card in (filters, listing, impact):
+            card.body.setContentsMargins(28, 24, 28, 24)
+            card.setStyleSheet("QFrame#card {background:white;border:1px solid #dee0e5;border-radius:16px;}")
         body.addStretch()
         for control, caption in ((self.kind_combo, "삭제할 자료 종류"), (self.site_combo, "삭제할 Site"),
                                  (self.family_combo, "삭제할 설비군/계열"), (self.start, "삭제 시작일"), (self.end, "삭제 종료일")):
             control.setAccessibleName(caption)
             control.setProperty("queryField", True)
-            control.setFixedHeight(40)
+            control.setFixedHeight(42)
             if isinstance(control, QComboBox):
                 control.setStyleSheet(import_combo_style())
                 control.currentIndexChanged.connect(self.apply_filter)
@@ -339,16 +456,20 @@ class ImportDeletePage(QWidget):
         # Qt QVariant은 str 기반 Enum을 문자열로 돌려줄 수 있다.
         return ExtractKind(self.kind_combo.currentData())
 
+    def _set_notice(self, text):
+        self.notice.setText(text)
+        self.notice.setVisible(bool(text))
+
     def reload(self):
         if self.busy or self.phase == "unknown":
             return False
         if self.gateway is None or not callable(getattr(self.gateway, "list_batches", None)):
-            self.notice.setText("삭제 서비스 미연결 · 목록과 대수를 임의로 만들지 않습니다.")
+            self._set_notice("")
             return False
         self.catalog = None
         self.selected.clear()
         self.phase = "loading"
-        self.notice.setText("저장된 자료 목록을 읽고 있습니다…")
+        self._set_notice("저장된 자료 목록을 읽고 있습니다…")
         self._render()
         self.busy_changed.emit()
         self.request.start(BackgroundRead(self.gateway.list_batches))
@@ -373,7 +494,7 @@ class ImportDeletePage(QWidget):
             index = combo.findData(previous)
             combo.setCurrentIndex(max(0, index))
             combo.blockSignals(False)
-        self.notice.setText(catalog.source_label)
+        self._set_notice(catalog.source_label)
         self.apply_filter()
         return True
 
@@ -396,7 +517,7 @@ class ImportDeletePage(QWidget):
         days = [b.day for b in self.catalog.batches if b.day and b.kind is ExtractKind.EQUIPMENT_STATUS
                 and (self.site_combo.currentData() is None or b.site == self.site_combo.currentData())] if self.catalog else []
         if not days:
-            self.notice.setText("선택한 Site에 저장된 기준일이 없습니다.")
+            self._set_notice("선택한 Site에 저장된 기준일이 없습니다.")
             return
         end = max(days)
         from PySide6.QtCore import QDate
@@ -419,13 +540,14 @@ class ImportDeletePage(QWidget):
         if self.sender() in (self.start, self.end):
             self.quick_buttons[-1].setChecked(True)
         invalid = equipment and bool(self.start.text() or self.end.text()) and self._dates() is None
-        self.range_message.setText("시작일·종료일을 YYYY-MM-DD 형식으로 입력하고, 시작일이 종료일보다 늦지 않은지 확인하세요." if invalid else "")
+        self.range_message.setText("시작일·종료일을 유효한 YYYY-MM-DD 날짜로 입력하고, 시작일이 종료일보다 늦지 않은지 확인하세요." if invalid else "")
         self.range_message.setVisible(invalid)
         for widget in (self.start_box, self.end_box, self.site_box):
             widget.setVisible(equipment)
-        self.family_box.setVisible(not equipment)
-        for widget in self.quick_buttons:
-            widget.setVisible(equipment)
+        self.fields_row.show_kind(equipment)
+        self.quick_choices.setVisible(equipment)
+        self.kind_notice.setVisible(not equipment)
+        self.listing_title.setText("2. 삭제될 기준일 확인" if equipment else "2. 삭제될 릴리즈 묶음 확인")
         if not self.busy and self.phase != "unknown":
             self.selected = {b.key for b in self.catalog.batches if self.eligible(b)} if self.catalog else set()
         self._render()
@@ -498,7 +620,7 @@ class ImportDeletePage(QWidget):
                     item.setBackground(QColor("#fcf0f2"))
                 self.table.setItem(r, c, item)
         self.empty.setVisible(not batches)
-        self.empty.setText("선택한 종류의 저장된 자료가 없습니다." if self.catalog else "삭제 목록이 연결되지 않았거나 아직 조회하지 않았습니다.")
+        self.empty.setText("선택한 종류의 저장된 자료가 없습니다." if self.catalog else "저장된 자료를 조회해 주세요.")
         equipment = self.kind is ExtractKind.EQUIPMENT_STATUS
         dates = {b.day for b in batches if b.day}
         remaining = dates - {b.day for b in selected}
@@ -509,7 +631,17 @@ class ImportDeletePage(QWidget):
                                  f"삭제할 현황표 행 {sum(b.row_count for b in selected)}행 · 남는 기준일 {len(remaining)}개") if equipment else
                                 f"선택한 릴리즈 묶음 {len(selected)}개 · 삭제할 행 {sum(b.row_count for b in selected)}행")
         else:
-            self.counts.setText("삭제할 기준일 — · 삭제할 행 — · 남는 기준일 —")
+            self.counts.setText("삭제할 기준일 — · 삭제할 현황표 행 — · 남는 기준일 —" if equipment else
+                                "삭제할 릴리즈 묶음 — · 삭제할 행 —")
+        self.impact_stats.setAccessibleName(self.counts.text())
+        self.stat_titles[0].setText("삭제할 기준일" if equipment else "삭제할 릴리즈 묶음")
+        self.stat_titles[1].setText("삭제할 현황표 행" if equipment else "삭제할 행")
+        self.stat_boxes[2].setVisible(equipment)
+        amounts = ((f"{len({b.day for b in selected}) if equipment else len(selected)}개",
+                    f"{sum(b.row_count for b in selected)}행", f"{len(remaining)}개" if equipment else "—")
+                   if self.catalog else ("—", "—", "—"))
+        for widget, text in zip(self.stat_values, amounts):
+            widget.setText(text)
         self.effect.setText(("• 선택한 자료가 기준 날짜 목록과 히트맵·추이·Replay 조회에 영향을 줍니다.\n"
                              "• 다른 Site·시트의 자료가 남은 기준일은 목록에 유지됩니다. 원본 Excel 파일도 유지합니다.\n"
                              "• 현황표 삭제는 릴리즈 노트를 삭제하지 않습니다." if equipment else
@@ -543,11 +675,11 @@ class ImportDeletePage(QWidget):
         if not confirmed:
             return False
         if self.plan() != plan:
-            self.notice.setText("목록 또는 선택 조건이 바뀌었습니다. 삭제 범위를 다시 확인해 주세요.")
+            self._set_notice("목록 또는 선택 조건이 바뀌었습니다. 삭제 범위를 다시 확인해 주세요.")
             return False
         self.pending_plan = plan
         self.phase = "deleting"
-        self.notice.setText("선택한 자료를 삭제하고 있습니다. 완료 전에는 다시 요청할 수 없습니다.")
+        self._set_notice("선택한 자료를 삭제하고 있습니다. 완료 전에는 다시 요청할 수 없습니다.")
         self._render()
         self.busy_changed.emit()
         gateway = self.gateway
@@ -559,7 +691,7 @@ class ImportDeletePage(QWidget):
             self.phase = "idle"
             if error is not None or not isinstance(result, DeletionCatalog):
                 self.catalog = None
-                self.notice.setText("저장된 자료 목록을 읽지 못했습니다. 다시 조회해 주세요.")
+                self._set_notice("저장된 자료 목록을 읽지 못했습니다. 다시 조회해 주세요.")
                 self._render()
             else:
                 self.set_catalog(result)
@@ -572,14 +704,14 @@ class ImportDeletePage(QWidget):
                 self.phase = "idle"
                 self.catalog = DeletionCatalog(result.revision, tuple(b for b in self.catalog.batches if b.key not in plan.keys), self.catalog.source_label)
                 self.selected.clear()
-                self.notice.setText("삭제 완료 · 기준 날짜와 조회 결과를 다시 확인해 주세요.")
+                self._set_notice("삭제 완료 · 기준 날짜와 조회 결과를 다시 확인해 주세요.")
                 self.deleted.emit(result)
             elif valid and result.status == "failed" and not result.deleted_keys:
                 self.phase = "idle"
-                self.notice.setText("삭제하지 못했습니다. 기존 자료와 선택은 유지됩니다. " + result.message)
+                self._set_notice("삭제하지 못했습니다. 기존 자료와 선택은 유지됩니다. " + result.message)
             else:
                 self.phase = "unknown"
-                self.notice.setText("삭제 결과를 확인할 수 없습니다. 중복 삭제를 요청하지 말고 저장 기록을 확인해 주세요.")
+                self._set_notice("삭제 결과를 확인할 수 없습니다. 중복 삭제를 요청하지 말고 저장 기록을 확인해 주세요.")
             self._render()
         self.busy_changed.emit()
 
