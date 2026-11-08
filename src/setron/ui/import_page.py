@@ -1500,6 +1500,24 @@ class ImportPage(QWidget):
         self._set_status("AI 추출 취소", "warning", "화면을 떠나 추출 결과 수신을 취소했습니다. 다시 추출해 주세요.")
         self._render()
 
+    def request_kind(self, kind: str) -> bool:
+        """버전 관리 화면의 '가져오기로 이동' 요청: 자료 종류를 바꾸되 진행 중인 다른 초안은 지킨다.
+
+        param
+        - kind: "release"면 릴리즈 노트, 그 밖에는 설비 현황.
+
+        return
+        - 자료 종류를 바꿨으면 True. 진행 중인 다른 작업을 지키느라 그대로 뒀으면 False.
+        """
+        requested = ExtractKind.RELEASE_NOTE if kind == "release" else ExtractKind.EQUIPMENT_STATUS
+        if not self.busy and not self.locked and not self.deletion.busy and (
+                self.draft is None or self.draft.kind is requested or self.state == "saved"):
+            self.kind_combo.setCurrentIndex(self.kind_combo.findData(requested.value))
+            return True
+        if self.kind is not requested:
+            self.result_label.setText("진행 중인 가져오기 작업을 유지했습니다. 검토를 마치거나 가져오기를 초기화한 뒤 자료 종류를 변경해 주세요.")
+        return False
+
     def hideEvent(self, event):
         """화면이 숨겨져도 추출은 계속한다. 기존 자료 검사만 앱 안에서 다른 화면으로 옮길 때 다시 하게 한다.
 

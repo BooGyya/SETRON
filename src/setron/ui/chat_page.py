@@ -238,8 +238,9 @@ class AnswerCard(QWidget):
         recognition = flow_row([label("요청 인식", 12, medium=True, color=SECONDARY), *self.intent_tags])
         recognition.setVisible(self.empty_kind is None)
         body.addWidget(recognition)
+        # 조건 줄은 화면에서 숨긴다(11/08 팀 결정: 칩만으로 충분). 답 묶음·전체 보기·Excel 조건 시트에는 그대로 쓴다.
         self.conditions = _wrap(result.understood, 12, SECONDARY)
-        self.conditions.setVisible(result.request.understood)
+        self.conditions.hide()
         body.addWidget(self.conditions)
         self.stale = _wrap("이전 자료 기준 · 다시 물어보세요", 12, name="chatStale")
         self.stale.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
@@ -269,8 +270,7 @@ class AnswerCard(QWidget):
             body.addWidget(_WrapRow(chart_cards, 360, fields=True))
         if result.cause:
             title = QHBoxLayout()
-            title.addWidget(label("원인 분석", 13, medium=True))
-            title.addWidget(_tag("AI 설명" if result.cause_is_ai else "자료 근거"))
+            title.addWidget(label("원인 분석", 13, medium=True))   # 출처 꼬리표 없이 (Word 보고서에는 출처 표시 유지)
             title.addStretch(1)
             body.addLayout(title)
             body.addWidget(_wrap(result.cause, 13, INK))
@@ -556,9 +556,7 @@ class ChatPage(QWidget):
         bottom.setSpacing(8)
         self.quick_chips = []
         self.example_chips = [_chip(question, self.send) for _, _, questions in self.starters for question in questions[:1]]
-        examples = flow_row([label("자주 하는 질문", 12, color=SECONDARY), *self.example_chips])
-        examples.hide()
-        bottom.addWidget(examples)
+        # 입력창 위는 '바로 분석 · 자주 하는 질문 메뉴 · 새 대화' 한 줄만 둔다(11/08 팀 결정). 예시 칩 줄은 쓰지 않는다.
         for title, with_previous, alone in QUICK:
             chip = QPushButton(title)
             chip.setObjectName("aiQuick")
@@ -589,7 +587,7 @@ class ChatPage(QWidget):
         self.new_button.clicked.connect(lambda *_: self.new_conversation())
         line.addWidget(self.new_button)
         chips_row.hide()                                 # 첫 답이 나온 뒤 보인다 (처음엔 예시 카드)
-        self.chip_rows = [examples, chips_row]
+        self.chip_rows = [chips_row]
         bottom.addWidget(chips_row)
         box = QFrame()
         box.setObjectName("aiInputBox")

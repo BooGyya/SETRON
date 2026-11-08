@@ -78,10 +78,11 @@ def test_initial_screen_classes_are_unchanged():
 def test_answer_exposes_contract_conditions_cause_charts_and_notices(ui):
     answer = replace(sample(), cause_is_ai=True)
     card = ui(AnswerCard(answer, lambda _: None, on_report=lambda _: None))
-    assert card.conditions.text() == answer.understood
+    # 조건 줄은 답 묶음에 그대로 두고 화면에서는 숨긴다. 원인 분석 출처 꼬리표도 두지 않는다 (11/08 팀 결정).
+    assert card.conditions.text() == answer.understood and not card.conditions.isVisibleTo(card)
     assert len(card.charts) == len(answer.charts) == 2
     texts = [w.text() for w in card.findChildren(QLabel)]
-    assert "AI 설명" in texts
+    assert "AI 설명" not in texts and "자료 근거" not in texts
     assert all(notice in texts for notice in answer.notices)
     assert all(c.note in texts for c in answer.charts if hasattr(c, "note") and c.note)
     assert all(isinstance(t.itemDelegate(), VerdictDelegate) for t in card.tables)

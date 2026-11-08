@@ -237,14 +237,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         and not management.pending and not management.pending_applicability))
     versions.navigate_requested.connect(window.navigate)
     def import_from_version(kind):
-        from setron.features.ai.schemas import ExtractKind
-        requested = ExtractKind.RELEASE_NOTE if kind == "release" else ExtractKind.EQUIPMENT_STATUS
-        # 진행 중인 다른 가져오기 초안을 바로 전환해 버리지 않는다.
-        if not importer.busy and not importer.locked and not importer.deletion.busy and (
-                importer.draft is None or importer.draft.kind is requested or importer.state == "saved"):
-            importer.kind_combo.setCurrentIndex(importer.kind_combo.findData(requested.value))
-        elif importer.kind is not requested:
-            importer.result_label.setText("진행 중인 가져오기 작업을 유지했습니다. 검토를 마치거나 가져오기를 초기화한 뒤 자료 종류를 변경해 주세요.")
+        importer.request_kind(kind)      # 자료 종류 판단은 가져오기 화면이 한다 (앱 조립 파일은 업무 코드를 직접 부르지 않음)
         window.navigate("import")
     versions.import_requested.connect(import_from_version)
     item_risk_save_pending = False
