@@ -1,4 +1,4 @@
-"""실행 파일 옆 설정 파일(setron.env) 읽기를 검증한다 (Jira S15P31B106-77)."""
+"""Windows 실행 설정 파일(setron.env) 읽기를 검증한다 (Jira S15P31B106-77)."""
 
 import sys
 
@@ -24,8 +24,9 @@ def test_missing_file_changes_nothing(tmp_path):
     assert load_env_file(tmp_path / "없음.env", environ) == () and environ == {}
 
 
-def test_env_file_is_read_only_for_frozen_executable(tmp_path, monkeypatch):
+def test_only_frozen_startup_reads_the_selected_env_file(tmp_path, monkeypatch):
     calls = []
+    bundle = tmp_path / "dist" / "SETRON"
     monkeypatch.setattr(entry, "load_env_file", lambda path: calls.append(path))
     monkeypatch.setattr("setron.ui.app.main", lambda: 0)
 
@@ -33,5 +34,5 @@ def test_env_file_is_read_only_for_frozen_executable(tmp_path, monkeypatch):
     assert entry.run() == 0 and calls == []
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(tmp_path / "SETRON.exe"))
-    assert entry.run() == 0 and calls == [tmp_path / "setron.env"]
+    monkeypatch.setattr(sys, "executable", str(bundle / "SETRON.exe"))
+    assert entry.run() == 0 and calls == [bundle / "setron.env"]

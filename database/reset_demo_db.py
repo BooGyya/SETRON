@@ -4,7 +4,7 @@
 관리 테이블(13개) 외의 테이블과 DB 자체는 건드리지 않는다.
 
     uv run --locked --env-file .env python database/reset_demo_db.py --confirm <SETRON_DB_NAME 값>
-    uv run --locked --env-file .env.windows python database/reset_demo_db.py --confirm setron   # 설치형 MySQL
+    uv run --locked --env-file dist/SETRON/setron.env python database/reset_demo_db.py --confirm setron   # 설치형 MySQL
 
 옵션
 - ``--prefix``: 접속 환경변수 접두사 (기본 ``SETRON_DB_``, 테스트 DB는 ``SETRON_TEST_DB_``)

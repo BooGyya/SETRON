@@ -1,18 +1,15 @@
 ﻿# Windows 실행 파일 폴더를 만든다 (Jira S15P31B106-77). 저장소 최상위 폴더에서 실행한다.
 #   powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
-# 결과: 루트의 setron.exe 와 dist\SETRON 실행 파일 폴더
+# 결과: dist\SETRON 실행 파일 폴더
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).ProviderPath
 $uv = (Get-Command uv -CommandType Application).Source
-$compiler = Join-Path $env:SystemRoot "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $dist = Join-Path $root "dist"
 $bundle = Join-Path $dist "SETRON"
-$launcher = Join-Path $root "setron.exe"
+$executables = @((Join-Path $bundle "SETRON.exe"), (Join-Path $bundle "SETRON_DB_INIT.exe"))
 $stage = [IO.Path]::GetFullPath((Join-Path $dist ("setron-stage-" + [guid]::NewGuid().ToString("N"))))
 $stagedBundle = Join-Path $stage "SETRON"
-$stagedLauncher = Join-Path $stage "setron.exe"
 $previousBundle = Join-Path $stage "previous-SETRON"
-$previousLauncher = Join-Path $stage "previous-setron.exe"
 $originalPath = $env:Path
 $stageCreated = $false
 $keepStage = $false
@@ -59,19 +56,15 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller 빌드 실패 (종료 코드: $LASTEXITCODE)"
     }
-    Copy-Item -LiteralPath .env.windows.example -Destination (Join-Path $stagedBundle "setron.env.example")
-    & $compiler /nologo /target:winexe /codepage:65001 /reference:System.Windows.Forms.dll "/out:$stagedLauncher" packaging\run_setron_windows.cs
-    if ($LASTEXITCODE -ne 0) {
-        throw "루트 실행 파일 빌드 실패 (종료 코드: $LASTEXITCODE)"
-    }
+    Copy-Item -LiteralPath setron.env.example -Destination $stagedBundle
+    Copy-Item -LiteralPath init_local_db.bat -Destination $stagedBundle
 
     # 동시에 빌드하더라도 한 번에 하나의 작업만 배포 폴더를 교체한다.
     $publishLock = [IO.FileStream]::new((Join-Path $dist ".setron-publish.lock"),
         [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 4096,
         [IO.FileOptions]::DeleteOnClose)
-    $exePaths = @($launcher, (Join-Path $bundle "SETRON.exe"))
-    $running = Get-Process -Name SETRON -ErrorAction SilentlyContinue | Where-Object {
-        -not $_.Path -or $_.Path -in $exePaths
+    $running = Get-Process -Name SETRON, SETRON_DB_INIT -ErrorAction SilentlyContinue | Where-Object {
+        -not $_.Path -or $_.Path -in $executables
     }
     if ($running) {
         throw "실행 중인 SETRON을 닫은 후 다시 빌드해 주세요."
@@ -82,7 +75,6 @@ try {
             ($existingBundle.Attributes -band [IO.FileAttributes]::ReparsePoint))) {
         throw "dist\SETRON은 이 저장소의 일반 폴더여야 합니다."
     }
-    $bundlePublished = $false
     try {
         if ($existingBundle) {
             Move-PackageDirectory $bundle $previousBundle
@@ -92,29 +84,11 @@ try {
             }
         }
         Move-PackageDirectory $stagedBundle $bundle
-        $bundlePublished = $true
-        if ([IO.File]::Exists($launcher)) {
-            [IO.File]::Replace($stagedLauncher, $launcher, $previousLauncher)
-        }
-        else {
-            [IO.File]::Move($stagedLauncher, $launcher)
-        }
     }
     catch {
         try {
-            if ($bundlePublished) {
-                Move-PackageDirectory $bundle $stagedBundle
-            }
             if ([IO.Directory]::Exists($previousBundle)) {
                 Move-PackageDirectory $previousBundle $bundle
-            }
-            if ([IO.File]::Exists($previousLauncher)) {
-                if ([IO.File]::Exists($launcher)) {
-                    [IO.File]::Replace($previousLauncher, $launcher, $stagedLauncher)
-                }
-                else {
-                    [IO.File]::Move($previousLauncher, $launcher)
-                }
             }
         }
         catch {
@@ -123,7 +97,7 @@ try {
         }
         throw
     }
-    Write-Host "완료: setron.exe (설정 파일은 dist\SETRON\setron.env)"
+    Write-Host "완료: dist\SETRON\SETRON.exe (설정 파일은 같은 폴더의 setron.env)"
 }
 finally {
     $env:Path = $originalPath

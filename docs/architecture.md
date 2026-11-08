@@ -161,9 +161,9 @@ S15P31B106/
 │   └── mermaid-diagram.png
 ├── .gitignore
 ├── .env.example
-├── .env.windows.example
 ├── .python-version
 ├── compose.yaml
+├── setron.env.example
 ├── docker/mysql5619/
 ├── pyproject.toml
 ├── uv.lock
@@ -394,7 +394,7 @@ DB 작업을 실행하는 스레드에서 세션을 열고 작업이 끝나면 �
 
 `features/storage/inputs.py`는 설비와 릴리즈에서 함께 쓰는 필수값·ID·원본 위치 검증을 담당합니다. 기존 `equipment.validation`의 함수 이름은 가져오기를 통해 유지하며 기능 사이에 서로의 검증 모듈을 직접 참조하지 않습니다.
 
-MySQL 회귀 테스트는 테스트 파일 위치를 기준으로 프로젝트 내 스키마를 찾습니다. 별도 스키마 경로 설정 없이 전용 테스트 DB에서 생성·검증·정리하며, 동시 삭제와 저장 도중·COMMIT 전송 직전의 실제 연결 중단도 검증합니다. Windows MySQL은 `.env.windows.example`을 기반으로 별도 접속 설정을 준비하고 실제 서버에서 추가 검증합니다.
+MySQL 회귀 테스트는 테스트 파일 위치를 기준으로 프로젝트 내 스키마를 찾습니다. 별도 스키마 경로 설정 없이 전용 테스트 DB에서 생성·검증·정리하며, 동시 삭제와 저장 도중·COMMIT 전송 직전의 실제 연결 중단도 검증합니다. Windows MySQL은 `setron.env.example`을 기반으로 접속 설정을 준비하고 실제 서버에서 추가 검증합니다.
 
 ### 설비·PM·계열 저장 (BE-002)
 
@@ -637,7 +637,7 @@ DB 공급자는 `ui/database_source.py`의 `database_catalog()`로 저장 현황
 
 ### Windows 실행 파일 (Jira S15P31B106-77)
 
-`packaging/setron.spec`(PyInstaller)이 `dist/SETRON/` 폴더 형태의 실행 파일을 만든다. 시작 처리는 `setron.__main__.run()` 하나로, 실행 파일일 때만 `infrastructure/env_file.py`의 `load_env_file()`로 실행 파일 옆 `setron.env`를 읽어 아직 없는 환경변수를 채운다. 개발 실행(`uv run --env-file`)은 그대로다. 빌드·설치·설정 방법은 `docs/windows-package.md`에 있다.
+`packaging/setron.spec`(PyInstaller)이 앱 `SETRON.exe`와 DB 초기화 도구 `SETRON_DB_INIT.exe`를 `dist/SETRON/`에 묶는다. 빌드할 때 루트의 `init_local_db.bat`을 배포 폴더에 복사한다. 배치 파일은 같은 폴더 또는 저장소 루트 아래 `dist/SETRON/`에서 초기화 도구를 찾는다. 앱과 초기화 도구는 각 실행 파일 옆의 `setron.env`를 읽는다. 앱은 `load_env_file()`로 아직 없는 환경변수를 채우고 초기화 도구는 `database/init_local_db.py`의 로직과 묶음에 포함된 SQL로 스키마·시연 데이터를 적용한다. 빌드·설치·설정 방법은 `docs/windows-package.md`에 있다.
 
 ## B 읽기 변환 공통 기반
 

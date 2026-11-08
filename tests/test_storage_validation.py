@@ -107,7 +107,7 @@ def test_windows_runtime_config_is_independent_of_docker():
 
     from setron.infrastructure.database import DatabaseConfig
 
-    path = Path(__file__).resolve().parents[1] / ".env.windows.example"
+    path = Path(__file__).resolve().parents[1] / "setron.env.example"
     values = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#"):

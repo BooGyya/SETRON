@@ -10,10 +10,9 @@ Jira S15P31B106-77. 폐쇄망 Windows PC에서 Python·uv 설치 없이 SETRON�
 powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 ```
 
-- 배포 파일은 `dist\SETRON\` 폴더에 생성된다. `SETRON.exe`, 실행에 필요한 `_internal\` 폴더, 설정 예시 `setron.env.example`이 들어 있다.
-- 저장소에서 실행할 때는 루트의 `setron.exe`를 열면 된다. 이 파일은 `dist\SETRON\SETRON.exe`를 실행한다.
-- 폴더 전체(약 220MB)를 압축해 옮긴다. `SETRON.exe`만 옮기면 실행되지 않는다.
-- 빌드 설정은 `packaging\setron.spec`, 시작 스크립트는 `packaging\run_setron.py`다. 화면 아이콘·폰트(`ui/assets`)와 MySQL 드라이버를 함께 묶는다.
+- Windows 빌드 결과는 `dist\SETRON`에 모인다. 앱 `SETRON.exe`, 초기화 도구 `SETRON_DB_INIT.exe`, 루트에서 복사한 `init_local_db.bat`, 설정 예시 `setron.env.example`, 그리고 실행 라이브러리와 초기화 SQL을 담은 `_internal` 폴더가 들어 있다.
+- 앱과 초기화 도구를 전달할 때는 `dist\SETRON` 폴더 전체를 압축한다. 사용자는 ZIP을 풀고 폴더 안의 배치 파일과 앱을 실행할 수 있다.
+- 빌드 설정은 `packaging\setron.spec`다. 화면 아이콘·폰트(`ui/assets`), MySQL 드라이버, 스키마와 시드 SQL을 함께 묶는다.
 
 ## 2. 사용자 PC 준비
 
@@ -21,23 +20,21 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 | --- | --- |
 | Windows | Windows 10 이상 64비트 |
 | Excel | 데스크톱 Excel. 데이터 가져오기는 사용자가 열어 둔 Excel 창에서 읽는다 |
-| MySQL | 회사 PC에 설치된 MySQL 5.6.19. SETRON용 빈 DB와 계정을 만들어 둔다 |
-| 스키마 | 빈 DB에 `database\schema_mysql5619.sql`을 HeidiSQL 등으로 실행한다 |
-| 기준 자료 | 시연·확인 때만 `database\seed_demo_catalog.sql`을 실행한다 (확정 기준 자료 아님) |
+| MySQL | 초기화 전에 같은 PC에서 Windows용 MySQL 5.6.19를 실행하고 SETRON용 빈 DB와 계정을 준비한다. 계정에는 대상 DB의 테이블 생성·참조와 데이터 조회·입력 권한이 필요하다 |
 
-개발 PC에서 시연 DB를 준비할 때는 `.env.windows.example`을 `.env.windows`로 복사하고, 같은 PC의 Windows MySQL에 미리 만든 DB와 계정을 입력한다. 저장소 루트에서 `init_local_db.bat`을 실행하면 스키마와 `database/seed.sql`의 설비 300대·6개월 목업 데이터를 적용한다. 배치 실행에는 `uv`가 필요하며, 스키마만 준비하려면 `init_local_db.bat --no-seed`를 실행한다.
+개발 PC에서는 Windows 패키지를 빌드한 뒤 저장소 루트의 `init_local_db.bat`을 실행할 수 있다. 루트에서 실행하면 배치 파일이 `dist\SETRON`에 있는 초기화 도구를 찾는다.
 
 시연·확인 전에 DB를 빈 상태로 다시 만들려면 개발 PC에서 아래를 실행한다. 관리 테이블 13개를 지우고 스키마와 시연용 기준 자료를 다시 넣는다. 대상 DB의 SETRON 자료가 모두 지워지므로 `--confirm`에 접속 설정의 DB 이름을 한 번 더 적어야 실행된다.
 
 ```powershell
-uv run --locked --env-file .env python database/reset_demo_db.py --confirm <SETRON_DB_NAME 값>
+uv run --locked --env-file dist/SETRON/setron.env python database/reset_demo_db.py --confirm <SETRON_DB_NAME 값>
 ```
 
 다른 사용자에게 받은 DB 내보내기 파일(.sql)이 있으면 스키마 대신 그 파일을 빈 DB에서 실행한다. 내보내기 파일에 구조와 자료가 모두 들어 있다. HeidiSQL에서는 빈 DB를 선택한 뒤 파일을 불러와 실행한다(9.2에서 확인).
 
 ## 3. 설정 파일
 
-`dist\SETRON\setron.env.example`을 같은 폴더에 `setron.env`로 복사하고 값을 채운다.
+`SETRON.exe` 옆의 `setron.env.example`을 같은 폴더에 `setron.env`로 복사하고 값을 채운다. 앱과 초기화 도구 모두 이 파일을 읽는다. 빌드 직후 이 폴더는 `dist\SETRON`이다. 기존 Windows 설정 파일을 사용했다면 그 값을 `dist\SETRON\setron.env`로 옮긴다.
 
 | 이름 | 내용 |
 | --- | --- |
@@ -47,16 +44,20 @@ uv run --locked --env-file .env python database/reset_demo_db.py --confirm <SETR
 | `SETRON_AI_*` | 회사 AI 접속 정보. 있으면 데이터 가져오기 추출과 AI 분석이 회사 AI를 쓰고, 없으면 예제 응답을 쓴다 |
 
 - 한 줄에 `이름=값` 하나. `#`로 시작하는 줄은 주석이다. 비밀번호의 `#`·공백은 그대로 쓴다.
-- 실행 파일은 시작할 때만 `setron.env`를 읽는다. 이미 Windows 환경변수에 같은 이름이 있으면 그 값을 쓴다.
+- 앱은 시작할 때 `setron.env`를 읽으며 이미 Windows 환경변수에 같은 이름이 있으면 그 값을 쓴다. 초기화 도구는 설정 파일에 적힌 DB에 접속한다.
 - `setron.env`에는 비밀번호가 들어 있으므로 다른 사람에게 폴더를 넘길 때는 빼고 넘긴다.
 
 ## 4. 실행
 
-`SETRON.exe`를 더블클릭한다.
+1. ZIP을 풀고 `setron.env`에 미리 준비한 로컬 DB의 접속 정보를 입력한다.
+2. 압축을 푼 폴더에서 `init_local_db.bat`을 실행한다. 관리 테이블 13개와 시연 설비 300대·관측 데이터 1,800건을 적용한다. 시연 데이터가 적용된 상태에서 다시 실행하면 중복 없이 기존 적용 상태를 확인한다.
+3. 같은 폴더의 `SETRON.exe`를 실행해 데이터를 조회한다.
+
+스키마만 준비하려면 명령 프롬프트에서 `init_local_db.bat --no-seed`를 실행한다.
 
 | 상황 | 화면 |
 | --- | --- |
-| `setron.env`가 없거나 `SETRON_DB_NAME`이 없음 | 합성 예시 자료로 시작. 가져오기 저장은 메모리, 내보내기 버튼 비활성 |
+| 파일과 기존 환경변수에서 `SETRON_DB_NAME`을 설정하지 않음 | 합성 예시 자료로 시작. 가져오기 저장은 메모리, 내보내기 버튼 비활성 |
 | DB 접속 성공 | 상단 안내 "MySQL DB 저장 자료". 가져오기 저장·조회·위험 판정·내보내기(관리 데이터 Excel, DB 전체 SQL)가 DB를 사용 |
 | DB 접속 실패 | 합성 예시 자료로 시작하고 상단에 "DB 자료를 읽지 못해…" 안내 |
 

@@ -29,7 +29,7 @@ Excel 미실행·연결 실패·선택 파일/시트 없음·동일 파일명 �
 | `SETRON_AI_MODEL` | 사용 가능한 모델명. 교육 자료 평가에 사용한 값 `gpt-6.1-sol` | 사내 서버가 제공하는 모델명. 전달받은 예시 `gpt-4` |
 | `SETRON_AI_TIMEOUT` | 코드 기본 60초. `.env.example`은 전체 시트 평가에 맞춰 180초 | 선택 사항. 코드 기본 60초 |
 
-개발 설정은 `.env.example`, 사내 Windows 설정은 `.env.windows.example`을 참고합니다. 기존 `.env`를 덮어쓰지 말고 필요한 항목을 추가하세요. 실제 키는 Git에서 제외된 환경 파일에만 보관합니다. 앱 코드가 환경 파일을 직접 읽지는 않으므로 실행 시 `uv run --locked --env-file .env ...` 또는 `--env-file .env.windows`로 불러옵니다. 필수 AI 설정이 없으면 `AIConfigError`가 발생하며, 다른 `OPENAI_*` 설정이나 기본 OpenAI 서버로 대체하지 않습니다.
+개발 설정은 `.env.example`, 사내 Windows 설정은 `setron.env.example`을 참고합니다. 기존 `.env`를 덮어쓰지 말고 필요한 항목을 추가하세요. 실제 키는 Git에서 제외된 환경 파일에만 보관합니다. 소스 실행 시 Docker 설정은 `uv run --locked --env-file .env ...`, Windows 설정은 `uv run --locked --env-file dist/SETRON/setron.env ...`로 불러옵니다. 필수 AI 설정이 없으면 `AIConfigError`가 발생하며, 다른 `OPENAI_*` 설정이나 기본 OpenAI 서버로 대체하지 않습니다.
 
 ```python
 from setron.features.ai.service import parse_question
@@ -243,16 +243,16 @@ Dockerfile이나 초기화 스크립트를 수정했다면 `docker compose build
 
 `SETRON_DB_HOST`, `SETRON_DB_PORT`, `SETRON_DB_NAME`, `SETRON_DB_USER`, `SETRON_DB_PASSWORD`가 필수입니다. `SETRON_DB_CONNECT_TIMEOUT`은 연결 제한 시간(초)이며 생략하면 5초입니다. 테스트 DB에는 같은 항목을 `SETRON_TEST_DB_*`로 지정합니다. Compose의 `ROOT_PASSWORD` 설정은 DB 초기화와 상태 확인용이며 앱에서는 사용하지 않습니다.
 
-실제 환경 파일은 Git에서 제외됩니다. 코드가 파일을 자동으로 읽지는 않으므로 실행할 때 uv의 `--env-file` 옵션으로 불러오거나 환경변수를 직접 설정합니다. 개발 DB에 접속하는지 다음 명령으로 확인할 수 있습니다.
+실제 환경 파일은 Git에서 제외됩니다. 소스 실행 시 uv의 `--env-file` 옵션으로 불러오거나 환경변수를 직접 설정합니다. 개발 DB에 접속하는지 다음 명령으로 확인할 수 있습니다.
 
 ```powershell
 uv run --locked --env-file .env python -m setron.infrastructure.database
 ```
 
-실제 사용 PC에서는 `.env.windows.example`을 `.env.windows`로 복사하고 Windows MySQL 5.6.19의 DB 이름·일반 계정·비밀번호를 입력합니다. 기본 주소는 `127.0.0.1:3306`이며 해당 PC의 설정에 맞춥니다. DB와 계정은 미리 준비하고 빈 DB에 공통 스키마를 적용합니다.
+저장소에서 Windows MySQL 5.6.19를 사용할 때는 [Windows 패키지를 빌드](docs/windows-package.md)하고 `dist/SETRON/setron.env.example`을 같은 폴더에 `setron.env`로 복사한 뒤 DB 이름·일반 계정·비밀번호를 입력합니다. 기본 주소는 `127.0.0.1:3306`이며 해당 PC의 설정에 맞춥니다. 로컬 MySQL에 빈 DB와 계정을 준비하고 루트의 `init_local_db.bat`을 실행하면 스키마와 시연용 설비 300대·관측 데이터 1,800건을 적용합니다. 빌드할 때 같은 배치 파일을 배포 폴더에 복사하므로, 사용자는 ZIP을 푼 폴더에서 배치 파일을 실행할 수 있습니다. 초기화 실행 파일과 앱은 모두 `dist/SETRON/setron.env`를 사용합니다.
 
 ```powershell
-uv run --locked --env-file .env.windows python -m setron.infrastructure.database
+uv run --locked --env-file dist/SETRON/setron.env python -m setron.infrastructure.database
 ```
 
 성공하면 확인 메시지와 종료 코드 0, 설정·접속 오류가 있으면 안내 메시지와 종료 코드 1을 반환합니다. Windows 설정에는 Compose용 root 비밀번호와 테스트 DB 설정이 필요하지 않습니다. Windows에 직접 설치된 MySQL의 실제 접속·저장 검증은 해당 환경이 준비된 뒤 진행합니다.
@@ -577,9 +577,9 @@ S15P31B106/
 │   └── mermaid-diagram.png
 ├── .gitignore
 ├── .env.example
-├── .env.windows.example
 ├── .python-version
 ├── compose.yaml
+├── setron.env.example
 ├── docker/mysql5619/
 ├── pyproject.toml
 ├── uv.lock

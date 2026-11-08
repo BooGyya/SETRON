@@ -251,7 +251,7 @@ def build_sql(catalog):
     emit('COMMIT')
     return ('-- 예시 설비 현황·Item 원문 기반 증강: 300대 / 2026년 5~10월 1,800개 관측\n'
             '-- 원본 Excel 보존. DEMO 호기·월별 관측만 합성. Item 원문·버전·모델 표식 출처 보존.\n'
-            '-- 실행: 저장소 최상위 폴더에서 init_local_db.bat 실행 (기본 설정 .env.windows)\n\n' +
+            '-- 실행: 저장소 최상위 폴더에서 init_local_db.bat 실행 (기본 설정 dist/SETRON/setron.env)\n\n' +
             ';\n\n'.join(statements) + ';\n')
 
 

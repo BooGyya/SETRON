@@ -16,9 +16,14 @@ from setron.infrastructure.database import DatabaseConfig, DatabaseConfigError
 from setron.infrastructure.env_file import load_env_file
 
 HERE = Path(__file__).resolve().parent
-SCHEMA = HERE / "schema_mysql5619.sql"
-SEED = HERE / "seed.sql"
-DEFAULT_ENV = HERE.parent / ".env.windows"
+if getattr(sys, "frozen", False):
+    SQL_DIR = HERE / "database"
+    DEFAULT_ENV = Path(sys.executable).with_name("setron.env")
+else:
+    SQL_DIR = HERE
+    DEFAULT_ENV = HERE.parent / "dist" / "SETRON" / "setron.env"
+SCHEMA = SQL_DIR / "schema_mysql5619.sql"
+SEED = SQL_DIR / "seed.sql"
 
 
 def is_loopback(host: str) -> bool:
@@ -97,12 +102,12 @@ def initialize(config: DatabaseConfig, *, seed: bool = True) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV, help="접속 설정 파일 (기본값: .env.windows)")
+    parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV, help=f"접속 설정 파일 (기본값: {DEFAULT_ENV})")
     parser.add_argument("--no-seed", action="store_true", help="스키마만 준비하고 시연용 목업 데이터는 생략")
     args = parser.parse_args(argv)
 
     if not args.env_file.is_file():
-        parser.error(f"접속 설정 파일이 없습니다: {args.env_file} (.env.windows.example 참고)")
+        parser.error(f"접속 설정 파일이 없습니다: {args.env_file} ({DEFAULT_ENV.with_name('setron.env.example')} 참고)")
 
     try:
         values: dict[str, str] = {}
