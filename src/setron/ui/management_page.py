@@ -15,6 +15,7 @@ from setron.features.management import ApplicabilityEdit, RecordEdit
 from setron.features.release.refresh_schemas import RefreshContext
 from setron.features.targets.schemas import CandidateConfirmation
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseConnectionError, DatabaseSaveError
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.calendar_widgets import DateEdit
 from setron.ui.equipment import ReadTableModel, read_table
@@ -50,7 +51,7 @@ class ValueEditor(QWidget):
         layout.setSpacing(4)
         if field == "setting_value":
             self.kind = "thresholds"
-            self.warning, self.danger, self.unit = QSpinBox(), QSpinBox(), QComboBox()
+            self.warning, self.danger, self.unit = QSpinBox(), QSpinBox(), ComboBox()
             for number in (self.warning, self.danger):
                 number.setRange(-2147483648, 2147483647)
             for value, text in (("YEAR", "년"), ("MONTH", "개월"), ("DAY", "일")):
@@ -79,7 +80,7 @@ class ValueEditor(QWidget):
             self.editor.setChecked(bool(current))
             layout.addWidget(self.editor)
         elif field in ENUMS or field in {"group_id", "family_id", "item_id"} or field.endswith("release_version_id"):
-            self.kind, self.editor = "choice", QComboBox()
+            self.kind, self.editor = "choice", ComboBox()
             self.editor.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             self.editor.setMinimumContentsLength(12)
             self.editor.setMinimumWidth(0)
@@ -179,7 +180,7 @@ class ManagementPage(QWidget):
         self.notice = label("원본은 보존하고 현재 관리값만 수정합니다. 사업장·기준일·PM 위치는 고정입니다.", 13, color=SECONDARY, wrap=True)
         body.addWidget(self.notice)
         selector = QHBoxLayout()
-        self.kind = QComboBox()
+        self.kind = ComboBox()
         for table, title in KINDS:
             self.kind.addItem(title, table)
         self.reload_button, self.previous, self.next = button("새로 조회"), button("이전"), button("다음")
@@ -584,7 +585,7 @@ class ManagementPage(QWidget):
         card.body.addWidget(label("모델별 적용 가능한 릴리즈 확인", 18, medium=True))
         card.body.addWidget(label("목표 N은 자동으로 바꾸지 않습니다. 실제 적용 표식·분기·순서와 출처를 확인한 후보만 지정하세요.", 13, wrap=True))
         choices = QHBoxLayout()
-        self.model_choice, self.family_choice = QComboBox(), QComboBox()
+        self.model_choice, self.family_choice = ComboBox(), ComboBox()
         self.load_candidates_button = button("적용 후보 조회")
         choices.addWidget(self.model_choice, 1)
         choices.addWidget(self.family_choice, 1)

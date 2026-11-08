@@ -31,6 +31,7 @@ from setron.infrastructure import excel_reader
 from setron.infrastructure.ai_client import AIConfigError, ResponseSource
 from setron.infrastructure.database import DatabaseCommitUnknownError
 from setron.infrastructure.excel_reader import ExcelReadError, cell_address
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTable, ReadTableModel, read_table
 from setron.ui.import_demo import example_extractor
@@ -435,7 +436,7 @@ class ImportPage(QWidget):
 
         select = _section("1. Excel 통합문서 · 시트 선택")
         self.step_cards = [select]
-        self.workbook_combo, self.sheet_combo, self.kind_combo = QComboBox(), QComboBox(), QComboBox()
+        self.workbook_combo, self.sheet_combo, self.kind_combo = ComboBox(), ComboBox(), ComboBox()
         for widget, name in ((self.workbook_combo, "통합문서 선택"), (self.sheet_combo, "시트 선택"),
                              (self.kind_combo, "가져올 자료 종류")):
             widget.setAccessibleName(name)
@@ -511,14 +512,14 @@ class ImportPage(QWidget):
         self.common_date, self.common_site = PeriodDateField(), QLineEdit()
         self.common_date.setPlaceholderText("기준일 YYYY-MM-DD")
         self.common_site.setPlaceholderText("사업장 (예: 화성, 평택)")
-        self.common_site_combo = QComboBox()
+        self.common_site_combo = ComboBox()
         self.common_site_combo.setEditable(True)
         self.common_site_combo.setLineEdit(self.common_site)
         self.common_site_combo.setAccessibleName("가져올 자료의 Site 선택 또는 입력")
         self.common_site_combo.setProperty("queryField", True)
         self.common_site_combo.setFixedHeight(38)
         self.common_site_combo.setStyleSheet(import_combo_style())
-        self.common_area = QComboBox()
+        self.common_area = ComboBox()
         self.common_area.setStyleSheet(import_combo_style())
         for text, value in (("메모리/파운드리 · 라인 기준 자동", ""), ("MEMORY", "MEMORY"), ("FOUNDRY", "FOUNDRY")):
             self.common_area.addItem(text, value)
@@ -536,7 +537,7 @@ class ImportPage(QWidget):
         self.release_context = QFrame()
         release_context = QVBoxLayout(self.release_context)
         release_context.setContentsMargins(0, 0, 0, 0)
-        self.release_family = QComboBox()
+        self.release_family = ComboBox()
         self.release_family.setEditable(True)
         self.release_family.setAccessibleName("릴리즈 노트 SW 계열 선택")
         self.release_family.setProperty("queryField", True)

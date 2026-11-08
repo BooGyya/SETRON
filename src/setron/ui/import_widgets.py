@@ -6,11 +6,12 @@ from datetime import date
 from PySide6.QtCore import QDate, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QPainter, QTextCharFormat, QTextLayout
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QHBoxLayout, QLineEdit, QMenu,
+    QDialog, QHBoxLayout, QLineEdit, QMenu,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QWidgetAction, QHeaderView, QSizePolicy,
     QStyle, QStyleOptionFrame, QToolButton,
 )
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.calendar_widgets import CalendarWidget
 from setron.ui.query_panel import _WrapRow
@@ -269,7 +270,7 @@ class ImportDataStateDialog(QDialog):
         body.setSpacing(16)
         body.addWidget(label("데이터 상태별 표시", 20, medium=True))
         body.addWidget(label("선택한 날짜에 현황이 없으면 다른 날짜 자료로 자동 대체하지 않습니다.", 13, wrap=True))
-        self.dates = QComboBox()
+        self.dates = ComboBox()
         self.dates.setAccessibleName("저장된 기준일 선택")
         self.dates.setProperty("queryField", True)
         self.dates.setStyleSheet(import_combo_style())

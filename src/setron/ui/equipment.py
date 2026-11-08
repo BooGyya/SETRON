@@ -3,13 +3,14 @@
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
+    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
     QTableView, QVBoxLayout, QWidget, QSizePolicy,
 )
 
 from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard import MetricCard
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
@@ -245,7 +246,7 @@ class EquipmentPage(QWidget):
         self.search.setPlaceholderText("설비명·위치·모델·버전 원문 검색")
         self.search.setStyleSheet("QLineEdit {background:#f7f9fc;border:1px solid #e5eaf3;border-radius:10px;padding:10px;}")
         self.search.textChanged.connect(self._filter_changed)
-        self.goal_filter = QComboBox()
+        self.goal_filter = ComboBox()
         self.goal_filter.setAccessibleName("목표 상태 필터")
         self.goal_filter.setProperty("queryField", True)
         self.goal_filter.setFixedHeight(38)
@@ -253,7 +254,7 @@ class EquipmentPage(QWidget):
         for goal in GoalState:
             self.goal_filter.addItem(goal.value, goal)
         self.goal_filter.currentIndexChanged.connect(self._filter_changed)
-        self.sort = QComboBox()
+        self.sort = ComboBox()
         self.sort.setAccessibleName("설비 목록 정렬")
         self.sort.setProperty("queryField", True)
         self.sort.setFixedHeight(38)

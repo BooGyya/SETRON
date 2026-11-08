@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.item.schemas import APPLICATION_LABELS, Application, ItemState
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_data import (
@@ -378,14 +379,14 @@ class ItemsPage(QWidget):
         self.observation_note, self.summary = _text(), _text()
         card.body.addWidget(self.observation_note)
         card.body.addWidget(self.summary)
-        self.state_filter = QComboBox()
+        self.state_filter = ComboBox()
         self.state_filter.setAccessibleName("Item 설비 적용 상태")
         self.state_filter.setProperty("queryField", True)
         self.state_filter.setFixedHeight(38)
         self.state_filter.addItem("전체 상태", None)
         for state, name in APPLICATION_LABELS.items():
             self.state_filter.addItem(name, state)
-        self.site_filter, self.distribution_view = QComboBox(), QComboBox()
+        self.site_filter, self.distribution_view = ComboBox(), ComboBox()
         for widget, name in ((self.site_filter, "Item 적용 Site"), (self.distribution_view, "Item 적용 보기")):
             widget.setAccessibleName(name)
             widget.setProperty("queryField", True)

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from setron.features.risk.item_scope import CATEGORIES
 from setron.features.risk.schemas import RiskStatus
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import button, label
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -17,7 +18,7 @@ from setron.ui.theme import PRIMARY, SECONDARY
 
 
 def choice(name):
-    widget = QComboBox()
+    widget = ComboBox()
     widget.setAccessibleName(name)
     widget.setProperty("queryField", True)
     widget.setMinimumWidth(0)

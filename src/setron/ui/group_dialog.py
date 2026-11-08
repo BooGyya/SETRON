@@ -8,9 +8,10 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget,
+    QDialog, QFrame, QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget,
 )
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.group_data import (
     SLOT_LABELS, TIER_COLORS, TIER_LABELS, GroupSaveBlocked, Slot, VersionGroups, check_groups, group_store_for,
@@ -43,7 +44,7 @@ class VersionGroupDialog(QDialog):
         body.setContentsMargins(24, 24, 24, 24)
         body.setSpacing(12)
         body.addWidget(label("버전(N) 기준 입력", 22, medium=True))
-        self.pair_combo = QComboBox()
+        self.pair_combo = ComboBox()
         self.pair_combo.setProperty("queryField", True)
         self.pair_combo.setAccessibleName("기준을 정할 설비군·모델·계열")
         self.pair_combo.setFixedHeight(38)
@@ -191,7 +192,7 @@ class VersionGroupDialog(QDialog):
             release = option.release
             name = release.version_raw + (f" · {option.unavailable_reason}" if option.unavailable_reason else "")
             self.rows.addWidget(label(name, 13, color=SECONDARY if option.unavailable_reason else None), row, 0)
-            combo = QComboBox()
+            combo = ComboBox()
             combo.setProperty("queryField", True)
             combo.setFixedSize(96, 32)
             combo.setAccessibleName(f"{release.version_raw} 칸")

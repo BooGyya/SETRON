@@ -1,8 +1,9 @@
 """모든 업무 화면에서 공유하는 연도 → 월 선택 달력. 날짜 확정은 Qt 기본 동작을 유지한다."""
 
 from PySide6.QtCore import QAbstractListModel, QDate, QLocale, QModelIndex, Qt
-from PySide6.QtWidgets import QCalendarWidget, QComboBox, QDateEdit, QHBoxLayout, QProxyStyle, QStyle, QToolButton, QWidget
+from PySide6.QtWidgets import QCalendarWidget, QComboBox, QDateEdit, QHBoxLayout, QToolButton, QWidget
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.theme import ASSETS, INK, LINE, PRIMARY, SECONDARY
 
 
@@ -33,19 +34,6 @@ class _Years(QAbstractListModel):
             self.endResetModel()
 
 
-class _CalendarListStyle(QProxyStyle):
-    """Qt의 메뉴형 전체 화면 목록 대신 maxVisibleItems가 적용되는 기본 목록을 사용한다."""
-
-    def __init__(self, parent):
-        super().__init__("Fusion")
-        self.setParent(parent)
-
-    def styleHint(self, hint, option=None, widget=None, returnData=None):
-        if hint == QStyle.StyleHint.SH_ComboBox_Popup:
-            return 0
-        return super().styleHint(hint, option, widget, returnData)
-
-
 class CalendarWidget(QCalendarWidget):
     """네이티브 날짜 표 위에 연도·월 드롭다운을 같은 순서로 배치한다."""
 
@@ -69,7 +57,7 @@ class CalendarWidget(QCalendarWidget):
             control.setAccessibleName(caption)
             control.setToolTip(caption)
             control.setFixedSize(28, 32)
-        self.year_combo, self.month_combo = QComboBox(), QComboBox()
+        self.year_combo, self.month_combo = ComboBox(), ComboBox()
         self.years = _Years(self)
         self.year_combo.setModel(self.years)
         self.year_combo.setObjectName("calendarYear")
@@ -78,8 +66,6 @@ class CalendarWidget(QCalendarWidget):
         self.month_combo.setAccessibleName("월 선택")
         self.year_combo.setToolTip("연도를 선택하세요. 목록에서 스크롤하거나 숫자로 이동할 수 있습니다.")
         for control in (self.year_combo, self.month_combo):
-            control._calendar_list_style = _CalendarListStyle(control)
-            control.setStyle(control._calendar_list_style)
             control.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             control.setMaxVisibleItems(10)
             control.setFixedHeight(32)

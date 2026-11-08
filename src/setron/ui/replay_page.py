@@ -3,9 +3,10 @@
 from dataclasses import replace
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QComboBox, QDialog, QHBoxLayout, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.features.excel_import.service import parse_date
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import series_color
 from setron.ui.equipment import ignore_width
@@ -64,7 +65,7 @@ class ReplayPage(QWidget):
         period_row.addWidget(_field("종료 날짜", self.end))
         self.combos, fields = {}, [period]
         for key, title in (("site_key", "Site"), ("fab_key", "Fab"), ("line_key", "Line"), ("group_key", "설비군")):
-            control = QComboBox()
+            control = ComboBox()
             control.setAccessibleName("Replay " + title)
             control.setProperty("queryField", True)
             control.setFixedHeight(38)

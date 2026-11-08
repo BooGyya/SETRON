@@ -2,8 +2,9 @@
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QComboBox, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.theme import INK, SECONDARY, font
@@ -82,7 +83,7 @@ class ItemOriginalTable(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
-        self.documents = QComboBox()
+        self.documents = ComboBox()
         self.documents.setAccessibleName("릴리즈노트 원본 문서·시트")
         self.documents.setProperty("queryField", True)
         self.documents.setFixedHeight(40)
