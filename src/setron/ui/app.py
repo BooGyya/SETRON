@@ -47,6 +47,7 @@ from setron.ui.import_page import ImportPage, saver_from_env
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_refresh import capture_release_context, is_database_import_saver
 from setron.ui.replay_page import ReplayPage
+from setron.ui.reports_page import ReportsPage
 from setron.ui.management_page import ManagementPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter
@@ -325,11 +326,17 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("import", importer, uses_query=False)
     window.register_page("replay", replay, uses_query=False)
     window.register_page("ai", ai, uses_query=False)
+    def latest_report_answer():
+        # 완료된 답만 복사한다. 보고서 생성에서 AI 요청이나 기존 초기 화면을 변경하지 않는다.
+        return next((card.answer for card in reversed(getattr(ai, "cards", ()))
+                     if not card.is_stale and not card.answer.issues and card.answer.request.understood), None)
+    reports = ReportsPage(source, targets_provider=replay_targets, version_loader=version_loader,
+                          ai_provider=latest_report_answer, generation_allowed=analysis_allowed)
+    reports.title_changed.connect(lambda title: window.header.title.setText(title) if window.route == "reports" else None)
     if chat_enabled:
-        from setron.ui.chat_report_library import ChatReportLibrary
-        ai_reports = ChatReportLibrary()
-        ai.report_saved.connect(ai_reports.add)
-        window.register_page("reports", ai_reports, uses_query=False)
+        ai.report_saved.connect(reports.add)
+    window.register_page("reports", reports, uses_query=False)
+    window.page_changed.connect(lambda key: reports.enter() if key == "reports" else None)
     window.register_page("management", management, uses_query=False)
 
     def navigate_item_answer(route, answer):
@@ -433,9 +440,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions") + (("ai", "reports") if chat_enabled else ())
+        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions", "reports") + (("ai",) if chat_enabled else ())
         window.notice.setVisible(window.route not in quiet or window.management_saving)
-        window.header.toolbar.setVisible(window.route not in {"replay", "versions"})
+        window.header.toolbar.setVisible(window.route not in {"replay", "versions", "reports"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
@@ -453,7 +460,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         elif window.route == "ai":
             window.notice.setText(getattr(ai, "notice_text", "AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음"))
             list_action.setEnabled(False)
-        elif chat_enabled and window.route == "reports":
+        elif window.route == "reports":
             list_action.setEnabled(False)
         elif window.route == "versions":
             window.header.title.setText("버전 관리")
@@ -844,6 +851,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
     window.close_guard = lambda: (management.state != "saving" and not versions.saving
+                                 and not reports.saving
                                  and not versions.history_panel.read_request.busy and importer.state != "saving"
                                  and importer.deletion.phase != "deleting")
 
