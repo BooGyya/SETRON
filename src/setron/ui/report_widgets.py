@@ -4,12 +4,13 @@ from datetime import datetime
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QStackedBarSeries, QValueAxis
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLayout, QSizePolicy,
     QStackedWidget, QTabBar, QVBoxLayout, QWidget,
 )
 
+from setron.ui.appearance import ui_color
 from setron.ui.chat_export import chart_png, export_folder
 from setron.ui.components import button, label
 from setron.ui.import_dialogs import ImportBusyBar, ImportConfirmDialog, ImportDialog
@@ -318,7 +319,7 @@ def data_chart(table, kind):
             value = sum(row[index] for row in table.rows)
             if value:
                 part = series.append(f"{title} {value}건", value)
-                part.setColor(QColor(COLORS[index - 1]))
+                part.setColor(ui_color(COLORS[index - 1]))
         chart.addSeries(series)
         return view
     x, y = QBarCategoryAxis(), QValueAxis()
@@ -337,7 +338,7 @@ def data_chart(table, kind):
             if current is None:
                 current = QLineSeries()
                 current.setName("N 이상 적용률")
-                current.setPen(QPen(QColor(PRIMARY), 2))
+                current.setPen(QPen(ui_color(PRIMARY), 2))
                 current.setPointsVisible(True)
                 series_list.append(current)
             current.append(index, float(row[4]) * 100)
@@ -348,7 +349,7 @@ def data_chart(table, kind):
         series = QStackedBarSeries()
         for i, title in enumerate(table.columns[1:], 1):
             values = QBarSet(title)
-            values.setColor(QColor(COLORS[i - 1]))
+            values.setColor(ui_color(COLORS[i - 1]))
             values.append([row[i] for row in table.rows])
             series.append(values)
         series_list.append(series)
@@ -374,7 +375,7 @@ class TreeMap(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("white"))
+        painter.fillRect(self.rect(), ui_color("white"))
         total = sum(sum(row[1:]) for row in self.table.rows)
         if not total:
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "자료 없음")
@@ -391,8 +392,8 @@ class TreeMap(QWidget):
                     continue
                 height = self.height() * value / count
                 rect = QRectF(x, y, width, height)
-                painter.fillRect(rect, QColor(COLORS[index]))
-                painter.setPen(QPen(QColor("white"), 1))
+                painter.fillRect(rect, ui_color(COLORS[index]))
+                painter.setPen(QPen(ui_color("white"), 1))
                 painter.drawRect(rect)
                 if width > 100 and height > 38:
                     painter.drawText(rect.adjusted(8, 4, -8, -4), Qt.AlignmentFlag.AlignCenter,

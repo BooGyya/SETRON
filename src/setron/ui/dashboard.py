@@ -143,6 +143,8 @@ class MetricCard(Card):
         self.body.addLayout(row)
         self.value = label("—", 46 if tone != "neutral" else 34, medium=True,
                            color=PRIMARY if tone == "achievement" else "#ad344d" if tone == "risk" else INK, numeric=True)
+        if tone == "achievement":
+            self.value.setProperty("appearanceRate", "foreground")
         number_font = self.value.font()
         number_font.setWeight(QFont.Weight.DemiBold)
         self.value.setFont(number_font)
@@ -160,6 +162,7 @@ class DashboardKpi(Card):
         self.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         ink, muted = ("white", "white") if accent else (INK, SECONDARY)
         if accent:
+            self.setProperty("appearanceRate", "background")
             self.setStyleSheet(f"QFrame#card {{background:{PRIMARY};border:1px solid {PRIMARY};border-radius:12px;}}")
         else:
             self.setStyleSheet("QFrame#card {background:white;border:1px solid white;border-radius:12px;}")

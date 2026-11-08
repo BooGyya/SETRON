@@ -1,7 +1,7 @@
 """VER5 Item 관리: 등록 기준과 물리 설비별 적용·결함 상태를 같은 판정기로 표시한다."""
 
 from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPalette
+from PySide6.QtGui import QFontMetrics, QPainter, QPalette
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLineEdit, QStyle, QStyledItemDelegate,
     QStyleOptionViewItem, QVBoxLayout, QWidget,
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from setron.features.item.schemas import Application
 from setron.features.risk.schemas import MappingStatus, RiskStatus, RuleType
 from setron.features.risk.service import RiskAssessor
+from setron.ui.appearance import ui_color
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import FlowGrid, ReadTableModel, read_table
 from setron.ui.item_risk_dialog import ItemRiskDialog, choice, field
@@ -57,10 +58,10 @@ class ItemStatusDelegate(QStyledItemDelegate):
         height = min(available.height(), metrics.height() + 8)
         badge = QRectF(available.left(), available.top() + (available.height() - height) / 2,
                        min(available.width(), metrics.horizontalAdvance(shown) + 18), height)
-        painter.setPen(QColor(border))
-        painter.setBrush(QColor(background))
+        painter.setPen(ui_color(border))
+        painter.setBrush(ui_color(background))
         painter.drawRoundedRect(badge.adjusted(.5, .5, -.5, -.5), 4, 4)
-        painter.setPen(QColor(ink))
+        painter.setPen(ui_color(ink))
         painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, shown)
         painter.restore()
 
@@ -320,7 +321,8 @@ class ItemRiskPage(QWidget):
         # indexWidget 아래의 기본 셀 텍스트가 겹쳐 보이지 않게 셀 배경을 명시한다.
         widget.setObjectName("itemRiskCell")
         palette = widget.palette()
-        palette.setColor(QPalette.ColorRole.Window, QColor("white"))
+        palette.setColor(QPalette.ColorRole.Window, ui_color("white"))
+        widget.setProperty("setronOwnPalette", True)
         widget.setPalette(palette)
         widget.setAutoFillBackground(True)
 

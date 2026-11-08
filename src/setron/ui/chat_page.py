@@ -13,7 +13,7 @@ from PySide6.QtCharts import (
     QBarCategoryAxis, QBarSet, QChart, QChartView, QDateTimeAxis, QLineSeries, QStackedBarSeries, QValueAxis,
 )
 from PySide6.QtCore import QDateTime, QEvent, QPoint, Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QProgressBar,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from setron.features.chat.report import ReportPart
 from setron.features.chat.schemas import INTENT_LABELS, BarChart, ChatAnswer, Intent, LineChart, Table
+from setron.ui.appearance import ui_color
 from setron.ui.ai_page import _STYLE, SPARKLE, _UserBubble, _sparkle, _tag
 from setron.ui.chat_export import ExcelExportDialog, ReportDialog, chart_png
 from setron.ui.chat_components import AnswerActions, asset_label, avatar, flow_row, SavedFileToast, VerdictDelegate
@@ -118,8 +119,8 @@ def table_widget(table: Table) -> QTableWidget:
 def bar_chart(chart: BarChart) -> QChartView:
     """구역별 달성률 막대. 강조할 막대(가장 낮은 곳 등)는 다른 색으로 쌓아 그린다."""
     normal, picked = QBarSet("달성률"), QBarSet("강조")
-    normal.setColor(QColor("#c9a54c"))
-    picked.setColor(QColor("#b23a48"))
+    normal.setColor(ui_color("#c9a54c"))
+    picked.setColor(ui_color("#b23a48"))
     for index, value in enumerate(chart.values):
         value = 0.0 if value is None else float(value)
         normal.append(0.0 if index in chart.highlight else value)
@@ -149,7 +150,7 @@ def line_chart(chart: LineChart) -> QChartView:
     axis_y.setLabelFormat("%d%%")
     days = sorted({point.day for _, points in chart.series for point in points if point.rate is not None})
     axis_x.setTickCount(max(2, min(len(days), 8)))   # 기준일 수만큼만 눈금 (같은 달이 겹쳐 보이지 않게)
-    colors = (QColor(PRIMARY), QColor("#9aa1ad"))
+    colors = (ui_color(PRIMARY), ui_color("#9aa1ad"))
     for index, (name, points) in enumerate(chart.series):
         actual, projected = QLineSeries(), QLineSeries()
         actual.setName(name)

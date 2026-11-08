@@ -1,12 +1,13 @@
 """가져오기 전용 진행·확인 창. Figma의 둥근 흰색 카드와 기존 Qt 컨트롤을 사용한다."""
 
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QRectF, Qt, QVariantAnimation
-from PySide6.QtGui import QColor, QPainter, QPainterPath
+from PySide6.QtGui import QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
     QMessageBox, QProgressBar, QScrollArea, QVBoxLayout,
 )
 
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import button, label
 from setron.ui.import_widgets import import_combo_style
@@ -34,7 +35,7 @@ class ImportDialog(QDialog):
         shadow = QGraphicsDropShadowEffect(self.surface)
         shadow.setBlurRadius(24)
         shadow.setOffset(0, 6)
-        shadow.setColor(QColor(0, 0, 0, 40))
+        shadow.setColor(ui_color(0, 0, 0, 40))
         self.surface.setGraphicsEffect(shadow)
         outer.addWidget(self.surface)
         self.body = QVBoxLayout(self.surface)
@@ -184,12 +185,12 @@ class ImportBusyBar(QProgressBar):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         track = QPainterPath()
         track.addRoundedRect(QRectF(self.rect()), 3, 3)
-        painter.fillPath(track, QColor("#e8edfc"))
+        painter.fillPath(track, ui_color("#e8edfc"))
         painter.setClipPath(track)
         segment = max(32.0, self.width() * 0.28)
         start = self.phase * (self.width() + segment) - segment
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(PRIMARY))
+        painter.setBrush(ui_color(PRIMARY))
         painter.drawRoundedRect(QRectF(start, 0, segment, self.height()), 3, 3)
 
 

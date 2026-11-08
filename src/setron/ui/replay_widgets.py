@@ -2,9 +2,10 @@
 
 from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPen
+from PySide6.QtGui import QPen
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
 
+from setron.ui.appearance import ui_color
 from setron.ui.components import label
 from setron.ui.dashboard_charts import DashboardChart, series_color
 from setron.ui.equipment import ignore_width
@@ -65,7 +66,7 @@ class ReplayChart(DashboardChart):
             for points in segments:
                 series = QLineSeries() if len(points) > 1 else QScatterSeries()
                 series.setName(group.label)
-                series.setColor(QColor(series_color(group.key)))
+                series.setColor(ui_color(series_color(group.key)))
                 if isinstance(series, QLineSeries):
                     series.setPen(QPen(series.color(), 2.5))
                     series.setPointsVisible(True)

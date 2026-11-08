@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.ai.schemas import ExtractKind
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.import_widgets import PeriodDateField, import_combo_style, picture
@@ -94,11 +95,11 @@ class _DeleteCheckStyle(QProxyStyle):
         painter.save()
         if not option.state & QStyle.StateFlag.State_Enabled:
             painter.setOpacity(0.4)
-        painter.setPen(QColor("#c23345" if checked else "#b8c0d0"))
-        painter.setBrush(QColor("#c23345" if checked else "white"))
+        painter.setPen(ui_color("#c23345" if checked else "#b8c0d0"))
+        painter.setBrush(ui_color("#c23345" if checked else "white"))
         painter.drawRoundedRect(QRectF(center.x() - 8, center.y() - 8, 16, 16), 3, 3)
         if partial:
-            painter.setPen(QColor("white"))
+            painter.setPen(ui_color("white"))
             painter.drawLine(center.x() - 4, center.y(), center.x() + 4, center.y())
         elif checked:
             size = svg_size("ai-ver5/330d5.svg")
@@ -616,7 +617,7 @@ class ImportDeletePage(QWidget):
             for c, text in enumerate(texts, 1):
                 item = QTableWidgetItem(text)
                 if batch in selected:
-                    item.setBackground(QColor("#fcf0f2"))
+                    item.setBackground(ui_color("#fcf0f2"))
                 self.table.setItem(r, c, item)
         self.empty.setVisible(not batches)
         self.empty.setText("선택한 종류의 저장된 자료가 없습니다." if self.catalog else "저장된 자료를 조회해 주세요.")

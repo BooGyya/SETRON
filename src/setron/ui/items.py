@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.item.schemas import APPLICATION_LABELS, Application, ItemState
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
@@ -138,7 +139,7 @@ class _ReleaseNoteModel(ReadTableModel):
         if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (1, 3):
             return Qt.AlignmentFlag.AlignCenter
         if role == Qt.ItemDataRole.ForegroundRole and index.column() == 4:
-            return QColor(SECONDARY)
+            return ui_color(SECONDARY)
         return super().data(index, role)
 
 
@@ -149,17 +150,17 @@ class _VersionDelegate(QStyledItemDelegate):
         model = index.model()
         painter.save()
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, QColor("#edf0fd"))
+            painter.fillRect(option.rect, ui_color("#edf0fd"))
         elif model.ids and model.ids[index.row()] in model.highlighted:
-            painter.fillRect(option.rect, QColor("#fff6d2"))
-        painter.setPen(QColor("#dee0e5"))
+            painter.fillRect(option.rect, ui_color("#fff6d2"))
+        painter.setPen(ui_color("#dee0e5"))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
         if index.row() in model.group_starts:
             rect = option.rect.adjusted(12, 9, -8, -9)
-            painter.setPen(QColor(INK))
+            painter.setPen(ui_color(INK))
             painter.setFont(font(13, medium=True))
             painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, index.data())
-            painter.setPen(QColor(SECONDARY))
+            painter.setPen(ui_color(SECONDARY))
             painter.setFont(font(11))
             painter.drawText(rect.adjusted(0, 19, 0, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                              model.dates[index.row()])
