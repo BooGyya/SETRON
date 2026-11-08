@@ -1,10 +1,12 @@
 """보고서 전용 표시 부품. 기존 카드·표·달력·진행 표시를 재사용한다."""
 
+from datetime import datetime
+
 from PySide6.QtCharts import QBarCategoryAxis, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QStackedBarSeries, QValueAxis
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy,
+    QButtonGroup, QCheckBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLayout, QSizePolicy,
     QStackedWidget, QTabBar, QVBoxLayout, QWidget,
 )
 
@@ -13,10 +15,136 @@ from setron.ui.components import button, label
 from setron.ui.import_dialogs import ImportBusyBar, ImportConfirmDialog, ImportDialog
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.report_export import display_value, save_generated_report
-from setron.ui.theme import PRIMARY, SECONDARY, font
+from setron.ui.theme import PRIMARY, SECONDARY, font, icon, svg_size
 from setron.ui.version_management_widgets import card, note, set_rows, table, text_field
 
 COLORS = ("#3c5ce9", "#293b66", "#9ca3af")
+
+
+class ReportClock(QWidget):
+    """자료 기준일·보고서 생성일과 구분되는 현재 시각. 보이는 동안에만 갱신한다."""
+
+    def __init__(self):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch()
+        calendar = label("")
+        calendar.setFixedSize(svg_size("reports-ver5/6e7c3.svg"))
+        calendar.setPixmap(icon("reports-ver5/6e7c3.svg").pixmap(calendar.size()))
+        row.addWidget(calendar)
+        self.time_label = label("", 13, color=SECONDARY)
+        row.addWidget(self.time_label)
+        self.timer = QTimer(self)
+        self.timer.setInterval(1000)
+        self.timer.timeout.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self):
+        text = f"현재 시각 {datetime.now():%Y-%m-%d %H:%M}"
+        if text != self.time_label.text():
+            self.time_label.setText(text)
+
+    def showEvent(self, event):
+        self.refresh()
+        self.timer.start()
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        super().hideEvent(event)
+
+
+class SelectedReportType(QFrame):
+    """목록에서 확정한 유형의 읽기 전용 표시. 생성 설정에 재선택 버튼을 만들지 않는다."""
+
+    def __init__(self, entries):
+        super().__init__()
+        self.names = dict(entries)
+        self.setObjectName("selectedReportType")
+        self.caption = label("", 14, medium=True, color=PRIMARY)
+        self.caption.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 0, 16, 0)
+        row.addWidget(self.caption)
+        self.setFixedHeight(40)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet(f"QFrame#selectedReportType {{background:#e8ebfc;border:1px solid {PRIMARY};"
+                           "border-radius:8px;}")
+        self.set_value(next(iter(self.names)))
+
+    def value(self):
+        return self.key
+
+    def text(self):
+        return self.caption.text()
+
+    def set_value(self, value):
+        self.key = value
+        # 글자 폭을 수동 고정하지 않는다. QLabel의 자연 크기와 바깥 여백을 분리해
+        # 테두리에 따른 자동 들여쓰기·소수 배율에서 끝 글자가 잘리는 것을 막는다.
+        self.caption.setText(self.names[value])
+        self.setAccessibleName("보고서 유형 · " + self.names[value])
+        self.updateGeometry()
+
+
+class OptionalSection(QWidget):
+    """유형 전용 입력란. 사용하지 않을 때는 높이와 바깥 간격도 접는다."""
+
+    def __init__(self, content):
+        super().__init__()
+        self.content = content
+        body = QVBoxLayout(self)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(content)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
+        self.set_active(False)
+
+    def set_active(self, active):
+        self.setVisible(bool(active))
+
+    def minimumSizeHint(self):
+        return QSize(0, super().minimumSizeHint().height())
+
+
+class ReportConfigPanels(QWidget):
+    """내용의 길이와 무관한 8:5 열, 같은 행 높이. 좁은 창에서는 두 카드를 세로 배치한다."""
+
+    def __init__(self, left, right):
+        super().__init__()
+        self.left, self.right = left, right
+        self.wide = None
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(18)
+        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        for panel in (left, right):
+            panel.setMinimumWidth(0)
+            panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            panel.body.addStretch()
+        self._arrange(True)
+
+    def _arrange(self, wide):
+        if self.wide == wide:
+            return
+        self.wide = wide
+        for panel in (self.left, self.right):
+            self.grid.removeWidget(panel)
+        self.grid.setColumnStretch(0, 8 if wide else 1)
+        self.grid.setColumnStretch(1, 5 if wide else 0)
+        self.grid.addWidget(self.left, 0, 0)
+        self.grid.addWidget(self.right, 0 if wide else 1, 1 if wide else 0)
+        self.updateGeometry()
+
+    def minimumSizeHint(self):
+        return QSize(0, self.grid.minimumSize().height())
+
+    def resizeEvent(self, event):
+        self._arrange(event.size().width() >= 850)
+        super().resizeEvent(event)
 
 
 def field(caption, control):

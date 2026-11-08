@@ -3,22 +3,25 @@
 import json
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget
 
 from setron.ui.chat_report_library import ChatReportLibrary
 from setron.ui.components import button, label
-from setron.ui.dashboard import DashboardGrid, SplitRow
+from setron.ui.dashboard import DashboardGrid
 from setron.ui.import_widgets import PeriodDateField
 from setron.ui.query_panel import _WrapRow
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, QuerySelection, QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.report_data import FORMATS, REPORT_TYPES, ReportRequest, generate_report, scope_caption
-from setron.ui.report_widgets import Choices, GenerationDialog, ReportPreview, ReportSaveDialog, checkbox, field, step_tabs
+from setron.ui.report_widgets import (
+    Choices, GenerationDialog, ReportClock, ReportConfigPanels, ReportPreview, ReportSaveDialog,
+    OptionalSection, SelectedReportType, checkbox, field, step_tabs,
+)
 from setron.ui.theme import PRIMARY, SECONDARY, icon, svg_size
 from setron.ui.version_management_widgets import actions, card, combo, note, set_rows, table, text_field
 
@@ -96,16 +99,8 @@ class ReportsPage(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        stamp = QWidget()
-        row = QHBoxLayout(stamp)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addStretch()
-        calendar = label("")
-        calendar.setFixedSize(svg_size("reports-ver5/6e7c3.svg"))
-        calendar.setPixmap(icon("reports-ver5/6e7c3.svg").pixmap(calendar.size()))
-        row.addWidget(calendar)
-        row.addWidget(label(datetime.now().strftime("%Y-%m-%d %H:%M"), 13, color=SECONDARY))
-        body.addWidget(stamp)
+        self.clock = ReportClock()
+        body.addWidget(self.clock)
         filters = card()
         self.landing_period = combo("기간", (("month", "최근 1개월"), ("quarter", "최근 3개월"), ("all", "전체 관측 기간")))
         self.landing_site = combo("Site", ((None, "전체 Site"), *((o.key, o.label) for o in self.source.catalog.sites)))
@@ -181,9 +176,8 @@ class ReportsPage(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(18)
         left = card("보고서 유형")
-        self.kind = Choices(tuple((key, title) for key, title, *_ in REPORT_TYPES))
-        self.kind.changed.connect(self._kind_changed)
-        left.body.addWidget(self.kind)
+        self.kind = SelectedReportType(tuple((key, title) for key, title, *_ in REPORT_TYPES))
+        left.body.addWidget(self.kind, 0, Qt.AlignmentFlag.AlignLeft)
         left.body.addWidget(label("조회 조건", 16, medium=True))
         self.site, self.fab, self.line, self.group = (combo(name) for name in ("Site", "Fab", "Line", "설비군"))
         dates = self.source.analysis_dates or self.source.dates
@@ -214,10 +208,22 @@ class ReportsPage(QWidget):
         left.body.addWidget(self.condition_status)
         left.body.addWidget(note(self.source.source_label))
         self.item = combo("조회할 Item")
+        # 전체 Item 원문은 모델·팝업·툴팁에 보존하되, 그 길이를 카드의 최소 폭으로 사용하지 않는다.
+        self.item.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.item.setMinimumContentsLength(18)
+        self.item.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.item.view().setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.item.currentTextChanged.connect(self.item.setToolTip)
         self.item_field = field("조회할 Item *", self.item)
         self.item_note = note("Item 적용 여부는 목표 N 달성과 별도로 기록합니다.")
-        left.body.addWidget(self.item_field)
-        left.body.addWidget(self.item_note)
+        item_section = QWidget()
+        item_body = QVBoxLayout(item_section)
+        item_body.setContentsMargins(0, 0, 0, 0)
+        item_body.setSpacing(12)
+        item_body.addWidget(self.item_field)
+        item_body.addWidget(self.item_note)
+        self.item_slot = OptionalSection(item_section)
+        left.body.addWidget(self.item_slot)
         self.site.currentIndexChanged.connect(self._site_changed)
         self.fab.currentIndexChanged.connect(self._fab_changed)
         for control in (self.site, self.fab, self.line, self.group):
@@ -225,6 +231,7 @@ class ReportsPage(QWidget):
         for control in (self.base_date, self.start, self.end):
             control.textChanged.connect(self._dirty)
         right = card("출력 설정")
+        self.output_body = right.body
         self.format = Choices(tuple((key, title) for key, title, _ in FORMATS))
         self.format.changed.connect(self._format_changed)
         self.format_label = text_field("선택한 형식", "Excel (.xlsx)", readonly=True)
@@ -239,6 +246,8 @@ class ReportsPage(QWidget):
         ai_body = QVBoxLayout(self.ai_fields)
         ai_body.setContentsMargins(0, 0, 0, 0)
         self.ai_status = note("분석 결과 없음")
+        self.ai_status.setFixedHeight(38)
+        self.ai_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         load_ai, example_ai = button("완료한 AI 응답 불러오기"), button("분석 결과 예시 불러오기")
         load_ai.clicked.connect(self.load_ai)
         example_ai.clicked.connect(self.example_ai)
@@ -248,21 +257,18 @@ class ReportsPage(QWidget):
         ai_body.addWidget(example_ai)
         ai_body.addWidget(self.numeric_only)
         ai_body.addWidget(note("예제 응답은 회사 AI 결과와 구분합니다. 보고서 생성은 AI를 다시 호출하지 않습니다."))
-        right.body.addWidget(self.ai_fields)
+        self.ai_slot = OptionalSection(self.ai_fields)
+        right.body.addWidget(self.ai_slot)
         self.filename = text_field("파일명", f"SETRON_보고서_{latest}")
-        right.body.addWidget(field("파일명 · 확장자 자동", self.filename))
+        self.filename_field = field("파일명 · 확장자 자동", self.filename)
+        right.body.addWidget(self.filename_field)
         self.generate_button = button("보고서 생성", primary=True)
         self.generate_button.clicked.connect(self.generate)
         right.body.addWidget(self.generate_button)
         self.generation_status = note("보고서를 생성하면 미리보기가 표시됩니다.")
         right.body.addWidget(self.generation_status)
-        for panel in (left, right):
-            panel.setMinimumWidth(0)
-            panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        panels = SplitRow(left, right, breakpoint=850)
-        panels.box.setAlignment(left, Qt.AlignmentFlag.AlignTop)
-        panels.box.setAlignment(right, Qt.AlignmentFlag.AlignTop)
-        body.addWidget(panels)
+        self.config_panels = ReportConfigPanels(left, right)
+        body.addWidget(self.config_panels)
         self.recent_card = card("최근 생성한 보고서")
         self.recent_card.body.addWidget(note("생성 당시 조건·형식·내용으로 다시 열립니다. 최근 2개를 보관합니다."))
         self.recent_buttons = []
@@ -425,9 +431,9 @@ class ReportsPage(QWidget):
 
     def _kind_changed(self, *_):
         item = self.kind.value() == "item"
-        self.item_field.setVisible(item)
-        self.item_note.setVisible(item)
-        self.ai_fields.setVisible(self.kind.value() == "ai")
+        self.item_slot.set_active(item)
+        ai = self.kind.value() == "ai"
+        self.ai_slot.set_active(ai)
 
     def _format_changed(self, value):
         self.format_label.setText(next(full for key, _, full in FORMATS if key == value))
@@ -441,10 +447,12 @@ class ReportsPage(QWidget):
                                                    for e in result.items)), self.item.currentData())
         for i in range(self.item.count()):
             self.item.setItemData(i, self.item.itemText(i), Qt.ItemDataRole.ToolTipRole)
+        self.item.setToolTip(self.item.currentText())
 
     def load_ai(self):
         self._ai_answer = deepcopy(self.ai_provider())
         self.ai_status.setText("완료한 AI 응답 불러옴 · " + self._ai_answer.request.question if self._ai_answer else "분석 결과 없음 · AI 분석에서 질문을 완료해 주세요.")
+        self.ai_status.setToolTip(self.ai_status.text())
         if self.demo.currentData() == "ai":
             self.demo.setCurrentIndex(0)
 
@@ -454,6 +462,7 @@ class ReportsPage(QWidget):
             self.demo.addItem("AI 응답 예제 · UI 시연", "ai")
         self.demo.setCurrentIndex(self.demo.findData("ai"))
         self.ai_status.setText("UI 시연 예제 선택됨 · 회사 AI 결과가 아닙니다.")
+        self.ai_status.setToolTip(self.ai_status.text())
 
     def generate(self):
         if self.request.busy or self.saving:
