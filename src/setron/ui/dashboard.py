@@ -175,6 +175,7 @@ class DashboardKpi(Card):
         self.picture.setFixedSize(24, 24)
         self.picture.hide()
         self.value = label("—", 30, medium=True, color=ink)
+        self.value.setProperty("rateValue", True)
         self.value.setMinimumHeight(40)
         self.body.addWidget(self.value)
         self.caption = label("조회 적용 전", 11, color=muted, wrap=True)

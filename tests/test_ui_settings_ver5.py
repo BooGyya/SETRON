@@ -2,13 +2,15 @@
 
 from dataclasses import replace
 import json
+from threading import Event
 
 import pytest
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QWidget
 
-from setron.ui.appearance import manager, ui_color
+from setron.ui.appearance import contrasting, manager, ui_color
 from setron.ui.appearance_data import Appearance, MENU_ORDER, PersonalSettings
 from setron.ui.app import create_window
 from setron.ui.dashboard_demo import demo_dashboard_source
@@ -63,7 +65,8 @@ def test_fixed_tabs_no_help_preview_cancel_reset_and_saved_theme(own, theme):
     assert p.draft.mode == "light" and not current.dark
     p.update_draft(mode="dark", accent="#12aacc")
     assert p.save_appearance()
-    assert current.dark and store.appearance().accent == "#12aacc"
+    until(lambda: not p.operation.busy)
+    assert current.dark and store.appearance().dark_colors["accent"] == "#12aacc"
     restored = page(own, theme)
     assert restored.draft.mode == "dark"
     p.reset_button.click()
@@ -95,6 +98,7 @@ def test_menu_order_draft_preview_cancel_save_and_defaults(own, theme):
     p.move_menu(0, 1)
     p._set_home("heatmap")
     assert p.save_personal()
+    until(lambda: not p.operation.busy)
     assert emitted[-1]["order"][0] == "heatmap" and emitted[-1]["home"] == "heatmap"
     assert p.store.personal()["home"] == "heatmap"
     p.open_layout()
@@ -109,7 +113,7 @@ def test_personal_line_group_selection_is_local_and_explicit(own, theme):
     first = next(k for k in dialog.checks if k[0] == "groups")
     dialog.checks[first].setChecked(False)
     dialog.accept()
-    QApplication.processEvents()
+    until(lambda: not p.operation.busy)
     assert first[1] not in p.personal["groups"]
     assert p.source.catalog.groups
 
@@ -195,3 +199,112 @@ def test_system_mode_and_distinct_custom_palette(own, theme):
     p.fields["met"].setText("#112233")
     p._edit_color("met")
     assert p.draft.palette == "custom" and p.draft.met == "#112233"
+
+
+def test_light_background_does_not_leak_into_dark_and_mode_colors_are_independent(own, theme):
+    current, store = theme
+    legacy = Appearance(canvas="#F5F6F8", surface="#FFFFFF", accent="#3c5ce9", rate="#7C4AE5")
+    store.save("appearance", legacy)
+    current.apply(legacy)
+    p = page(own, theme)
+    p.update_draft(mode="dark")
+    assert p.draft.colors(True)["surface"] == "#242b36"
+    assert p.draft.colors(True)["canvas"] == "#11151c"
+    assert p.draft.colors(True)["accent"] == "#8ea2ff"
+    p.fields["surface"].setText("#283040")
+    p._edit_color("surface")
+    assert p.draft.dark_colors["surface"] == "#283040"
+    p.update_draft(mode="light")
+    assert p.fields["surface"].text() == "#FFFFFF"
+    p.update_draft(mode="dark")
+    assert p.fields["surface"].text() == "#283040"
+
+
+def test_existing_light_tones_and_primary_text_contrast(own, theme):
+    current, _ = theme
+    from setron.ui.components import button
+    for value in ("#d4ebdf", "#fbe5a3", "#fce2e7", "#3d5afe"):
+        assert current.color(value, "background") == value
+    action = own(button("조회 적용", primary=True))
+    assert action.palette().color(QPalette.ColorRole.ButtonText).lightnessF() > .9
+    assert contrasting("#3c5ce9") == "#f4f7ff"
+    current.apply(Appearance(mode="dark"))
+    assert action.palette().color(QPalette.ColorRole.ButtonText).lightnessF() < .3
+    assert "#a8baff" in QApplication.instance().styleSheet()
+
+
+def test_actual_dark_pixels_existing_light_hex_and_light_restore(own, theme):
+    current, store = theme
+    w = own(create_window())
+    w.navigate("settings")
+    current.apply(Appearance(mode="dark", canvas="#F5F6F8", surface="#FFFFFF"))
+    QApplication.processEvents()
+    # QPalette만 검사하면 흰 배경 + 밝은 글자의 실제 렌더링 결함을 놓친다.
+    canvas = w.centralWidget().grab().toImage()
+    # 우측 끝은 스크롤바이므로 본문 위쪽의 실제 여백을 표본으로 잡는다.
+    assert canvas.pixelColor(300, 10).name() == "#11151c"
+    sidebar = w.findChild(QWidget, "sidebar")
+    assert sidebar.grab().toImage().pixelColor(4, 4).name() == "#242b36"
+    p = w.pages["settings"]
+    p.open_layout()
+    assert p.menu_preview.palette().color(QPalette.ColorRole.WindowText).lightnessF() > .8
+    current.apply(Appearance())
+    QApplication.processEvents()
+    assert w.centralWidget().grab().toImage().pixelColor(300, 10).name() == "#f5f6f8"
+    assert w.nav["dashboard"].caption.palette().color(QPalette.ColorRole.WindowText).lightnessF() < .3
+
+
+def test_background_settings_save_popup_animation_duplicate_and_failure(own, theme, monkeypatch):
+    p = page(own, theme)
+    gate = Event()
+    original_writer = p.store.writer
+    def writer(key, value):
+        actual = original_writer(key, value)
+        def write():
+            gate.wait(4)
+            actual()
+        return write
+    monkeypatch.setattr(p.store, "writer", writer)
+    p.update_draft(mode="dark")
+    try:
+        assert p.save_appearance()
+        assert p.operation.dialog.isVisible()
+        assert "저장 중" in p.operation.dialog.heading.text()
+        assert not p.save_appearance() and not p.save_personal()
+        QTest.qWait(80)
+        phase = p.operation.dialog.progress.phase
+        QTest.qWait(100)
+        assert p.operation.dialog.progress.phase != phase
+        assert not theme[0].dark
+    finally:
+        gate.set()
+    until(lambda: not p.operation.busy)
+    assert theme[0].dark and not p.operation.dialog.isVisible()
+    previous = theme[0].appearance
+    def fail():
+        raise OSError("failure")
+    monkeypatch.setattr(p.store, "writer", lambda *_: fail)
+    p.update_draft(mode="light")
+    assert p.save_appearance()
+    until(lambda: not p.operation.busy)
+    assert theme[0].appearance == previous
+    assert "저장하지 못했습니다" in p.feedback.text()
+
+
+def test_management_save_progress_success_failure_unknown_and_no_duplicate(own, theme):
+    w = own(create_window())
+    management, versions = w.pages["management"], w.pages["versions"]
+    progress = w.management_progress
+    management.save_started.emit()
+    assert progress.isVisible() and "저장 중" in progress.heading.text()
+    management.save_failed.emit()
+    assert not progress.isVisible()
+    management.save_started.emit()
+    management.save_uncertain.emit()
+    assert not progress.isVisible()
+    versions.progress.set_operation("save", "저장 중", "설치 버전 저장 중")
+    versions.save_started.emit()
+    assert versions.progress.isVisible() and not progress.isVisible()
+    versions.progress.set_operation(None)
+    versions.save_uncertain.emit()
+    assert not w.management_saving

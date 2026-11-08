@@ -85,9 +85,10 @@ class NavButton(QPushButton):
         if controller:
             image = controller.themed_icon(image, svg_size(asset), controller.tokens["accent"] if selected else None)
         self.picture.setPixmap(image.pixmap(svg_size(asset)))
-        ink = (controller.tokens["accent"] if selected else controller.tokens["ink"] if self.isEnabled()
-               else controller.tokens["muted"]) if controller else (PRIMARY if selected else INK if self.isEnabled() else '#8b95a8')
+        ink = PRIMARY if selected else INK if self.isEnabled() else '#8b95a8'
         self.caption.setStyleSheet(f"color: {ink};")
+        if controller:
+            controller._widget(self.caption)
 
     def changeEvent(self, event):
         super().changeEvent(event)

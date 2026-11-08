@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 import re
 
-from PySide6.QtCore import QEvent, QObject, QStandardPaths, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QStandardPaths, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -26,7 +26,12 @@ def ui_color(*args):
 
 def contrasting(value):
     color = QColor(value)
-    return "#142033" if color.lightnessF() > .56 else "#f4f7ff"
+    def luminance(c):
+        channels = (v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4
+                    for v in (c.redF(), c.greenF(), c.blueF()))
+        return sum(a * b for a, b in zip(channels, (.2126, .7152, .0722)))
+    light, dark, bg = luminance(QColor("#f4f7ff")), luminance(QColor("#142033")), luminance(color)
+    return "#142033" if (bg + .05) / (dark + .05) >= (light + .05) / (bg + .05) else "#f4f7ff"
 
 
 class ThemeManager(QObject):
@@ -61,20 +66,22 @@ class ThemeManager(QObject):
         if not original.isValid():
             return value
         key, t = original.name().lower(), self.tokens
+        # 기본 라이트는 기존 UI의 파스텔 상태색을 한 글자도 치환하지 않는다.
+        overrides = self.appearance.dark_colors if self.dark else vars(self.appearance)
         if key in ("#3c5ce9", "#3d5afe", "#4f46e5"):
-            return t["accent"]
+            return (t["primary"] if role == "background" else t["accent"]) if self.dark or overrides.get("accent") else value
         if key in ("#3652ca", "#304dc9"):
-            return QColor(t["accent"]).darker(115).name()
-        if key in ("#ddf4e5", "#d4ebdf", "#d4ebdf", "#e3f5ec", "#e4f5ed"):
-            return t["met"]
+            return (t["primary_hover"] if self.dark else QColor(t["accent"]).darker(115).name()) if self.dark or overrides.get("accent") else value
+        if key in ("#ddf4e5", "#d4ebdf", "#e3f5ec", "#e4f5ed"):
+            return t["met"] if self.dark or self.appearance.palette != "standard" else value
         if key in ("#fff0b7", "#fbe5a3", "#fff6d2", "#fdf3d6", "#fff5d6"):
-            return t["below"]
+            return t["below"] if self.dark or self.appearance.palette != "standard" else value
         if key in ("#ffe1e5", "#fce2e7", "#fcf0f2", "#fde6e9"):
-            return t["risk"]
+            return t["risk"] if self.dark or self.appearance.palette != "standard" else value
         if key == "#f5f6f8":
             return t["canvas"]
         if key == "#ffffff":
-            return contrasting(t["accent"]) if role == "foreground" else t["surface"]
+            return (t["ink"] if self.dark else "#ffffff") if role == "foreground" else t["surface"]
         if not self.dark:
             return value
         if key in ("#142033", "#111827", "#000000", "#1f2937"):
@@ -83,6 +90,8 @@ class ThemeManager(QObject):
             return t["muted"]
         if key in ("#edf0fd", "#e8ebfc", "#e7ebff", "#d8defb", "#e8efff", "#dfe4fb"):
             return t["selected"]
+        if key == "#a8b4fa":
+            return t["accent"]
         if key in ("#f9fafb", "#f1f3f7", "#f0f3f8", "#f7f9fc", "#f8fafc"):
             return t["soft"]
         if key in ("#d5d7da", "#dee0e5", "#e5eaf3", "#e9eef6", "#e9ecf1", "#cbd3e1"):
@@ -104,6 +113,16 @@ class ThemeManager(QObject):
             value = re.sub(r"#[0-9a-fA-F]{6}\b|\bwhite\b|\bblack\b", lambda m: self.color(m[0], role), value)
             return name + ":" + value
         result = re.sub(r"([\w-]+)\s*:([^;{}]+)", declaration, text)
+        # 흰 글자는 기본적으로 흰색을 보존한다. 진한/밝은 primary 배경인 규칙만
+        # 그 배경의 실제 명도로 on-primary를 결정한다. 전역 글자색을 바꾸지 않는다.
+        def primary_rule(match):
+            selector, original = match.group(1), match.group(2)
+            rendered = re.sub(r"([\w-]+)\s*:([^;{}]+)", declaration, original)
+            if re.search(r"background[^;]*#[34][0-9a-fA-F]{5}", original) and re.search(r"color\s*:\s*(white|#ffffff)\b", original, re.I):
+                rendered = re.sub(r"(?<![\w-])color\s*:[^;{}]+", "color:" + contrasting(self.tokens["primary"]), rendered)
+            return selector + "{" + rendered + "}"
+        if "{" in text:
+            result = re.sub(r"([^{}]+)\{([^{}]*)\}", primary_rule, text)
         if self.dark:
             result = re.sub(r"url\(([^)]+\.svg)\)", lambda m: "url(" + self._asset_path(m[1]) + ")", result)
         return result
@@ -140,7 +159,12 @@ class ThemeManager(QObject):
         if widget.property("appearanceRate") == "foreground":
             target = "color:" + self.tokens["rate"] + ";"
         elif widget.property("appearanceRate") == "background":
-            target = target.replace(self.tokens["accent"], self.tokens["rate"])
+            # 강조색은 숫자/테두리에만 사용하고, 넓은 카드 면은 부드러운 톤으로 둔다.
+            target = (f"QFrame#card {{background:{self.tokens['selected']};"
+                      f"border:1px solid {self.tokens['line']};border-radius:12px;}}")
+        if widget.parentWidget() and widget.parentWidget().property("appearanceRate") == "background":
+            if callable(getattr(widget, "text", None)):
+                target = "color:" + self.tokens["rate" if widget.property("rateValue") else "muted"] + ";"
         if current != target:
             widget.setProperty("setronRenderedStyle", target)
             widget.setStyleSheet(target)
@@ -224,38 +248,67 @@ class ThemeManager(QObject):
                     series.setProperty("setronOriginalColor", original)
                 series.setColor(QColor(self.color(original, "foreground")))
 
+    def _begin(self, appearance):
+        self.appearance = appearance
+        self._tokens = appearance.colors(self.dark)
+        t = self.tokens
+        palette = QPalette(self.base_palette)
+        for role, color in ((QPalette.ColorRole.Window, t["canvas"]), (QPalette.ColorRole.Base, t["surface"]),
+                            (QPalette.ColorRole.AlternateBase, t["soft"]), (QPalette.ColorRole.Button, t["soft"]),
+                            (QPalette.ColorRole.WindowText, t["ink"]), (QPalette.ColorRole.Text, t["ink"]),
+                            (QPalette.ColorRole.ButtonText, t["ink"]), (QPalette.ColorRole.Highlight, t["selected"]),
+                            (QPalette.ColorRole.HighlightedText, t["accent"]), (QPalette.ColorRole.PlaceholderText, t["muted"])):
+            palette.setColor(role, QColor(color))
+        if self.dark:
+            for role in (QPalette.ColorRole.Light, QPalette.ColorRole.Midlight, QPalette.ColorRole.Mid, QPalette.ColorRole.Dark):
+                palette.setColor(role, QColor(t["line"]))
+        self.app.setPalette(palette)
+        extra = ("QLineEdit,QTextEdit,QPlainTextEdit,QComboBox,QSpinBox,QDateEdit {background:#f9fafb;}"
+                 "QTableView,QTableWidget,QAbstractItemView {background:white;alternate-background-color:#f9fafb;"
+                 "selection-background-color:#edf0fd;selection-color:#142033;}"
+                 "QHeaderView::section {background:#f9fafb;color:#5b6880;}"
+                 "QMenu,QDialog,QCalendarWidget {background:white;}"
+                 "QTabWidget::pane {border:0;} QStackedWidget {background:transparent;}")
+        self.app.setStyleSheet(self.stylesheet(self.base_stylesheet + extra))
+
     def apply(self, appearance, *, persist=False):
         if persist:
             self.store.save("appearance", appearance)
-        self.appearance = appearance
-        self._tokens = appearance.colors(self.dark)
         self._guard = True
         try:
-            t = self.tokens
-            palette = QPalette(self.base_palette)
-            for role, color in ((QPalette.ColorRole.Window, t["canvas"]), (QPalette.ColorRole.Base, t["surface"]),
-                                (QPalette.ColorRole.AlternateBase, t["soft"]), (QPalette.ColorRole.Button, t["soft"]),
-                                (QPalette.ColorRole.WindowText, t["ink"]), (QPalette.ColorRole.Text, t["ink"]),
-                                (QPalette.ColorRole.ButtonText, t["ink"]), (QPalette.ColorRole.Highlight, t["selected"]),
-                                (QPalette.ColorRole.HighlightedText, t["accent"]), (QPalette.ColorRole.PlaceholderText, t["muted"])):
-                palette.setColor(role, QColor(color))
-            if self.dark:
-                for role in (QPalette.ColorRole.Light, QPalette.ColorRole.Midlight, QPalette.ColorRole.Mid, QPalette.ColorRole.Dark):
-                    palette.setColor(role, QColor(t["line"]))
-            self.app.setPalette(palette)
-            extra = ("QLineEdit,QTextEdit,QPlainTextEdit,QComboBox,QSpinBox,QDateEdit {background:#f9fafb;}"
-                     "QTableView,QTableWidget,QAbstractItemView {background:white;alternate-background-color:#f9fafb;"
-                     "selection-background-color:#edf0fd;selection-color:#142033;}"
-                     "QHeaderView::section {background:#f9fafb;color:#5b6880;}"
-                     "QMenu,QDialog,QCalendarWidget {background:white;}"
-                     "QTabWidget::pane {border:0;} QStackedWidget {background:transparent;}")
-            self.app.setStyleSheet(self.stylesheet(self.base_stylesheet + extra))
+            self._begin(appearance)
             for widget in QApplication.allWidgets():
                 self._widget(widget)
                 self._chart(widget)
         finally:
             self._guard = False
         self.changed.emit()
+
+    def apply_async(self, appearance, finished):
+        """GUI 변경만 메인 스레드에서 나누어 처리해 진행 표시가 계속 그려지게 한다."""
+        from shiboken6 import isValid
+        self._guard = True
+        try:
+            self._begin(appearance)
+        finally:
+            self._guard = False
+        widgets = list(QApplication.allWidgets())
+        def batch():
+            self._guard = True
+            try:
+                for _ in range(min(24, len(widgets))):
+                    widget = widgets.pop()
+                    if isValid(widget):
+                        self._widget(widget)
+                        self._chart(widget)
+            finally:
+                self._guard = False
+            if widgets:
+                QTimer.singleShot(0, batch)
+            else:
+                self.changed.emit()
+                finished()
+        QTimer.singleShot(0, batch)
 
 
 def install_appearance(app, store=None):
