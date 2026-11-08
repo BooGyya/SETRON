@@ -3,6 +3,7 @@
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QSizePolicy, QVBoxLayout, QWidget
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.query_panel import _WrapRow
@@ -66,7 +67,7 @@ class VersionsPage(QWidget):
         filters.body.addWidget(label("모델 · SW 계열 선택", 20, medium=True))
         filters.body.addWidget(label("릴리즈 문서를 조회합니다. 설비 조회 조건과 목표 N은 바뀌지 않습니다.",
                                      13, color=SECONDARY, wrap=True))
-        self.model_filter, self.family_filter = QComboBox(), QComboBox()
+        self.model_filter, self.family_filter = ComboBox(), ComboBox()
         for widget, name in ((self.model_filter, "릴리즈 모델 선택"), (self.family_filter, "릴리즈 SW 계열 선택")):
             widget.setAccessibleName(name)
             widget.setProperty("queryField", True)
@@ -79,7 +80,7 @@ class VersionsPage(QWidget):
         self.search.setPlaceholderText("버전 원문 또는 문서명 검색")
         self.search.setFixedHeight(38)
         self.search.setStyleSheet("QLineEdit {background:#f7f9fc;border:1px solid #e5eaf3;border-radius:10px;padding:8px;}")
-        self.order = QComboBox()
+        self.order = ComboBox()
         self.order.setAccessibleName("릴리즈 정렬")
         self.order.setProperty("queryField", True)
         self.order.setFixedHeight(38)

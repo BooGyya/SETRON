@@ -1,8 +1,9 @@
 """버전관리의 공통 필드·탭·읽기 표. 기존 Qt와 앱 토큰을 재사용한다."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLineEdit, QSizePolicy, QTabBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QSizePolicy, QTabBar, QVBoxLayout, QWidget
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, label
 from setron.ui.equipment import ReadTableModel, ignore_width, read_table
 from setron.ui.import_widgets import import_combo_style
@@ -36,7 +37,7 @@ def text_field(name, text="", *, readonly=False):
 
 
 def combo(name, choices=()):
-    result = QComboBox()
+    result = ComboBox()
     result.setAccessibleName(name)
     result.setMinimumWidth(0)
     result.setProperty("queryField", True)

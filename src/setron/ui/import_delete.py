@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.ai.schemas import ExtractKind
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.import_widgets import PeriodDateField, import_combo_style, picture
 from setron.ui.import_dialogs import ImportDialog
@@ -280,7 +281,7 @@ class ImportDeletePage(QWidget):
         self.filters_card = filters
         filters.setProperty("outlined", True)
         filters.body.addWidget(label("1. 삭제할 자료와 기간 선택", 20, medium=True))
-        self.kind_combo, self.site_combo, self.family_combo = QComboBox(), QComboBox(), QComboBox()
+        self.kind_combo, self.site_combo, self.family_combo = ComboBox(), ComboBox(), ComboBox()
         self.kind_combo.addItem("설비 현황표", ExtractKind.EQUIPMENT_STATUS)
         self.kind_combo.addItem("릴리즈 노트", ExtractKind.RELEASE_NOTE)
         self.site_combo.addItem("전체", None)

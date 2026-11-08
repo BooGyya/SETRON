@@ -6,6 +6,7 @@ from datetime import date
 from PySide6.QtCore import QDate, QSize, Qt, Signal
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLayout, QSizePolicy, QVBoxLayout, QWidget
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.calendar_widgets import DateEdit
 from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState, version_filter_caption
@@ -110,7 +111,7 @@ class QueryPanel(QWidget):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(8)
             title = label(caption, medium=True, color=INK)
-            combo = QComboBox()
+            combo = ComboBox()
             combo.setObjectName("query_" + key)
             combo.setProperty("queryField", True)
             combo.setAccessibleName(caption)

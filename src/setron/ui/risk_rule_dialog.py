@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QPlainTextEdit, QVBoxLayout,
+    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QPlainTextEdit, QVBoxLayout,
 )
+
+from setron.ui.combo_box import ComboBox
 
 RULE_TYPES = (
     ("DIRECT_VERSION", "위험 버전 직접 지정 (이 버전을 쓰는 설비가 위험)"),
@@ -48,15 +50,15 @@ class RiskRuleDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("저장하면 현재 저장된 현황으로 위험을 다시 판정합니다. 연결 확인 전이면 '미확인'으로 남습니다."))
         form = QFormLayout()
-        self.rule_type = QComboBox()
+        self.rule_type = ComboBox()
         for key, text in RULE_TYPES:
             self.rule_type.addItem(text, key)
-        self.family = QComboBox()
+        self.family = ComboBox()
         for row in references.get("version_family", ()):
             self.family.addItem(row["family_name"], row["family_id"])
         if family_id is not None and self.family.findData(family_id) >= 0:
             self.family.setCurrentIndex(self.family.findData(family_id))
-        self.combos = {name: QComboBox() for name in ("item_id", "release_version_id",
+        self.combos = {name: ComboBox() for name in ("item_id", "release_version_id",
                                                       "start_release_version_id", "end_release_version_id")}
         self.labels = {"item_id": "대상 Item", "release_version_id": "위험 버전",
                        "start_release_version_id": "결함 시작 버전", "end_release_version_id": "해제 버전 (선택)"}

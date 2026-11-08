@@ -3,10 +3,11 @@
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QRectF, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
+    QApplication, QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
     QMessageBox, QProgressBar, QScrollArea, QVBoxLayout,
 )
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import button, label
 from setron.ui.import_widgets import import_combo_style
 from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY
@@ -88,7 +89,7 @@ class ImportChoiceDialog(ImportDialog):
     def __init__(self, title, text, options, parent=None):
         super().__init__(title, parent)
         self.message = self.add_message(text)
-        self.choices = QComboBox()
+        self.choices = ComboBox()
         self.choices.setProperty("queryField", True)
         self.choices.setAccessibleName(title + " 선택")
         self.choices.setStyleSheet(import_combo_style())

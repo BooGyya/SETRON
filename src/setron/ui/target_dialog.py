@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.query_state import TargetN
 from setron.ui.target_data import initial_targets, target_pairs, validate_targets
@@ -61,7 +62,7 @@ class TargetDialog(QDialog):
         body.addWidget(self.notice)
         body.addWidget(label("확인된 릴리즈를 모델·계열별로 선택합니다. ‘선택 완료’ 후에도 기존 결과는 유지됩니다.\n"
                              "새 기준으로 계산하려면 공통 패널에서 ‘조회 적용’을 눌러 주세요.", 13, color=SECONDARY, wrap=True))
-        self.pair_combo = QComboBox()
+        self.pair_combo = ComboBox()
         self.pair_combo.setProperty("queryField", True)
         self.pair_combo.setAccessibleName("목표를 편집할 설비군·모델·계열")
         self.pair_combo.setMinimumWidth(0)
