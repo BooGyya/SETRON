@@ -2,13 +2,14 @@
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QStyle, QStyledItemDelegate,
     QStyleOptionViewItem, QVBoxLayout, QLayout, QWidget, QProxyStyle, QStyleFactory, QCheckBox, QRadioButton,
     QGridLayout, QSizePolicy,
 )
 
+from setron.ui.appearance import ui_color
 from setron.ui.components import button, label
 from setron.ui.theme import SECONDARY, icon, svg_size
 
@@ -189,8 +190,8 @@ class _SelectionStyle(QProxyStyle):
         if element == QStyle.PrimitiveElement.PE_IndicatorRadioButton:
             name = "ai-ver5/eacd9.svg" if checked else "ai-ver5/f0598.svg"
         else:
-            painter.setPen(QColor("#3c5ce9" if checked else "#d5d7da"))
-            painter.setBrush(QColor("#3c5ce9" if checked else "white"))
+            painter.setPen(ui_color("#3c5ce9" if checked else "#d5d7da"))
+            painter.setBrush(ui_color("#3c5ce9" if checked else "white"))
             painter.drawRoundedRect(QRectF(center.x() - 8.5, center.y() - 8.5, 17, 17), 4, 4)
             name = "ai-ver5/330d5.svg" if checked else None
         if name:
@@ -224,9 +225,9 @@ class VerdictDelegate(QStyledItemDelegate):
         box = QRectF(option.rect.center().x() - width / 2, option.rect.center().y() - 12, width, 24)
         bg, fg = self.COLORS[tone]
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(bg))
+        painter.setBrush(ui_color(bg))
         painter.drawRoundedRect(box, 5, 5)
-        painter.setPen(QColor(fg))
+        painter.setPen(ui_color(fg))
         painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()
 

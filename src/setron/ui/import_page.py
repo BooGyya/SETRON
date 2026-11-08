@@ -12,7 +12,7 @@ import re
 import uuid
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QSizePolicy,
     QScrollArea, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QTableView, QVBoxLayout, QWidget,
@@ -31,6 +31,7 @@ from setron.infrastructure import excel_reader
 from setron.infrastructure.ai_client import AIConfigError, ResponseSource
 from setron.infrastructure.database import DatabaseCommitUnknownError
 from setron.infrastructure.excel_reader import ExcelReadError, cell_address
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.equipment import ReadTable, ReadTableModel, read_table
@@ -103,11 +104,11 @@ class _BadgeDelegate(QStyledItemDelegate):
                       width, height)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(border)))
-        painter.setBrush(QColor(background))
+        painter.setPen(QPen(ui_color(border)))
+        painter.setBrush(ui_color(background))
         painter.drawRoundedRect(rect, 4, 4)
         painter.setFont(badge_font)
-        painter.setPen(QColor(ink))
+        painter.setPen(ui_color(ink))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
                          metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(width) - 8))
         painter.restore()
@@ -123,7 +124,7 @@ class _ReviewRowModel(ReadTableModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid():
             if role == Qt.ItemDataRole.ForegroundRole and (index.row(), index.column()) in self.text_colors:
-                return QColor(self.text_colors[index.row(), index.column()])
+                return ui_color(self.text_colors[index.row(), index.column()])
             if role == Qt.ItemDataRole.TextAlignmentRole and index.column() == 0:
                 return Qt.AlignmentFlag.AlignCenter
         return super().data(index, role)
@@ -155,7 +156,7 @@ class _IssueModel(ReadTableModel):
         if role == Qt.ItemDataRole.FontRole:
             return font(13, medium=True)
         if role == Qt.ItemDataRole.ForegroundRole:
-            return QColor(DANGER_INK if level is IssueLevel.ERROR else INK)
+            return ui_color(DANGER_INK if level is IssueLevel.ERROR else INK)
         return None
 
 
@@ -291,12 +292,12 @@ class SheetGridModel(QAbstractTableModel):
             return f"{address} {cell_text(self.snapshot.cells.get(address))}"
         if role == Qt.ItemDataRole.BackgroundRole:
             if address == self.highlight:
-                return QColor("#fbe5a3")
+                return ui_color("#fbe5a3")
             level = self.marks.get(address)
-            return QColor(TONES["danger"][0]) if level is IssueLevel.ERROR else \
-                QColor("#fdf3d6") if level is IssueLevel.REVIEW else None
+            return ui_color(TONES["danger"][0]) if level is IssueLevel.ERROR else \
+                ui_color("#fdf3d6") if level is IssueLevel.REVIEW else None
         if role == Qt.ItemDataRole.ForegroundRole and self.marks.get(address) is IssueLevel.ERROR:
-            return QColor(DANGER_INK)
+            return ui_color(DANGER_INK)
         if role == Qt.ItemDataRole.FontRole:
             return font(12)
         return None

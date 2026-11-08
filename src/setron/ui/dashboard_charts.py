@@ -2,9 +2,10 @@
 
 from PySide6.QtCharts import QAbstractBarSeries, QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen
+from PySide6.QtGui import QBrush, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsSimpleTextItem
 
+from setron.ui.appearance import ui_color
 from setron.ui.theme import INK, PRIMARY, SECONDARY, font
 
 
@@ -26,13 +27,13 @@ class DashboardChart(QChartView):
         self.setMinimumHeight(350)
         self.setMaximumHeight(390)
         self.setMinimumWidth(0)
-        self.setBackgroundBrush(QBrush(QColor("white")))
+        self.setBackgroundBrush(QBrush(ui_color("white")))
         self._donut_mode = False
         self.setAccessibleName("대시보드 차트 · 같은 수치는 수치표 보기에서 확인할 수 있습니다")
 
     def _chart(self):
         chart = QChart()
-        chart.setBackgroundBrush(QBrush(QColor("white")))
+        chart.setBackgroundBrush(QBrush(ui_color("white")))
         chart.setBackgroundRoundness(0)
         chart.legend().hide()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
@@ -49,9 +50,9 @@ class DashboardChart(QChartView):
     @staticmethod
     def _axis(axis):
         axis.setLabelsFont(font(11))
-        axis.setLabelsColor(QColor(SECONDARY))
-        axis.setLinePen(QPen(QColor("#e9eef6")))
-        axis.setGridLinePen(QPen(QColor("#e9eef6")))
+        axis.setLabelsColor(ui_color(SECONDARY))
+        axis.setLinePen(QPen(ui_color("#e9eef6")))
+        axis.setGridLinePen(QPen(ui_color("#e9eef6")))
 
     def composition(self, snapshot):
         chart = self._chart()
@@ -63,19 +64,19 @@ class DashboardChart(QChartView):
         for title, count, color in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#fdf0b8", "#e5e7eb")):
             if count:
                 part = series.append(f"{title} {count}건 ({count / total:.1%})", count)
-                part.setColor(QColor(color))
-                part.setBorderColor(QColor(color))
+                part.setColor(ui_color(color))
+                part.setBorderColor(ui_color(color))
         chart.addSeries(series)
         self._donut_mode = True
         chart.legend().hide()  # 범례는 화면 오른쪽 상태 칩으로 표시한다.
         rate = snapshot.summary.rate
         center = QGraphicsSimpleTextItem("계산 불가" if rate is None else f"{rate:.1%}", chart)
         center.setFont(font(34, medium=True, numeric=True))
-        center.setBrush(QBrush(QColor(INK)))
+        center.setBrush(QBrush(ui_color(INK)))
         decided = snapshot.summary.compliant + snapshot.summary.below
         caption = QGraphicsSimpleTextItem(f"{snapshot.summary.compliant} / {decided}건 목표 달성" if total else "자료 없음", chart)
         caption.setFont(font(13))
-        caption.setBrush(QBrush(QColor(SECONDARY)))
+        caption.setBrush(QBrush(ui_color(SECONDARY)))
         def place_center(rect):
             size, below = center.boundingRect(), caption.boundingRect()
             top = rect.center().y() - (size.height() + 6 + below.height()) / 2
@@ -94,7 +95,7 @@ class DashboardChart(QChartView):
                 continue
             shown.append(group)
             group_set = QBarSet(group.label)
-            group_set.setColor(QColor(series_color(group.group_keys[0], index)))
+            group_set.setColor(ui_color(series_color(group.group_keys[0], index)))
             group_set.setLabelFont(font(10))
             values = []
             for row in rows:
@@ -159,7 +160,7 @@ class DashboardChart(QChartView):
             for segment in segments:
                 series = QLineSeries() if len(segment) > 1 else QScatterSeries()
                 series.setName(group.label)
-                series.setColor(QColor(series_color(group.group_key, index)))
+                series.setColor(ui_color(series_color(group.group_key, index)))
                 if isinstance(series, QLineSeries):
                     series.setPen(QPen(series.color(), 2.5))
                     series.setPointsVisible(True)

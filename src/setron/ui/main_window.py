@@ -79,8 +79,15 @@ class NavButton(QPushButton):
         selected = self.isChecked()
         asset = self.menu.active_icon if selected else self.menu.normal_icon
         self.picture.setProperty("assetFile", asset)
-        self.picture.setPixmap(icon(asset).pixmap(svg_size(asset)))
-        self.caption.setStyleSheet(f"color: {PRIMARY if selected else INK if self.isEnabled() else '#8b95a8'};")
+        from setron.ui.appearance import manager
+        controller = manager()
+        image = icon(asset)
+        if controller:
+            image = controller.themed_icon(image, svg_size(asset), controller.tokens["accent"] if selected else None)
+        self.picture.setPixmap(image.pixmap(svg_size(asset)))
+        ink = (controller.tokens["accent"] if selected else controller.tokens["ink"] if self.isEnabled()
+               else controller.tokens["muted"]) if controller else (PRIMARY if selected else INK if self.isEnabled() else '#8b95a8')
+        self.caption.setStyleSheet(f"color: {ink};")
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -222,9 +229,12 @@ class MainWindow(QMainWindow):
         signature.setLayout(brand)
         side.addWidget(signature)
         side.addWidget(label("SW 버전 현황 관리", 13, color=INK))
+        self.personal_menu_layout = None
         for title, keys in MENU_GROUPS:
             group = QVBoxLayout()
             group.setSpacing(4)
+            if title is None:
+                self.personal_menu_layout = group
             if title is not None:
                 caption = label(title, 11, color=INK)
                 caption.setObjectName("navGroup")
@@ -242,6 +252,15 @@ class MainWindow(QMainWindow):
         self.sidebar_scroll.setWidget(content)
         outer.addWidget(self.sidebar_scroll)
         return sidebar
+
+    def set_menu_order(self, order):
+        from setron.ui.appearance_data import MENU_ORDER
+        if len(order) != len(MENU_ORDER) or set(order) != set(MENU_ORDER):
+            raise ValueError("메뉴 순서가 올바르지 않습니다.")
+        for key in MENU_ORDER:
+            self.personal_menu_layout.removeWidget(self.nav[key])
+        for key in order:
+            self.personal_menu_layout.addWidget(self.nav[key])
 
     def register_page(self, key: str, widget: QWidget, *, uses_query: bool | None = None) -> None:
         """담당 QWidget을 알려진 메뉴에 한 번 등록한다. 등록한 위젯의 소유자는 이 창이다."""

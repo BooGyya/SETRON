@@ -51,6 +51,7 @@ from setron.ui.reports_page import ReportsPage
 from setron.ui.management_page import ManagementPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter
+from setron.ui.settings_page import SettingsPage
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
@@ -338,6 +339,36 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("reports", reports, uses_query=False)
     window.page_changed.connect(lambda key: reports.enter() if key == "reports" else None)
     window.register_page("management", management, uses_query=False)
+    settings = SettingsPage(source)
+    window.register_page("settings", settings, uses_query=False)
+    settings.targets_requested.connect(open_groups)
+
+    def settings_management(table):
+        if management.busy or management.locked or management.state in {"review", "saving"} or management.pending or management.pending_applicability:
+            settings.feedback.setText("관리 데이터에서 진행 중인 검토·저장을 완료한 뒤 다시 열어 주세요.")
+            return
+        management.kind.setCurrentIndex(management.kind.findData(table))
+        window.navigate("management")
+    settings.management_requested.connect(settings_management)
+
+    def apply_personal(value):
+        window.set_menu_order(value["order"])
+        layout = dashboard.layout()
+        layout.removeWidget(dashboard.kpi_grid)
+        layout.removeWidget(dashboard.overview)
+        position = layout.indexOf(dashboard.applied_row) + 1
+        first, second = ((dashboard.overview, dashboard.kpi_grid) if value["home"] == "heatmap"
+                         else (dashboard.kpi_grid, dashboard.overview))
+        layout.insertWidget(position, first)
+        layout.insertWidget(position + 1, second)
+        catalog = source.catalog
+        selected = replace(catalog,
+            lines=tuple(o for o in catalog.lines if value["lines"] is None or o.key in value["lines"]),
+            groups=tuple(o for o in catalog.groups if value["groups"] is None or o.key in value["groups"]))
+        if selected != window.query_state.catalog:
+            window.set_query_catalog(selected)
+    settings.personal_changed.connect(apply_personal)
+    apply_personal(settings.personal)
 
     def navigate_item_answer(route, answer):
         if answer is None or answer is not items.answer or answer.data is not items.data:
@@ -440,9 +471,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions", "reports") + (("ai",) if chat_enabled else ())
+        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions", "reports", "settings") + (("ai",) if chat_enabled else ())
         window.notice.setVisible(window.route not in quiet or window.management_saving)
-        window.header.toolbar.setVisible(window.route not in {"replay", "versions", "reports"})
+        window.header.toolbar.setVisible(window.route not in {"replay", "versions", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")

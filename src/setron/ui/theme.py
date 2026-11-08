@@ -61,6 +61,8 @@ class WheelGuard(QObject):
 
 
 def install_theme(app: QApplication) -> None:
+    if getattr(app, "appearance_manager", None) is not None:
+        return
     # 휠로 조회 조건·보기 탭이 바뀌지 않도록 애플리케이션 전체에 한 번만 건다.
     if app.findChild(WheelGuard) is None:
         app.installEventFilter(WheelGuard(app))
@@ -133,3 +135,5 @@ def install_theme(app: QApplication) -> None:
         QToolTip { background: #142033; color: white; border: none; padding: 8px; }
         QMessageBox { background: #f5f6f8; }
     """)
+    from setron.ui.appearance import install_appearance
+    install_appearance(app)

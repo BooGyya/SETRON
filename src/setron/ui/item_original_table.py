@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
 
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
@@ -30,10 +31,10 @@ class EvidenceDelegate(QStyledItemDelegate):
             return super().paint(painter, option, index)
         painter.save()
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        painter.fillRect(option.rect, QColor("#edf0fd" if selected else "#fff6d2" if highlighted else "white"))
-        painter.setPen(QColor("#dee0e5"))
+        painter.fillRect(option.rect, ui_color("#edf0fd" if selected else "#fff6d2" if highlighted else "white"))
+        painter.setPen(ui_color("#dee0e5"))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
-        painter.setPen(foreground if foreground is not None else QColor(INK))
+        painter.setPen(foreground if foreground is not None else ui_color(INK))
         painter.setFont(font(12, medium=True) if highlighted else index.data(Qt.ItemDataRole.FontRole))
         painter.drawText(option.rect.adjusted(12, 6, -12, -6),
                          index.data(Qt.ItemDataRole.TextAlignmentRole) | Qt.TextFlag.TextWordWrap,
@@ -67,9 +68,9 @@ class OriginalModel(ReadTableModel):
                 value = self.rows[index.row()][index.column()].strip()
                 if (column in _C4_MARKERS and value.casefold() == "x"
                         or column in _C4_DISABLE and value == "불가"):
-                    return QColor("#c23345")
+                    return ui_color("#c23345")
             if role == Qt.ItemDataRole.BackgroundRole and self.ids and self.ids[index.row()] in self.highlighted:
-                return QColor("#fff6d2")
+                return ui_color("#fff6d2")
         return super().data(index, role)
 
 

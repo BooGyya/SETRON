@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget
 
 from setron.features.item.schemas import APPLICATION_LABELS, Application
+from setron.ui.appearance import ui_color
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.heatmap import TileGrid
@@ -19,7 +20,7 @@ APPLICATION_TONES = {Application.APPLIED: "success", Application.NOT_APPLIED: "w
 class DistributionModel(ReadTableModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid() and index.column() > 0 and role == Qt.ItemDataRole.BackgroundRole:
-            return QColor(TONES[APPLICATION_TONES[tuple(Application)[index.column() - 1]]][0])
+            return ui_color(TONES[APPLICATION_TONES[tuple(Application)[index.column() - 1]]][0])
         return super().data(index, role)
 
 
@@ -33,10 +34,10 @@ class DistributionDelegate(QStyledItemDelegate):
         background, ink, border = TONES[APPLICATION_TONES[state]]
         rect = option.rect.adjusted(3, 3, -3, -3)
         painter.save()
-        painter.fillRect(rect, QColor(background))
-        painter.setPen(QColor(PRIMARY if option.state & (QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus) else border))
+        painter.fillRect(rect, ui_color(background))
+        painter.setPen(ui_color(PRIMARY if option.state & (QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus) else border))
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
-        painter.setPen(QColor(ink))
+        painter.setPen(ui_color(ink))
         painter.setFont(font(13))
         painter.drawText(rect.adjusted(10, 0, -10, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, index.data())
         painter.restore()

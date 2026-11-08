@@ -34,6 +34,7 @@ setron = ["ui/assets/*.png", "ui/assets/*.svg", "ui/assets/*.txt", "ui/assets/fo
           "ui/assets/import-ver5/*.svg",
           "ui/assets/replay-ver5/*.svg",
           "ui/assets/reports-ver5/*.svg",
+          "ui/assets/settings-ver5/*.svg",
           "features/export/chartex/*.xml"]
 
 [tool.pytest.ini_options]

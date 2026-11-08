@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard import MetricCard
@@ -142,7 +143,7 @@ class ReadTableModel(QAbstractTableModel):
             return font(14 if self.ids and index.column() == 0 else 13,
                         medium=bool(self.ids) and index.column() == 0, numeric=index.column() in self.numeric_columns)
         if role == Qt.ItemDataRole.ForegroundRole and self.tones and index.column() == 4:
-            return QColor(TONES[self.tones[index.row()]][1])
+            return ui_color(TONES[self.tones[index.row()]][1])
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         return None
