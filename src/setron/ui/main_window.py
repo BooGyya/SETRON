@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLayout, QMainWindow, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -209,9 +209,18 @@ class MainWindow(QMainWindow):
         brand.setSpacing(10)
         logo = label("")
         logo.setObjectName("semesLogo")
+        logo.setAccessibleName("SEMES 로고")
+        logo.setProperty("brandAsset", "semes-logo.png")
         logo.setFixedSize(80, 19)
-        logo.setPixmap(QPixmap(str(ASSETS / "ff5f9.png")).scaled(
-            80, 19, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        source = QPixmap(str(ASSETS / "semes-logo.png"))
+        # 원본 PNG는 보존하고, 표시할 때만 투명 여백을 제외한다.
+        visible = QRegion(source.mask()).boundingRect().adjusted(-1, -1, 1, 1).intersected(source.rect())
+        ratio = self.devicePixelRatioF()
+        picture = source.copy(visible).scaled(logo.size() * ratio, Qt.AspectRatioMode.KeepAspectRatio,
+                                              Qt.TransformationMode.SmoothTransformation)
+        picture.setDevicePixelRatio(ratio)
+        logo.setPixmap(picture)
         brand.addWidget(logo)
         divider = QFrame()
         divider.setFixedSize(1, 18)
