@@ -40,7 +40,7 @@ class VersionManagementPage(VersionsPage):
         self.workspace = VersionWorkspace()
         self.source, self.targets_provider = source, targets_provider
         self.gateway, self.context_provider, self.edit_allowed = None, lambda: None, lambda: True
-        self._ready, self._tab_history, self._navigating = False, [], False
+        self._ready = False
         self._operation, self.locked, self.pending_change = None, False, None
         super().__init__(loader)
         self.operation_request = ReadRequest(self)
@@ -63,9 +63,10 @@ class VersionManagementPage(VersionsPage):
         release_body.addWidget(self.list_view)
         release_body.addWidget(self.detail_view)
         self.tabs = tabs(("설비 설치 버전", "릴리즈 · Item", "설비 정보 관리", "변경 검토", "변경·보관 이력"), "버전관리 탭")
-        self.back_button = button("← 뒤로")
-        self.back_button.clicked.connect(self.go_back)
-        body.insertWidget(0, actions(self.tabs, None, self.back_button))
+        # 상단 전체 폭을 탭에 사용한다. 다섯 탭을 좌우 화살표 없이 직접 선택한다.
+        self.tabs.setUsesScrollButtons(False)
+        self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        body.insertWidget(0, self.tabs)
         self.session_notice = note("신규 등록·설비 정보·보관은 현재 앱 세션의 작업본입니다. 기존 원본·목표 N은 유지됩니다.")
         body.insertWidget(1, self.session_notice)
         self.installed_view = self._installed_panel()
@@ -104,15 +105,10 @@ class VersionManagementPage(VersionsPage):
     def _tab_changed(self, index):
         if not self._ready:
             return
-        if not self._navigating:
-            previous = getattr(self, "active_tab", 0)
-            if previous != index:
-                self._tab_history.append(previous)
         self.active_tab = index
         for i, view in enumerate(self.views):
             view.setVisible(index == i)
         self.notice.setVisible(index == 1)
-        self.back_button.setEnabled(bool(self._tab_history) or (index == 1 and self.mode != "list"))
         if index == 0 and self.installed_source is None and not self.installed_request.busy:
             self.load_installed()
         elif index == 3:
@@ -123,22 +119,6 @@ class VersionManagementPage(VersionsPage):
 
     def select_tab(self, index):
         self.tabs.setCurrentIndex(index)
-
-    def go_back(self):
-        if self.active_tab == 1 and self.release_form.isVisible():
-            self._release_cancelled()
-        elif self.active_tab == 1 and self.mode == "detail":
-            self.back_to_list()
-        elif self.active_tab == 0 and self.comparison_view.isVisible():
-            self.comparison_view.hide()
-            self.installed_listing.show()
-        elif self.active_tab == 4 and self.history_panel.archived:
-            self.history_panel.show_mode(False)
-        elif self._tab_history:
-            self._navigating = True
-            self.tabs.setCurrentIndex(self._tab_history.pop())
-            self._navigating = False
-            self.back_button.setEnabled(bool(self._tab_history))
 
     def _decorate_releases(self):
         for field in (self.model_filter, self.family_filter, self.order):
@@ -286,7 +266,6 @@ class VersionManagementPage(VersionsPage):
         super()._set_mode(mode)
         if self._ready:
             self.release_form.hide()
-            self.back_button.setEnabled(mode == "detail" or bool(self._tab_history))
 
     def open_row(self, row):
         if self._ready:
@@ -324,7 +303,6 @@ class VersionManagementPage(VersionsPage):
         self.list_view.hide()
         self.detail_view.hide()
         self.release_form.show()
-        self.back_button.setEnabled(True)
         return True
 
     def _release_cancelled(self):
@@ -423,9 +401,10 @@ class VersionManagementPage(VersionsPage):
         query_host = QWidget()
         query_row = QVBoxLayout(query_host)
         query_row.setContentsMargins(0, 0, 0, 0)
+        query_row.setSpacing(0)
         query_row.addStretch()
-        self.query_button.setFixedHeight(38)
-        query_row.addWidget(self.query_button)
+        self.query_button.setFixedSize(90, 38)
+        query_row.addWidget(self.query_button, 0, Qt.AlignmentFlag.AlignLeft)
         filters.body.addWidget(_WrapRow([_field("설비명 검색", self.installed_search), _field("Site / 원본 구역", self.installed_site),
                                          _field("관측 기준일", self.installed_date), query_host], 220, fields=True))
         filters.body.addWidget(_WrapRow([_field("Fab", self.installed_fab), _field("Line", self.installed_line)], 220, fields=True))
@@ -873,7 +852,6 @@ class VersionManagementPage(VersionsPage):
         self._compare_family_changed()
         self.installed_listing.hide()
         self.comparison_view.show()
-        self.back_button.setEnabled(True)
 
     def _compare_family_changed(self, *_):
         source = self.installed_source

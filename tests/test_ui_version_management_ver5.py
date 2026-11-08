@@ -8,9 +8,9 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton, QToolButton
 
 from setron.features.management.schemas import ManagedRecord, ManagementResult
 from setron.ui.app import create_window
@@ -70,15 +70,22 @@ def test_five_fixed_tabs_keep_order_header_and_common_query_unchanged(window):
     assert (window.query_state.draft, window.query_state.applied, window.query_state.target_draft) == before
 
 
-def test_back_keeps_selected_tab_and_returns_within_release(window):
+def test_release_list_return_and_form_cancel_keep_selected_tab(window):
     page = window.pages["versions"]
     page.select_tab(1)
     assert page.open_row(0)
     assert page.mode == "detail"
-    page.go_back()
+    page.back.click()
     assert page.mode == "list" and page.tabs.currentIndex() == 1
-    page.go_back()
-    assert page.tabs.currentIndex() == 0
+    assert page.open_row(0)
+    assert page.open_release_form(page.catalog.entry(page.selected_id))
+    page.release_form.cancel.click()
+    assert not page.release_form.isVisible() and page.tabs.currentIndex() == 1
+    assert page.mode == "detail"
+    page.back.click()
+    assert page.mode == "list"
+    page.select_tab(0)
+    assert page.installed_listing.isVisible()
 
 
 def test_installed_query_uses_exact_date_and_never_clones_observation(window, app):
@@ -98,6 +105,19 @@ def test_invalid_installed_date_does_not_query_or_enable_save(window):
     page.installed_date.setText("2026-02-30")
     assert not page.load_installed()
     assert page.installed_records is before
+
+
+@pytest.mark.parametrize("width,height", [(1600, 960), (1100, 800), (960, 600)])
+def test_installed_query_button_is_compact_and_aligned_with_date(window, app, width, height):
+    page = window.pages["versions"]
+    window.resize(width, height)
+    app.processEvents()
+    assert (page.query_button.width(), page.query_button.height()) == (90, 38)
+    assert page.query_button.width() < page.installed_date.width()
+    assert page.query_button.height() == page.installed_date.height()
+    assert page.query_button.mapTo(page, QPoint()).y() == page.installed_date.mapTo(page, QPoint()).y()
+    assert abs(page.installed_site.width() - page.installed_search.width()) <= 1
+    assert window.scroll.horizontalScrollBar().maximum() == 0
 
 
 def test_only_selected_sw_draft_changes_and_other_pm_n_source_preserved(window):
@@ -257,6 +277,15 @@ def test_tabs_and_forms_fit_three_window_sizes(window, app, width, height):
         assert window.scroll.horizontalScrollBar().maximum() == 0
         assert page.tabs.width() > 0
         assert page.views[index].width() <= window.scroll.viewport().width()
+        assert not page.tabs.usesScrollButtons()
+        assert all(page.tabs.rect().contains(page.tabs.tabRect(i)) for i in range(5))
+        assert not any(control.isVisibleTo(page.tabs) for control in page.tabs.findChildren(QToolButton))
+        assert not any(control.text() == "← 뒤로" for control in page.findChildren(QPushButton))
+    page.tabs.setFocus()
+    QTest.keyClick(page.tabs, Qt.Key.Key_Left)
+    assert page.tabs.currentIndex() == 3
+    QTest.keyClick(page.tabs, Qt.Key.Key_Right)
+    assert page.tabs.currentIndex() == 4
 
 
 def test_relative_actual_and_age_comparison_do_not_modify_common_targets(window):
