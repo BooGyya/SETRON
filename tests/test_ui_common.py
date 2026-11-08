@@ -1,6 +1,7 @@
 """공통 UI만 검증한다. 업무 화면·예시 설비·DB·Excel은 만들거나 호출하지 않는다."""
 
 import ast
+import hashlib
 import os
 from pathlib import Path
 
@@ -79,6 +80,27 @@ def test_original_assets_and_fonts_are_usable(window):
         assert nav.picture.pixmap().deviceIndependentSize().toSize() == svg_size(rendered_asset)
         assert (ASSETS / menu.normal_icon).is_file()
         assert (ASSETS / menu.active_icon).is_file()
+
+
+def test_sidebar_uses_supplied_logo_without_transparent_padding_or_theme_tint(window):
+    from setron.ui.appearance import manager
+    from setron.ui.appearance_data import Appearance
+    logo = window.findChild(QLabel, "semesLogo")
+    assert logo.property("brandAsset") == "semes-logo.png"
+    # 첨부한 원본을 재인코딩·변색하지 않고 패키지 자산으로 보관한다.
+    assert hashlib.sha256((ASSETS / "semes-logo.png").read_bytes()).hexdigest() == (
+        "b5d9714733795918eff210ac6e74be456e5460f37fcfe05b109566ac1b74b7d5")
+    size = logo.pixmap().deviceIndependentSize()
+    assert 76 <= size.width() <= 80 and 16 <= size.height() <= 19
+    original = logo.pixmap().toImage()
+    current, previous = manager(), manager().appearance
+    try:
+        current.apply(Appearance(mode="dark"))
+        assert logo.pixmap().toImage() == original
+        current.apply(Appearance())
+        assert logo.pixmap().toImage() == original
+    finally:
+        current.apply(previous)
 
 
 def test_registration_enables_menu_and_updates_header(window, app):
