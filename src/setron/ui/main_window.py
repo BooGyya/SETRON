@@ -39,14 +39,13 @@ MENUS = (
     Menu("versions", "버전 관리", *_ver5("versions")),
     # VER5 사이드바에 없는 기존 메뉴. 기능을 유지하고 데이터 관리 묶음에 둔다.
     Menu("management", "관리 데이터", *_ver5("management", "settings")),
-    Menu("history", "이력 조회", *_ver5("history")),
     Menu("reports", "보고서", *_ver5("reports")),
     Menu("settings", "기준 · 설정", *_ver5("settings")),
 )
 # 첫 묶음(현황 분석)은 제목 없이 표시한다.
 MENU_GROUPS = (
     (None, ("dashboard", "heatmap", "items", "ai", "import", "replay")),
-    ("데이터 관리", ("versions", "management", "history")),
+    ("데이터 관리", ("versions", "management")),
     ("운영 설정", ("reports", "settings")),
 )
 

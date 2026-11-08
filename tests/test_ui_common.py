@@ -50,6 +50,16 @@ def test_shell_starts_without_business_pages(window):
     assert not hasattr(window, "filters")
 
 
+def test_sidebar_removes_standalone_history_menu(window):
+    assert "history" not in window.nav
+    assert not any(menu.key == "history" for menu in MENUS)
+    assert not any(nav.accessibleName() == "이력 조회" for nav in window.nav.values())
+    assert window.findChild(QWidget, "nav_history") is None
+    assert {"versions", "management", "reports", "settings"} <= window.nav.keys()
+    with pytest.raises(ValueError, match="알 수 없는"):
+        window.navigate("history")
+
+
 def test_original_assets_and_fonts_are_usable(window):
     assert {"Inter", "IBM Plex Sans KR"} <= set(QFontDatabase.families())
     for asset in ASSETS.glob("*.svg"):
