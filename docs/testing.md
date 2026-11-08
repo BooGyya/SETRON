@@ -455,3 +455,24 @@ uv run --locked --no-sync python -m pytest tests/test_ui_replay_ver5.py tests/te
 2026-11-08 검증 결과: 위 두 묶음 각각 **58개·93개 통과**. 드롭다운 화살표·동일 행 크기 최적화의 최종 상태에서도 신규 달력 테스트 **18개를 재실행해 통과**했다. 렌더링·문법 컴파일·공백 검사도 통과했다.
 
 구현 참고: [Qt 달력의 페이지·날짜 선택 API](https://doc.qt.io/qt-6/qcalendarwidget.html), [날짜 입력기의 공통 달력 연결](https://doc.qt.io/qt-6/qdatetimeedit.html#setCalendarWidget), [콤보 목록 표시 개수](https://doc.qt.io/qt-6/qcombobox.html#maxVisibleItems-prop), [독립된 QProxyStyle 적용](https://doc.qt.io/qt-6/qproxystyle.html).
+
+## VER5 버전관리
+
+화면 대응·저장 경계·확인 순서는 [버전관리 VER5](version-management-ver5.md)에 있다. 상단 탭, 설치 기록의 정확한 관측일, SW별 정정과 입력 보존, 릴리즈·Item·설비 정보 작업본, 보관 범위 확인과 변경 이력, 선택 작업 출력, 상대/실제 버전·기간 비교를 검증한다.
+
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+$env:PYTHONUTF8='1'
+uv run --locked --no-sync python -m pytest tests/test_ui_version_management_ver5.py -q
+uv run --locked --no-sync python -m pytest tests/test_ui_async_read.py tests/test_ui_source_notices.py tests/test_ui_release_saved_pages.py tests/test_management_app_integration.py tests/test_ui_version_edit.py -q
+```
+
+새 UI가 실제 입력 가능한 작업본으로 바뀌었으므로 `test_ui_version_edit.py`의 이전 '입력 항목 없음' 검사는 새 입력폼의 검토 전 저장 차단·취소·원본/공통 조건 보존 검사로 갱신한다. 가짜 관리 공급자로 최종 확인 전 저장 0회, 확인 후 1회, 충돌/확정 실패/결과 미확인·중복 저장 금지를 검사한다. 출력은 임시 Excel을 다시 읽어 범위·원문 보존을 확인한다. 회사 AI·MySQL·열린 Excel을 호출하지 않는다.
+
+2026-11-08 확인 결과:
+
+- 최종 신규 버전관리 검사 **38개 통과**. 가져오기 종류별 이동·기존 미저장 초안 유지, 조회 조건 변경 중 늦은 응답 폐기도 포함한다.
+- 기존 릴리즈 조회 검사 `test_ui_versions.py` **25개 통과**. 안내·편집 검사와 초기 신규 검사 묶음도 **54개 통과**했다. 서로 겹치는 검사는 합산하지 않는다.
+- 달력·Replay 병행 검사에서는 **77개 통과 / Replay 로딩 대기 1개 시간 초과**가 있었다. 해당 검사는 단독 재실행 시 **1개 통과**했으며 원인을 단정하거나 기존 대기 제한을 늘리지 않았다.
+- 1600×960·1100×800·960×600, 100%·150% 배율의 다섯 탭·상세·입력·비교 화면을 렌더링해 확인했다. 메인 가로 넘침은 없고 넓은 표와 긴 팝업 필드만 내부 스크롤한다.
+- 문법 컴파일·Git 공백 검사 통과. 전체 저장소 테스트 및 회사 실데이터·실환경 검증은 실행하지 않았다.

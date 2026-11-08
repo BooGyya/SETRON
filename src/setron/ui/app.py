@@ -31,7 +31,7 @@ from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.theme import install_theme
 from setron.ui.version_data import catalog_from_dashboard
 from setron.ui.version_demo import demo_version_catalog
-from setron.ui.versions import VersionsPage
+from setron.ui.version_management import VersionManagementPage
 from setron.ui.item_data import ItemManagerData, item_data_from_source
 from setron.ui.items import ItemsPage
 from setron.ui.ai_data import FreshAnalysisData, facts_from_snapshot
@@ -193,7 +193,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             return catalog_from_dashboard(source)
         if hasattr(source, "load_version_catalog"):
             version_loader = BackgroundRead(version_loader)
-    versions = VersionsPage(version_loader)
+    versions = VersionManagementPage(version_loader, source, targets_provider=lambda: (
+        window.query_state.applied.targets if window.query_state.applied is not None else initial_targets(source)))
     if item_loader is None:
         # 외부 릴리즈 ID를 기본 합성 설비 ID와 임의로 연결하지 않는다.
         item_loader = (lambda: ItemManagerData(version_loader())) if custom_versions else (
@@ -228,6 +229,21 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 initial_targets(source))
     replay = ReplayPage(source, targets_provider=replay_targets)
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
+    versions.configure(management_gateway, release_refresh_context, edit_allowed=lambda: (
+        not management.busy and not management.locked and management.state not in {"review", "saving"}
+        and not management.pending and not management.pending_applicability))
+    versions.navigate_requested.connect(window.navigate)
+    def import_from_version(kind):
+        from setron.features.ai.schemas import ExtractKind
+        requested = ExtractKind.RELEASE_NOTE if kind == "release" else ExtractKind.EQUIPMENT_STATUS
+        # 진행 중인 다른 가져오기 초안을 바로 전환해 버리지 않는다.
+        if not importer.busy and not importer.locked and not importer.deletion.busy and (
+                importer.draft is None or importer.draft.kind is requested or importer.state == "saved"):
+            importer.kind_combo.setCurrentIndex(importer.kind_combo.findData(requested.value))
+        elif importer.kind is not requested:
+            importer.result_label.setText("진행 중인 가져오기 작업을 유지했습니다. 검토를 마치거나 가져오기를 초기화한 뒤 자료 종류를 변경해 주세요.")
+        window.navigate("import")
+    versions.import_requested.connect(import_from_version)
     item_risk_save_pending = False
     def submit_item_risk(values):
         nonlocal item_risk_save_pending
@@ -417,9 +433,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_mode(*_):
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap", "items", "replay") + (("ai", "reports") if chat_enabled else ())
+        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions") + (("ai", "reports") if chat_enabled else ())
         window.notice.setVisible(window.route not in quiet or window.management_saving)
-        window.header.toolbar.setVisible(window.route != "replay")
+        window.header.toolbar.setVisible(window.route not in {"replay", "versions"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
@@ -440,8 +456,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         elif chat_enabled and window.route == "reports":
             list_action.setEnabled(False)
         elif window.route == "versions":
-            window.header.title.setText("릴리즈 버전 상세" if versions.mode == "detail" else "릴리즈 버전 목록")
-            window.notice.setText("릴리즈 조회 전용 · 자료 출처와 조회 상태는 본문 참조")
+            window.header.title.setText("버전 관리")
+            window.notice.setText("버전 관리 · 원본 보존 · 자료 출처와 조회 상태는 본문 참조")
             list_action.setEnabled(False)
         elif window.route == "management":
             window.notice.setText("관리 데이터 · 원본 보존 · 검토한 수정 묶음 저장")
@@ -810,6 +826,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     management.saved.connect(after_management_save)
     management.save_uncertain.connect(uncertain_management_save)
     management.save_failed.connect(lambda: after_management_save(None))
+    versions.save_started.connect(begin_management_save)
+    versions.saved.connect(after_management_save)
+    versions.save_failed.connect(lambda: after_management_save(None))
+    versions.save_uncertain.connect(uncertain_management_save)
+    versions.sql_requested.connect(lambda: export_sql())
+    versions.history_panel.sql_button.setEnabled(db_exporter is not None)
     def item_save_notice(text, tone):
         nonlocal item_risk_save_pending
         if item_risk_save_pending:
@@ -821,7 +843,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     management.request.completed.connect(lambda *_: ai.refresh())
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
-    window.close_guard = lambda: (management.state != "saving" and importer.state != "saving"
+    window.close_guard = lambda: (management.state != "saving" and not versions.saving
+                                 and not versions.history_panel.read_request.busy and importer.state != "saving"
                                  and importer.deletion.phase != "deleting")
 
     def invalidate_saved_results(receipt):
@@ -857,6 +880,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.notice.setText("DB 저장 완료 · 기존 조회 결과 갱신 필요 · 목표 N 선택은 유지했습니다.")
 
     importer.saved.connect(invalidate_saved_results)
+    importer.saved.connect(lambda receipt: versions.record_import(
+        receipt, importer.draft, persisted=is_database_import_saver(importer.saver)))
     importer.saved.connect(lambda *_: configure_import_choices())
     def after_import_delete(result):
         cancel_management_refresh()

@@ -86,8 +86,8 @@ def review_change(dialog):
     assert dialog.state == "review"
 
 
-def test_production_has_no_edit_fields_or_storage(app):
-    """기본 상세 진입·취소가 A 상태와 B 검색 및 자료를 보존하는지 확인한다.
+def test_production_edit_has_reviewable_local_draft_without_mutating_source(app):
+    """VER5의 실제 입력 폼을 열어도 취소 전후 A 조건·릴리즈 원본을 보존한다.
 
     param
     - app: Qt 앱.
@@ -99,13 +99,13 @@ def test_production_has_no_edit_fields_or_storage(app):
     page.open_row(0)
     before = page.catalog, page.selected_id, page.page_index, page.search.text(), window.query_state.applied
     page.edit_button.click()
-    editor = page.editor
-    assert editor.draft.fields == () and editor.gateway is None
-    assert not editor.check.isEnabled()
-    editor._save()
-    assert editor.state == "edit"
-    QTest.keyClick(editor, Qt.Key.Key_Escape)
-    assert not editor.isVisible()
+    editor = page.release_form
+    assert editor.isVisible() and page.gateway is None
+    assert editor.raw.text() == page.catalog.entry(page.selected_id).release.version_raw
+    assert editor.prepared is None and editor.save.isHidden()
+    editor.raw.setText("검토 전 작업본")
+    editor.cancel.click()
+    assert not editor.isVisible() and not page.workspace.history
     assert before == (page.catalog, page.selected_id, page.page_index, page.search.text(), window.query_state.applied)
     assert page.mode == "detail"
     window.close()
