@@ -12,6 +12,7 @@ from setron.ui.dashboard import DashboardGrid, SplitRow
 from setron.ui.import_dialogs import ImportDialog
 from setron.ui.main_window import MENUS, PageStack
 from setron.ui.settings_location import LocationPanel
+from setron.ui.settings_tasks import SettingsSave
 from setron.ui.theme import SECONDARY, icon, svg_size
 from setron.ui.version_management_widgets import actions, card, note, set_rows, table, tabs, text_field
 
@@ -62,6 +63,8 @@ class SettingsPage(QWidget):
         self.order_draft = list(self.personal["order"])
         self.home_draft = self.personal["home"]
         self._rendering = False
+        self.operation = SettingsSave(self)
+        self.operation.changed.connect(lambda: self.tabs.setEnabled(not self.operation.busy))
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(18)
@@ -293,18 +296,25 @@ class SettingsPage(QWidget):
         if self._rendering:
             return
         try:
+            if self.fields[key].text().lower() == self.draft.colors(self._dark())[key].lower():
+                return
             self.update_draft(**{key: self.fields[key].text(), **({"palette": "custom"} if key in ("met", "below", "risk") else {})})
         except ValueError as error:
             self.feedback.setText(str(error))
 
     def update_draft(self, **values):
+        colors = {key: values.pop(key) for key in tuple(values) if key in self.fields}
         self.draft = replace(self.draft, **values)
+        self.draft = self.draft.with_colors(self._dark(), **colors)
         self._render()
+
+    def _dark(self):
+        return self.draft.mode == "dark" or (self.draft.mode == "system"
+                and QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
 
     def _render(self):
         self._rendering = True
-        dark = self.draft.mode == "dark" or (self.draft.mode == "system"
-            and QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
+        dark = self._dark()
         colors = self.draft.colors(dark)
         for key, b in self.mode_buttons.items():
             b.setChecked(key == self.draft.mode)
@@ -341,22 +351,28 @@ class SettingsPage(QWidget):
         changes = {key: field.text() for key, field in self.fields.items() if field.text().lower() != colors[key].lower()}
         if set(changes) & {"met", "below", "risk"}:
             changes["palette"] = "custom"
-        return replace(self.draft, **changes)
+        palette = changes.pop("palette", self.draft.palette)
+        return replace(self.draft, palette=palette).with_colors(self._dark(), **changes)
 
     def save_appearance(self):
+        if self.operation.busy:
+            return False
         try:
             draft = self._collect()
-            if self.controller:
-                self.controller.apply(draft, persist=True)
-            else:
-                self.store.save("appearance", draft)
-        except (ValueError, OSError) as error:
+        except ValueError as error:
             self.feedback.setText(str(error))
             return False
-        self.saved = self.draft = draft
-        self.feedback.setText("저장 완료 · 모든 화면에 적용했습니다.")
-        self._render()
-        return True
+        def stored(done):
+            def applied():
+                self.saved = self.draft = draft
+                self.feedback.setText("저장 완료 · 모든 화면에 적용했습니다.")
+                self._render()
+                done()
+            if self.controller:
+                self.controller.apply_async(draft, applied)
+            else:
+                applied()
+        return self.operation.start(self.store, "appearance", draft, "화면 설정 저장 중", stored, self.feedback.setText)
 
     def cancel_appearance(self):
         self.draft = self.saved
@@ -413,34 +429,35 @@ class SettingsPage(QWidget):
         self._render_layout()
 
     def save_personal(self):
-        candidate = {**self.personal, "order": tuple(self.order_draft), "home": self.home_draft}
-        try:
-            self.store.save("personal", candidate)
-        except OSError as error:
-            self.feedback.setText(str(error))
+        if self.operation.busy:
             return False
-        self.personal = candidate
-        self.personal_changed.emit(candidate)
-        self.layout_editor.hide()
-        return True
+        candidate = {**self.personal, "order": tuple(self.order_draft), "home": self.home_draft}
+        def stored(done):
+            self.personal = candidate
+            self.personal_changed.emit(candidate)
+            self.layout_editor.hide()
+            self.feedback.setText("개인 설정을 저장했습니다.")
+            done()
+        return self.operation.start(self.store, "personal", candidate, "메뉴·배치 저장 중", stored, self.feedback.setText)
 
     def cancel_personal(self):
         self.order_draft, self.home_draft = list(self.personal["order"]), self.personal["home"]
         self.layout_editor.hide()
 
     def open_personal(self):
+        if self.operation.busy:
+            return
         dialog = PersonalDialog(self.source.catalog, self.personal, self)
         self.personal_dialog = dialog
         def finish(result):
             if result == dialog.DialogCode.Accepted:
                 candidate = {**self.personal, **dialog.values()}
-                try:
-                    self.store.save("personal", candidate)
-                except OSError as error:
-                    self.feedback.setText(str(error))
-                    return
-                self.personal = candidate
-                self.personal_changed.emit(candidate)
+                def stored(done):
+                    self.personal = candidate
+                    self.personal_changed.emit(candidate)
+                    self.feedback.setText("나의 라인·설비군을 저장했습니다.")
+                    done()
+                self.operation.start(self.store, "personal", candidate, "라인·설비군 저장 중", stored, self.feedback.setText)
             dialog.deleteLater()
         dialog.finished.connect(finish)
         dialog.open()

@@ -52,6 +52,7 @@ from setron.ui.management_page import ManagementPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter
 from setron.ui.settings_page import SettingsPage
+from setron.ui.import_dialogs import ImportProgressDialog
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
@@ -268,6 +269,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.management_refresh_query = None
     window.management_saving = False
     window.management_last_success = False
+    window.management_progress = ImportProgressDialog(window)
 
     def open_management_release(release_id):
         management.open_record("release_version", {"release_version_id": release_id})
@@ -773,9 +775,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         """저장 전 관리 재조회와 그 응답을 받을 조회 기준을 함께 폐기한다."""
         window.management_refresh.cancel()
         window.management_refresh_query = None
+        if not window.management_saving:
+            window.management_progress.set_operation(None)
 
     def begin_management_save():
         window.management_saving = True
+        if not versions.progress.isVisible():
+            window.management_progress.set_operation("save", "변경 사항 저장 중", "검토한 변경 사항을 저장하고 있습니다. 잠시만 기다려 주세요.")
         cancel_management_refresh()
         dashboard.invalidate()
         heatmap.invalidate()
@@ -789,6 +795,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         sync_mode()
 
     def finish_saved_refresh(snapshot, error):
+        window.management_progress.set_operation(None)
         query = window.management_refresh_query
         if query is None:
             return
@@ -843,12 +850,15 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         query = window.query_state.applied
         cancel_management_refresh()
         if reapplied:
+            window.management_progress.set_operation(None)
             # 선택지가 바뀌어 같은 조건을 다시 적용했다. 적용 과정에서 화면을 이미 새로 읽었다.
             window.notice.setText("저장 완료 · 조회 선택지(Site·Line)를 새로 읽고 같은 조회 조건을 다시 적용했습니다.")
         elif query is not None and window.query_state.is_current(query):
             window.management_refresh_query = query
+            window.management_progress.set_operation("refresh", "저장 결과 반영 중", "저장된 자료로 화면을 다시 조회하고 있습니다.")
             window.management_refresh.start(BackgroundRead(lambda: source.snapshot(query)))
         else:
+            window.management_progress.set_operation(None)
             prefix = "저장 완료" if window.management_last_success else "저장 실패 · 기존값 유지"
             window.notice.setText(prefix + " · 조회 조건을 적용해 현재 저장된 현황을 확인해 주세요.")
         judgments = getattr(result, "refresh", None)
@@ -857,6 +867,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def uncertain_management_save():
         window.management_saving = False
+        window.management_progress.set_operation(None)
         ai.invalidate_data()
         window.notice.setText("저장 결과 미확인 · 같은 수정 묶음을 다시 저장하지 말고 DB 기록을 확인해 주세요.")
 
@@ -882,6 +893,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
     window.close_guard = lambda: (management.state != "saving" and not versions.saving
+                                 and not settings.operation.busy
                                  and not reports.saving
                                  and not versions.history_panel.read_request.busy and importer.state != "saving"
                                  and importer.deletion.phase != "deleting")
