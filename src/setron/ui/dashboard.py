@@ -12,7 +12,7 @@ from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import DashboardChart, series_color
 from setron.ui.dashboard_data import (
     DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, count_value, missing_sw_count,
-    upgrade_caption,
+    undetermined_breakdown, upgrade_caption,
 )
 from setron.ui.query_state import UNASSIGNED, version_filter_caption
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size
@@ -486,7 +486,10 @@ class DashboardPage(QWidget):
                      f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
             "upgrade": (count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
                         upgrade_caption("한 계열이라도 N 미만인 물리 설비 · 중복 제거", summary.undetermined)),
-            "check": (f"{unresolved}대", f"판단 불가 {summary.undetermined}건 · SW 미등록 {no_sw}대"),
+            # 판단 불가 이유를 함께 보인다. 목표 N 미지정을 버전 문제로 오해하지 않게 한다 (QA Q-07).
+            "check": (f"{unresolved}대", f"판단 불가 {summary.undetermined}건"
+                      + (f" ({reasons})" if (reasons := undetermined_breakdown(summary)) else "")
+                      + f" · SW 미등록 {no_sw}대"),
         }
         for key, (value, caption) in values.items():
             self.metrics[key].value.setText(value)
