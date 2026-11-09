@@ -110,7 +110,7 @@ class _DeleteCheckStyle(QProxyStyle):
 
 @dataclass(frozen=True)
 class DeletionBatch:
-    """삭제 가능한 저장 묶음. key는 서비스의 불변 식별자이며 표시 날짜로 대체하지 않는다."""
+    """저장 묶음. key는 서비스의 불변 식별자이며 표시 날짜로 대체하지 않는다."""
 
     key: str
     kind: ExtractKind
@@ -122,6 +122,7 @@ class DeletionBatch:
     row_count: int
     saved_at: str
     method: str
+    deletable: bool = True
 
     def __post_init__(self):
         if not isinstance(self.key, str) or not self.key or not isinstance(self.kind, ExtractKind):
@@ -138,6 +139,8 @@ class DeletionBatch:
             raise ValueError("저장 묶음 표시 정보 형식이 올바르지 않습니다.")
         if any(type(v) is not int or v < 0 for v in (self.equipment_count, self.row_count)):
             raise ValueError("삭제 대수·행 수는 0 이상의 정수여야 합니다.")
+        if not isinstance(self.deletable, bool):
+            raise ValueError("삭제 가능 여부는 참 또는 거짓이어야 합니다.")
 
 
 @dataclass(frozen=True)
@@ -198,6 +201,8 @@ class DeletionResult:
 DANGER_STYLE = ("QPushButton {background:#c23345;color:white;border:1px solid #c23345;}"
                 "QPushButton:disabled {background:#f3dce0;color:#a97982;border-color:#f3dce0;}"
                 "QPushButton:focus {border:2px solid #142033;}")
+DELETE_HEADERS = ("", "기준일 / 설비군", "Site · 시트", "설비 수 / 행 수", "저장일", "저장 방식", "상태")
+RELEASE_HEADERS = ("", "SW 계열", "입력 작업 시트", "버전 수", "저장일", "저장 방식", "상태")
 
 
 class DeleteConfirmDialog(ImportDialog):
@@ -281,12 +286,13 @@ class ImportDeletePage(QWidget):
         filters = Card(padding=24)
         self.filters_card = filters
         filters.setProperty("outlined", True)
-        filters.body.addWidget(label("1. 삭제할 자료와 기간 선택", 20, medium=True))
+        self.filters_title = label("1. 삭제할 자료와 기간 선택", 20, medium=True)
+        filters.body.addWidget(self.filters_title)
         self.kind_combo, self.site_combo, self.family_combo = ComboBox(), ComboBox(), ComboBox()
         self.kind_combo.addItem("설비 현황표", ExtractKind.EQUIPMENT_STATUS)
         self.kind_combo.addItem("릴리즈 노트", ExtractKind.RELEASE_NOTE)
         self.site_combo.addItem("전체", None)
-        self.family_combo.addItem("설비군/계열 선택", None)
+        self.family_combo.addItem(self._family_placeholder, None)
         self.start, self.end = PeriodDateField(), PeriodDateField()
         from setron.ui.versions import _field
         self.start_box, self.end_box = _field("시작일", self.start), _field("종료일", self.end)
@@ -350,7 +356,7 @@ class ImportDeletePage(QWidget):
         self.table = QTableWidget(0, 7)
         # 스타일을 사용하는 헤더/행 체크박스가 먼저 정리되도록 테이블이 소유한다.
         self._check_style.setParent(self.table)
-        self.table.setHorizontalHeaderLabels(["", "기준일 / 설비군", "Site · 시트", "설비 수 / 행 수", "저장일", "저장 방식", "상태"])
+        self.table.setHorizontalHeaderLabels(DELETE_HEADERS)
         self.table.setAccessibleName("삭제 대상 저장 묶음")
         self.table.setMinimumWidth(0)
         self.table.setMinimumHeight(240)
@@ -377,6 +383,7 @@ class ImportDeletePage(QWidget):
         listing.body.addWidget(self.empty)
         body.addWidget(listing)
         impact = Card(padding=24)
+        self.impact_card = impact
         impact.setProperty("outlined", True)
         impact.body.addWidget(label("3. 삭제 영향 확인", 20, medium=True))
         self.counts = label("삭제할 기준일 — · 삭제할 현황표 행 — · 남는 기준일 —", 16, medium=True, wrap=True)
@@ -456,6 +463,18 @@ class ImportDeletePage(QWidget):
         # Qt QVariant은 str 기반 Enum을 문자열로 돌려줄 수 있다.
         return ExtractKind(self.kind_combo.currentData())
 
+    @property
+    def _release_deletion_supported(self):
+        return getattr(self.gateway, "release_deletion_supported", True) is not False
+
+    @property
+    def _family_placeholder(self):
+        return "설비군/계열 선택" if self._release_deletion_supported else "전체"
+
+    @property
+    def viewing_releases(self):
+        return self.kind is ExtractKind.RELEASE_NOTE and not self._release_deletion_supported
+
     def _set_notice(self, text):
         self.notice.setText(text)
         self.notice.setVisible(bool(text))
@@ -475,6 +494,12 @@ class ImportDeletePage(QWidget):
         self.request.start(BackgroundRead(self.gateway.list_batches))
         return True
 
+    def invalidate_catalog(self):
+        """가져오기 저장 후 다음 진입에서 목록을 다시 읽는다."""
+        if self.phase == "idle":
+            self.catalog = None
+            self.selected.clear()
+
     def set_catalog(self, catalog):
         if self.busy or self.phase == "unknown":
             return False
@@ -488,7 +513,7 @@ class ImportDeletePage(QWidget):
             combo.blockSignals(True)
             previous = combo.currentData()
             combo.clear()
-            combo.addItem("전체" if combo is self.site_combo else "설비군/계열 선택", None)
+            combo.addItem("전체" if combo is self.site_combo else self._family_placeholder, None)
             for value in values:
                 combo.addItem(value, value)
             index = combo.findData(previous)
@@ -527,7 +552,7 @@ class ImportDeletePage(QWidget):
         self.quick_buttons[("latest", "month", "quarter").index(mode)].setChecked(True)
 
     def eligible(self, batch):
-        if batch.kind is not self.kind:
+        if not batch.deletable or batch.kind is not self.kind or self.viewing_releases:
             return False
         if batch.kind is ExtractKind.RELEASE_NOTE:
             return self.family_combo.currentData() is not None and batch.family == self.family_combo.currentData()
@@ -537,6 +562,7 @@ class ImportDeletePage(QWidget):
 
     def apply_filter(self, *_):
         equipment = self.kind is ExtractKind.EQUIPMENT_STATUS
+        viewing = self.viewing_releases
         if self.sender() in (self.start, self.end):
             self.quick_buttons[-1].setChecked(True)
         invalid = equipment and bool(self.start.text() or self.end.text()) and self._dates() is None
@@ -546,8 +572,22 @@ class ImportDeletePage(QWidget):
             widget.setVisible(equipment)
         self.fields_row.show_kind(equipment)
         self.quick_choices.setVisible(equipment)
+        self.kind_notice.setText("이 탭에서 릴리즈 버전은 조회만 할 수 있습니다. "
+                                 "버전과 Item 상세는 ‘버전 관리 > 릴리즈 · Item’ 또는 ‘아이템 매니저’에서 확인하세요."
+                                 if viewing else "릴리즈 노트는 기간 대신 확인된 설비군/계열을 선택합니다.")
         self.kind_notice.setVisible(not equipment)
-        self.listing_title.setText("2. 삭제될 기준일 확인" if equipment else "2. 삭제될 릴리즈 묶음 확인")
+        self.filters_title.setText("1. 조회할 릴리즈 계열 선택" if viewing else "1. 삭제할 자료와 기간 선택")
+        if viewing:
+            self.listing_title.setText("2. 저장된 릴리즈 버전")
+        else:
+            self.listing_title.setText("2. 삭제될 기준일 확인" if equipment else "2. 삭제될 릴리즈 묶음 확인")
+        self.kind_combo.setAccessibleName("자료 종류" if viewing else "삭제할 자료 종류")
+        self.family_combo.setAccessibleName("조회할 SW 계열" if viewing else "삭제할 설비군/계열")
+        self.impact_card.setVisible(not viewing)
+        self.table.setHorizontalHeaderLabels(RELEASE_HEADERS if viewing else DELETE_HEADERS)
+        self.table.setAccessibleName("저장된 릴리즈 버전" if viewing else "삭제 대상 저장 묶음")
+        self.table.setColumnHidden(0, viewing)
+        self.select_all.setVisible(not viewing)
         if not self.busy and self.phase != "unknown":
             self.selected = {b.key for b in self.catalog.batches if self.eligible(b)} if self.catalog else set()
         self._render()
@@ -585,8 +625,12 @@ class ImportDeletePage(QWidget):
             widget.setEnabled(not locked)
         selected = self._selected_batches()
         batches = tuple(b for b in self.catalog.batches if b.kind is self.kind) if self.catalog else ()
-        if self.kind is ExtractKind.EQUIPMENT_STATUS:
+        equipment = self.kind is ExtractKind.EQUIPMENT_STATUS
+        viewing = self.viewing_releases
+        if equipment:
             batches = tuple(sorted(batches, key=lambda b: b.day, reverse=True))
+        elif viewing and self.family_combo.currentData() is not None:
+            batches = tuple(b for b in batches if b.family == self.family_combo.currentData())
         eligible_keys = {b.key for b in batches if self.eligible(b)}
         self.select_all.blockSignals(True)
         self.select_all.setCheckState(Qt.CheckState.Checked if eligible_keys and eligible_keys <= self.selected else
@@ -597,31 +641,35 @@ class ImportDeletePage(QWidget):
         self.table.setRowCount(len(batches))
         self.checks = {}
         for r, batch in enumerate(batches):
-            check = QCheckBox()
-            check.setStyle(self._check_style)
-            check.setAccessibleName(f"{batch.day or batch.family} · {batch.site or ''} · {batch.sheet} 삭제 선택")
-            check.setChecked(batch in selected)
-            check.setEnabled(not locked and self.eligible(batch))
-            check.toggled.connect(lambda value, key=batch.key: self._toggle(key, value))
-            wrapper = QWidget()
-            check_row = QHBoxLayout(wrapper)
-            check_row.setContentsMargins(4, 0, 4, 0)
-            check_row.addWidget(check, 0, Qt.AlignmentFlag.AlignCenter)
-            if batch in selected:
-                wrapper.setStyleSheet("background:#fcf0f2;")
-            self.table.setCellWidget(r, 0, wrapper)
-            self.checks[batch.key] = check
-            texts = (str(batch.day or batch.family), f"{batch.site or '—'} · {batch.sheet}",
-                     f"{batch.equipment_count}대 / {batch.row_count}행", batch.saved_at or "미확인", batch.method or "미확인",
-                     "삭제 예정" if batch in selected else "유지")
+            if not viewing:
+                check = QCheckBox()
+                check.setStyle(self._check_style)
+                check.setAccessibleName(f"{batch.day or batch.family} · {batch.site or ''} · {batch.sheet} 삭제 선택")
+                check.setChecked(batch in selected)
+                check.setEnabled(not locked and batch.key in eligible_keys)
+                check.toggled.connect(lambda value, key=batch.key: self._toggle(key, value))
+                wrapper = QWidget()
+                check_row = QHBoxLayout(wrapper)
+                check_row.setContentsMargins(4, 0, 4, 0)
+                check_row.addWidget(check, 0, Qt.AlignmentFlag.AlignCenter)
+                if batch in selected:
+                    wrapper.setStyleSheet("background:#fcf0f2;")
+                self.table.setCellWidget(r, 0, wrapper)
+                self.checks[batch.key] = check
+            status = "삭제 예정" if batch in selected else "유지"
+            if viewing or not batch.deletable:
+                status = "조회 전용"
+            source = batch.sheet if viewing else f"{batch.site or '—'} · {batch.sheet}"
+            count = f"{batch.row_count}개" if viewing else f"{batch.equipment_count}대 / {batch.row_count}행"
+            texts = (str(batch.day or batch.family), source, count, batch.saved_at or "미확인", batch.method or "미확인", status)
             for c, text in enumerate(texts, 1):
                 item = QTableWidgetItem(text)
                 if batch in selected:
                     item.setBackground(ui_color("#fcf0f2"))
                 self.table.setItem(r, c, item)
         self.empty.setVisible(not batches)
-        self.empty.setText("선택한 종류의 저장된 자료가 없습니다." if self.catalog else "저장된 자료를 조회해 주세요.")
-        equipment = self.kind is ExtractKind.EQUIPMENT_STATUS
+        missing = "저장된 릴리즈 버전이 없습니다." if viewing else "선택한 종류의 저장된 자료가 없습니다."
+        self.empty.setText(missing if self.catalog else "저장된 자료를 조회해 주세요.")
         dates = {b.day for b in batches if b.day}
         remaining = dates - {b.day for b in selected}
         # 같은 날짜의 다른 Site 자료가 남으면 기준일도 남는다.

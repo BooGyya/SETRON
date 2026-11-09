@@ -646,6 +646,7 @@ class ImportPage(QWidget):
         self.workspace.addWidget(self.delete_scroll)
         outer.addWidget(self.workspace, 1)
         self.tabs.currentChanged.connect(self._tab_changed)
+        self.deletion.kind_combo.currentIndexChanged.connect(self._sync_delete_steps_visibility)
         self.deletion.busy_changed.connect(self._sync_tabs)
         self.deletion.busy_changed.connect(self._sync_progress)
         self.deletion.cancel_requested.connect(lambda: self.tabs.setCurrentIndex(0))
@@ -689,7 +690,7 @@ class ImportPage(QWidget):
             self.delete_progress_steps.set_stage(index)
 
     def _sync_delete_step(self, *_):
-        if self.workspace.currentIndex() != 1:
+        if self.workspace.currentIndex() != 1 or self.deletion.viewing_releases:
             return
         bar = self.delete_scroll.verticalScrollBar()
         stage = 0
@@ -700,6 +701,10 @@ class ImportPage(QWidget):
                 if card.y() <= bar.value() + 12:
                     stage = index
         self.delete_progress_steps.set_stage(stage)
+
+    def _sync_delete_steps_visibility(self):
+        self.delete_steps.setVisible(self.workspace.currentIndex() == 1 and not self.deletion.viewing_releases)
+        self._sync_delete_step()
 
     def _sync_tabs(self):
         self.tabs.setEnabled(not self.busy and not self.deletion.busy)
@@ -727,7 +732,7 @@ class ImportPage(QWidget):
             key = ("comparison", self.comparison_request.generation)
         elif self.deletion.busy:
             title, text = (("저장 자료 삭제 중", "선택한 자료를 삭제하고 있습니다. 완료 전에는 앱을 종료하지 마세요.")
-                           if self.deletion.phase == "deleting" else ("저장 자료 조회 중", "삭제 대상 목록을 읽고 있습니다."))
+                           if self.deletion.phase == "deleting" else ("저장 자료 조회 중", "저장된 자료 목록을 읽고 있습니다."))
             key = ("delete", self.deletion.phase, self.deletion.request.generation)
         else:
             self.progress_dialog.set_operation(None)
@@ -742,7 +747,7 @@ class ImportPage(QWidget):
             return
         self.workspace.setCurrentIndex(index)
         self.steps.setVisible(index == 0)
-        self.delete_steps.setVisible(index == 1)
+        self._sync_delete_steps_visibility()
         self._sync_tabs()
         if index == 1 and self.deletion.catalog is None:
             self.deletion.reload()
@@ -1938,6 +1943,7 @@ class ImportPage(QWidget):
             self.result_label.setText(message)
         else:
             self.state, self.receipt = "saved", receipt
+            self.deletion.invalidate_catalog()
             self._set_status("저장 완료", "success", f"{receipt.target_label} · 입력 작업 {receipt.batch_id}")
             persisted = isinstance(self.saver, DatabaseImportSaver)
             release = persisted and self.draft.kind is ExtractKind.RELEASE_NOTE

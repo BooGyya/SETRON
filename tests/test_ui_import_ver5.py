@@ -337,6 +337,46 @@ def test_release_mode_uses_family_not_hidden_dates_or_site(own):
     assert page.plan().start is None and page.plan().site is None
 
 
+def test_read_only_release_catalog_refreshes_after_a_successful_import(own):
+    saver = MemoryImportSaver()
+
+    class ReadOnlyReleaseGateway(Gateway):
+        release_deletion_supported = False
+
+        def list_batches(self):
+            stored = replace(catalog().batches[-1], deletable=False)
+            new = replace(stored, key="new-release", family="O2", sheet="신규 릴리즈", row_count=3)
+            return DeletionCatalog("rev-1", (stored, new) if saver.saved else (stored,), "")
+
+    gateway = ReadOnlyReleaseGateway()
+    page = import_page(own, saver=saver, delete_gateway=gateway)
+    deletion = page.deletion
+    page.tabs.setCurrentIndex(1)
+    until(lambda: not deletion.busy)
+    deletion.kind_combo.setCurrentIndex(1)
+    assert deletion.table.rowCount() == 1
+    assert not page.delete_steps.isVisibleTo(page)
+    assert deletion.table.isColumnHidden(0) and not deletion.impact_card.isVisibleTo(page)
+    assert "아이템 매니저" in deletion.kind_notice.text()
+
+    page.tabs.setCurrentIndex(0)
+    page.kind_combo.setCurrentIndex(1)
+    page.draft = draft(row(content="수정 내용", item_no="7"), kind=ExtractKind.RELEASE_NOTE)
+    page.workbook_name = page.draft.workbook_name
+    page._changed()
+    assert page.save()
+    wait_for_extraction(page)
+    assert saver.saved
+
+    page.tabs.setCurrentIndex(1)
+    until(lambda: not deletion.busy)
+    assert deletion.table.rowCount() == 2 and deletion.family_combo.currentText() == "전체"
+    deletion.family_combo.setCurrentIndex(deletion.family_combo.findData("O2"))
+    assert deletion.table.rowCount() == 1
+    assert deletion.table.item(0, 2).text() == "신규 릴리즈" and deletion.table.item(0, 3).text() == "3개"
+    assert not deletion.confirm_delete() and not gateway.calls
+
+
 def test_quick_ranges_use_latest_saved_date_and_keyboard_toggle_works(own):
     page = own(ImportDeletePage())
     select_period(page)

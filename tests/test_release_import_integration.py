@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from setron.features.ai.schemas import ExtractKind
+from setron.features.deletion import SnapshotDeletionService
 from setron.features.excel_import.schemas import SaveRequest, SaveRow
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.item.schemas import ItemState, TargetScope
@@ -14,6 +15,7 @@ from setron.features.release.schemas import ItemLinkInput
 from setron.features.release.service import ReleaseService
 from setron.features.release.schemas import ReleaseInput
 from setron.features.storage.validation import StorageValidationError
+from setron.ui.import_delete_gateway import ImportDeleteGateway
 
 from test_release_revision import all_rows, observation, revision_storage
 from test_release_replacement import original
@@ -133,6 +135,42 @@ def test_real_import_new_release_relinks_existing_unregistered_history(revision_
     row = all_rows(storage, "equipment_version")[0]
     assert row["release_version_id"] is not None and row["version_raw"] == "v1"
     assert receipt.refresh.dates[0].summary.equipment[0].families[0].pms[0].comparison.registered
+
+
+def test_saved_data_catalog_lists_current_release_batches_from_all_sources(revision_storage):
+    storage = revision_storage
+    observation(storage)
+    manual = ReleaseService(storage).register_release(ReleaseInput(family_id=2, version_raw="수동 등록"))
+    with storage.transaction() as tx:
+        seed = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {
+            "seed": "demo_seed.test", "synthetic": True, "sheets": {"초기 노트": {"A1": "v0"}}}})
+        seed_batch_id = seed["batch_id"]
+        note_id = tx.insert("release_note", {"group_id": 3, "batch_id": seed_batch_id})["release_note_id"]
+        tx.insert("release_version", {"family_id": 2, "release_note_id": note_id, "batch_id": seed_batch_id,
+                                       "version_raw": "v0", "version_order": 1})
+    saver = DatabaseImportSaver(storage)
+    gateway = ImportDeleteGateway(SnapshotDeletionService(storage))
+    old = saver.save(import_request(storage, identity="old-note", confirmed=False, sheet="이전 노트"))
+
+    catalog = gateway.list_batches()
+    status, note, initial, direct = catalog.batches
+    assert status.kind is ExtractKind.EQUIPMENT_STATUS and status.deletable
+    assert note.key == f"release:{old.batch_id}:1"
+    assert (note.kind, note.family, note.sheet, note.row_count, note.method, note.deletable) == (
+        ExtractKind.RELEASE_NOTE, "O2", "이전 노트", 1, "Excel 가져오기", False)
+    assert (initial.key, initial.sheet, initial.row_count, initial.method, initial.deletable) == (
+        f"release:{seed_batch_id}:2", "초기 노트", 1, "DB 초기 자료", False)
+    assert direct.key == f"release:{manual.release.current['batch_id']}:2"
+    assert direct.method == "직접 입력" and not direct.deletable
+
+    request = import_request(storage, identity="new-note", raw="v2", sheet="새 노트")
+    new = saver.save(reviewed_request(saver, request))
+    updated = gateway.list_batches()
+    assert updated.revision == catalog.revision  # 릴리즈 교체가 현황표 삭제 범위를 바꾸지 않는다.
+    assert updated.batches[0] == status
+    assert (updated.batches[1].key, updated.batches[1].sheet) == (f"release:{new.batch_id}:1", "새 노트")
+    assert updated.batches[2:] == (initial, direct)
+    assert old.batch_id in {row["batch_id"] for row in all_rows(storage, "import_batch")}
 
 
 def test_whole_note_removes_omitted_versions_and_preserves_manual_risk(revision_storage):

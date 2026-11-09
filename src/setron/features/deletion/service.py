@@ -42,6 +42,19 @@ class SnapshotBatch:
 
 
 @dataclass(frozen=True)
+class ReleaseBatch:
+    """현재 저장된 릴리즈 버전의 입력 작업·계열별 조회 정보."""
+
+    batch_id: int
+    family_id: int
+    family: str
+    sheet: str
+    version_count: int
+    imported_at: datetime | None
+    source_type: str
+
+
+@dataclass(frozen=True)
 class DeleteOutcome:
     """삭제 결과. status: success(요청한 단위 전부 삭제) · failed(하나도 안 지움) · unknown(commit 결과 모름)."""
 
@@ -55,16 +68,18 @@ def batch_key(batch_id: int, base_date: date, site: str) -> str:
     return f"status:{batch_id}:{base_date.isoformat()}:{site}"
 
 
-def _sheet(raw) -> str:
-    """import_batch.raw_data({시트: {셀: 값}})의 시트 이름. 없으면 '시트 미확인'."""
+def _raw_object(raw) -> Mapping:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except ValueError:
-            return "시트 미확인"
-    if isinstance(raw, Mapping) and raw:
-        return ", ".join(str(name) for name in raw)
-    return "시트 미확인"
+            return {}
+    return raw if isinstance(raw, Mapping) else {}
+
+
+def _sheet(raw) -> str:
+    """import_batch.raw_data({시트: {셀: 값}})의 시트 이름. 없으면 '시트 미확인'."""
+    return ", ".join(str(name) for name in _raw_object(raw)) or "시트 미확인"
 
 
 class SnapshotDeletionService:
@@ -98,6 +113,36 @@ class SnapshotDeletionService:
         """(revision, 지울 수 있는 단위 목록). 최신 기준일부터."""
         with self.storage.transaction() as tx:
             return self._read(tx)
+
+    def catalog(self) -> tuple[str, tuple[SnapshotBatch, ...], tuple[ReleaseBatch, ...]]:
+        """삭제할 수 있는 현황표와 조회 전용 릴리즈 묶음을 함께 읽는다."""
+        with self.storage.transaction() as tx:
+            revision, snapshots = self._read(tx)
+            return revision, snapshots, self._read_release_batches(tx)
+
+    @staticmethod
+    def _read_release_batches(tx) -> tuple[ReleaseBatch, ...]:
+        table = tx.repository.table
+        release, family, batch = table("release_version"), table("version_family"), table("import_batch")
+        # 현재 버전에서 출발해야 교체 후 보존한 원본 입력 이력이 목록에 다시 나타나지 않는다.
+        counts = (select(release.c.batch_id, release.c.family_id, func.count().label("version_count"))
+                  .group_by(release.c.batch_id, release.c.family_id).subquery())
+        query = (select(counts.c.batch_id, counts.c.family_id, family.c.family_name, counts.c.version_count,
+                        batch.c.imported_at, batch.c.source_type, batch.c.raw_data)
+                 .select_from(counts.join(batch, batch.c.batch_id == counts.c.batch_id)
+                              .join(family, family.c.family_id == counts.c.family_id))
+                 .order_by(batch.c.imported_at.desc(), batch.c.batch_id.desc(), family.c.family_name, family.c.family_id))
+        found = []
+        for row in tx.session.execute(query):
+            raw = _raw_object(row.raw_data)
+            source_type = row.source_type
+            # seed.sql은 MANUAL 작업의 원본 안에 초기 자료 표시와 시트 목록을 보관한다.
+            seed_sheets = raw.get("sheets")
+            if source_type == "MANUAL" and isinstance(raw.get("seed"), str) and isinstance(seed_sheets, Mapping):
+                raw, source_type = seed_sheets, "SEED"
+            found.append(ReleaseBatch(row.batch_id, row.family_id, row.family_name, _sheet(raw),
+                                      row.version_count, row.imported_at, source_type))
+        return tuple(found)
 
     def _read(self, tx, *, lock: bool = False):
         table = tx.repository.table

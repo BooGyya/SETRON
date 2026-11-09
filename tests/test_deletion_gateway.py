@@ -19,8 +19,8 @@ class FakeService:
                                             datetime(2026, d.month, 2, 9, 30), "EXCEL")
                               for i, d in enumerate((date(2026, 3, 1), date(2026, 2, 1), date(2026, 1, 1)), 1))
 
-    def batches(self):
-        return "rev-1", self.batches_
+    def catalog(self):
+        return "rev-1", self.batches_, ()
 
     def delete(self, revision, keys):
         self.calls.append((revision, tuple(keys)))
