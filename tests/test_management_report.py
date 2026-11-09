@@ -78,7 +78,8 @@ def test_hpa_only_date_keeps_exact_summary_without_extending_analysis_trend(obse
     assert [point.base_date for point in value.trend] == [date(2026, 10, 1), date(2026, 10, 3)]
     hpa_day = report(result, day=day)
     assert hpa_day.summary.base_date == day
-    assert hpa_day.summary.equipment_count == 0 and hpa_day.summary.hpa_excluded == 1
+    # 설비별 최신 관측 (QA Q-01): HPA만 들어온 날에도 일반 설비는 이전 마지막 관측(10-03)으로 센다.
+    assert hpa_day.summary.equipment_count == 2 and hpa_day.summary.hpa_excluded == 1
     assert day not in {point.base_date for point in hpa_day.trend}
 
 
@@ -256,3 +257,23 @@ def test_current_report_reads_saved_n_groups_in_same_transaction(revision_storag
 
     assert after.summary.by_family[0].compliant == 1 and after.summary.by_family[0].below == 0
     assert after.targets[0].version_raw.startswith("N 그룹 · N: v1")
+
+
+def test_equipment_missing_on_base_date_is_counted_from_its_last_observation(observed_result):
+    """QA Q-01: 기준일(10-03)에 관측되지 않은 설비는 그 이전 마지막 관측(10-01)으로 센다."""
+    second = observed_result.refresh.dates[1]
+    without_normal = tuple(r for r in second.records if r.equipment_code != "NORMAL-2")
+    risks = replace(second.risks, equipment=tuple(e for e in second.risks.equipment
+                                                  if e.record.equipment_code != "NORMAL-2"))
+    partial = replace(second, records=without_normal, risks=risks,
+                      summary=summarize(without_normal, observed_result.refresh.families, {(1, 1): 2, (3, 2): 3}))
+    result = replace(observed_result, refresh=replace(observed_result.refresh,
+                     dates=(observed_result.refresh.dates[0], partial)))
+
+    value = report(result, day=date(2026, 10, 3))
+
+    codes = {e.record.equipment_code: e.record.base_date for e in value.summary.equipment}
+    assert codes == {"MIX-1": date(2026, 10, 3), "NORMAL-2": date(2026, 10, 1)}
+    assert value.summary.equipment_count == 2 and value.summary.hpa_excluded == 1
+    assert {e.record.equipment_code for e in value.risks.equipment} == {"MIX-1", "NORMAL-2"}
+    assert [p.base_date for p in value.trend] == [date(2026, 10, 1), date(2026, 10, 3)]   # 추이는 그날 관측 그대로

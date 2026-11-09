@@ -34,10 +34,11 @@ class EquipmentData:
 
 def equipment_data(snapshot: DashboardSnapshot, source: DashboardSource) -> EquipmentData:
     selected = equipment_tiles(snapshot, source)
-    current = {r.equipment_id: r for r in source.records if r.base_date == snapshot.base_date}
+    # 화면 스냅샷과 같은 설비별 최신 관측 (QA Q-01). 실제 관측일은 기록마다 다를 수 있다.
+    current = {r.equipment_id: r for r in source.current_records(snapshot.base_date)}
     normal_ids = tuple(r.equipment_id for r in snapshot.selected_records if not r.is_hpa)
     if any(eid not in current for eid in normal_ids):
-        raise ValueError("같은 기준일의 전체 SW 관측이 없습니다.")
+        raise ValueError("기준일까지 저장된 전체 SW 관측이 없습니다.")
     hpa = tuple(r for r in lookup_records(snapshot) if r.is_hpa)
     normal = tuple(current[eid] for eid in normal_ids)
     # 전체 판정은 같은 기준일/같은 호기의 모든 SW로 따로 계산한다. 선택 판정을 덮지 않는다.

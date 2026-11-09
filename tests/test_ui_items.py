@@ -1,7 +1,7 @@
 """B-3: Item 식별·저장 상태·한 관측일·Qt 탐색·A 조회와의 독립성."""
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -85,7 +85,7 @@ def test_confirmed_order_missing_row_and_four_states(data):
 def test_invalid_observation_contract(data, change):
     changes = {
         "duplicate": dict(records=(*data.records, data.records[0])),
-        "mixed_date": dict(records=(replace(data.records[0], base_date=date(2026, 1, 1)),)),
+        "mixed_date": dict(records=(replace(data.records[0], base_date=data.base_date + timedelta(days=1)),)),  # 기준일 이후 관측
         "disconnected": dict(observations_connected=False),
         "missing_date": dict(base_date=None),
         "bad_catalog": dict(versions=None),
@@ -98,7 +98,7 @@ def test_adapter_uses_only_latest_date(data):
     source = demo_dashboard_source()
     result = item_data_from_source(data.versions, source)
     assert result.base_date == max(source.dates)
-    assert all(r.base_date == result.base_date for r in result.records)
+    assert all(r.base_date <= result.base_date for r in result.records)   # 설비별 최신 관측 (QA Q-01)
     assert len({r.equipment_id for r in result.records}) == len(result.records)
 
 
