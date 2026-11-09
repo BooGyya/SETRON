@@ -171,6 +171,14 @@ class MainWindow(QMainWindow):
         self.body.setSpacing(20)
         self.header = PageHeader()
         self.body.addWidget(self.header)
+        # 실제 업무 자료가 아닐 때(DB 미연결로 합성 예시 자료 등)의 경고. 공통 안내 칸(notice)과 달리
+        # 화면별 숨김 규칙을 따르지 않고 모든 화면에 계속 보인다 (QA Q-03).
+        self.data_warning = StatusBadge("", "danger")
+        self.data_warning.setObjectName("dataWarning")
+        self.data_warning.setWordWrap(True)
+        self.data_warning.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self.data_warning.hide()
+        self.body.addWidget(self.data_warning)
         self.notice = StatusBadge("작업 단위 3 · 공통 조회 조건 · 업무 데이터 미연결", "info")
         self.body.addWidget(self.notice)
         self.query_panel = QueryPanel(self.query_state)
@@ -270,6 +278,13 @@ class MainWindow(QMainWindow):
             self.personal_menu_layout.removeWidget(self.nav[key])
         for key in order:
             self.personal_menu_layout.addWidget(self.nav[key])
+
+    def set_data_warning(self, text: str | None) -> None:
+        """실제 자료가 아님을 알리는 경고를 모든 화면에 계속 띄운다. 빈 문구면 숨긴다 (QA Q-03)."""
+        text = (text or "").strip()
+        self.data_warning.setText(text)
+        self.data_warning.setToolTip(text)
+        self.data_warning.setVisible(bool(text))
 
     def register_page(self, key: str, widget: QWidget, *, uses_query: bool | None = None) -> None:
         """담당 QWidget을 알려진 메뉴에 한 번 등록한다. 등록한 위젯의 소유자는 이 창이다."""
