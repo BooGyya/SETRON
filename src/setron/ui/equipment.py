@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.aggregation.service import summarize
+from setron.features.risk.service import RiskAssessor
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import ui_color
@@ -16,7 +17,7 @@ from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard import MetricCard
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
-from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone
+from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings
 from setron.ui.target_data import target_map
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
 from setron.features.item.schemas import APPLICATION_LABELS
@@ -748,7 +749,7 @@ class EquipmentPage(QWidget):
                 code = (f"{entry.rank}위 · " if entry is not None and entry.rank else "확인 필요 · ") + code
             rows.append((code, location.replace(" · ", "\n"), names, versions,
                          tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else ""),
-                         tile.risk_label + "\n세부 근거 미연결"))
+                         "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
         self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones)
         fit_rows(self.table)
@@ -811,7 +812,8 @@ class EquipmentPage(QWidget):
         self._render_sw_cards(tones)
         self._show_detail_extras(detail, rows)
         extra = "HPA는 분석 제외입니다." if detail.record.is_hpa else "SW 관측이 없습니다." if not rows else "PM 배치 메모로 안전 Item 미적용을 추정하지 않습니다."
-        self.evidence.setText(f"{extra}\n위험 근거: 판정 결과만 연결됨 · 규칙·필수 Item·릴리즈 문서·원본 위치 미연결.\n"
+        risk_detail = (detail.whole.risk_detail or detail.whole.risk_label) if getattr(self.source, "assessor", None) else "규칙·필수 Item·릴리즈 문서·원본 위치 미연결"
+        self.evidence.setText(f"{extra}\n위험 근거: {risk_detail}\n"
                                f"관측 출처: {self.snapshot.source_label} · 실제 관측일 {detail.record.base_date} · 원본 셀 연결은 확인 필요")
         self._set_mode("detail")
         return True
@@ -837,19 +839,26 @@ class EquipmentPage(QWidget):
         risk_color = ("#c23345" if whole.risk is RiskStatus.RISK else "#b88000" if whole.risk is RiskStatus.UNKNOWN else "#5e6b7a")
         self._set_judgement({
             "goal": goal,
-            "risk": (whole.risk_label, "판정 결과만 연결됨 · 규칙·근거 문서 미연결 · 목표 판정과 별개",
+            "risk": (whole.risk_label, whole.risk_detail or "목표 판정과 별개",
                      "#5e6b7a" if whole.goal is GoalState.EXCLUDED else risk_color),
             "complete": ("미확정", "모듈 · 필수 SW 목록 확인 필요", "#5e6b7a"),
         })
+        item_ids = {f.rule.item_id for f in whole.findings if f.rule.item_id is not None}
+        versions = getattr(self.source, "version_catalog", None)
+        entries = [e for e in versions.items if e.item.item_id in item_ids] if versions and item_ids else []
+        release_ids = {f.release.release_version_id for f in whole.findings if f.release}
+        releases = [e for e in versions.releases if e.release.release_version_id in release_ids] if versions and release_ids else []
+        locations = [" · ".join(filter(None, (s.document, s.sheet, s.cells)))
+                     for entry in (*entries, *releases) for s in entry.sources if s.sheet and s.cells]
         targets = " / ".join(dict.fromkeys(row[3] for row in rows if row[3] != "—")) or "미확인"
         self._set_evidence_rows((
             ("11605.svg", "실제 관측일", f"{record.base_date} (일반 분석 기준일 {self.snapshot.base_date})"),
             ("f5960.svg", "원본 모델", record.model_name or "미확인"),
             ("8cc7b.svg", "비교 목표 N", "HPA 비교 제외" if record.is_hpa else targets),
             ("f8090.svg", "위치", whole.location),
-            ("3c247.svg", "판정 규칙", "미연결"),
-            ("a2d12.svg", "필수 아이템명", "미연결"),
-            ("ac176.svg", "릴리즈 문서 · 아이템 위치", "미연결"),
+            ("3c247.svg", "판정 규칙", format_findings(whole.findings) or (whole.risk_label if getattr(self.source, "assessor", None) else "미연결")),
+            ("a2d12.svg", "필수 아이템명", " / ".join(e.item.content for e in entries) or "미연결"),
+            ("ac176.svg", "릴리즈 문서 · 아이템 위치", " / ".join(dict.fromkeys(locations)) or "미연결"),
             ("f5960.svg", "관측 출처", self.snapshot.source_label),
         ))
 
@@ -857,19 +866,24 @@ class EquipmentPage(QWidget):
         record = application.record
         self.detail_goal_badge.setText("N 비교 안 함")
         self.detail_goal_badge.set_tone("neutral")
-        self.detail_risk_badge.setText("위험 판정 미연결")
+        rules = tuple(rule for rule in request.data.risk_rules if rule.item_id == request.item_id)
+        catalog = request.data.catalog()
+        result = RiskAssessor(catalog.families, catalog, rules).equipment_risk(record) if rules and not record.is_hpa else None
+        risk_label = result.label if result else "해당 Item 위험 규칙 없음" if not rules else "분석 제외"
+        reason = format_findings(result.findings) if result else ""
+        self.detail_risk_badge.setText(risk_label)
         self.detail_risk_badge.set_tone("neutral")
         self._set_meta({"site": record.site, "fab": None, "line": None, "area": None, "date": record.base_date})
         self._set_judgement({
             "goal": (application.label, f"선택 Item ID {request.item_id} · 목표 N 비교는 이 보기에서 수행하지 않음", INK),
-            "risk": ("미연결", "Item 적용만으로 안전 여부를 추정하지 않음", "#5e6b7a"),
+            "risk": (risk_label, reason or risk_label, "#5e6b7a"),
             "complete": ("미확정", "모듈 · 필수 SW 목록 확인 필요", "#5e6b7a"),
         })
         self._set_evidence_rows((
             ("11605.svg", "기준일", str(record.base_date)),
             ("f5960.svg", "원본 모델", record.model_name or "미확인"),
             ("f8090.svg", "위치", record.site or "미확인"),
-            ("3c247.svg", "판정 규칙", "미연결"),
+            ("3c247.svg", "판정 규칙", reason or risk_label),
             ("ac176.svg", "원본 출처", "아래 Item 근거 표 참조"),
         ))
 
@@ -906,8 +920,7 @@ class EquipmentPage(QWidget):
         self._render_sw_cards()
         self._show_item_extras(request, application)
         self.evidence.setText("Item 적용 근거는 아래 저장 행·원본 출처를 확인해 주세요. 저장 행이 없는 버전은 미확인입니다.\n"
-                              "위험 규칙·필수 Item·위험 해제 판정은 미연결이며 Item 적용만으로 안전 여부를 추정하지 않습니다.\n"
-                              "원본 문서/셀 열기는 미연결입니다." + ("\nPM/SW 관측 없음 · 업무 규칙상 대상 외" if not application.pms else ""))
+                              "원본 셀은 Item 상세의 출처 표에서 열 수 있습니다." + ("\nPM/SW 관측 없음 · 업무 규칙상 대상 외" if not application.pms else ""))
         self.item_evidence_model.set_rows(item_evidence_rows(request, application))
         fit_rows(self.item_evidence_table)
         self.item_evidence_table.show()

@@ -636,7 +636,7 @@ class HeatmapPage(QWidget):
                 "분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
             names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
             rows.append((tile.code, f"{tile.site_label}\n{tile.area or '구역 미확인'}", names, versions, tile.goal.value,
-                         tile.risk_label + ("\n세부 근거 미연결" if tile.risk is RiskStatus.RISK else "")))
+                         "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
             tones.append(tile.version_tone)
         self.list_model.set_rows(rows, tuple(t.equipment_id for t in filtered), tones)
         if rows:

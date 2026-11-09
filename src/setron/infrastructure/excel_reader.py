@@ -515,3 +515,34 @@ def _find_merged_ranges(com_range: Any) -> list[MergedRange]:
     for col in range(first_col, last_col + 1):
         scan_column(col, first_row, last_row)
     return sorted(found.values(), key=lambda m: (m.top, m.left))
+
+def open_source_cell(path: str, sheet: str, cells: str) -> None:
+    """사용자가 고른 파일의 기록된 셀을 표시한다. 새 파일은 읽기 전용으로 연다."""
+    import re
+    from pathlib import Path
+    import xlwings as xw
+
+    addresses = [cell.strip().upper() for cell in cells.split(",")]
+    if not all(re.fullmatch(r"\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}", cell) for cell in addresses):
+        raise ValueError("원본 셀 주소를 확인하세요.")
+    target = Path(path).resolve(strict=True)
+    book = next((b for app in xw.apps for b in app.books if Path(b.fullname) == target), None)
+    created = None
+    try:
+        if book is None:
+            created = xw.App(visible=False, add_book=False)
+            security = created.api.AutomationSecurity
+            try:
+                created.api.AutomationSecurity = 3
+                book = created.books.open(str(target), read_only=True, update_links=False)
+            finally:
+                created.api.AutomationSecurity = security
+        tab = book.sheets[sheet]
+        tab.activate()
+        book.app.api.Goto(tab.api.Range(",".join(addresses)), True)
+        book.app.visible = True
+        book.app.activate(steal_focus=True)
+    except Exception:
+        if created is not None:
+            created.quit()
+        raise

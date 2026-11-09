@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 
-from setron.features.risk.schemas import RiskStatus
+from setron.features.risk.schemas import RiskFinding, RiskStatus
 from setron.features.version.groups import TIERS_WORST_FIRST, Tier, tier_of
 from setron.features.version.schemas import CompareStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource, family_name
@@ -97,6 +97,12 @@ class EquipmentTile:
     steps_below: int | None = None  # 설비 전체에서 확인된 가장 큰 N 미만 단계. 표시 색에만 쓴다.
     tier: Tier = Tier.UNKNOWN       # 설비 전체 5단계 (계열 중 가장 낮은 단계). 확인 필요·HPA는 비교 불가
 
+    findings: tuple[RiskFinding, ...] = ()
+
+    @property
+    def risk_detail(self):
+        return format_findings(self.findings) or ("세부 근거 미연결" if self.risk is RiskStatus.RISK else "")
+
     @property
     def version_tone(self) -> str:
         """타일 채움색 (5단계). 목표 판정과 같은 기준이며 위험 판정(테두리)과는 섞지 않는다."""
@@ -117,6 +123,8 @@ class EquipmentTile:
         if self.goal is GoalState.EXCLUDED:
             parts.append(f"{self.model_name or 'HPA'} · 실제 관측일 {self.observation_date}")
             parts.extend(self.raw_versions)
+        if self.findings:
+            parts.append(self.risk_detail)
         if self.multi_sw:
             parts.append("복수 SW · 타일/물리 대수는 1대")
         if self.pm_mismatch:
@@ -128,6 +136,15 @@ class EquipmentTile:
         if not self.families and self.goal is not GoalState.EXCLUDED:
             parts.append("SW 미등록 · 목표 비교 불가")
         return "\n".join(parts)
+
+
+def format_findings(findings):
+    lines = []
+    for finding in findings:
+        rule = finding.rule
+        location = f" · {finding.pm.pm_name or '공통 SW'}" if finding.pm else ""
+        lines.append(f"규칙 {rule.risk_rule_id}{location} · {rule.risk_reason} · {finding.message}")
+    return "\n".join(dict.fromkeys(lines))
 
 
 def equipment_tiles(snapshot: DashboardSnapshot, source: DashboardSource) -> tuple[EquipmentTile, ...]:
@@ -199,13 +216,16 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                     f"Line {lines.get(loc.line_key, '미지정')} · 원본 구역 {raw_area or '미확인'}")
         raw_versions = tuple(f"{pm.pm_name or '공통'} · {pm.version_raw if pm.version_raw is not None else '미입력'}"
                              for pm in record.pms) if record.is_hpa else ()
+        assessor = getattr(source, "assessor", None)
+        assessment = assessor.equipment_risk(record) if assessor and assessor.rules and not record.is_hpa else None
+        risk = assessment.status if assessment else source.risk_status(record)
         result.append(EquipmentTile(record.equipment_id, record.equipment_code, loc.site_key, sites[loc.site_key],
-                                    location, goal, source.risk_status(record), tuple(items),
+                                    location, goal, risk, tuple(items),
                                     len({p.group_id for p in record.pms}) > 1 or len(families) > 1,
                                     any(f.pm_mismatch for f in families), record.base_date, raw_versions,
                                     record.model_name if record.is_hpa else None,
                                     fabs.get(loc.fab_key), lines.get(loc.line_key), raw_area or None,
                                     _max_steps(p.comparison for f in families for p in f.pms),
                                     Tier.UNKNOWN if goal in (GoalState.EXCLUDED, GoalState.UNKNOWN)
-                                    else worst_tier(f.tier for f in items)))
+                                    else worst_tier(f.tier for f in items), assessment.findings if assessment else ()))
     return tuple(result)
