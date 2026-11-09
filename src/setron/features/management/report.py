@@ -84,6 +84,12 @@ def build_status_report_from_refresh(refresh, thresholds, base_date, *, group_na
 
     summary = summaries[base_date]
     records = records_by_date[base_date]
+    observed_risks = observed.risks
+    carried = _latest_per_equipment(refresh, base_date, selected)
+    if carried is not None:
+        # 화면과 같은 기준: 그날 관측되지 않은 설비는 기준일 이전 마지막 관측으로 센다 (QA Q-01).
+        records, observed_risks = carried
+        summary = replace(summarize(records, refresh.families, targets), base_date=base_date)
     pairs = {(pm.group_id, pm.family_id) for record in records if not record.is_hpa for pm in record.pms}
     rows = []
     for target in refresh.targets:
@@ -103,7 +109,7 @@ def build_status_report_from_refresh(refresh, thresholds, base_date, *, group_na
     analysis_days = {day.base_date for day in refresh.dates
                      if any(not record.is_hpa for record in getattr(day, "records", ()))
                      or day.summary.equipment_count > 0}
-    risks = _filter_risks(observed.risks, records, summary.hpa_excluded)
+    risks = _filter_risks(observed_risks, records, summary.hpa_excluded)
     # 우선순위(BE-017)는 같은 범위·위험 판정·목표 N으로 계산한다.
     priority = prioritize_from_risks(records, risks, refresh.families, thresholds, base_date, targets=targets)
     return StatusReport(
@@ -182,6 +188,40 @@ def _filter_record(record, value):
     if (value.model_ids is not None or value.family_ids is not None) and not pms:
         return None
     return replace(record, pms=pms)
+
+
+def _latest_per_equipment(refresh, base_date, selected):
+    """기준일 이전(출력 기간 안) 관측 중 설비마다 마지막 관측과 그 관측일의 위험 판정을 모은다 (QA Q-01).
+
+    return
+    - (범위를 적용한 기록, 위험 판정) 또는 None. 모든 설비가 기준일에 관측됐거나 원본 관측이 없는
+      날짜가 섞여 있으면 None을 돌려 기존 하루치 계산을 그대로 쓴다.
+    """
+    latest = {}
+    for day in refresh.dates:
+        if day.base_date > base_date or not _in_dates(day.base_date, selected):
+            continue
+        if not getattr(day, "records", ()):
+            return None
+        for record in day.records:
+            previous = latest.get(record.equipment_id)
+            if previous is None or record.base_date > previous[0].base_date:
+                latest[record.equipment_id] = (record, day)
+    if all(day.base_date == base_date for _, day in latest.values()):
+        return None
+    records, risks = [], []
+    for equipment_id in sorted(latest):
+        record, day = latest[equipment_id]
+        scoped = _filter_record(record, selected)
+        if scoped is None:
+            continue
+        records.append(scoped)
+        risk = next((e for e in day.risks.equipment if e.record.equipment_id == equipment_id), None)
+        if risk is not None:
+            risks.append(risk)
+    observed = next(day for day in refresh.dates if day.base_date == base_date)
+    return tuple(records), RiskSummary(tuple(risks), hpa_excluded=sum(r.is_hpa for r in records),
+                                       has_rules=observed.risks.has_rules)
 
 
 def _filter_risks(original, records, hpa_excluded):

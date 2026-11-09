@@ -67,15 +67,18 @@ def summarize(
     families: Mapping[int, FamilyReleases],
     targets: Targets,
 ) -> Summary:
-    """한 기준 날짜의 설비 현황으로 공통 집계를 만든다. 날짜가 섞이면 ValueError를 낸다."""
+    """설비 현황으로 공통 집계를 만든다. 설비 하나는 관측 하나로만 센다.
+
+    관측일은 섞일 수 있다: 기준일 조회는 설비마다 기준일 이전 가장 최근 관측을 쓴다 (QA Q-01).
+    집계 기준일(base_date)은 그중 가장 늦은 관측일이다. 같은 설비가 두 번 오면 ValueError를 낸다
+    (여러 날짜 관측을 통째로 넘기는 실수도 여기서 막힌다).
+    """
     records = tuple(records)
     dates = {r.base_date for r in records}
-    if len(dates) > 1:
-        raise ValueError(f"한 번에 한 기준 날짜만 집계합니다: {sorted(dates)}")
     ids = [r.equipment_id for r in records]
     duplicated = sorted({i for i in ids if ids.count(i) > 1})
     if duplicated:
-        raise ValueError(f"같은 날짜에 같은 설비가 두 번 있습니다: {duplicated}")
+        raise ValueError(f"같은 설비가 두 번 있습니다: {duplicated}")
 
     hpa = [r for r in records if r.is_hpa]
     statuses = tuple(equipment_status(r, families, targets) for r in records if not r.is_hpa)
@@ -87,7 +90,7 @@ def summarize(
 
     return Summary(
         **_count(units),
-        base_date=dates.pop() if dates else None,
+        base_date=max(dates) if dates else None,
         equipment_count=len(statuses),
         upgrade_needed=sum(e.needs_upgrade for e in statuses),
         hpa_excluded=len(hpa),

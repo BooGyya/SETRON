@@ -154,6 +154,9 @@ class DashboardSource:
     """기준일 위치로 선택한 설비 집합과 고정 N을 모든 보기·과거 관측에서 공유한다."""
 
     result_label = "예시 결과"  # 화면 결과 배지. DB 공급자는 "DB 자료"로 바꾼다.
+    # 기준일 조회에서 그날 관측되지 않은 일반 설비를 이전 마지막 관측으로 채운다 (QA Q-01, 11-09 결정).
+    # Version Replay는 날짜별 저장 현황을 그대로 재생하므로 False로 둔다.
+    carry_forward = True
 
     def __init__(self, *, catalog: QueryCatalog, bindings: tuple[GroupBinding, ...],
                  records: tuple[EquipmentRecord, ...], locations: Mapping[int, EquipmentLocation],
@@ -197,6 +200,35 @@ class DashboardSource:
             raise ValueError("위험 판정 상태 형식이 올바르지 않습니다.")
         self.dates = tuple(sorted({r.base_date for r in self.records}))
         self.analysis_dates = tuple(sorted({r.base_date for r in self.records if not r.is_hpa}))
+
+    def current_records(self, as_of: date | None = None) -> tuple[EquipmentRecord, ...]:
+        """기준일(포함) 이전 관측 중 설비마다 가장 최근 관측을 돌려준다 (QA Q-01).
+
+        현황표는 사업장·시트 단위로 따로 들어오므로, 가장 최근 날짜 하나만 고르면 그날 넣지 않은
+        사업장·시트의 설비가 사라진다. 설비별로 마지막 관측을 쓰고 실제 관측일(base_date)은 그대로 둔다.
+
+        return
+        - 설비 ID 오름차순. HPA도 같은 규칙으로 포함한다(집계에서는 제외 대수로만 센다).
+        """
+        latest = {}
+        for record in self.records:
+            if as_of is not None and record.base_date > as_of:
+                continue
+            previous = latest.get(record.equipment_id)
+            if previous is None or record.base_date > previous.base_date:
+                latest[record.equipment_id] = record
+        return tuple(latest[equipment_id] for equipment_id in sorted(latest))
+
+    def snapshot_records(self, day: date) -> tuple[EquipmentRecord, ...]:
+        """스냅샷에 넣을 관측: 분석 기준일(day)까지 설비별 최신 관측 (QA Q-01).
+
+        day는 기준일 이전 가장 최근 일반 관측일이다. 그보다 뒤에 관측된 HPA는 지금처럼 별도 최신 HPA
+        목록(``_hpa_lookup``)으로만 보여 주고 집계·세부 목록에 넣지 않는다.
+        ``carry_forward``가 False인 공급자(Version Replay)는 그날 실제 관측만 쓴다(이웃 날짜 복사 없음).
+        """
+        if not self.carry_forward:
+            return tuple(r for r in self.records if r.base_date == day)
+        return self.current_records(day)
 
     def latest_hpa_records(self, until: date | None = None) -> tuple[EquipmentRecord, ...]:
         """공통 분석 기준일과 독립적으로 호기별 최신 HPA 원본 관측을 조회한다.
@@ -270,8 +302,7 @@ class DashboardSource:
         candidates = _until(self.analysis_dates or self.dates, query.selection.as_of)
         if not candidates:
             return ()
-        cohort = {r.equipment_id for r in self._scope_records(
-            tuple(r for r in self.records if r.base_date == candidates[-1]), query)}
+        cohort = {r.equipment_id for r in self._scope_records(self.snapshot_records(candidates[-1]), query)}
         history_query = replace(query, selection=replace(query.selection, versions=None))
         return tuple(r for r in self._scope_records(self.records, history_query) if r.equipment_id in cohort)
 
@@ -345,6 +376,7 @@ class DashboardSource:
                                      records=self.records, locations=self.locations, families=self.families, targets=targets,
                                      risks=self.risks, source_label=self.source_label, risk_evaluator=self.risk_evaluator)
             scoped.saved_groups = self.saved_groups
+            scoped.carry_forward = self.carry_forward
             return scoped._snapshot(query)
         return self._snapshot(query)
 
@@ -361,8 +393,8 @@ class DashboardSource:
         candidates = _until(self.analysis_dates or self.dates, query.selection.as_of)
         if not candidates:
             raise NoObservationBefore(query.selection.as_of)
-        day = candidates[-1]
-        current = tuple(r for r in self.records if r.base_date == day)
+        day = candidates[-1]  # 화면에 보이는 기준일 = 기준일 이전 가장 최근 일반 관측일
+        current = self.snapshot_records(day)
         selected = self._scope_records(current, query)
         hpa_lookup, hpa_locations = self._hpa_lookup(query)
         latest_location_ids = {equipment_id for equipment_id, _ in hpa_locations}

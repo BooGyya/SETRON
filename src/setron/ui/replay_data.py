@@ -72,6 +72,8 @@ def freeze_source(source):
     if evaluator is not None:
         for record in result.records:
             result.risk_status(record)
+    # Replay 프레임은 그날 실제 저장된 관측만 재생한다. 이웃 날짜 관측으로 채우지 않는다 (QA Q-01 범위 밖).
+    result.carry_forward = False
     return result
 
 

@@ -35,10 +35,11 @@ class ItemManagerData:
             raise ValueError("미연결 관측 자료를 사용할 수 없습니다.")
         if self.observations_connected and self.base_date is None:
             raise ValueError("관측 기준일이 필요합니다.")
-        if any(r.base_date != self.base_date for r in self.records):
-            raise ValueError("서로 다른 관측일을 합칠 수 없습니다.")
+        # 설비별 최신 관측이라 관측일은 섞일 수 있지만, 기준일 이후 관측은 섞지 않는다 (QA Q-01).
+        if any(r.base_date > self.base_date for r in self.records):
+            raise ValueError("기준일 이후 관측은 합칠 수 없습니다.")
         if len({r.equipment_id for r in self.records}) != len(self.records):
-            raise ValueError("같은 기준일의 설비 ID가 중복되었습니다.")
+            raise ValueError("같은 설비 ID가 중복되었습니다.")
 
     def search(self, query=""):
         items = tuple(e.item for e in self.versions.items)
@@ -99,12 +100,12 @@ def release_note_rows(data, family_id, item_ids=None):
 
 
 def item_data_from_source(versions, source):
-    """A와 같은 최신 분석 관측일만 선택한다. HPA의 새 날짜로 일반 관측을 밀어내지 않는다."""
+    """대시보드와 같은 설비별 최신 관측을 쓴다 (QA Q-01). 표시 기준일은 최신 분석 관측일이다."""
     if not source.dates:
         return ItemManagerData(versions, observation_label=source.source_label + " · 관측 기준일 없음",
                                risk_rules=tuple(getattr(getattr(source, "assessor", None), "rules", ())))
     day = (source.analysis_dates or source.dates)[-1]
-    return ItemManagerData(versions, tuple(r for r in source.records if r.base_date == day),
+    return ItemManagerData(versions, source.snapshot_records(day),
                            day, True, source.source_label, tuple(getattr(getattr(source, "assessor", None), "rules", ())))
 
 

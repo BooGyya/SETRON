@@ -1,7 +1,7 @@
 """6번 목록/상세: 정확한 전달 범위·검색/페이지·원문·전체 판정·복귀·무효화."""
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -102,12 +102,24 @@ def test_filters_are_literal_case_insensitive_and_never_expand_ids(source):
         filtered_tiles(data, (999,))
 
 
-def test_missing_same_day_record_is_not_filled_from_history(source):
+def test_missing_same_day_record_uses_last_earlier_observation(source):
+    """QA Q-01 (11-09 결정): 기준일에 관측되지 않은 설비는 기준일 이전 마지막 관측으로 보여 준다."""
     state = QueryState(source.catalog)
     snapshot = source.snapshot(state.apply())
-    source.records = tuple(replace(record, base_date=date(2026, 9, 21)) if record.equipment_id == 1 else record
+    earlier = date(2026, 9, 21)
+    source.records = tuple(replace(record, base_date=earlier) if record.equipment_id == 1 else record
                            for record in source.records)
-    with pytest.raises(ValueError, match="같은 기준일"):
+    data = equipment_data(snapshot, source)
+    detail = next(d for d in data.details if d.record.equipment_id == 1)
+    assert detail.record.base_date == earlier
+
+
+def test_observation_after_base_date_is_never_used(source):
+    state = QueryState(source.catalog)
+    snapshot = source.snapshot(state.apply())
+    source.records = tuple(replace(record, base_date=snapshot.base_date + timedelta(days=1))
+                           if record.equipment_id == 1 else record for record in source.records)
+    with pytest.raises(ValueError, match="기준일까지"):
         equipment_data(snapshot, source)
 
 

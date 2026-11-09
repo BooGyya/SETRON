@@ -220,9 +220,16 @@ def test_summarize_by_date_uses_only_records_of_each_date():
     assert result[1].upgrade_needed == 0
 
 
-def test_summarize_rejects_mixed_dates():
-    with pytest.raises(ValueError, match="한 기준 날짜"):
-        summarize([mixed_o2_below_o3_met(1, DAY1), mixed_o2_below_o3_met(2, DAY2)], FAMILIES, TARGETS)
+def test_summarize_accepts_latest_observation_per_equipment_across_dates():
+    """QA Q-01: 설비별 최신 관측은 날짜가 섞일 수 있다. 집계 기준일은 가장 늦은 관측일."""
+    result = summarize([mixed_o2_below_o3_met(1, DAY1), mixed_o2_below_o3_met(2, DAY2)], FAMILIES, TARGETS)
+
+    assert result.equipment_count == 2 and result.base_date == max(DAY1, DAY2)
+
+
+def test_summarize_rejects_same_equipment_from_two_dates():
+    with pytest.raises(ValueError, match="두 번"):
+        summarize([mixed_o2_below_o3_met(1, DAY1), mixed_o2_below_o3_met(1, DAY2)], FAMILIES, TARGETS)
 
 
 def test_summarize_rejects_duplicated_equipment():
