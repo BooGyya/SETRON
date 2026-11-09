@@ -10,6 +10,14 @@ from setron.ui.query_state import VersionFilter
 from setron.ui.theme import SECONDARY, font
 
 
+def choice_caption(value):
+    """원문은 합치지 않되, 앞뒤 공백 때문에 같은 글자로 보이는 버전을 구분해 보여 준다 (QA R-05)."""
+    if value == value.strip():
+        return value
+    places = [name for name, present in (("앞", value != value.lstrip()), ("끝", value != value.rstrip())) if present]
+    return f"{value.strip()}  ({'·'.join(places)} 공백 포함 원문)"
+
+
 class VersionChoice(QCheckBox):
     """긴 원문도 줄바꿈하며 체크박스의 Space·포커스·접근성 역할을 유지한다."""
 
@@ -81,7 +89,7 @@ class VersionFilterDialog(QDialog):
         extra = () if original is None else (*original.versions, *((None,) if original.include_missing else ()))
         values = tuple(dict.fromkeys((*self.options, *extra)))
         for value in values:
-            control = VersionChoice("버전 미등록 포함" if value is None else value)
+            control = VersionChoice("버전 미등록 포함" if value is None else choice_caption(value))
             control.setChecked(original is None or (original.include_missing if value is None else value in original.versions))
             if value not in self.options:
                 control.setToolTip(control.toolTip() + " · 현재 관측 자료에 없음")

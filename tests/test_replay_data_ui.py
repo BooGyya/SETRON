@@ -27,17 +27,53 @@ def with_records(source, records):
     return result
 
 
-def test_only_actual_stored_dates_are_sorted_in_period_without_neighbor_copy():
+def test_frames_are_actual_stored_dates_and_carry_latest_observation_like_dashboard():
+    """시점은 실제 저장 날짜만. 그날 없는 설비는 이전 마지막 관측(실제 관측일 유지)으로 센다 (QA R-01)."""
     source = demo_dashboard_source()
     value = load_replay(source, request(source, start=date(2026, 6, 1), end=date(2026, 8, 31)))
     assert [f.day for f in value.frames] == [date(2026, m, 21) for m in (6, 7, 8)]
     assert value.can_replay
     for frame in value.frames:
-        assert all(t.observation_date == frame.day for t in frame.tiles)
-        assert all(r.base_date == frame.day for r in frame.snapshot.selected_records)
-    assert len(value.frames[1].tiles) < len(value.frames[0].tiles)  # 7월의 관측 공백은 채우지 않는다.
+        assert all(t.observation_date <= frame.day for t in frame.tiles)
+        assert all(r.base_date <= frame.day for r in frame.snapshot.selected_records)
+        assert frame.observed == sum(r.base_date == frame.day for r in frame.snapshot.selected_records if not r.is_hpa)
+    july = value.frames[1]
+    # 7월에 저장되지 않은 설비가 사라지지 않고 6월 관측으로 이어진다.
+    assert july.carried > 0 and len(july.tiles) >= len(value.frames[0].tiles)
+    assert any(t.observation_date == date(2026, 6, 21) for t in july.tiles)
     empty = load_replay(source, request(source, start=date(2025, 1, 1), end=date(2025, 12, 31)))
     assert empty.frames == () and not empty.can_replay
+
+
+def test_partially_saved_last_date_matches_dashboard_instead_of_dropping_to_one_equipment():
+    """한 설비만 저장한 날짜도 대시보드와 같은 달성률·대수가 나온다 (QA R-01 재현: 11-01에 1대만 저장)."""
+    source = demo_dashboard_source()
+    last = next(r for r in source.records if r.base_date == source.dates[-1] and not r.is_hpa and r.pms)
+    partial_day = date(2026, 11, 1)
+    source = with_records(source, (*source.records, replace(last, base_date=partial_day)))
+    value = load_replay(source, request(source))
+    frame = value.frames[-1]
+    assert frame.day == partial_day and frame.observed == 1 and frame.carried > 0
+    query = request(source).query
+    dashboard = source.snapshot(replace(query, selection=replace(query.selection, as_of=partial_day)))
+    assert frame.snapshot.summary.equipment_count == dashboard.summary.equipment_count
+    assert frame.snapshot.summary.rate == dashboard.summary.rate is not None
+    assert (frame.snapshot.summary.compliant, frame.snapshot.summary.below) == (dashboard.summary.compliant,
+                                                                               dashboard.summary.below)
+
+
+def test_version_options_sort_ignoring_case_but_keep_raw_spaces_separate():
+    source = demo_dashboard_source()
+    day = source.dates[-1]
+    targets = [r for r in source.records if r.base_date == day and not r.is_hpa and r.pms][:2]
+    renamed = {targets[0].equipment_id: "V1.0.1", targets[1].equipment_id: "v1.0.1 "}  # 대문자 · 끝 공백 원문
+    records = tuple(replace(r, pms=(replace(r.pms[0], version_raw=renamed[r.equipment_id]), *r.pms[1:]))
+                    if r.base_date == day and r.equipment_id in renamed else r for r in source.records)
+    value = load_replay(with_records(source, records), request(source))
+    plain = [v for v in value.options if v is not None]
+    assert plain == sorted(plain, key=lambda v: (v.strip().casefold(), v))  # 대문자가 맨 위로 몰리지 않는다
+    assert {"V1.0.1", "v1.0.1", "v1.0.1 "} <= set(plain)  # 원문은 합치지 않는다
+    assert plain.index("v1.0.1") < plain.index("v1.0.1 ") and abs(plain.index("V1.0.1") - plain.index("v1.0.1")) <= 2
 
 
 def test_single_actual_date_can_be_viewed_but_cannot_play():
@@ -99,14 +135,18 @@ def test_zero_matching_records_keep_real_dates_without_inventing_rate_or_equipme
     assert all(not any(not r.is_hpa for r in f.snapshot.selected_records) for f in value.frames)
 
 
-def test_hpa_from_another_date_never_appears_in_historical_frame():
+def test_later_hpa_never_appears_in_earlier_frame_and_earlier_hpa_carries_like_dashboard():
     source = demo_dashboard_source()
-    source = with_records(source, tuple(r for r in source.records if not r.is_hpa or r.base_date == source.dates[0]))
-    value = load_replay(source, request(source))
+    early = with_records(source, tuple(r for r in source.records if not r.is_hpa or r.base_date == source.dates[0]))
+    value = load_replay(early, request(early))
     assert value.frames[0].snapshot.summary.hpa_excluded == 3
-    assert value.frames[-1].snapshot.summary.hpa_excluded == 0
+    assert value.frames[-1].snapshot.summary.hpa_excluded == 3  # 대시보드처럼 마지막 관측을 이어받아 제외 대수로 센다
     assert not any(t.goal.value.startswith("HPA") for f in value.frames for t in f.tiles)
     assert not value.frames[-1].snapshot.hpa_lookup_records
+    late = with_records(source, tuple(r for r in source.records if not r.is_hpa or r.base_date == source.dates[-1]))
+    value = load_replay(late, request(late))
+    assert value.frames[0].snapshot.summary.hpa_excluded == 0  # 나중에 저장된 HPA를 과거 시점에 넣지 않는다
+    assert not value.frames[0].snapshot.hpa_lookup_records
 
 
 def test_loaded_frames_and_detail_are_frozen_against_later_target_or_policy_changes():

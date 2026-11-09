@@ -9,14 +9,18 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from setron.features.version.groups import Slot, VersionGroups
 from setron.ui.app import create_window
 from setron.ui.dashboard_demo import demo_dashboard_source
-from setron.ui.heatmap_data import GoalState
+from setron.features.risk.schemas import RiskStatus
+from setron.ui.heatmap import tile_style
+from setron.ui.heatmap_data import GoalState, Tier
 from setron.ui.query_state import QuerySelection, VersionFilter
 from setron.ui.replay_data import load_replay
-from setron.ui.replay_widgets import ReplayChart
+from setron.ui.replay_widgets import CURRENT_MARKER, CURRENT_SUFFIX, FUTURE_SUFFIX, ReplayChart
 from setron.ui.replay_page import ReplayPage
 from setron.ui.theme import ASSETS, svg_size
+from setron.ui.version_filter_dialog import choice_caption
 from test_ui_import_ver5 import own, until  # noqa: F401
 
 
@@ -38,7 +42,12 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert "2026-05-21" in page.context.text() and "목표 N" in page.context.text()
     assert "기준일 최신" not in page.context.text()
     assert page.heatmap.visible_ids and len(page.heatmap.group_cards) == 9
-    assert all(t.data.observation_date == page.frame.day for t in page.heatmap.tile_occurrences)
+    assert all(t.data.observation_date <= page.frame.day for t in page.heatmap.tile_occurrences)
+    # R-02: 범례는 타일과 같은 5단계 색 + 위험 후보 테두리
+    legend = [item.accessibleName() for item in page.legend_items]
+    assert legend == ["범례 N+1 이상", "범례 N 달성", "범례 N-1", "범례 N-2 이하", "범례 비교 불가 · HPA",
+                      "범례 위험 후보 (빨간 테두리)"]
+    assert page.observation_note.text().startswith("이날 저장 ")
     assert page.heatmap_title.text() == "선택 시점(2026-10-21)의 설비 Heatmap"
 
 
@@ -310,10 +319,112 @@ def test_chart_breaks_lines_at_unknown_dates_and_clear_removes_previous_values(o
     chart = own(ReplayChart())
     chart.show_data(data, {"c3"})
     assert chart.values["c3"][2] is None
-    assert len(chart.chart().series()) == 2
-    assert [[p.x() for p in series.points()] for series in chart.chart().series()] == [[0, 1], [3, 4, 5]]
+    lines = [s for s in chart.chart().series() if s.name() == "C3"]
+    assert [[p.x() for p in series.points()] for series in lines] == [[0, 1], [3, 4, 5]]
+    assert not any(s.name().endswith(FUTURE_SUFFIX) for s in chart.chart().series())  # 기본은 마지막 날짜가 현재
+    # 판단 불가인 날짜가 현재면 현재 점을 0%로 찍지 않는다.
+    chart.show_data(data, {"c3"}, current=2)
+    assert not any(s.name().endswith(CURRENT_SUFFIX) for s in chart.chart().series())
     chart.clear()
-    assert chart.values == {} and chart.accessibleDescription() == ""
+    assert chart.values == {} and chart.accessibleDescription() == "" and chart.current is None
+
+
+def chart_parts(page, label):
+    series = page.chart.chart().series()
+    marker = next(s for s in series if s.name() == CURRENT_MARKER)
+    past = [p.x() for s in series if s.name() == label for p in s.points()]
+    future = [p.x() for s in series if s.name() == label + FUTURE_SUFFIX for p in s.points()]
+    dot = [p.x() for s in series if s.name() == label + CURRENT_SUFFIX for p in s.points()]
+    return {p.x() for p in marker.points()}, past, future, dot
+
+
+def test_chart_moves_with_playback_solid_until_current_and_faded_after(own):
+    page = replay_page(own)
+    label = next(g.label for g in page.data.source.catalog.groups if g.key == "c3")
+    marker, past, future, dot = chart_parts(page, label)
+    assert marker == {5} and max(past) == 5 and future == [] and dot == [5]
+    assert page.play() and page.index == 0
+    marker, past, future, dot = chart_parts(page, label)
+    assert marker == {0} and past == [0] and future == [0, 1, 2, 3, 4, 5] and dot == [0]
+    page.advance()
+    page.advance()
+    marker, past, future, dot = chart_parts(page, label)
+    assert page.index == 2 and marker == {2} and past == [0, 1, 2] and future == [2, 3, 4, 5] and dot == [2]
+    assert page.chart.current == 2 and page.chart.accessibleDescription().startswith(f"현재 {page.frame.day}")
+
+
+def test_date_chip_and_legend_keep_chart_at_selected_date(own):
+    page = replay_page(own)
+    page.date_buttons[1].click()
+    assert chart_parts(page, "C3")[0] == {1}
+    page.legend_buttons["c4"].click()  # 범례를 바꿔도 현재 날짜 위치는 그대로
+    assert page.chart.current == 1 and chart_parts(page, "C3")[0] == {1}
+    assert not any(s.name().startswith("C4") for s in page.chart.chart().series())
+
+
+def test_target_count_includes_saved_n_groups(own):
+    """R-03: 개별 목표 N이 없고 저장 N 그룹만 있어도 실제 판정 기준 수를 보인다."""
+    source = demo_dashboard_source()
+    key, release = next(iter(sorted(source.targets.items())))
+    source.targets.clear()
+    source.saved_groups = {key: VersionGroups({Slot.N: frozenset({release})})}
+    page = own(ReplayPage(source))
+    assert page.apply_query()
+    until(lambda: not page.busy)
+    assert "목표 N 1개" in page.context.text()
+
+
+def test_empty_period_clears_previous_achievement_tooltip(own):
+    """R-06: 빈 기간으로 다시 조회하면 이전 결과의 대수 설명이 남지 않는다."""
+    page = replay_page(own)
+    assert "분석" in page.achievement.toolTip()
+    page.start.setText("2025-01-01")
+    page.end.setText("2025-01-31")
+    assert page.apply_query()
+    until(lambda: not page.busy)
+    assert page.data.frames == () and page.achievement.toolTip() == "" and page.observation_note.text() == ""
+
+
+def test_heatmap_reuses_tiles_when_layout_is_same_and_rebuilds_only_changed_tile(own):
+    """R-04: 같은 배치면 타일 위젯을 다시 만들지 않고, 보이는 내용이 바뀐 타일만 교체한다."""
+    page = replay_page(own)
+    heatmap, data, frame = page.heatmap, page.data, page.frame
+    before = list(heatmap.tile_occurrences)
+    heatmap.show_frame(data, frame)
+    assert heatmap.rebuilt_tiles == 0 and heatmap.tile_occurrences == before
+    target = frame.tiles[0]
+    changed_tier = next(t for t in Tier if t is not target.tier)
+    changed = replace(frame, tiles=(replace(target, tier=changed_tier), *frame.tiles[1:]))
+    heatmap.show_frame(data, changed)
+    occurrences = sum(control.data.equipment_id == target.equipment_id for control in before)
+    # 색만 바뀌면 위젯은 그대로 두고 스타일·글자만 바꾼다.
+    assert heatmap.rebuilt_tiles == 0 and heatmap.restyled_tiles == occurrences
+    assert heatmap.tile_occurrences == before
+    restyled = [c for c in heatmap.tile_occurrences if c.data.equipment_id == target.equipment_id]
+    assert all(c.data.tier is changed_tier and c.style_text == tile_style(c.data) for c in restyled)
+    # '위험' 표시처럼 타일 모양이 바뀌면 그 타일만 새로 만든다.
+    flipped = RiskStatus.NO_RISK if target.risk is RiskStatus.RISK else RiskStatus.RISK
+    risky = replace(frame, tiles=(replace(target, risk=flipped), *frame.tiles[1:]))
+    heatmap.show_frame(data, risky)
+    if target.goal is not GoalState.EXCLUDED:
+        assert heatmap.rebuilt_tiles == occurrences
+        assert sum(a is b for a, b in zip(before, heatmap.tile_occurrences)) == len(before) - occurrences
+    # 설비가 하나 빠지면 그 설비가 있던 설비군 카드만 새로 만들고 나머지 카드는 그대로 쓴다.
+    heatmap.show_frame(data, frame)
+    cards = list(heatmap.group_cards)
+    dropped = next(t for t in frame.tiles if t.goal is not GoalState.EXCLUDED and not t.multi_sw)
+    heatmap.show_frame(data, replace(frame, tiles=tuple(t for t in frame.tiles if t is not dropped)))
+    kept = sum(a is b for a, b in zip(cards, heatmap.group_cards))
+    assert len(heatmap.group_cards) == len(cards) and kept == len(cards) - 1
+    assert dropped.equipment_id not in heatmap.visible_ids
+    assert 0 < heatmap.rebuilt_tiles < len(before)
+
+
+def test_version_popup_marks_raw_versions_with_spaces():
+    """R-05: 끝 공백 원문은 합치지 않되 같은 글자로 보이지 않게 표시한다."""
+    assert choice_caption("v3.53_1") == "v3.53_1"
+    assert choice_caption("v3.53_1 ") == "v3.53_1  (끝 공백 포함 원문)"
+    assert choice_caption(" v3.53_1 ") == "v3.53_1  (앞·끝 공백 포함 원문)"
 
 
 def test_management_save_blocks_replay_and_completion_requires_new_read(own):
