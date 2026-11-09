@@ -9,6 +9,8 @@ from setron.features.export.schemas import StatusReport, TargetRow
 from setron.features.priority.service import prioritize_from_risks
 from setron.features.risk.schemas import EquipmentRisk, RiskStatus, RiskSummary
 from setron.features.storage.inputs import identifier, require, required_text
+from setron.features.targets.groups import with_saved_groups
+from setron.features.version.groups import VersionGroups, target_label
 
 from .schemas import ManagementResult
 
@@ -33,7 +35,8 @@ class ReportFilter:
     end_date: date | None = None
 
 
-def build_management_status_report(result, base_date, *, group_names, family_names, scope=(), filters=None):
+def build_management_status_report(result, base_date, *, group_names, family_names, scope=(), filters=None,
+                                   saved_groups=None):
     """전체 저장 결과에서 출력 범위를 먼저 적용한 뒤 표·차트·위험·노후도를 산출한다.
 
     이전 호출의 단일 사업장/Site·라인/Line 표기는 정확한 원문 필터로 해석한다.
@@ -41,19 +44,27 @@ def build_management_status_report(result, base_date, *, group_names, family_nam
     """
     require(isinstance(result, ManagementResult), "ManagementResult 형식이 필요합니다.")
     return build_status_report_from_refresh(result.refresh, result.thresholds, base_date,
-        group_names=group_names, family_names=family_names, scope=scope, filters=filters)
+        group_names=group_names, family_names=family_names, scope=scope, filters=filters, saved_groups=saved_groups)
 
 
-def build_status_report_from_refresh(refresh, thresholds, base_date, *, group_names, family_names, scope=(), filters=None):
-    """같은 관측 시점의 재판정·기간 설정을 출력 범위로 좁힌다."""
+def build_status_report_from_refresh(refresh, thresholds, base_date, *, group_names, family_names, scope=(), filters=None,
+                                     saved_groups=None):
+    """같은 관측 시점의 재판정·기간 설정을 출력 범위로 좁힌다.
+
+    saved_groups: 저장된 N 그룹 (모델·계열 → VersionGroups). 화면과 같이 그룹이 있는 모델·계열은
+    단일 목표 대신 그룹으로 판정·추이·우선순위·목표 N 표기를 다시 계산한다 (QA Q-10).
+    """
     require(type(base_date) is date, "출력 기준 날짜가 필요합니다.")
     selected = _resolve_filter(filters, scope)
     _validate_filter(selected)
     require(_in_dates(base_date, selected), "출력 기준일이 선택한 날짜 범위 밖입니다.")
     observed = next((day for day in refresh.dates if day.base_date == base_date), None)
     require(observed is not None, "선택한 기준일의 기록이 없습니다.")
+    saved_groups = dict(saved_groups or {})
+    require(all(isinstance(value, VersionGroups) for value in saved_groups.values()), "저장된 N 그룹 형식이 필요합니다.")
     targets = {(target.model_id, target.family_id): target.selected_release_id
                for target in refresh.targets if target.valid and target.selected_release_id is not None}
+    targets = with_saved_groups(targets, saved_groups)
     summaries, records_by_date = {}, {}
     for day in refresh.dates:
         if not _in_dates(day.base_date, selected):
@@ -64,7 +75,8 @@ def build_status_report_from_refresh(refresh, thresholds, base_date, *, group_na
                     "범위별 HPA 제외 대수를 확인할 원본 관측이 없습니다. 최신 자료를 다시 조회해 주세요.")
             complete_records = tuple(equipment.record for equipment in day.summary.equipment)
         records = tuple(record for value in complete_records if (record := _filter_record(value, selected)) is not None)
-        summary = (day.summary if records == tuple(complete_records) else
+        # 재판정 결과(day.summary)는 단일 목표로 센 값이다. N 그룹이 있으면 같은 관측을 그룹으로 다시 센다.
+        summary = (day.summary if records == tuple(complete_records) and not saved_groups else
                    replace(summarize(records, refresh.families, targets), base_date=day.base_date))
         if not getattr(day, "records", ()) and not _has_filter(selected):
             summary = replace(summary, hpa_excluded=day.summary.hpa_excluded)
@@ -78,10 +90,14 @@ def build_status_report_from_refresh(refresh, thresholds, base_date, *, group_na
         if (target.model_id, target.family_id) not in pairs:
             continue
         family = refresh.families.get(target.family_id)
-        release = family.get(target.selected_release_id) if family is not None else None
+        group = saved_groups.get((target.model_id, target.family_id))
+        if group is not None:
+            label = target_label(family, group)
+        else:
+            release = family.get(target.selected_release_id) if family is not None else None
+            label = release.version_raw if release else None
         rows.append(TargetRow(group_names.get(target.model_id, f"모델 {target.model_id}"),
-                              family_names.get(target.family_id, f"계열 {target.family_id}"),
-                              release.version_raw if release else None))
+                              family_names.get(target.family_id, f"계열 {target.family_id}"), label))
     ages = tuple(equipment_age(equipment.record, refresh.families, thresholds)
                  for equipment in summary.equipment)
     analysis_days = {day.base_date for day in refresh.dates

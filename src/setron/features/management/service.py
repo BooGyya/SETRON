@@ -323,6 +323,8 @@ class ManagementService:
 
         AI와 수정 이력은 생성하지 않는다. 릴리즈 대응의 재판정만 기존 refresh 경로로 수행한다.
         """
+        from setron.features.targets.groups import GroupStore
+
         from .report import build_status_report_from_refresh
 
         with self.storage.transaction() as tx:
@@ -332,8 +334,16 @@ class ManagementService:
             thresholds = self._thresholds(tx)
             groups = {r["group_id"]: r["group_name"] for r in self.rows.rows(tx, "equipment_group")}
             families = {r["family_id"]: r["family_name"] for r in self.rows.rows(tx, "version_family")}
+            # 화면(대시보드·히트맵)과 같은 기준: 저장된 N 그룹이 있으면 그 모델·계열은 그룹으로 판정한다 (QA Q-10).
+            store = GroupStore(self.storage)
+            saved = {}
+            for target in refresh.targets:
+                pair = (target.model_id, target.family_id)
+                stored = store.load_in(tx, pair)
+                if stored is not None:
+                    saved[pair] = stored.groups
             return build_status_report_from_refresh(refresh, thresholds, base_date,
-                group_names=groups, family_names=families, scope=scope, filters=filters)
+                group_names=groups, family_names=families, scope=scope, filters=filters, saved_groups=saved)
 
     @staticmethod
     def _table(table):
