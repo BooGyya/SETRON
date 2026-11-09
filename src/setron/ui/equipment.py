@@ -18,7 +18,6 @@ from setron.ui.dashboard import MetricCard
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings
-from setron.ui.target_data import target_map
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
 from setron.features.item.schemas import APPLICATION_LABELS
 from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
@@ -27,7 +26,8 @@ from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, TONES, f
 
 # 색은 히트맵과 같은 규칙(heatmap_data.compare_tone/version_tone): 초록 N 이상 · 노랑 N-1/확인 필요 ·
 # 빨강 N-2 이하(임시 기준) · 회색 분석 제외. 아래는 판정 요약 글자색만 정한다.
-TONE_INK = {"success": "#246b4a", "warning": "#b88000", "danger": "#c23345", "neutral": "#5e6b7a"}
+# 5단계 색의 "N+1 이상"(strong)이 빠져 있어 그 설비의 상세가 KeyError로 열리지 않았다 (QA Q-02 확인 중 발견).
+TONE_INK = {"strong": "#14532d", "success": "#246b4a", "warning": "#b88000", "danger": "#c23345", "neutral": "#5e6b7a"}
 
 
 def icon_label(asset):
@@ -697,7 +697,7 @@ class EquipmentPage(QWidget):
                              + self.snapshot.source_label)
         ids = set(self.scope_ids)
         records = tuple(r for r in self.snapshot.selected_records if r.equipment_id in ids)
-        summary = summarize(records, self.source.families, target_map(self.snapshot.target_values))
+        summary = summarize(records, self.source.families, self.snapshot.effective_targets)
         tiles = tuple(d.selected for d in self.data.details if d.selected.equipment_id in ids)
         candidates = sum(t.risk is RiskStatus.RISK for t in tiles)
         unknown = sum(t.risk is RiskStatus.UNKNOWN and t.goal is not GoalState.EXCLUDED for t in tiles)
