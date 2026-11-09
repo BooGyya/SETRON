@@ -14,12 +14,12 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
-from setron.features.version.schemas import CompareStatus
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource, family_name, model_name
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env, data_exporter_from_env
+from setron.ui.heatmap_data import below_evidence_lines
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.equipment import EquipmentPage
 from setron.ui.equipment_drawer import EquipmentDrawer
@@ -535,16 +535,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             return
         if equipment.open_detail(request, origin="heatmap"):
             detail = next(d for d in equipment.data.details if d.record.equipment_id == request.equipment_id)
-            below_evidence = []
-            if heatmap.below_filter.isChecked():
-                selected = next(s for s in heatmap.snapshot.summary.equipment
-                                if s.record.equipment_id == request.equipment_id)
-                for family in selected.families:
-                    for observation in family.pms:
-                        pm, comparison = observation.pm, observation.comparison
-                        if comparison.status is CompareStatus.BELOW:
-                            below_evidence.append(f"{family_name(source, pm.family_id)} · {pm.pm_name or '공통 SW'} · "
-                                                  f"설치 {pm.version_raw} → 목표 {comparison.target.version_raw} · {comparison.label}")
+            # 미달 근거 문장은 화면 자료 모듈이 만든다 (앱 조립 파일은 업무 코드를 직접 부르지 않음)
+            below_evidence = (below_evidence_lines(heatmap.snapshot, request.equipment_id, source)
+                              if heatmap.below_filter.isChecked() else [])
             drawer.open_detail(request, detail, equipment.detail_model.rows, equipment.evidence_values,
                                equipment.snapshot.source_label, below_evidence=below_evidence,
                                return_focus=heatmap.tile_buttons.get(request.equipment_id),

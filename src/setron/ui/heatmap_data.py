@@ -229,3 +229,22 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                                     Tier.UNKNOWN if goal in (GoalState.EXCLUDED, GoalState.UNKNOWN)
                                     else worst_tier(f.tier for f in items), assessment.findings if assessment else ()))
     return tuple(result)
+
+
+def below_evidence_lines(snapshot, equipment_id: int, source) -> list[str]:
+    """히트맵 '미달 설비'에서 연 설비 상세에 보일 미달 근거 (계열 · PM · 설치 → 목표 · 단계).
+
+    param
+    - snapshot: 히트맵이 그린 대시보드 스냅샷.
+    - equipment_id: 상세를 연 설비.
+    - source: 계열 이름을 찾을 자료 출처.
+    """
+    selected = next(s for s in snapshot.summary.equipment if s.record.equipment_id == equipment_id)
+    lines = []
+    for family in selected.families:
+        for observation in family.pms:
+            pm, comparison = observation.pm, observation.comparison
+            if comparison.status is CompareStatus.BELOW:
+                lines.append(f"{family_name(source, pm.family_id)} · {pm.pm_name or '공통 SW'} · "
+                             f"설치 {pm.version_raw} → 목표 {comparison.target.version_raw} · {comparison.label}")
+    return lines
