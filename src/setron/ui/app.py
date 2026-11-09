@@ -985,6 +985,19 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     return window
 
 
+def startup_warning(db_problem: str | None, ai_problem: str | None) -> str:
+    """시작할 때 실제 자료·실제 AI를 쓰지 못한 이유를 경고 한 줄로 만든다 (QA Q-03).
+
+    DB를 읽지 못하면 합성 예시 자료로 시작하므로 화면의 숫자가 실제 설비 현황이 아니라고 먼저 밝힌다.
+    """
+    parts = []
+    if db_problem:
+        parts.append("실제 자료 아님 · 화면의 숫자는 합성 예시입니다. " + db_problem)
+    if ai_problem:
+        parts.append("AI 예제 응답 · " + ai_problem)
+    return " / ".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--auto-close-ms", type=int, default=0, help="실행 검증용 자동 종료 시간")
@@ -1010,6 +1023,11 @@ def main(argv: list[str] | None = None) -> int:
                            chat_enabled=True)
     if problem or ai.problem:
         window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
+    # 공통 안내 칸은 대시보드·히트맵 등에서 숨겨지므로, 실제 자료가 아니라는 경고는 따로 계속 보인다 (QA Q-03).
+    # DB 설정이 아예 없어도(예: 실행 파일 옆 setron.env 없음) 합성 예시로 시작하므로 함께 알린다.
+    db_problem = problem or (None if source is not None else
+                             "DB 접속 설정(SETRON_DB_*)이 없어 합성 예시로 시작했습니다. setron.env를 확인하세요.")
+    window.set_data_warning(startup_warning(db_problem, ai.problem))
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
