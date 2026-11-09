@@ -15,7 +15,7 @@ from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QRe
 from PySide6.QtGui import QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QSizePolicy,
-    QScrollArea, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QTableView, QVBoxLayout, QWidget,
+    QMenu, QScrollArea, QStackedWidget, QStyle, QStyledItemDelegate, QTabBar, QTableView, QVBoxLayout, QWidget,
 )
 
 from setron.features.ai.schemas import ExtractKind
@@ -313,6 +313,8 @@ class ImportPage(QWidget):
     """
 
     saved = Signal(object)  # SaveReceipt
+    saved_scope_requested = Signal(object, str, str)
+    saved_history_requested = Signal()
     requery_requested = Signal()
     navigate_requested = Signal(str)
     date_selected = Signal(object)
@@ -423,10 +425,11 @@ class ImportPage(QWidget):
         self.saved_caption = label("", 13, medium=True, color="#1f8c59", wrap=True)
         self.saved_caption.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         banner.addWidget(self.saved_caption, 1)
+        self.saved_actions = {}
         for title, route in (("히트맵에서 보기", "heatmap"), ("대시보드에서 보기", "dashboard")):
             action = button(title)
-            action.setToolTip("화면으로 이동합니다. 저장 자료를 조회하려면 조회 적용을 눌러 주세요.")
-            action.clicked.connect(lambda checked=False, key=route: self.navigate_requested.emit(key))
+            self.saved_actions[route] = action
+            action.clicked.connect(lambda checked=False, key=route: self.open_saved_result(key))
             banner.addWidget(action)
         self.saved_banner.hide()
         body.addWidget(self.saved_banner)
@@ -653,7 +656,7 @@ class ImportPage(QWidget):
         self.save_button.clicked.connect(self.save)
         self.candidate_button.clicked.connect(self.apply_model_candidates)
         self.revalidate_button.clicked.connect(self.revalidate)
-        self.requery_button.clicked.connect(self.requery_requested.emit)
+        self.requery_button.clicked.connect(lambda: self.open_saved_result())
         self.workbook_combo.currentIndexChanged.connect(self._fill_sheets)
         self.kind_combo.currentIndexChanged.connect(self._kind_changed)
         self._paint_steps(self.status.tone)
@@ -1883,6 +1886,29 @@ class ImportPage(QWidget):
         saver, captured = self.saver, deepcopy(request)
         self.save_request.start(BackgroundRead(lambda: saver.save(captured)))
 
+    def open_saved_result(self, route=None):
+        if self.receipt is None or self.draft is None:
+            return
+        if not isinstance(self.saver, DatabaseImportSaver):
+            if route is None:
+                self.requery_requested.emit()
+            else:
+                self.navigate_requested.emit(route)
+        elif self.draft.kind is ExtractKind.RELEASE_NOTE:
+            self.saved_history_requested.emit()
+        else:
+            route = route or "dashboard"
+            scopes = sorted({(parse_date(row.value("base_date")), row.value("site"))
+                             for row in self.draft.active_rows}, reverse=True)
+            if len(scopes) == 1:
+                self.saved_scope_requested.emit(*scopes[0], route)
+                return
+            menu = QMenu(self)
+            for day, site in scopes:
+                menu.addAction(f"{day} · {site}", lambda checked=False, d=day, s=site: self.saved_scope_requested.emit(d, s, route))
+            menu.exec(self.requery_button.mapToGlobal(self.requery_button.rect().bottomLeft()))
+            menu.deleteLater()
+
     def _save_completed(self, receipt, error):
         if error is None and not isinstance(receipt, SaveReceipt):
             error = DatabaseCommitUnknownError("저장 결과 형식을 확인할 수 없습니다. 중복 저장하지 말고 저장 기록을 확인해 주세요.")
@@ -1901,9 +1927,20 @@ class ImportPage(QWidget):
         else:
             self.state, self.receipt = "saved", receipt
             self._set_status("저장 완료", "success", f"{receipt.target_label} · 입력 작업 {receipt.batch_id}")
+            persisted = isinstance(self.saver, DatabaseImportSaver)
+            release = persisted and self.draft.kind is ExtractKind.RELEASE_NOTE
+            action = "대시보드로 이동"
+            if persisted:
+                action = "저장한 릴리즈 이력 보기" if release else "저장한 현황 보기"
+            self.saved_actions["heatmap"].setVisible(not release)
+            self.saved_actions["dashboard"].setText(action if release else "대시보드에서 보기")
+            self.requery_button.setText(action)
+            self.requery_button.setToolTip(action)
+            next_step = (f"‘{action}’에서 저장 결과를 확인하세요." if persisted else
+                         "메모리 저장 완료 · 대시보드의 조회 적용에는 DB에 저장한 자료만 반영됩니다.")
             self.result_label.setText(
                 f"입력 작업 {receipt.batch_id} · {receipt.row_count}행 · {receipt.saved_at:%Y-%m-%d %H:%M:%S}\n"
-                "조회 화면은 자동으로 바뀌지 않습니다. 저장한 자료를 반영하려면 대시보드에서 ‘조회 적용’을 다시 눌러 주세요.\n"
+                f"{next_step}\n"
                 "다른 시트를 가져오려면 시트를 다시 읽어 주세요.")
             self.saved.emit(receipt)
         if self.selected_row_id is not None:

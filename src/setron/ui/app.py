@@ -11,9 +11,10 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QPoint, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
+from setron.features.version.schemas import CompareStatus
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource, family_name, model_name
@@ -516,13 +517,37 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if equipment.open_scope(request, origin="dashboard"):
             window.navigate("equipment")
 
+    def open_below_heatmap():
+        if dashboard.snapshot is not heatmap.snapshot or not heatmap.show_below():
+            return
+        window.navigate("heatmap")
+        # 공통 조회 조건은 유지하고 미달 설비가 있는 영역으로 이동한다.
+        def reveal_results():
+            if window.route == "heatmap" and heatmap.below_filter.isChecked():
+                top = heatmap.mapTo(window.scroll.widget(), QPoint()).y()
+                window.scroll.verticalScrollBar().setValue(max(0, top - 12))
+        QTimer.singleShot(0, reveal_results)
+
+    dashboard.below_requested.connect(open_below_heatmap)
+
     def open_detail(request):
         if window.route != "heatmap":
             return
         if equipment.open_detail(request, origin="heatmap"):
             detail = next(d for d in equipment.data.details if d.record.equipment_id == request.equipment_id)
+            below_evidence = []
+            if heatmap.below_filter.isChecked():
+                selected = next(s for s in heatmap.snapshot.summary.equipment
+                                if s.record.equipment_id == request.equipment_id)
+                for family in selected.families:
+                    for observation in family.pms:
+                        pm, comparison = observation.pm, observation.comparison
+                        if comparison.status is CompareStatus.BELOW:
+                            below_evidence.append(f"{family_name(source, pm.family_id)} · {pm.pm_name or '공통 SW'} · "
+                                                  f"설치 {pm.version_raw} → 목표 {comparison.target.version_raw} · {comparison.label}")
             drawer.open_detail(request, detail, equipment.detail_model.rows, equipment.evidence_values,
-                               equipment.snapshot.source_label, return_focus=heatmap.tile_buttons.get(request.equipment_id),
+                               equipment.snapshot.source_label, below_evidence=below_evidence,
+                               return_focus=heatmap.tile_buttons.get(request.equipment_id),
                                edit_available=callable(getattr(management_gateway, "equipment_versions", None)))
 
     export_action = window.header.actions["export"]
@@ -740,6 +765,23 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.page_changed.connect(lambda key: ai.refresh() if key == "ai" else None)
     ai.navigate_requested.connect(window.navigate)
     importer.requery_requested.connect(lambda: window.navigate("dashboard"))
+
+    def show_import_result(day, site, route):
+        key = next((o.key for o in window.query_state.catalog.sites if o.label == site), None)
+        if key is None:
+            importer.result_label.setText(f"{site} 사업장 조회 조건을 불러오지 못했습니다. DB 연결을 확인해 주세요.")
+            return
+        window.query_panel.set_draft(QuerySelection(as_of=day, site_key=key))
+        window.navigate(route)
+        window.query_panel.apply_draft()
+
+    importer.saved_scope_requested.connect(show_import_result)
+
+    def show_import_history():
+        window.navigate("versions")
+        versions.select_tab(4)
+
+    importer.saved_history_requested.connect(show_import_history)
     importer.navigate_requested.connect(window.navigate)
     def show_saved_date(day):
         window.query_panel.set_draft(replace(window.query_state.draft, as_of=day))
@@ -921,7 +963,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             importer.result_label.setText(importer.result_label.text() +
                 f"\n수동 위험 지정 {len(unresolved)}건이 미확인으로 유지되었습니다 (지정 번호: {identifiers}). "
                 "대상 버전·Item과 적용 범위를 확인해 주세요. 위험이 해제된 상태가 아닙니다.")
-        window.notice.setText("DB 저장 완료 · 기존 조회 결과 갱신 필요 · 목표 N 선택은 유지했습니다.")
+        window.notice.setText(f"DB 저장 완료 · 입력 작업 {receipt.batch_id} · {receipt.row_count}행")
 
     importer.saved.connect(invalidate_saved_results)
     importer.saved.connect(lambda receipt: versions.record_import(
@@ -972,6 +1014,13 @@ def main(argv: list[str] | None = None) -> int:
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
     window.show()
+    if source is None or source.dates:
+        if source is not None:
+            window.query_panel.set_as_of(max(source.analysis_dates or source.dates))
+        QTimer.singleShot(0, window.query_panel.apply_draft)
+    else:
+        window.notice.setText("저장된 설비 현황이 없습니다. ‘데이터 가져오기’에서 첫 현황표를 저장해 주세요."
+                              + (f" · {ai.problem}" if ai.problem else ""))
     if args.auto_close_ms:
         QTimer.singleShot(args.auto_close_ms, window.close)
     return app.exec()

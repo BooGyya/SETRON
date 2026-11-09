@@ -7,7 +7,6 @@ from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource
 from setron.ui.heatmap_data import EquipmentTile, equipment_tiles, lookup_records, record_tiles
-from setron.ui.target_data import target_map
 
 
 @dataclass(frozen=True)
@@ -42,7 +41,7 @@ def equipment_data(snapshot: DashboardSnapshot, source: DashboardSource) -> Equi
     normal = tuple(current[eid] for eid in normal_ids)
     # 전체 판정은 같은 기준일/같은 호기의 모든 SW로 따로 계산한다. 선택 판정을 덮지 않는다.
     # 날짜가 다른 HPA는 공통 집계에 섞지 않고 원본 표시만 추가한다.
-    summary = summarize(normal, source.families, target_map(snapshot.target_values))
+    summary = summarize(normal, source.families, snapshot.effective_targets)
     whole = {t.equipment_id: t for t in record_tiles(normal + hpa, summary, source,
              hpa_locations=dict(snapshot.hpa_lookup_locations))}
     records = {r.equipment_id: r for r in normal + hpa}
@@ -69,7 +68,7 @@ def upgrade_priority(snapshot, source, records, thresholds):
     summary = RiskSummary(tuple(EquipmentRisk(r, risks.get(r.equipment_id, RiskStatus.UNKNOWN), ()) for r in records),
                           has_rules=bool(assessor is not None and assessor.rules))
     result = prioritize_from_risks(records, summary, source.families, thresholds, snapshot.base_date,
-                                   targets=target_map(snapshot.target_values))
+                                   targets=snapshot.effective_targets)
     return {entry.record.equipment_id: entry for entry in (*result.ranked, *result.needs_check)}
 
 

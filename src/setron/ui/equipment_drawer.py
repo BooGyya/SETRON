@@ -231,7 +231,7 @@ class EquipmentDrawer(QWidget):
         controls[(index + (1 if forward else -1)) % len(controls)].setFocus(Qt.FocusReason.TabFocusReason)
         return True
 
-    def open_detail(self, request, detail, rows, evidence, source, *, return_focus=None, edit_available=False):
+    def open_detail(self, request, detail, rows, evidence, source, *, return_focus=None, edit_available=False, below_evidence=()):
         self.closed.emit()  # 같은 패널 재선택 시 이전 비동기 편집 조회도 취소한다.
         self._clear_body()
         self.request, self.detail, self.return_focus = request, detail, return_focus
@@ -270,6 +270,8 @@ class EquipmentDrawer(QWidget):
         box.addLayout(verdict)
         note = ("SW 판정 대상 아님 · 안전 확정 아님" if record.is_hpa else
                 f"설비 전체 등록 SW 기준 · 선택 SW {detail.selected.goal.value}\n목표 충족과 위험 여부는 별도 판정")
+        if below_evidence:
+            note = "\n".join(("미달 판정 근거", *below_evidence))
         summary_note = label(note, 12, wrap=True, color=SECONDARY)
         ignore_width(summary_note)
         box.addWidget(summary_note)
