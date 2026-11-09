@@ -17,6 +17,8 @@ from setron.features.risk.schemas import (
     EquipmentRisk, FindingBasis, MappingStatus, RiskFinding, RiskRule, RiskStatus, RiskSummary, RuleType,
 )
 from setron.features.storage.validation import StorageValidationError
+from setron.features.targets.groups import setting_key
+from setron.features.version.groups import Slot, VersionGroups
 from setron.features.version.schemas import ReleaseVersion
 from setron.features.version.service import FamilyReleases
 
@@ -218,3 +220,39 @@ def test_status_report_ranks_priority_with_same_scope_risk_and_targets(observed_
     assert value.priority.hpa_excluded == 1 and value.priority.has_rules
     filtered = report(observed_result, filters=ReportFilter(site_names=("평택",)))
     assert [e.record.equipment_code for e in filtered.priority.ranked] == ["NORMAL-2"]
+
+
+def test_saved_n_groups_replace_single_target_in_status_report(observed_result):
+    """QA Q-10: 저장된 N 그룹이 있으면 현황 보고서도 화면처럼 그룹으로 판정·추이·우선순위·목표 표기를 계산한다."""
+    single = report(observed_result)
+    assert single.summary.by_family[0].compliant == 0          # 단일 목표 v2: 10-01의 v1 설비 2건은 미달
+
+    groups = {(1, 1): VersionGroups({Slot.N: frozenset({1})})}   # v1을 N 칸에 넣은 그룹
+    value = build_management_status_report(observed_result, date(2026, 10, 1), group_names=GROUPS,
+                                           family_names=FAMILIES, saved_groups=groups)
+
+    o2 = next(f for f in value.summary.by_family if f.family_id == 1)
+    assert o2.compliant == 2 and o2.below == 0                  # v1 = N → 적용 완료
+    assert all(point.by_family[0].below == 0 for point in value.trend)   # 추이도 같은 그룹 기준
+    rows = {(t.model_name, t.family_name): t.version_raw for t in value.targets}
+    assert rows[("O2", "O2 계열")] == "N 그룹 · N: v1"
+    assert rows[("C3", "C3 계열")] == "x1"                # 그룹이 없는 모델·계열은 기존 단일 목표 유지
+    assert all(e.steps_behind in (None, 0) for e in value.priority.ranked if e.record.equipment_code == "NORMAL-2")
+
+
+def test_current_report_reads_saved_n_groups_in_same_transaction(revision_storage):
+    """QA Q-10: 데이터 내보내기(현재 조회 현황)는 DB에 저장된 N 그룹을 같은 트랜잭션에서 읽어 반영한다."""
+    storage = revision_storage
+    service, snapshot, first, _ = service_for(storage)   # 단일 목표 v2, 설비 v1
+    before = service.current_report(snapshot.base_date)
+    assert before.summary.by_family[0].below == 1
+
+    groups = VersionGroups({Slot.N: frozenset({first})})
+    with storage.transaction() as tx:
+        tx.insert("app_setting", {"setting_key": setting_key((1, 1)), "setting_value": {
+            "schema": 1, "model_id": 1, "family_id": 1,
+            "history": [{"saved_at": "2026-11-09T10:00:00", "memo": "", "groups": groups.to_dict()}]}})
+    after = service.current_report(snapshot.base_date)
+
+    assert after.summary.by_family[0].compliant == 1 and after.summary.by_family[0].below == 0
+    assert after.targets[0].version_raw.startswith("N 그룹 · N: v1")
