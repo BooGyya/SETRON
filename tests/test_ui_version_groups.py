@@ -1,17 +1,19 @@
 """버전(N) 기준 입력: 줄마다 N 칸 선택, 기본 후보, 막힘/경고, 저장 이력·되돌리기, 저장 그룹으로 계산."""
 
 import os
+from datetime import date
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QLabel
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from setron.ui.app import create_window
 from setron.ui.group_data import SLOT_LABELS, TIER_LABELS, Slot, Tier
 from setron.ui.group_dialog import SLOT_CHOICES, VersionGroupDialog
+from setron.ui.query_state import QuerySelection
 from setron.ui.theme import install_theme
 
 PAIR = (101, 1001)  # 예시 자료 C3 · 계열 1001: v1.0.1(10011) · v1.0.2(10012, 기본 목표) · v1.0.3(10013)
@@ -38,7 +40,7 @@ def open_editor(window) -> VersionGroupDialog:
     QTest.qWait(20)
     dialog = window.group_dialog
     assert isinstance(dialog, VersionGroupDialog)
-    dialog.pair_combo.setCurrentIndex(next(i for i, p in enumerate(dialog.pairs) if p.key == PAIR))
+    dialog.pair_buttons[PAIR].click()
     return dialog
 
 
@@ -47,6 +49,8 @@ def tiers(dialog):
 
 
 def choose(dialog, release_id, slot):
+    if not dialog.details_button.isChecked():
+        dialog.details_button.click()
     dialog.slot_combos[release_id].setCurrentIndex(SLOT_CHOICES.index(slot))
 
 
@@ -59,9 +63,55 @@ def test_rows_follow_version_order_and_single_target_uses_same_tiers(window):
     assert "저장 이력이 없습니다" in dialog.history.itemAt(0).widget().text()
 
 
+def test_click_multiple_n_versions_and_keep_each_pair_draft_until_save(window):
+    window.query_panel.set_draft(QuerySelection(group_key="c3", as_of=date(2026, 5, 21)))
+    window.query_panel.apply_draft()
+    dashboard, heatmap = window.pages["dashboard"], window.pages["heatmap"]
+    before = dashboard.snapshot
+    below = next(tile for tile in heatmap.tiles if tile.tier is Tier.ONE_BELOW)
+
+    dialog = open_editor(window)
+    other_pair = (102, 1002)
+    assert dialog.pair_buttons[PAIR].isChecked() and not dialog.pair_buttons[other_pair].isChecked()
+    assert not dialog.slot_combos[10012].isVisibleTo(dialog)
+
+    for release_id in (10011, 10013):
+        check = dialog.version_checks[release_id]
+        text_position = check.caption.mapTo(dialog, QPoint(4, check.caption.height() // 2))
+        QTest.mouseClick(dialog.windowHandle(), Qt.MouseButton.LeftButton, pos=text_position)
+        assert check.isChecked() and dialog.slot_combos[release_id].currentText() == "N"
+    assert dialog.groups().members(Slot.N) == {10011, 10012, 10013}
+
+    check = dialog.version_checks[10013]
+    check.setFocus()
+    QTest.keyClick(check, Qt.Key.Key_Space)
+    assert not check.isChecked() and dialog.slot_combos[10013].currentText() == "—"
+
+    dialog.pair_buttons[other_pair].click()
+    assert dialog.pair_buttons[other_pair].isChecked() and not dialog.pair_buttons[PAIR].isChecked()
+    assert dialog.groups().members(Slot.N) == {10022}
+    dialog.pair_buttons[PAIR].click()
+    assert {rid for rid, button in dialog.version_checks.items() if button.isChecked()} == {10011, 10012}
+    assert dialog.store.load(PAIR) is None
+    dialog.save_button.click()
+    assert dialog.store.load(PAIR).groups.members(Slot.N) == {10011, 10012}
+    assert dashboard.snapshot is heatmap.snapshot is before
+
+    dialog.close_button.click()
+    reopened = open_editor(window)
+    assert {rid for rid, button in reopened.version_checks.items() if button.isChecked()} == {10011, 10012}
+    reopened.close_button.click()
+    window.query_panel.apply_draft()
+    assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot.summary.compliant > before.summary.compliant
+    assert next(tile for tile in heatmap.tiles if tile.equipment_id == below.equipment_id).tier is Tier.AT
+    detail = next(item for item in window.pages["equipment"].data.details if item.record.equipment_id == below.equipment_id)
+    assert detail.whole.tier is Tier.AT
+
+
 def test_suggest_fills_neighbours_and_empty_n_blocks_save(window):
     dialog = open_editor(window)
     assert dialog.suggest()
+    assert not dialog.status.text()
     assert dialog.slot_combos[10011].currentText() == SLOT_LABELS[Slot.N_MINUS_1]
     assert dialog.slot_combos[10013].currentText() == SLOT_LABELS[Slot.N_PLUS_1]
     choose(dialog, 10012, None)
