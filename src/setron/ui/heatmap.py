@@ -50,6 +50,25 @@ def _version_text(data, families):
     return " / ".join(dict.fromkeys(parts)) or "SW 미등록"
 
 
+def tile_style(data):
+    """타일 채움색·테두리 스타일. 위험 후보는 굵은 빨간 테두리."""
+    risk = data.risk is RiskStatus.RISK and data.goal is not GoalState.EXCLUDED
+    background = GOAL_FILL[data.goal] if data.goal is GoalState.EXCLUDED else TIER_FILL[data.tier]
+    border = f"2px solid {RISK_LINE}" if risk else f"1px solid {background}"
+    return (f"QPushButton#equipmentTile {{background:{background};border:{border};"
+            "border-radius:4px;padding:0;min-height:0;}"
+            f"QPushButton#equipmentTile:hover {{border-color:{PRIMARY};}}"
+            f"QPushButton#equipmentTile:focus, QPushButton#equipmentTile:checked {{outline:none;border:2px solid {PRIMARY};}}")
+
+
+def tile_detail_text(data, group_name):
+    """펼친 타일 둘째 줄: 구역 · 설비군(복수 SW) · 달성 여부."""
+    name = group_name or (data.model_name if data.goal is GoalState.EXCLUDED else None)
+    if data.multi_sw and group_name:
+        name = f"{group_name} · 복수 SW"
+    return " · ".join([data.area or "구역 미확인"] + ([name] if name else []) + [GOAL_SHORT[data.goal]])
+
+
 class TileButton(QPushButton):
     def __init__(self, data, *, expanded=False, families=None, group_name=None):
         super().__init__()
@@ -63,14 +82,10 @@ class TileButton(QPushButton):
         self.setAccessibleDescription("Space 또는 클릭으로 설비 선택")
         self.setToolTip(data.description)
         risk = data.risk is RiskStatus.RISK and data.goal is not GoalState.EXCLUDED
-        background = GOAL_FILL[data.goal] if data.goal is GoalState.EXCLUDED else TIER_FILL[data.tier]
-        border = f"2px solid {RISK_LINE}" if risk else f"1px solid {background}"
-        self.setStyleSheet(
-            f"QPushButton#equipmentTile {{background:{background};border:{border};"
-            "border-radius:4px;padding:0;min-height:0;}"
-            f"QPushButton#equipmentTile:hover {{border-color:{PRIMARY};}}"
-            f"QPushButton#equipmentTile:focus, QPushButton#equipmentTile:checked {{outline:none;border:2px solid {PRIMARY};}}"
-        )
+        self.style_text = tile_style(data)
+        self.setStyleSheet(self.style_text)
+        # Replay가 같은 자리 타일의 글자만 바꿀 때 쓴다 (펼친 타일만 있음).
+        self.version_label = self.detail_label = None
         body = QVBoxLayout(self)
         body.setContentsMargins(10, 8 if not expanded else 10, 10, 8 if not expanded else 10)
         body.setSpacing(4)
@@ -87,12 +102,10 @@ class TileButton(QPushButton):
                                    0, Qt.AlignmentFlag.AlignTop)
         body.addLayout(identity)
         if expanded:
-            body.addWidget(_tile_label(_version_text(data, families), 11))
-            name = group_name or (data.model_name if data.goal is GoalState.EXCLUDED else None)
-            if data.multi_sw and group_name:
-                name = f"{group_name} · 복수 SW"
-            detail = [data.area or "구역 미확인"] + ([name] if name else []) + [GOAL_SHORT[data.goal]]
-            body.addWidget(_tile_label(" · ".join(detail), 10, color=SECONDARY))
+            self.version_label = _tile_label(_version_text(data, families), 11)
+            body.addWidget(self.version_label)
+            self.detail_label = _tile_label(tile_detail_text(data, group_name), 10, color=SECONDARY)
+            body.addWidget(self.detail_label)
         for child in self.findChildren(QWidget):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         body.addStretch()

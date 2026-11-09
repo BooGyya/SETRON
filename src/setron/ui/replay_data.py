@@ -1,4 +1,7 @@
-"""Replay 읽기 모델. 조회 때 자료·목표·규칙을 고정하고 실제 저장 날짜만 사용한다."""
+"""Replay 읽기 모델. 조회 때 자료·목표·규칙을 고정하고 실제 저장 날짜를 시점으로 쓴다.
+
+각 시점은 대시보드와 같이 그 날짜까지 설비별 최신 관측으로 계산한다 (QA R-01).
+"""
 
 from copy import deepcopy
 from contextlib import nullcontext
@@ -35,6 +38,16 @@ class ReplayFrame:
     @property
     def day(self):
         return self.snapshot.base_date
+
+    @property
+    def observed(self):
+        """그날 실제로 저장된 일반 설비 수 (조회 조건 안)."""
+        return sum(r.base_date == self.day for r in self.snapshot.selected_records if not r.is_hpa)
+
+    @property
+    def carried(self):
+        """그날 저장되지 않아 이전 날짜의 마지막 관측을 이어받은 일반 설비 수."""
+        return sum(r.base_date < self.day for r in self.snapshot.selected_records if not r.is_hpa)
 
 
 @dataclass(frozen=True)
@@ -73,8 +86,10 @@ def freeze_source(source):
     if evaluator is not None:
         for record in result.records:
             result.risk_status(record)
-    # Replay 프레임은 그날 실제 저장된 관측만 재생한다. 이웃 날짜 관측으로 채우지 않는다 (QA Q-01 범위 밖).
-    result.carry_forward = False
+    # Replay도 대시보드와 같이 각 날짜까지 설비별 최신 관측을 쓴다 (QA R-01, 11-09 결정 ①).
+    # 일부 사업장·시트만 저장한 날짜에 나머지 설비가 사라져 0%로 떨어지지 않게 한다.
+    # 날짜 칩은 여전히 실제 저장된 날짜만이고, 그날 새로 저장된 설비 수는 ReplayFrame.observed로 따로 센다.
+    result.carry_forward = True
     return result
 
 
@@ -125,14 +140,16 @@ def load_replay(source, request):
         analyzed = tuple(r for r in snapshot.selected_records if not r.is_hpa)
         frames.append(ReplayFrame(snapshot, record_tiles(analyzed, snapshot.summary, frozen)))
         all_versions = replace(query, selection=replace(query.selection, versions=None))
-        for record in frozen._scope_records(tuple(r for r in frozen.records if r.base_date == day), all_versions):
+        for record in frozen._scope_records(frozen.snapshot_records(day), all_versions):
             if record.is_hpa:
                 continue
             if not record.pms:
                 versions.add(None)
             for pm in record.pms:
                 versions.add(pm.version_raw if pm.version_raw and pm.version_raw.strip() else None)
-    options = tuple(sorted(v for v in versions if v is not None)) + ((None,) if None in versions else ())
+    # 대소문자를 무시하고 정렬한다 (QA R-05). 원문은 합치지 않는다(끝 공백·대소문자도 다른 버전으로 유지).
+    options = tuple(sorted((v for v in versions if v is not None), key=lambda v: (v.strip().casefold(), v)))
+    options += (None,) if None in versions else ()
     return ReplayData(request, frozen, tuple(frames), options)
 
 
@@ -142,7 +159,8 @@ def replay_detail(data, frame, equipment_id):
         raise ValueError("현재 Replay에 없는 관측입니다.")
     selected = next(t for t in frame.tiles if t.equipment_id == equipment_id)
     source = data.source
-    record = next(r for r in source.records if r.base_date == frame.day and r.equipment_id == equipment_id)
+    # 그날 저장되지 않은 설비는 이어받은 이전 관측(실제 관측일 유지)의 전체 SW를 보여 준다.
+    record = next(r for r in source.snapshot_records(frame.day) if r.equipment_id == equipment_id)
     summary = summarize((record,), source.families, with_saved_groups(source.targets, source.saved_groups))
     whole = record_tiles((record,), summary, source)[0]
     status = next((s for s in summary.equipment if s.record.equipment_id == equipment_id), None)

@@ -3,14 +3,16 @@
 from dataclasses import replace
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.features.excel_import.service import parse_date
+from setron.features.targets.groups import with_saved_groups
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import series_color
 from setron.ui.equipment import ignore_width
 from setron.ui.equipment_drawer import EquipmentDrawer
+from setron.ui.heatmap import RISK_LINE, TIER_FILL, TIER_LEGEND
 from setron.ui.heatmap_data import EquipmentSelection
 from setron.ui.import_widgets import PeriodDateField, import_combo_style
 from setron.ui.query_panel import _WrapRow
@@ -127,7 +129,13 @@ class ReplayPage(QWidget):
         self.content.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.snapshot_title = label("관측 시점", 20, medium=True)
         self.content.body.addWidget(self.snapshot_title)
-        self.content.body.addWidget(label("선택 설비군 기준 집계", 13, color=SECONDARY))
+        self.content.body.addWidget(label("선택 설비군 기준 집계 · 그날 저장되지 않은 설비는 이전 마지막 관측으로 계산 (대시보드와 같은 규칙)",
+                                          13, color=SECONDARY, wrap=True))
+        # 그날 실제로 저장된 설비와 이전 관측을 이어받은 설비 수 (QA R-01).
+        self.observation_note = label("", 13, color=SECONDARY, wrap=True)
+        self.observation_note.setAccessibleName("선택 시점의 관측 구성")
+        ignore_width(self.observation_note)
+        self.content.body.addWidget(self.observation_note)
         self.timeline = QWidget()
         self.timeline_body = QVBoxLayout(self.timeline)
         self.timeline_body.setContentsMargins(0, 0, 0, 0)
@@ -175,12 +183,23 @@ class ReplayPage(QWidget):
                             12, color=SECONDARY, wrap=True)
         ignore_width(description)
         self.content.body.addWidget(description)
-        legend = []
-        for color, caption in (("#1e9e63", "목표 달성"), ("#d6ad00", "목표 미달"),
-                               ("#999ea8", "확인 필요"), ("#d63a3a", "위험 후보 우선")):
-            legend.append(label("●  " + caption, 12, color=color))
-        legend.append(label("버전 미확인", 11, color=SECONDARY))
-        self.content.body.addWidget(_WrapRow(legend, 90))
+        # 타일 채움색과 같은 5단계 범례 + 위험 후보 빨간 테두리 (버전 히트맵과 같음, QA R-02).
+        self.legend_items = []
+        for color, caption in [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보 (빨간 테두리)")]:
+            item = QWidget()
+            row = QHBoxLayout(item)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            dot = QFrame()
+            dot.setFixedSize(10, 10)
+            dot.setStyleSheet(f"background:{color};border-radius:5px;" if color else
+                              f"background:white;border:2px solid {RISK_LINE};border-radius:3px;")
+            row.addWidget(dot)
+            row.addWidget(label(caption, 12, color=SECONDARY))
+            row.addStretch()
+            item.setAccessibleName("범례 " + caption)
+            self.legend_items.append(item)
+        self.content.body.addWidget(_WrapRow(self.legend_items, 120))
         self.content.body.addWidget(label("설비군 → Line → 설비", 16, medium=True))
         group_policy = label("Site·Fab은 조회 조건으로 유지 · Line 미확정 값은 원본 구역으로 구분합니다. "
                              "복수 SW는 여러 설비군에 표시되며 전체 물리 대수는 중복하지 않습니다.",
@@ -306,7 +325,9 @@ class ReplayPage(QWidget):
         selection = data.request.query.selection
         scope = self.state.describe(replace(selection, as_of=data.request.end))
         scope = scope.replace(f" · 기준일 {data.request.end}", "")
-        n = len(data.frames[0].snapshot.target_values) if data.frames else len(data.source.targets)
+        # 개별 목표 N과 저장 N 그룹을 합친 실제 판정 기준 수 (대시보드·히트맵과 같은 방식, QA R-03).
+        n = (len(data.frames[0].snapshot.effective_targets) if data.frames
+             else len(with_saved_groups(data.source.targets, data.source.saved_groups)))
         self.context.setText(f"기간 {data.request.start} ~ {data.request.end} · 저장된 기준일 {len(data.frames)}개 · "
                              f"{scope} · 목표 N {n}개 · 위험 판정 기준 고정")
         self.context.setToolTip(data.source.source_label)
@@ -314,7 +335,6 @@ class ReplayPage(QWidget):
                                          if g.key == data.request.query.selection.group_key), "전체 설비")) + " · 조회 적용 시 목표 N 고정")
         self._make_dates()
         self._make_legend()
-        self._draw_chart()
         self._render_frame()
         self._notice("기간 안에 저장된 관측일이 없습니다." if not data.frames else
                      "재생하려면 조건에 맞는 실제 관측일이 두 개 이상 필요합니다." if not data.can_replay else "")
@@ -363,7 +383,8 @@ class ReplayPage(QWidget):
 
     def _draw_chart(self, *_):
         if self.data is not None:
-            self.chart.show_data(self.data, {key for key, control in self.legend_buttons.items() if control.isChecked()})
+            self.chart.show_data(self.data, {key for key, control in self.legend_buttons.items() if control.isChecked()},
+                                 current=self.index)
 
     def _clear_display(self):
         self._empty_layout(self.timeline_body)
@@ -373,12 +394,16 @@ class ReplayPage(QWidget):
         self.snapshot_title.setText("관측 시점")
         self.playback_status.setText("일시정지 · 0 / 0")
         self.achievement.setText("등록 SW 목표 달성 —")
+        self.achievement.setToolTip("")  # 이전 조회의 대수 설명이 남지 않게 한다 (QA R-06).
+        self.observation_note.setText("")
         self.progress.setValue(0)
         self.heatmap_title.setText("선택 시점의 설비 Heatmap")
 
     def _render_frame(self):
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
+        # 히트맵과 함께 그래프도 현재 날짜까지 실선·세로선으로 다시 그린다 (재생 시 그래프도 움직임).
+        self._draw_chart()
         frame = self.frame
         if frame is None:
             return
@@ -389,7 +414,11 @@ class ReplayPage(QWidget):
         decided = summary.compliant + summary.below
         value = f"{summary.rate:.1%}" if summary.rate is not None else "계산 불가"
         self.achievement.setText(f"등록 SW 목표 달성 {summary.compliant} / {decided}건 · {value}")
-        self.achievement.setToolTip(f"분석 {summary.equipment_count}대 · HPA {summary.hpa_excluded}대 제외 · "
+        observed = f"이날 저장 {frame.observed}대"
+        if frame.carried:
+            observed += f" · 이전 관측 이어받음 {frame.carried}대"
+        self.observation_note.setText(observed)
+        self.achievement.setToolTip(f"분석 {summary.equipment_count}대 ({observed}) · HPA {summary.hpa_excluded}대 제외 · "
                                     f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
         self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
         self.progress.setAccessibleDescription(value)
