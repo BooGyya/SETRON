@@ -9,6 +9,7 @@ from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.features.targets.groups import with_saved_groups
 from setron.features.version.groups import VersionGroups
+from setron.features.version.schemas import CompareReason, CompareStatus
 from setron.features.version.service import FamilyReleases
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
 from setron.ui.version_filter import matches_versions
@@ -120,6 +121,31 @@ class DashboardDrilldown:
 def missing_sw_count(summary: Summary) -> int:
     """계열 자체가 등록되지 않아 건수 분모에도 잡히지 않는 물리 설비를 별도 표시한다."""
     return sum(not equipment.families for equipment in summary.equipment)
+
+
+# 판단 불가 이유를 사용자가 고칠 수 있는 단위로 묶는다 (QA Q-07). 목표 N 미지정을 버전 문제로 오해하지 않게 한다.
+UNDETERMINED_GROUPS = (
+    ("목표 N 미지정", (CompareReason.TARGET_NOT_SET, CompareReason.TARGET_INVALID)),
+    ("릴리즈 노트 없음", (CompareReason.NO_RELEASE_DATA,)),
+    ("버전 미입력", (CompareReason.MISSING_VERSION,)),
+    ("노트에 없는 버전", (CompareReason.NOT_REGISTERED, CompareReason.OTHER_FAMILY)),
+    ("순서 미확인", (CompareReason.ORDER_UNKNOWN, CompareReason.ORDER_CONFLICT)),
+)
+
+
+def undetermined_breakdown(summary: Summary) -> str:
+    """판단 불가 건(설비×계열)을 이유별로 센 짧은 문구. 예: '목표 N 미지정 240 · 노트에 없는 버전 5'. 없으면 빈 문구."""
+    counts = dict.fromkeys((name for name, _ in UNDETERMINED_GROUPS), 0)
+    names = {reason: name for name, reasons in UNDETERMINED_GROUPS for reason in reasons}
+    for equipment in summary.equipment:
+        for family in equipment.families:
+            if family.status is not CompareStatus.UNDETERMINED:
+                continue
+            reason = next((p.comparison.reason for p in family.pms
+                           if p.comparison.status is CompareStatus.UNDETERMINED and p.comparison.reason), None)
+            if reason in names:
+                counts[names[reason]] += 1
+    return " · ".join(f"{name} {count}" for name, count in counts.items() if count)
 
 
 def count_value(count: int, unknown: int, unknown_label: str) -> str:
