@@ -5,6 +5,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtWidgets import QLabel
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -86,7 +87,19 @@ def test_save_then_apply_uses_saved_groups_and_history_can_revert(window):
     assert dialog.save() and "조회 적용" in dialog.status.text()
     assert window.pages["dashboard"].snapshot.summary.compliant == before  # 저장만으로 화면 결과는 바뀌지 않는다
     window.query_panel.apply_draft()
-    assert window.pages["dashboard"].snapshot.summary.compliant < before
+    dashboard = window.pages["dashboard"]
+    assert dashboard.snapshot.summary.compliant < before
+    dashboard.metrics["upgrade"].action.click()
+    heatmap = window.pages["heatmap"]
+    assert window.route == "heatmap" and len(heatmap.visible_ids) == dashboard.snapshot.summary.upgrade_needed
+    tile_id = heatmap.visible_ids[0]
+    heatmap.tile_buttons[tile_id].click()
+    drawer = window.equipment_drawer
+    assert drawer.isVisible() and drawer.summary_title.text() == "목표 미달"
+    assert any("미달 판정 근거" in widget.text() for widget in drawer.findChildren(QLabel))
+    drawer.close_panel()
+    heatmap.below_filter.click()
+    assert len(heatmap.visible_ids) >= dashboard.snapshot.summary.upgrade_needed
     first = dialog.store.load(PAIR).history[0]
     choose(dialog, 10011, Slot.N_MINUS_2)
     assert dialog.save()

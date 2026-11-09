@@ -8,6 +8,7 @@ from setron.features.aggregation.schemas import EquipmentRecord, Summary
 from setron.features.aggregation.service import summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.features.targets.groups import with_saved_groups
+from setron.features.version.groups import VersionGroups
 from setron.features.version.service import FamilyReleases
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
 from setron.ui.version_filter import matches_versions
@@ -99,6 +100,12 @@ class DashboardSnapshot:
     target_values: tuple[TargetN, ...]  # 실제 계산에 사용한 N. 이후 초안과 분리
     hpa_lookup_records: tuple[EquipmentRecord, ...] = ()  # 공통 분석과 분리한 호기별 최신 원본 관측
     hpa_lookup_locations: tuple[tuple[int, EquipmentLocation], ...] = ()
+    saved_groups: tuple[tuple[tuple[int, int], VersionGroups], ...] = ()
+
+    @property
+    def effective_targets(self):
+        targets = {(t.model_id, t.family_id): t.release_id for t in self.target_values}
+        return with_saved_groups(targets, dict(self.saved_groups))
 
 
 @dataclass(frozen=True)
@@ -426,7 +433,7 @@ class DashboardSource:
                                  total.summary, tuple(rows), groups, trends,
                                  self._observations(query, selected), self.source_label, selected,
                                  tuple(TargetN(mid, fid, rid) for (mid, fid), rid in sorted(self.targets.items())),
-                                 hpa_lookup, hpa_locations)
+                                 hpa_lookup, hpa_locations, tuple(self.saved_groups.items()))
 
     def _observations(self, query, baseline, group_keys=None):
         active = {query.selection.group_key} if query.selection.group_key else set(self.bindings)

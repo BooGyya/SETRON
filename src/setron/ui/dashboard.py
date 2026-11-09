@@ -3,7 +3,7 @@
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QBoxLayout, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout, QScrollArea,
+    QBoxLayout, QPushButton, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout, QScrollArea,
     QSizePolicy, QTabBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -156,7 +156,7 @@ class MetricCard(Card):
 class DashboardKpi(Card):
     """VER4 대시보드 상단의 간결한 지표 카드. 첫 카드(달성률)는 강조색으로 채운다."""
 
-    def __init__(self, title, asset, *, accent=False):
+    def __init__(self, title, asset, *, accent=False, action=None):
         super().__init__(padding=18)
         self.body.setSpacing(3)
         self.body.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -181,8 +181,25 @@ class DashboardKpi(Card):
         self.caption = label("조회 적용 전", 11, color=muted, wrap=True)
         self.body.addWidget(self.caption)
 
+        self.action = None
+        if action is not None:
+            self.action = QPushButton(self)
+            self.action.setAccessibleName("목표 미달 설비를 히트맵에서 보기")
+            self.action.setToolTip(self.action.accessibleName())
+            self.action.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.action.setStyleSheet("QPushButton{background:transparent;border:0;border-radius:12px;}"
+                                      "QPushButton:focus{border:2px solid #4258d5;}")
+            self.action.clicked.connect(action)
+            self.action.setEnabled(False)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.action is not None:
+            self.action.setGeometry(self.rect())
+
 
 class DashboardPage(QWidget):
+    below_requested = Signal()
     drilldown_requested = Signal(object)
 
     def __init__(self, state, source: DashboardSource, *, drilldown_connected=False):
@@ -218,7 +235,8 @@ class DashboardPage(QWidget):
             ("check", "버전 확인 필요", "7880d.svg", False),
             ("risk", "안전·결함 위험 후보", "60dbd.svg", False),
         ):
-            card = DashboardKpi(title, asset, accent=accent)
+            card = DashboardKpi(title, asset, accent=accent,
+                                action=self.below_requested.emit if key == "upgrade" and drilldown_connected else None)
             self.metrics[key] = card
             cards.append(card)
         self.kpi_grid = DashboardGrid(cards, minimum_width=200, maximum_columns=5, spacing=12)
@@ -398,6 +416,8 @@ class DashboardPage(QWidget):
         self.message.setText("선택지가 변경되었습니다. 조회 적용으로 결과를 다시 확인해 주세요.")
 
     def _clear_values(self):
+        if self.metrics["upgrade"].action is not None:
+            self.metrics["upgrade"].action.setEnabled(False)
         for card in self.metrics.values():
             card.value.setText("—")
             card.caption.setText("결과 없음")
@@ -453,7 +473,7 @@ class DashboardPage(QWidget):
         unresolved = sum(1 for status in summary.equipment if _equipment_state(status)[0] in ("미확인", "확인 필요"))
         self.result_status.setText(f"{self._result_label()} · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))
         self.result_status.set_tone("info")
-        self.context.setText(f"{result.base_date:%Y.%m.%d} 기준 · 목표 N {len(result.target_values)}계열")
+        self.context.setText(f"{result.base_date:%Y.%m.%d} 기준 · 목표 N {len(result.effective_targets)}계열")
         self.applied_text.setText(self._applied_caption(result))
         self.applied_row.show()
         values = {
@@ -471,6 +491,11 @@ class DashboardPage(QWidget):
         for key, (value, caption) in values.items():
             self.metrics[key].value.setText(value)
             self.metrics[key].caption.setText(caption)
+        upgrade = self.metrics["upgrade"]
+        if upgrade.action is not None:
+            upgrade.action.setEnabled(bool(summary.upgrade_needed))
+            if summary.upgrade_needed:
+                upgrade.caption.setText("미달 설비 히트맵 보기 →")
         self.candidate_button.setText(f"전체 {len(result.risky_ids)}대")
         self.candidate_button.setEnabled(bool(result.risky_ids))
         self.observations.setText("같은 기준일 설비 집합·목표 N 고정 · 관측 없는 자료는 이전 값으로 채우지 않음\n" + "\n".join(
@@ -492,7 +517,7 @@ class DashboardPage(QWidget):
         parts = [f"기준일 {result.base_date}", " · ".join(places) if places else "전체 Site/Fab/Line"]
         if selection.group_key is not None:
             parts.append(f"설비군 {name(selection.group_key, catalog.groups)}")
-        parts.append(f"계열별 N {len(result.target_values)}개")
+        parts.append(f"계열별 N {len(result.effective_targets)}개")
         if selection.versions is not None:
             parts.append(version_filter_caption(selection.versions))
         return " · ".join(parts)

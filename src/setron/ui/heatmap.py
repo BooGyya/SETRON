@@ -1,6 +1,6 @@
 """작업 단위 5: 물리 설비 타일·버전 함께 보기. VER4 히트맵(상세보기·간략히 보기, 카드형·목록형) 배치."""
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout, QLineEdit, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -253,7 +253,16 @@ class HeatmapPage(QWidget):
                                   "padding:0 10px;}"
                                   f"QLineEdit#heatmapSearch:focus {{border:2px solid {PRIMARY};}}")
         self.search.textChanged.connect(self._render_tiles)
-        self.content.body.addWidget(self.search)
+        self.below_filter = button("목표 미달만 · 해제 ×")
+        self.below_filter.setToolTip("목표 미달 필터 해제")
+        self.below_filter.setCheckable(True)
+        self.below_filter.hide()
+        self.below_filter.toggled.connect(self.below_filter.setVisible)
+        self.below_filter.toggled.connect(self._render_tiles)
+        search_row = QHBoxLayout()
+        search_row.addWidget(self.search, 1)
+        search_row.addWidget(self.below_filter)
+        self.content.body.addLayout(search_row)
 
         self.view_buttons = QButtonGroup(self)
         self.view_bar = QWidget()
@@ -408,7 +417,22 @@ class HeatmapPage(QWidget):
         self._reflow(event.size().width() < 780)
         super().resizeEvent(event)
 
+    def show_below(self):
+        if self.snapshot is None or not self.state.is_current(self.snapshot.query):
+            return False
+        with QSignalBlocker(self.search), QSignalBlocker(self.risk_button):
+            self.search.clear()
+            self.risk_button.setChecked(False)
+        if self.below_filter.isChecked():
+            self._render_tiles()
+        else:
+            self.below_filter.setChecked(True)
+        return True
+
     def _clear(self):
+        with QSignalBlocker(self.below_filter):
+            self.below_filter.setChecked(False)
+        self.below_filter.hide()
         self.snapshot, self.tiles, self.selected_id = None, (), None
         self.risk_button.setEnabled(False)
         self.risk_button.setChecked(False)
@@ -505,7 +529,7 @@ class HeatmapPage(QWidget):
         parts = [f"적용 기준 {result.base_date}", " · ".join(places) if places else "전체 Site / Fab / Line"]
         if selection.group_key is not None:
             parts.append(f"설비군 {name(selection.group_key, catalog.groups)}")
-        parts.append(f"목표 N {len(result.target_values)}개")
+        parts.append(f"목표 N {len(result.effective_targets)}개")
         if selection.versions is not None:
             parts.append(version_filter_caption(selection.versions))
         return " · ".join(parts)
@@ -521,11 +545,13 @@ class HeatmapPage(QWidget):
         self.tile_buttons, self.tile_grids, self.tile_occurrences = {}, [], []
         text = self.search.text().strip().casefold()
         risk_only = self.risk_button.isChecked()
-        risk_filtered = tuple(t for t in self.tiles if not risk_only or t.risk is RiskStatus.RISK)
+        below_only = self.below_filter.isChecked()
+        scoped = tuple(t for t in self.tiles if not below_only or t.goal is GoalState.BELOW)
+        risk_filtered = tuple(t for t in scoped if not risk_only or t.risk is RiskStatus.RISK)
         filtered = tuple(t for t in risk_filtered if self._matches(t, text))
         self.visible_ids = tuple(t.equipment_id for t in filtered)
         self.view_count.setText("표시할 조회 결과가 없습니다." if self.snapshot is None else
-                                f"{'위험 후보만' if risk_only else '전체'}{' · 검색 적용' if text else ''}"
+                                f"{'목표 미달' if below_only else '전체'}{' · 위험 후보만' if risk_only else ''}{' · 검색 적용' if text else ''}"
                                 f" · 표시 {len(filtered)}대 / 선택 범위 {len(self.tiles)}대 · 요약은 선택 범위 전체 기준")
         self.message.setVisible(not filtered)
         if self.snapshot is not None:
