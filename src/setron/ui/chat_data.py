@@ -14,7 +14,7 @@ from setron.features.analysis.service import explain
 from collections import Counter
 
 from setron.features.chat import ChatAnswer, ChatData, ChatRequest, answer, polish, recognize
-from setron.features.chat.answers import josa, report_answers
+from setron.features.chat.answers import josa, latest_until, report_answers
 from setron.features.chat.export import query_export
 from setron.features.query.schemas import FamilyChoice, GroupChoice, QueryCatalog
 from setron.features.targets.groups import with_saved_groups
@@ -85,7 +85,7 @@ class ChatService:
         if not records:
             return "저장된 설비 현황이 없습니다. 데이터 가져오기에서 현황표를 먼저 넣어 주세요."
         latest = max(r.base_date for r in records)
-        current = [r for r in records if r.base_date == latest]
+        current = latest_until(records, latest)          # 대시보드와 같은 기준: 설비별 최신 관측
         sites = sorted({r.site for r in current if r.site})
         dates = len({r.base_date for r in records})
         return (f"기준일 {latest.isoformat()} · 설비 {len({r.equipment_id for r in current})}대 · {'·'.join(sites)}"
@@ -100,7 +100,7 @@ class ChatService:
         if not records:
             return None
         latest = max(r.base_date for r in records)
-        current = [r for r in records if r.base_date == latest]
+        current = latest_until(records, latest)
         site = Counter(r.site for r in current if r.site).most_common(1)[0][0]
         here = [r for r in current if r.site == site]
         lines = [line for line, _ in Counter(r.line for r in here if (r.line or "").strip(" -")).most_common(2)]

@@ -365,3 +365,29 @@ def test_line_spread_is_skipped_when_records_have_no_lines():
     data = ChatData(tuple(dc_replace(r, line=None) for r in DATA.records), CATALOG, TARGETS, DATA.family_names)
     result = answer(recognize("평택 목표 N 미만 설비 보여줘", CATALOG), data)
     assert result.summary.endswith("입니다.") and "(-" not in result.summary
+
+
+# --- 11/09: 기준일까지 설비별 최신 관측 (대시보드 current_records와 같은 규칙, QA Q-01) ---------------------------
+def _hwaseong_only_in_september():
+    """평택은 9·10월, 화성은 9월에만 현황표를 넣은 경우 (사업장별로 다른 날 들어오는 실제 상황)."""
+    from setron.features.chat import ChatData
+    records = tuple(r for r in DATA.records if not (r.site == "화성" and r.base_date == OCT))
+    return ChatData(records, CATALOG, TARGETS, DATA.family_names)
+
+
+def test_latest_observation_per_equipment_is_used_like_the_dashboard():
+    from setron.features.chat.answers import latest_until
+    data = _hwaseong_only_in_september()
+    result = answer(recognize("화성 현황 보여줘", CATALOG), data)
+    assert result.base_date == OCT                                         # 기준일은 최신 관측일
+    assert sorted(codes(result)) == ["H-001", "H-002", "H-003", "H-004"]   # 9월 관측으로 화성 설비가 그대로 보임
+    assert "HPA 1대는 분석에서 제외했습니다." in result.notices
+    current = latest_until(data.records, OCT)
+    assert len(current) == 13 and {r.base_date for r in current if r.site == "화성"} == {SEP}
+
+
+def test_site_compare_includes_sites_saved_on_earlier_dates():
+    result = answer(recognize("평택이랑 화성 중 어디가 달성률 낮아?", CATALOG), _hwaseong_only_in_september())
+    assert result.charts[0].labels == ("평택", "화성")
+    # 화성 9월: 15L 2대 달성 · 16L H-003 v3.52_20 달성 (9월엔 아직 내려가지 않음) → 화성 100%
+    assert "가장 낮은 사업장은 평택(50.0%" in result.summary

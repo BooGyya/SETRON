@@ -90,6 +90,23 @@ class _Scope:
     subject: str                     # 요약 문장의 주어 (예: "평택 M-O2")
     sites: tuple[str, ...] = ()
     lines: tuple[str, ...] = ()
+    at: Callable | None = None       # 기준일 d → 조건에 맞는 설비별 최신 관측 (이전 기준일 비교용)
+
+
+def latest_until(records, as_of: date | None) -> tuple:
+    """기준일(포함)까지 설비마다 가장 최근 관측 하나 (대시보드 ``current_records``와 같은 규칙, QA Q-01).
+
+    현황표는 사업장·시트별로 다른 날 들어오므로, 그날 딱 맞는 기록만 세면 다른 날 넣은 사업장 설비가 사라진다.
+    실제 관측일(base_date)은 그대로 둔다.
+    """
+    latest = {}
+    for record in records:
+        if as_of is not None and record.base_date > as_of:
+            continue
+        previous = latest.get(record.equipment_id)
+        if previous is None or record.base_date > previous.base_date:
+            latest[record.equipment_id] = record
+    return tuple(latest[equipment_id] for equipment_id in sorted(latest))
 
 
 def _pct(rate: float | None) -> str:
@@ -110,10 +127,19 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
     issues = tuple(f"'{issue.value}': {issue.message}" for issue in resolved.issues)
     dates = tuple(sorted({r.base_date for r in data.records}))
     base = resolved.base_date or (dates[-1] if dates else None)
-    every = select_records(data.records, replace(resolved, base_date=None), data.catalog)
-    if request.areas:
-        every = tuple(r for r in every if area_of({"site": r.site, "line": r.line}) in request.areas)
-    on_base = tuple(r for r in every if r.base_date == base)
+    def pick(records):
+        chosen = select_records(records, replace(resolved, base_date=None), data.catalog)
+        if request.areas:
+            chosen = tuple(r for r in chosen if area_of({"site": r.site, "line": r.line}) in request.areas)
+        return tuple(chosen)
+
+    def at(day):
+        # 대시보드와 같은 순서: 기준일까지 설비별 최신 관측을 먼저 고르고 조건으로 거른다
+        # (반대로 하면 예전에 .41이었다 지금 .43인 설비가 '.41 쓰는 설비'로 남는다).
+        return pick(latest_until(data.records, day))
+
+    every = pick(data.records)                           # 모든 기준일 (추이·예측)
+    on_base = at(base)
     statuses = {r.equipment_id: equipment_status(r, data.catalog.releases, data.targets) for r in on_base if not r.is_hpa}
     groups = {g.group_id: g.model_name or g.name for g in data.catalog.groups}
     families = {f.family_id: f.name for f in data.catalog.families}
@@ -144,7 +170,7 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
         parts.insert(0, "앞 질문 이어서")
     parts.append(f"기준일 {base.isoformat()}" if base else "기준일 없음")
     return _Scope(base, dates, every, on_base, statuses, sum(1 for r in on_base if r.is_hpa), issues, " · ".join(parts),
-                  " ".join(subject) or "전체", tuple(resolved.sites), tuple(resolved.lines))
+                  " ".join(subject) or "전체", tuple(resolved.sites), tuple(resolved.lines), at)
 
 
 def _tier(family_status) -> Tier:
@@ -272,7 +298,7 @@ def _change(request: ChatRequest, data: ChatData, scope: _Scope):
     if previous is None:
         return "이전 기준일 자료가 없어 변화를 비교할 수 없습니다.", []
     group_by = request.group_by or GroupBy.LINE
-    before_records = [r for r in scope.all_dates if r.base_date == previous]
+    before_records = list(scope.at(previous))           # 이전 기준일도 같은 규칙 (설비별 최신 → 조건)
     before = {k: summarize(v, data.catalog.releases, data.targets) for k, v in _grouped(scope, group_by, before_records).items()}
     after = {k: summarize(v, data.catalog.releases, data.targets) for k, v in _grouped(scope, group_by).items()}
     rows, dropped = [], []
@@ -329,8 +355,9 @@ def _cause(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tuple[
     earlier = sorted(d for d in scope.dates if scope.base and d < scope.base)
     if earlier and below:
         first = earlier[0]
+        first_keys = {(r.equipment_id, r.base_date) for r in scope.at(first)}
         old = {(r.equipment_id, pm.family_id): (pm.version_raw or "").strip() for r in scope.all_dates
-               if r.base_date == first for pm in r.pms}
+               if (r.equipment_id, r.base_date) in first_keys for pm in r.pms}
         stuck = sum(1 for r in records for pm in r.pms
                     if r.equipment_id in scope.statuses and old.get((r.equipment_id, pm.family_id)) == (pm.version_raw or "").strip()
                     and any(f.family_id == pm.family_id and f.status is CompareStatus.BELOW
