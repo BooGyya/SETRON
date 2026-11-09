@@ -13,7 +13,7 @@ from setron.features.reference_data import resolve_model_text, MODEL_STRUCTURES
 DATES = tuple(date(2026, month, 21) for month in range(5, 11))
 SEED_KEY = "demo_seed.v2:excel:300x6:2026-10-21"
 LEGACY_KEY = "demo_seed.v1:300x6:2026-10-21"
-GENERATOR_REVISION = 3
+GENERATOR_REVISION = 4   # 4: 시연 목표 N(최신 바로 아래 버전) 추가
 FAMILIES = (
     ("c3_legacy", "M-C3", "C3 구UI", "LEGACY"),
     ("c3", "M-C3", "C3 통합UI", "INTEGRATED"),

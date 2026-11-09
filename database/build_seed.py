@@ -22,6 +22,24 @@ HERE = Path(__file__).resolve().parent
 CATALOG = HERE / "demo_release_catalog.json"
 from seed_source import SEED_KEY, LEGACY_KEY
 DATES = tuple(date(2026, month, 21) for month in range(5, 11))
+# 시연 목표 N (11/09 팀 결정 A): 모델·계열마다 적용 가능한 릴리즈 중 '최신 바로 아래' 버전을 N으로 저장해 둔다.
+# 최신 버전은 N+1(진초록), 그 아래로 N·N-1·N-2 이하가 함께 보여 버전 히트맵 5단계 색을 모두 시연할 수 있다.
+# 위험 규칙은 넣지 않는다 (예시 Item을 임의로 위험 지정하지 않음 — 시연에서 기준·설정 화면으로 직접 등록).
+DEMO_TARGET_SAVED_AT = "2026-10-21T09:00:00"
+DEMO_TARGET_MEMO = "시연 기준: 최신 바로 아래 버전을 N"
+
+
+def demo_target(catalog, candidates, model, key):
+    """모델·계열의 시연 목표 N 릴리즈 위치(i). 모델 적용 근거가 확인된 후보 중에서만 고른다.
+
+    근거가 하나도 없으면(예: 개조형 M-O5 Prime — 집계 포함 여부 멘토 확인 전) None: N 그룹을 만들지 않는다.
+    목표 N은 적용 근거가 확인된 버전만 쓴다는 규칙(목표 N 편집·대시보드 계산)과 맞춘다.
+    """
+    choices = candidates(catalog, model, key) if key in catalog['families'] else []
+    if not choices:
+        return None
+    ordered = sorted(choices, key=lambda choice: choice[1]['order'])
+    return (ordered[-2] if len(ordered) > 1 else ordered[-1])[0]
 MODELS = (
     ("M-C3", "POLY", None), ("M-C4", "POLY", None),
     ("M-C4 DFB", "POLY", "M-C4"), ("M-C4+", "POLY", "M-C4"),
@@ -120,6 +138,9 @@ def build_sql(catalog):
         collisions.append(f'EXISTS(SELECT 1 FROM release_version WHERE family_id = @f_{key} AND version_raw IN ({names}))')
     for model, key in pairs:
         collisions.append(f"EXISTS(SELECT 1 FROM app_setting WHERE setting_key = CONCAT('target_applicability.v1:',{model_var(model).sql},':',@f_{key}))")
+    for model, key in pairs:
+        if demo_target(catalog, candidates, model, key) is not None:
+            collisions.append(f"EXISTS(SELECT 1 FROM app_setting WHERE setting_key = CONCAT('version_groups.v1:',{model_var(model).sql},':',@f_{key}))")
     emit('SET @seed_install = NOT @seed_done AND NOT (' + '\n OR '.join(collisions) + ')')
     for index, book in enumerate(catalog['workbooks']):
         raw = {'seed': KEY, 'synthetic': True, 'source_workbook': book['name'], 'source_sha256': book['sha256'],
@@ -220,6 +241,15 @@ def build_sql(catalog):
         if lineage is not None:
             payload['version_lineage'] = lineage
         setting = Expr(f"CONCAT('target_applicability.v1:',{model_var(model).sql},':',@f_{key})")
+        insert('app_setting', {'setting_key': setting, 'setting_value': Expr(json_sql(payload))})
+        owned_settings.append(string_expr(setting.sql))
+    for model, key in pairs:
+        index = demo_target(catalog, candidates, model, key)
+        if index is None:
+            continue                                    # 릴리즈노트·모델 적용 근거가 없으면 목표를 정하지 않는다 (비교 불가로 남김)
+        history = [{'saved_at': DEMO_TARGET_SAVED_AT, 'memo': DEMO_TARGET_MEMO, 'groups': {'N': [Expr(f'@r_{key}_{index}')]}}]
+        payload = {'schema': 1, 'model_id': model_var(model), 'family_id': Expr(f'@f_{key}'), 'history': history}
+        setting = Expr(f"CONCAT('version_groups.v1:',{model_var(model).sql},':',@f_{key})")
         insert('app_setting', {'setting_key': setting, 'setting_value': Expr(json_sql(payload))})
         owned_settings.append(string_expr(setting.sql))
     for entry in plan:
