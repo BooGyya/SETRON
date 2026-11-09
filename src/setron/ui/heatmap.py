@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 
 from setron.features.risk.schemas import RiskStatus
 from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.dashboard_data import count_value, missing_sw_count, upgrade_caption
+from setron.ui.dashboard_data import RiskRuleState, count_value, missing_sw_count, upgrade_caption
 from setron.ui.equipment import FlowGrid, ReadTableModel, fit_rows, ignore_width, read_table
 from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
@@ -437,6 +437,7 @@ class HeatmapPage(QWidget):
         self.risk_button.setEnabled(False)
         self.risk_button.setChecked(False)
         self.risk_button.setText("위험 후보만")
+        self.risk_button.setAccessibleName("위험 후보만")
         for card in self.metrics.values():
             card.value.setText("—")
             card.caption.clear()
@@ -473,6 +474,25 @@ class HeatmapPage(QWidget):
         self.context.setText("선택지가 변경되어 이전 결과를 지웠습니다.")
         self.message.setText("조회 적용으로 결과를 다시 확인해 주세요.")
 
+    @staticmethod
+    def _risk_labels(result):
+        if result.risk_rule_state in (RiskRuleState.UNREGISTERED, RiskRuleState.ALL_DISABLED):
+            label = result.risk_rule_state.value
+            return label, label
+        if not result.summary.equipment_count:
+            return "분석 대상 없음", "분석 대상 없음"
+        candidates, unknown = len(result.risky_ids), result.risk_unknown
+        if unknown == result.summary.equipment_count:
+            return "미확인", f"위험 미확인 {unknown}대"
+        if candidates:
+            label = f"위험 후보만 ({candidates}대)"
+            if unknown:
+                label += f" · 미확인 {unknown}대"
+            return f"{candidates}대", label
+        if unknown:
+            return "일부 미확인", f"확인된 후보 0대 · 미확인 {unknown}대"
+        return "0대", "위험 후보 0대"
+
     def accept_result(self, query, result):
         if not self.state.is_current(query) or result.query is not query or self.state.catalog != self.source.catalog:
             return False
@@ -484,9 +504,13 @@ class HeatmapPage(QWidget):
         self.result_status.set_tone("info")
         self.context.setText(f"적용 #{query.revision} · 일반 분석 기준일 {result.base_date} · {query.description}\n"
                              f"{result.source_label}\nHPA는 조건에 맞는 최신 자료와 기존 전달 범위의 관측이며 실제 관측일을 표시합니다.")
-        self.risk_button.setText(f"위험 후보만 ({len(result.risky_ids)}대)")
-        self.risk_button.setAccessibleName(f"위험 후보 {len(result.risky_ids)}대만 보기")
-        self.risk_button.setEnabled(bool(self.tiles))
+        risk_value, filter_label = self._risk_labels(result)
+        self.risk_button.setText(filter_label)
+        self.risk_button.setAccessibleName(filter_label)
+        self.risk_button.setEnabled(bool(result.risky_ids))
+        if not result.risky_ids:
+            with QSignalBlocker(self.risk_button):
+                self.risk_button.setChecked(False)
         summary = result.summary
         goals = [t.goal for t in self.tiles]
         self.applied_text.setText(self._applied_caption(result))
@@ -500,7 +524,7 @@ class HeatmapPage(QWidget):
             "unknown": (f"{goals.count(GoalState.UNKNOWN)}", ""),
             "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
                      f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건 · SW 미등록 {missing_sw_count(summary)}대"),
-            "risk": (count_value(len(result.risky_ids), result.risk_unknown, "미확인"),
+            "risk": (risk_value,
                      f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
             "upgrade": (count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
                         upgrade_caption("하나라도 N 미만인 물리 설비 · 중복 제거", summary.undetermined)),
@@ -561,6 +585,10 @@ class HeatmapPage(QWidget):
         list_mode = self.layout_buttons.checkedId() == 1
         self.list_table.setVisible(list_mode and bool(filtered))
         self.tile_host.setVisible(not list_mode)
+        risky = [t for t in self.tiles if t.risk is RiskStatus.RISK]
+        self.risk_footer.setVisible(bool(filtered) and bool(risky))
+        self.risk_footer.setText(f"위험 후보 {len(risky)}대 · 달성 설비 "
+                                 f"{sum(t.goal is GoalState.MET for t in risky)}대 포함")
         if list_mode:
             self._render_list(filtered)
             return
@@ -569,10 +597,6 @@ class HeatmapPage(QWidget):
         self.hpa_button.setVisible(any(t.goal is GoalState.EXCLUDED for t in self.tiles))
         self.group_heading.setVisible(has_tiles)
         self.group_note.setVisible(has_tiles)
-        risky = [t for t in self.tiles if t.risk is RiskStatus.RISK]
-        self.risk_footer.setVisible(has_tiles and bool(risky))
-        self.risk_footer.setText(f"위험 후보 {len(risky)}대 · 달성 설비 "
-                                 f"{sum(t.goal is GoalState.MET for t in risky)}대 포함")
         if not has_tiles:
             return
         cards = [self._group_card(title, members, expanded, name)

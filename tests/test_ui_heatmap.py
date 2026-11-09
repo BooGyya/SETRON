@@ -16,7 +16,7 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus, ReleaseVersion
 from setron.features.version.service import FamilyReleases
 from setron.ui.app import create_window
-from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding
+from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, RiskRuleState
 from setron.ui.heatmap import RISK_FILL, RISK_LINE, TIER_FILL, TileButton
 from setron.ui.heatmap_data import GoalState, equipment_tiles
 from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
@@ -164,9 +164,34 @@ def test_candidate_filter_empty_message_does_not_hide_unknown_as_safe(window):
     page = window.pages["heatmap"]
     assert "위험 미확인 1대" in page.metrics["risk"].caption.text()
     page.risk_button.click()
-    assert page.tile_buttons == {} and "위험 후보가 없습니다" in page.message.text()
-    page.risk_button.click()
+    assert not page.risk_button.isEnabled()
+    assert page.risk_button.text() == "위험 미확인 1대"
     assert tuple(page.tile_buttons) == (3, 4)
+
+
+@pytest.mark.parametrize("state,risks,summary,filter_text", [
+    (RiskRuleState.UNREGISTERED, {}, "위험 규칙 미등록", "위험 규칙 미등록"),
+    (RiskRuleState.ALL_DISABLED, {}, "위험 규칙 모두 비활성", "위험 규칙 모두 비활성"),
+    (RiskRuleState.ACTIVE, {}, "미확인", "위험 미확인 4대"),
+    (RiskRuleState.ACTIVE, {1: RiskStatus.NO_RISK}, "일부 미확인", "확인된 후보 0대 · 미확인 3대"),
+    (RiskRuleState.ACTIVE, dict.fromkeys((1, 2, 3, 5), RiskStatus.NO_RISK), "0대", "위험 후보 0대"),
+])
+def test_risk_summary_and_filter_after_requery(window, source, state, risks, summary, filter_text):
+    page = window.pages["heatmap"]
+    window.query_panel.apply_draft()
+    page.risk_button.click()
+    assert page.risk_button.isChecked()
+    page.layout_buttons.button(1).click()
+    assert page.risk_footer.isVisibleTo(page)
+    source.risk_rule_state = state
+    source.risks = risks
+    window.query_panel.apply_draft()
+    assert not page.risk_footer.isVisibleTo(page)
+    assert page.snapshot.risk_rule_state is state
+    assert page.metrics["risk"].value.text() == summary
+    assert page.risk_button.text() == page.risk_button.accessibleName() == filter_text
+    assert not page.risk_button.isEnabled() and not page.risk_button.isChecked()
+    assert set(page.visible_ids) == {1, 2, 3, 4, 5}
 
 
 def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
