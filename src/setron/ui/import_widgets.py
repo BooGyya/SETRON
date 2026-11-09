@@ -1,8 +1,5 @@
 """VER5 가져오기 표시 부품. 원본·업무 판정·DB는 변경하지 않는다."""
 
-from dataclasses import dataclass
-from datetime import date
-
 from PySide6.QtCore import QDate, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QPainter, QTextCharFormat, QTextLayout
 from PySide6.QtWidgets import (
@@ -11,6 +8,7 @@ from PySide6.QtWidgets import (
     QStyle, QStyleOptionFrame, QToolButton,
 )
 
+from setron.features.excel_import.schemas import ImportComparison
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.calendar_widgets import CalendarWidget
@@ -192,27 +190,6 @@ class ImportSteps(QWidget):
                               f"QPushButton:focus {{border:1px solid {PRIMARY};}}")
             for text in (self.markers[index], self.captions[index], self.completions[index]):
                 text.setStyleSheet(f"color:{ink};")
-
-
-@dataclass(frozen=True)
-class ImportComparison:
-    """같은 시트·Site 범위로 확인한 직전 저장본 비교의 표시 계약. 숫자를 UI에서 추정하지 않는다."""
-
-    previous_date: date
-    scope_label: str
-    changed: int
-    added: int
-    unchanged: int
-    absent: int
-    details: tuple[str, ...] = ()
-
-    def __post_init__(self):
-        if not isinstance(self.previous_date, date) or not isinstance(self.scope_label, str) or not self.scope_label.strip():
-            raise ValueError("비교 기준일과 범위가 필요합니다.")
-        if any(type(v) is not int or v < 0 for v in (self.changed, self.added, self.unchanged, self.absent)):
-            raise ValueError("비교 대수는 0 이상의 정수여야 합니다.")
-        if not isinstance(self.details, tuple) or any(not isinstance(t, str) for t in self.details):
-            raise ValueError("비교 상세 형식이 올바르지 않습니다.")
 
 
 class ComparisonCard(Card):

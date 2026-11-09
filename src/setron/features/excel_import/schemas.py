@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 import re
 from typing import Any, Protocol
@@ -258,3 +258,24 @@ class ImportSaver(Protocol):
     target_label: str
 
     def save(self, request: SaveRequest) -> SaveReceipt: ...
+
+
+@dataclass(frozen=True)
+class ImportComparison:
+    """같은 시트·Site 범위로 확인한 직전 저장본 비교의 표시 계약. 숫자를 UI에서 추정하지 않는다."""
+
+    previous_date: date
+    scope_label: str
+    changed: int
+    added: int
+    unchanged: int
+    absent: int
+    details: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if not isinstance(self.previous_date, date) or not isinstance(self.scope_label, str) or not self.scope_label.strip():
+            raise ValueError("비교 기준일과 범위가 필요합니다.")
+        if any(type(v) is not int or v < 0 for v in (self.changed, self.added, self.unchanged, self.absent)):
+            raise ValueError("비교 대수는 0 이상의 정수여야 합니다.")
+        if not isinstance(self.details, tuple) or any(not isinstance(t, str) for t in self.details):
+            raise ValueError("비교 상세 형식이 올바르지 않습니다.")
