@@ -557,6 +557,7 @@ class ImportPage(QWidget):
         self.row_table.activated.connect(lambda index: self.select_row(self.row_model.ids[index.row()]))
         review.body.addWidget(self.row_table)
         self.row_empty = label("", color=SECONDARY, wrap=True)
+        self.extract_hint = ""        # 추출이 멈춘 이유. 검토 칸에 바로 보여 준다 (위쪽 안내는 스크롤하면 안 보임)
         review.body.addWidget(self.row_empty)
         # 선택 행 편집 패널: 값 입력 · 원본 셀 주소 상자 · ‘AI 원본’ 설명을 한 줄씩 묶는다.
         self.editor = QFrame()
@@ -920,7 +921,7 @@ class ImportPage(QWidget):
         self.row_table.setVisible(bool(rows))
         self.row_empty.setVisible(not rows)
         self.row_empty.setText("추출 중입니다. 결과를 준비하고 있습니다." if self.state == "extracting" else
-                              "" if draft is None else "추출된 행이 없습니다.")
+                              self.extract_hint if draft is None else "추출된 행이 없습니다.")
         if self.selected_row_id in ids:
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
@@ -1192,6 +1193,7 @@ class ImportPage(QWidget):
         return True
 
     def _reset_draft(self):
+        self.extract_hint = ""
         if self.state == "saving":
             return False
         self.excel_request.cancel()
@@ -1384,11 +1386,13 @@ class ImportPage(QWidget):
             except Exception:
                 result, draft = None, None
         if draft is None:
-            self.source_badge.setText("AI 추출 실패")
-            self.source_badge.set_tone("danger")
-            self._set_status("AI 추출 실패", "danger",
-                             str(error) if isinstance(error, AIConfigError) else
-                             result.message if result is not None else "AI 추출 결과를 처리하지 못했습니다. 다시 시도하세요.")
+            ruled = result is not None and result.source is ResponseSource.RULE   # 규칙이 '읽을 내용 없음'으로 판단
+            self.source_badge.setText("추출할 내용 없음" if ruled else "AI 추출 실패")
+            self.source_badge.set_tone("warning" if ruled else "danger")
+            message = (str(error) if isinstance(error, AIConfigError) else
+                       result.message if result is not None else "AI 추출 결과를 처리하지 못했습니다. 다시 시도하세요.")
+            self.extract_hint = message
+            self._set_status("추출할 내용 없음" if ruled else "AI 추출 실패", "warning" if ruled else "danger", message)
             self._render()
             return
         self.draft = draft
