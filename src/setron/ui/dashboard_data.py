@@ -1,12 +1,13 @@
 """대시보드 읽기 어댑터. 확정된 위치/설비군 매핑과 기존 BE 집계를 사용한다. DB 접근 없음."""
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import date
 from enum import Enum
 from typing import Callable, Mapping
 
 from setron.features.aggregation.schemas import EquipmentRecord, Summary
-from setron.features.aggregation.service import summarize
+from setron.features.aggregation.service import Targets, summarize
 from setron.features.risk.schemas import RiskStatus
 from setron.features.targets.groups import with_saved_groups
 from setron.features.version.groups import VersionGroups
@@ -105,16 +106,17 @@ class DashboardSnapshot:
     observations: tuple[TrendPoint, ...]
     source_label: str
     selected_records: tuple[EquipmentRecord, ...]  # 공통 분석과 드릴다운의 같은 기준일·필터 결과
-    target_values: tuple[TargetN, ...]  # 실제 계산에 사용한 N. 이후 초안과 분리
+    target_values: tuple[TargetN, ...]  # 적용 시점의 개별 목표 N. 저장 그룹은 별도로 보존
     hpa_lookup_records: tuple[EquipmentRecord, ...] = ()  # 공통 분석과 분리한 호기별 최신 원본 관측
     hpa_lookup_locations: tuple[tuple[int, EquipmentLocation], ...] = ()
     saved_groups: tuple[tuple[tuple[int, int], VersionGroups], ...] = ()
     risk_rule_state: RiskRuleState | None = None  # 규칙 목록을 제공하지 않는 자료는 판정 결과만 표시한다.
 
     @property
-    def effective_targets(self):
-        targets = {(t.model_id, t.family_id): t.release_id for t in self.target_values}
-        return with_saved_groups(targets, dict(self.saved_groups))
+    def effective_targets(self) -> Targets:
+        """드릴다운에서도 조회 당시와 같은 모델·계열별 기준으로 비교한다."""
+        single = {(target.model_id, target.family_id): target.release_id for target in self.target_values}
+        return with_saved_groups(single, dict(self.saved_groups))
 
 
 @dataclass(frozen=True)
@@ -470,7 +472,7 @@ class DashboardSource:
                                  total.summary, tuple(rows), groups, trends,
                                  self._observations(query, selected), self.source_label, selected,
                                  tuple(TargetN(mid, fid, rid) for (mid, fid), rid in sorted(self.targets.items())),
-                                 hpa_lookup, hpa_locations, tuple(self.saved_groups.items()), self.risk_rule_state)
+                                 hpa_lookup, hpa_locations, tuple(deepcopy(self.saved_groups).items()), self.risk_rule_state)
 
     def _observations(self, query, baseline, group_keys=None):
         active = {query.selection.group_key} if query.selection.group_key else set(self.bindings)

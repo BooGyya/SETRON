@@ -621,9 +621,10 @@ class DashboardPage(QWidget):
             return "라인 미지정 · 현재 원본 구역 기준"
         selection = data.query.selection
         scope = "전체 설비" if selection == type(selection)(as_of=selection.as_of) else "선택 범위 설비"
+        if data.saved_groups:
+            return f"{scope} · 저장한 N 그룹 반영"
         defaults = getattr(self.source, "targets", None)
-        used = {(t.model_id, t.family_id): t.release_id for t in data.target_values}
-        basic = data.query.targets is None or (defaults is not None and used == dict(defaults))
+        basic = data.query.targets is None or (defaults is not None and data.effective_targets == defaults)
         return f"{scope} · " + ("기본 목표 N" if basic else "선택한 목표 N")
 
     def _style_series(self, mode):
