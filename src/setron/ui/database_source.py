@@ -32,7 +32,7 @@ from setron.features.targets.groups import GroupStore
 from setron.features.targets.service import TargetService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import DatabaseError
-from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, family_name, model_name
+from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, RiskRuleState, family_name, model_name
 from setron.ui.query_state import LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
 from setron.ui.target_data import target_pairs
 from setron.ui.version_data import ItemEntry, ModelFamily, ReleaseEntry, SourceReference, VersionCatalog
@@ -151,12 +151,18 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         risks[record.equipment_id] = status
         risks_by_date[record.base_date, record.equipment_id] = status
 
-    label = f"MySQL DB 저장 자료 · 모델별 목표 근거 확인 · 위험 기준 {str(len(assessor.rules)) + '건 반영' if assessor.rules else '미등록'} · 현황 {len(records)}건"
+    if assessor.rules:
+        rule_state, rule_label = RiskRuleState.ACTIVE, f"{len(assessor.rules)}건 반영"
+    elif rules:
+        rule_state, rule_label = RiskRuleState.ALL_DISABLED, "모두 비활성"
+    else:
+        rule_state, rule_label = RiskRuleState.UNREGISTERED, "미등록"
+    label = f"MySQL DB 저장 자료 · 모델별 목표 근거 확인 · 위험 기준 {rule_label} · 현황 {len(records)}건"
     if skipped:
         label += f" · Site·설비군 미연결 또는 확인 필요 {skipped}건 제외"
     source = DashboardSource(catalog=catalog, bindings=bindings, records=tuple(records), locations=locations,
                              families=family_releases, targets={}, risks=risks, source_label=label,
-                             risk_evaluator=risk_status)
+                             risk_evaluator=risk_status, risk_rule_state=rule_state)
     source.applicability = target_catalog.applicability
     # 버전(N) 기준 입력에서 저장한 N 그룹. 형식이 깨진 저장값은 그룹 없이(목표 N 하나로) 계산하고 안내한다.
     source.group_store = GroupStore(storage)

@@ -14,7 +14,7 @@ from setron.ui.database_source import (
     dashboard_source_from_env,
     load_dashboard_source,
 )
-from setron.ui.dashboard_data import EquipmentLocation
+from setron.ui.dashboard_data import EquipmentLocation, RiskRuleState
 from setron.ui.query_state import AppliedQuery, QuerySelection, TargetN, preview_catalog
 from test_import_save_mysql import EQUIPMENT, request, row, storage  # noqa: F401  시드 적용 fixture 재사용
 from test_schema_mysql import schema_database  # noqa: F401
@@ -138,6 +138,7 @@ def test_risk_rules_in_db_decide_dashboard_risk(storage):  # noqa: F811
     """위험 지정이 없으면 미확인, 사용 중인 지정이 있으면 DB 기준으로 판정한다 (BE-015)."""
     before = load_dashboard_source(storage)
     assert "위험 기준 미등록" in before.source_label
+    assert before.snapshot(ALL).risk_rule_state is RiskRuleState.UNREGISTERED
     assert set(before.risks.values()) == {RiskStatus.UNKNOWN}
 
     save(storage, "release-o3", row(1, {"version_raw": "A2", "content": "D2"}, version_raw="v1", content="결함 버전",
@@ -149,8 +150,12 @@ def test_risk_rules_in_db_decide_dashboard_risk(storage):  # noqa: F811
                    if r["version_raw"] == "v1"][0]
         base = {"family_id": o3["family_id"], "risk_reason": "가상 결함", "target_reference": {"family": "O3"},
                 "release_version_id": release["release_version_id"], "mapping_status": "VERIFIED"}
-        tx.insert("risk_rule", {**base, "rule_type": "DIRECT_VERSION"})
         tx.insert("risk_rule", {**base, "rule_type": "DIRECT_VERSION", "is_enabled": False, "risk_reason": "끈 지정"})
+
+    disabled = load_dashboard_source(storage)
+    assert disabled.snapshot(ALL).risk_rule_state is RiskRuleState.ALL_DISABLED
+    with storage.transaction() as tx:
+        tx.insert("risk_rule", {**base, "rule_type": "DIRECT_VERSION"})
 
     after = load_dashboard_source(storage)
     # 판정기는 사용 중인 지정만 쓴다 (끈 지정은 판정에서 뺀다).
@@ -161,6 +166,7 @@ def test_risk_rules_in_db_decide_dashboard_risk(storage):  # noqa: F811
     assert after.risks[by_code["D-O3"]] is RiskStatus.RISK
     assert after.risks[by_code["D-O2"]] is RiskStatus.NO_RISK
     snapshot = after.snapshot(ALL)
+    assert snapshot.risk_rule_state is RiskRuleState.ACTIVE
     assert len(snapshot.risky_ids) == 1
     from setron.ui.heatmap_data import equipment_tiles
     tile = next(t for t in equipment_tiles(snapshot, after) if t.code == "D-O3")

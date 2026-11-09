@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 from datetime import date
+from enum import Enum
 from typing import Callable, Mapping
 
 from setron.features.aggregation.schemas import EquipmentRecord, Summary
@@ -84,6 +85,12 @@ class GroupTrend:
     points: tuple[TrendPoint, ...]
 
 
+class RiskRuleState(Enum):
+    UNREGISTERED = "위험 규칙 미등록"
+    ALL_DISABLED = "위험 규칙 모두 비활성"
+    ACTIVE = "위험 규칙 사용 중"
+
+
 @dataclass(frozen=True)
 class DashboardSnapshot:
     query: AppliedQuery
@@ -102,6 +109,7 @@ class DashboardSnapshot:
     hpa_lookup_records: tuple[EquipmentRecord, ...] = ()  # 공통 분석과 분리한 호기별 최신 원본 관측
     hpa_lookup_locations: tuple[tuple[int, EquipmentLocation], ...] = ()
     saved_groups: tuple[tuple[tuple[int, int], VersionGroups], ...] = ()
+    risk_rule_state: RiskRuleState | None = None  # 규칙 목록을 제공하지 않는 자료는 판정 결과만 표시한다.
 
     @property
     def effective_targets(self):
@@ -195,11 +203,13 @@ class DashboardSource:
                  records: tuple[EquipmentRecord, ...], locations: Mapping[int, EquipmentLocation],
                  families: Mapping[int, FamilyReleases], targets: Mapping[tuple[int, int], int],
                  risks: Mapping[int, RiskStatus], source_label: str,
-                 risk_evaluator: Callable[[EquipmentRecord], RiskStatus] | None = None):
+                 risk_evaluator: Callable[[EquipmentRecord], RiskStatus] | None = None,
+                 risk_rule_state: RiskRuleState | None = None):
         self.catalog, self.records = catalog, tuple(records)
         self.locations, self.families = dict(locations), dict(families)
         self.targets, self.risks = dict(targets), dict(risks)
         self.risk_evaluator = risk_evaluator
+        self.risk_rule_state = risk_rule_state
         # 모델·계열별로 저장한 N 그룹(버전(N) 기준 입력). 있으면 목표 N 하나 대신 이 그룹으로 판정한다.
         self.saved_groups = {}
         self.source_label = source_label
@@ -407,7 +417,8 @@ class DashboardSource:
             targets = target_map(validate_targets(self, query.targets))
             scoped = DashboardSource(catalog=self.catalog, bindings=tuple(GroupBinding(k, v) for k, v in self.bindings.items()),
                                      records=self.records, locations=self.locations, families=self.families, targets=targets,
-                                     risks=self.risks, source_label=self.source_label, risk_evaluator=self.risk_evaluator)
+                                     risks=self.risks, source_label=self.source_label, risk_evaluator=self.risk_evaluator,
+                                     risk_rule_state=self.risk_rule_state)
             scoped.saved_groups = self.saved_groups
             scoped.carry_forward = self.carry_forward
             return scoped._snapshot(query)
@@ -459,7 +470,7 @@ class DashboardSource:
                                  total.summary, tuple(rows), groups, trends,
                                  self._observations(query, selected), self.source_label, selected,
                                  tuple(TargetN(mid, fid, rid) for (mid, fid), rid in sorted(self.targets.items())),
-                                 hpa_lookup, hpa_locations, tuple(self.saved_groups.items()))
+                                 hpa_lookup, hpa_locations, tuple(self.saved_groups.items()), self.risk_rule_state)
 
     def _observations(self, query, baseline, group_keys=None):
         active = {query.selection.group_key} if query.selection.group_key else set(self.bindings)

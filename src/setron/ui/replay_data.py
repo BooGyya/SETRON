@@ -62,7 +62,8 @@ def freeze_source(source):
         catalog=source.catalog, bindings=tuple(GroupBinding(k, v) for k, v in source.bindings.items()),
         records=tuple(source.records), locations=dict(source.locations), families=deepcopy(source.families),
         targets=dict(source.targets), risks=dict(source.risks),
-        source_label=source.source_label, risk_evaluator=frozen_risk if evaluator is not None else None)
+        source_label=source.source_label, risk_evaluator=frozen_risk if evaluator is not None else None,
+        risk_rule_state=source.risk_rule_state)
     result.saved_groups = deepcopy(source.saved_groups)
     result.result_label = getattr(source, "result_label", "관측 자료")
     for name in ("applicability", "target_reasons", "model_names", "family_names"):
