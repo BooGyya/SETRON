@@ -43,6 +43,7 @@ from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_import_review import choose_release_reviews
 from setron.ui.import_delete import ImportDeletePage
+from setron.features.excel_import.comparison import ComparisonScopeError, compare_import
 from setron.ui.import_widgets import ComparisonCard, PeriodDateField, ImportComparison, ImportDataStateDialog, ImportSteps, import_combo_style, picture
 from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
 from setron.ui.import_tasks import discover_workbooks, read_workbook
@@ -802,12 +803,22 @@ class ImportPage(QWidget):
     def _refresh_comparison(self):
         self.comparison_request.cancel()
         self._comparison_context = None
-        if self.draft is None or self.kind is not ExtractKind.EQUIPMENT_STATUS or self.comparison_loader is None:
+        if self.draft is None or self.kind is not ExtractKind.EQUIPMENT_STATUS:
             self.comparison_card.show_comparison(None)
+            return
+        loader = self.comparison_loader
+        if loader is None and isinstance(self.saver, DatabaseImportSaver):
+            reference, saver = self.reference, self.saver
+            if reference is None or has_errors(self.issues):
+                self.comparison_card.show_comparison(None, message="검토 오류를 해결한 뒤 직전 저장본을 비교할 수 있습니다.")
+                return
+            loader = lambda draft: compare_import(saver.storage, draft, reference)
+        if loader is None:
+            self.comparison_card.show_comparison(None, message="DB 연결이 필요합니다.")
             return
         self._comparison_context = (self.generation, self.draft)
         self.comparison_card.show_comparison(None, message="같은 범위의 직전 저장본과 비교하고 있습니다…")
-        captured, loader = deepcopy(self.draft), self.comparison_loader
+        captured = deepcopy(self.draft)
         self.comparison_request.start(BackgroundRead(lambda: loader(captured)))
         self._render()
 
@@ -816,7 +827,8 @@ class ImportPage(QWidget):
         if context is None or context[0] != self.generation or context[1] is not self.draft:
             return
         if error is not None or result is not None and not isinstance(result, ImportComparison):
-            self.comparison_card.show_comparison(None, message="비교 자료를 읽지 못했습니다. ‘다시 검사’로 재시도할 수 있습니다.")
+            self.comparison_card.show_comparison(None, message=str(error) if isinstance(error, ComparisonScopeError) else
+                                                 "비교 자료를 읽지 못했습니다. ‘다시 검사’로 재시도할 수 있습니다.")
         else:
             self.comparison_card.show_comparison(result)
         self._render()
