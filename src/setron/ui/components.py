@@ -41,11 +41,15 @@ class DisclosureArrow(QLabel):
         super().__init__()
         asset = "c9be0.svg"
         size = svg_size(asset)
-        self._up = icon(asset).pixmap(size)
-        self._down = self._up.transformed(QTransform().rotate(180), Qt.TransformationMode.SmoothTransformation)
+        self.set_arrow_pixmap(icon(asset).pixmap(size))
         self.setFixedSize(size)
         self.setProperty("assetFile", asset)
         self.set_expanded(expanded)
+
+    def set_arrow_pixmap(self, pixmap):
+        self._up = pixmap
+        self._down = pixmap.transformed(QTransform().rotate(180), Qt.TransformationMode.SmoothTransformation)
+        self.setPixmap(self._up if getattr(self, "expanded", False) else self._down)
 
     def set_expanded(self, expanded):
         self.expanded = bool(expanded)

@@ -180,7 +180,10 @@ class ThemeManager(QObject):
                 painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
                 painter.fillRect(pixmap.rect(), QColor(self.tokens["accent"] if "active-" in asset else self.tokens["ink"]))
                 painter.end()
-            widget.setPixmap(pixmap)
+            if hasattr(widget, "set_arrow_pixmap"):
+                widget.set_arrow_pixmap(pixmap)
+            else:
+                widget.setPixmap(pixmap)
         if callable(getattr(widget, "icon", None)) and hasattr(widget, "setIcon") and not widget.property("fixedColorIcon"):
             original_icon = widget.property("setronOriginalIcon")
             if original_icon is None and not widget.icon().isNull():

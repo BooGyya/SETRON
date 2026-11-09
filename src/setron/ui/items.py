@@ -3,10 +3,11 @@
 from PySide6.QtCore import QPoint, QRect, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton, QSizePolicy,
+    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton, QSizePolicy,
     QStyle, QStyledItemDelegate, QTabBar, QVBoxLayout, QWidget,
 )
 
+from setron.infrastructure.excel_reader import open_source_cell
 from setron.features.item.schemas import APPLICATION_LABELS, Application, ItemState
 from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
@@ -374,6 +375,7 @@ class ItemsPage(QWidget):
             (180, 240, 200, 180, 280))
         self.source_model, self.source_table, self.source_note = self._section(
             detail, "Item 출처 · 원본 위치", ("대상 / 필드", "문서 · 리비전", "시트 · 셀", "입력 작업"), (180, 380, 280, 180))
+        self.source_table.activated.connect(self.open_source_cell)
         card = Card()
         card.body.setContentsMargins(24, 20, 24, 20)
         card.body.addWidget(label("설비별 적용 현황", 17, medium=True))
@@ -414,7 +416,7 @@ class ItemsPage(QWidget):
         card.body.addWidget(self.equipment_empty)
         detail.addWidget(card)
         detail.addWidget(_text("설비 행 또는 타일 선택 → 기존 설비 상세와 Item 근거 · 복귀 시 선택 범위 유지\n"
-                               "읽기 전용 · 원본 문서/셀 열기와 위험 규칙 근거는 미연결입니다."))
+                               "출처 표의 행을 두 번 클릭하면 원본 Excel 셀을 열 수 있습니다."))
         body.addWidget(self.list_view)
         body.addWidget(self.detail_view)
         self.manager = ItemRiskPage()
@@ -730,12 +732,30 @@ class ItemsPage(QWidget):
             return False
         return self._open_entry(self.visible_entries[row])
 
+    def open_source_cell(self, index):
+        refs = getattr(self, "source_refs", ())
+        if not index.isValid() or index.row() >= len(refs):
+            return
+        ref = refs[index.row()]
+        if not ref.sheet or not ref.cells:
+            self.source_note.setText("이 필드에는 저장된 시트·셀 위치가 없습니다.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, f"원본 Excel 선택 · {ref.sheet} · {ref.cells}", "",
+                                              "Excel (*.xlsx *.xlsm *.xlsb *.xls)")
+        if not path:
+            return
+        try:
+            open_source_cell(path, ref.sheet, ref.cells)
+        except Exception:
+            self.source_note.setText(f"선택한 파일에서 {ref.sheet} · {ref.cells} 위치를 열 수 없습니다. 원본 파일을 확인하세요.")
+        else:
+            self.source_note.setText(f"Excel에서 {ref.sheet} · {ref.cells} 위치를 열었습니다.")
+
     def _open_entry(self, entry):
         self._invalidate_selection()
         item = entry.item
         self.selected_id = item.item_id
         self.title.setText(f"Item {item.item_no if item.item_no is not None else '번호 미확인'} · ID {item.item_id}")
-        self.content.setText(item.content)
         catalog = self.data.catalog()
         names = {p.family_id: p.family_name for p in self.data.versions.pairs}
         releases = catalog.item_versions(item.item_id)
@@ -750,7 +770,11 @@ class ItemsPage(QWidget):
         sources = []
         VersionsPage._append_sources(sources, f"Item {item.item_id}", entry.sources)
         self.source_model.set_rows(sources)
-        self.source_note.setText("전달받은 원본 출처입니다. 관리값 수정은 제공하지 않습니다.")
+        self.source_refs = entry.sources
+        self.source_note.setText("출처 행을 두 번 클릭하거나 Enter를 눌러 원본 Excel 파일의 셀을 확인하세요."
+                                 if entry.sources else "저장된 원본 위치가 없습니다.")
+        rules = [r for r in self.data.risk_rules if r.item_id == item.item_id]
+        self.content.setText(item.content + "".join(f"\n위험 규칙 {r.risk_rule_id} · {r.risk_reason}" for r in rules))
         # 연결이 전혀 없는 Item은 다른 계열의 대상 외라는 판정을 확대하지 않는다.
         connected = self.data.observations_connected and bool(releases)
         summary = catalog.summarize(item, self.data.records) if connected else None

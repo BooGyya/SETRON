@@ -137,12 +137,13 @@ def test_header_opens_applied_cohort_without_new_query_or_menu(window, monkeypat
         calls.append(query)
         return original(query)
     monkeypatch.setattr(source, "snapshot", counted)
+    menus = tuple(window.nav)
     page, query = open_list(window)
     assert calls == [query]
     assert page.snapshot is window.pages["dashboard"].snapshot is window.pages["heatmap"].snapshot
     assert page.scope_ids == tuple(range(1, 19))
     assert window.route == "equipment" and window.header.title.text() == "설비 목록"
-    assert window.nav["heatmap"].isChecked() and len(window.nav) == 11
+    assert window.nav["heatmap"].isChecked() and tuple(window.nav) == menus and "equipment" not in menus
     assert page.model.rowCount() == 12 and page.metrics["total"].value.text() == "18대"
 
 

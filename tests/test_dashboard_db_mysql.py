@@ -160,4 +160,8 @@ def test_risk_rules_in_db_decide_dashboard_risk(storage):  # noqa: F811
     assert "위험 기준 1건" in after.source_label
     assert after.risks[by_code["D-O3"]] is RiskStatus.RISK
     assert after.risks[by_code["D-O2"]] is RiskStatus.NO_RISK
-    assert len(after.snapshot(ALL).risky_ids) == 1
+    snapshot = after.snapshot(ALL)
+    assert len(snapshot.risky_ids) == 1
+    from setron.ui.heatmap_data import equipment_tiles
+    tile = next(t for t in equipment_tiles(snapshot, after) if t.code == "D-O3")
+    assert "가상 결함" in tile.risk_detail and "끈 지정" not in tile.risk_detail

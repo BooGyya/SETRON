@@ -89,7 +89,8 @@ def test_table_enter_and_release_source_are_connected(window, data):
     assert window.route == "equipment"
     assert any("release.xlsx" in row[2] and "B8" in row[3] for row in detail.item_evidence_model.rows)
     assert any("모델 A" in row[3] for row in detail.item_evidence_model.rows)
-    assert "위험 규칙" in detail.evidence.text() and "미연결" in detail.evidence.text()
+    assert detail.detail_risk_badge.text() == "해당 Item 위험 규칙 없음"
+    assert "원본 셀" in detail.evidence.text()
 
 
 @pytest.mark.parametrize("change", ["reload", "failure", "scope", "item", "back", "new_equipment"])
