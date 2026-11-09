@@ -60,6 +60,8 @@ def extract_for_review(kind, workbook_name, snapshot, *, extractor=None, sheet_e
     if rules is not None:
         ruled = rules(kind, sheet)
         if ruled is not None:
+            if not ruled.ok:
+                return review_extraction_result(kind, sheet, ruled)   # 빈 양식·빈 시트: AI로 넘기지 않고 바로 알림
             review = review_extraction_result(kind, sheet, ruled)
             if review.ok:
                 return review
