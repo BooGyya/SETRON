@@ -526,3 +526,26 @@ def test_extraction_keeps_running_while_away_from_the_page(window, page):
     window.navigate("import")
     QTest.qWait(10)
     assert page.draft is not None and page.state == "idle"
+
+
+def test_stop_reason_is_shown_inside_the_review_area(window, page):
+    """추출이 멈추면 그 이유를 빈 검토 칸에 바로 보여 준다 (위쪽 안내는 3번 카드까지 내리면 안 보임, 11/09)."""
+    from setron.features.ai.schemas import AIResult, AIStatus, AITask
+    from setron.infrastructure.ai_client import ResponseSource
+
+    reason = "설비 현황표 양식이지만 설비호기·버전 칸이 비어 있어 읽을 설비가 없습니다."
+    page.rule_extractor = lambda kind, sheet: AIResult(AITask.EXCEL_EXTRACT, AIStatus.FAILED, reason, None, ResponseSource.RULE)
+    page.load_workbooks()
+    read(page)
+    assert page.extract()
+    wait_for_extraction(page)
+    assert page.draft is None and page.row_empty.isVisibleTo(page) and page.row_empty.text() == reason
+    assert page.source_badge.text() == "추출할 내용 없음"
+
+    page.rule_extractor = None                                                 # AI 실패도 같은 자리에 이유
+    page.extractor = lambda *args, **kwargs: AIResult(AITask.EXCEL_EXTRACT, AIStatus.FAILED, "AI 응답 시간 초과", None,
+                                                      ResponseSource.REAL)
+    assert page.extract()
+    assert page.row_empty.text() != reason                                     # 새 추출을 시작하면 이전 이유는 지운다
+    wait_for_extraction(page)
+    assert "AI 응답 시간 초과" in page.row_empty.text() and page.source_badge.text() == "AI 추출 실패"

@@ -196,3 +196,48 @@ def test_giheung_line_site_becomes_hwaseong_candidate():
     assert GIHEUNG_NOTE in candidate_notes(ai_value)
     typed = with_site(draft, typed=True)                     # 사람이 직접 입력한 값은 바꾸지 않는다
     assert "site" not in model_candidate_rows(typed).get(target.row_id, {})
+
+
+# --- 11/08: 교육용 원본(날짜 없는 파일)의 빈 양식은 AI로 넘기지 않는다 -----------------------------------------
+class _NoAI:
+    """AI 추출을 부르면 실패시킨다 (빈 양식이 AI로 넘어가지 않는지 확인)."""
+
+    def __call__(self, kind, sheet):
+        raise AssertionError("빈 양식이 AI 추출로 넘어갔습니다")
+
+
+def _original(name, sheet_name):
+    path = _path(name)
+    snapshot = _snapshot(path, sheet_name)
+    return path, snapshot, sheet_from_snapshot(path.name, snapshot)
+
+
+@pytest.mark.parametrize("name, sheet_name", [("평택설비현황표_교육용.xlsx", "P1"),
+                                              ("화성_설비현황표_SEMES_ETCH_교육용.xlsx", "Foundry")])
+def test_empty_original_status_templates_stop_without_ai(name, sheet_name):
+    from setron.ui.import_extraction import extract_for_review, rule_extractor
+    path, snapshot, sheet = _original(name, sheet_name)
+    result = rule_extract(ExtractKind.EQUIPMENT_STATUS, sheet)
+    assert result is not None and not result.ok and result.source is ResponseSource.RULE
+    assert "설비호기·버전 칸이 비어" in result.message
+    review = extract_for_review(ExtractKind.EQUIPMENT_STATUS, path.name, snapshot, sheet_extractor=_NoAI(),
+                                rules=rule_extractor)
+    assert not review.ok and review.source is ResponseSource.RULE
+
+
+def test_note_only_sheet_stops_without_ai():
+    from setron.ui.import_extraction import extract_for_review, rule_extractor
+    path, snapshot, _ = _original("평택설비현황표_교육용.xlsx", "P2")           # 'P2F', 'P1과 유사' 메모뿐
+    review = extract_for_review(ExtractKind.EQUIPMENT_STATUS, path.name, snapshot, sheet_extractor=_NoAI(),
+                                rules=rule_extractor)
+    assert not review.ok and "읽을 내용이 거의 없는 시트" in review.message
+
+
+def test_original_memory_still_rules_and_horizontal_note_still_goes_to_ai():
+    _, _, memory = _original("화성_설비현황표_SEMES_ETCH_교육용.xlsx", "Memory")
+    result = rule_extract(ExtractKind.EQUIPMENT_STATUS, memory)
+    assert result is not None and result.ok and len(result.data.rows) == 85
+    path = _path("P_PJT_M-O2_SW_정기_Release_List_교육용_가로형_AI테스트용.xlsx")
+    from openpyxl import load_workbook
+    horizontal = sheet_from_snapshot(path.name, _snapshot(path, load_workbook(path, read_only=True).sheetnames[0]))
+    assert rule_extract(ExtractKind.RELEASE_NOTE, horizontal) is None                 # 처음 보는 양식은 그대로 AI
