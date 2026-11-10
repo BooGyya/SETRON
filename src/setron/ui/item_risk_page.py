@@ -267,7 +267,7 @@ class ItemRiskPage(QWidget):
         records.sort(key=lambda value: (rank[value[2].status], value[0].equipment_code, value[0].equipment_id))
         risk_count = sum(result.status is RiskStatus.RISK for _, _, result in records)
         self.risk_badge.setText(f"미적용·결함 해당 {risk_count}대")
-        self.count.setText(f"관측일 {data.base_date if data else '미확인'} · {len(records)}대 · HPA 제외 {sum(r.is_hpa for r in data.records) if data else 0}대")
+        self.count.setText(f"관측일 {data.base_date if data else '미확인'} / {len(records)}대 · HPA 제외 {sum(r.is_hpa for r in data.records) if data else 0}대")
         pages = max(1, (len(records) + self.page_size - 1) // self.page_size)
         self.page_index = min(max(self.page_index, 0), pages - 1)
         visible = records[self.page_index * self.page_size:(self.page_index + 1) * self.page_size]
@@ -311,7 +311,7 @@ class ItemRiskPage(QWidget):
                 self.table.setRowHeight(index, max(self.table.rowHeight(index), host.sizeHint().height() + 16))
         self.table.setFixedHeight(max(100, min(720, 44 + sum(self.table.rowHeight(i) for i in range(len(rows))))))
         self.empty.setVisible(not rows)
-        self.empty.setText("조건에 맞는 설비가 없습니다." if data and data.observations_connected else "설비 관측 자료 미연결 · 0대/안전 확정 아님")
+        self.empty.setText("조건에 맞는 설비가 없습니다." if data and data.observations_connected else "설비 관측 자료 미연결 / 0대/안전 확정 아님")
         self.previous.setEnabled(self.page_index > 0)
         self.next.setEnabled(self.page_index + 1 < pages)
         self.page_label.setText(f"{self.page_index + 1} / {pages}")

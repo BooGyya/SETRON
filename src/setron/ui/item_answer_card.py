@@ -146,7 +146,7 @@ class ItemAnswerCard(QFrame):
         right.addWidget(label(f"미확인 {total.unknown}대 · 대상 외 {total.not_target}대 · HPA 제외 {sum(r.is_hpa for r in data.records)}대", 12,
                               color=SECONDARY, wrap=True))
         if not data.observations_connected:
-            right.addWidget(label("설비 관측 자료 미연결 · 0대/안전 확정 아님", 12, color="#b88000", wrap=True))
+            right.addWidget(label("설비 관측 자료 미연결 / 0대/안전 확정 아님", 12, color="#b88000", wrap=True))
         self.columns.set_widgets((versions, right_widget))
         self.columns.setVisible(bool(answer.item_ids))
         for route, control in self.actions.items():

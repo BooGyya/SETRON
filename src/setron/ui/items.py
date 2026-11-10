@@ -815,7 +815,7 @@ class ItemsPage(QWidget):
                       f"{APPLICATION_LABELS[p.application]} ({BASIS_LABELS[p.basis]})" for p in e.pms)
             or "PM/SW 관측 없음 · 업무 규칙상 대상 외") for e in rows), tuple(e.record.equipment_id for e in rows))
         self.scope_count.setText(f"표시 범위: {site if site is not None else '전체 Site'} · "
-                                 f"{APPLICATION_LABELS[state] if state else '전체 상태'} · {len(rows)}대 / 전체 {len(self.equipment)}대")
+                                 f"{APPLICATION_LABELS[state] if state else '전체 상태'} / {len(rows)}대 / 전체 {len(self.equipment)}대")
         if self.selected_equipment_id in self.equipment_model.ids:
             self.equipment_table.setCurrentIndex(self.equipment_model.index(self.equipment_model.ids.index(self.selected_equipment_id), 0))
         self.equipment_table.setVisible(bool(rows) and not heatmap)

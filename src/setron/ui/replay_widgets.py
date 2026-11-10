@@ -175,10 +175,10 @@ class ReplayHeatmap(QWidget):
         body = QVBoxLayout(card)
         body.setContentsMargins(12, 12, 12, 12)
         body.setSpacing(12)
-        body.addWidget(label(f"{title} · {sum(len(items) for _, items in lines)}대", 16, medium=True))
+        body.addWidget(label(f"{title} / {sum(len(items) for _, items in lines)}대", 18, medium=True))
         slots = []
         for (site, line), items in lines:
-            heading = label(f"{site} · {line or '구역 미확인'} · {len(items)}대", 12, medium=True, wrap=True)
+            heading = label(f"{site} · {line or '구역 미확인'} / {len(items)}대", 14, medium=True, wrap=True)
             ignore_width(heading)
             body.addWidget(heading)
             tile_grid = TileGrid([self._tile(tile, families, title) for tile, families in items],
