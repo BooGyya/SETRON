@@ -93,15 +93,15 @@ def approve(dialog):
     return True
 
 
-def test_tabs_preserve_import_draft_and_editor(own):
+def test_tabs_preserve_import_draft(own):
     page = import_page(own)
     extracted(page)
+    page.edit_cell("version_raw", "edited")
     original = page.draft
-    page.inputs["version_raw"].setText("unsubmitted edit")
     page.tabs.setCurrentIndex(1)
     assert page.workspace.currentIndex() == 1 and not page.steps.isVisible()
     page.tabs.setCurrentIndex(0)
-    assert page.draft is original and page.inputs["version_raw"].text() == "unsubmitted edit"
+    assert page.draft is original and page.draft.row(1).value("version_raw") == "edited"
 
 
 def test_first_step_context_applies_only_to_blank_fields(own):
@@ -144,16 +144,22 @@ def test_suggestion_is_explicit_and_preserves_source(own):
     assert page.draft.row(1).value("version_raw") == "v90.1.0,43"
 
 
-def test_unapplied_editor_values_cannot_be_silently_saved(own):
+def test_table_cell_edit_applies_immediately(own):
+    """값 수정 칸 없이 추출 표 칸에서 고치면 바로 반영된다 (11-10 2차 5-3)."""
     page = import_page(own)
     page.draft = draft(row())
     page.select_row(1)
     page._changed()
     assert page.save_button.isEnabled()
-    page.inputs["version_raw"].setText("v2")
-    assert not page.save_button.isEnabled()
-    assert not page.save() and "수정 반영" in page.notice.text()
-    assert page.apply_edits() and page.save_button.isEnabled()
+    column = 2 + page.draft.fields.index("version_raw")
+    cell = page.row_model.index(0, column)
+    assert page.row_model.flags(cell) & Qt.ItemFlag.ItemIsEditable
+    assert page.row_model.setData(cell, "v2")
+    QTest.qWait(10)
+    assert page.draft.row(1).value("version_raw") == "v2" and page.save_button.isEnabled()
+    cell = page.row_model.index(0, column)
+    assert page.row_model.data(cell) == "v2" and page.row_model.data(cell, Qt.ItemDataRole.BackgroundRole) is not None
+    assert "원래 값" in page.row_model.data(cell, Qt.ItemDataRole.ToolTipRole)
 
 
 def test_origin_rows_are_distinct_from_extraction_ids_and_split_rows_share_cell(own):
@@ -181,8 +187,7 @@ def test_review_action_marks_only_frontend_acknowledgement_and_edits_reset_it(ow
     assert page.issue_model.data(page.issue_model.index(0, page.issue_model.action_column)) == "확인 완료"
     assert page.review_ack_button.isEnabled() and page.review_ack_button.text() == "확인 취소"
     assert "검토 확인 1건" in page.save_summary.text()
-    page.inputs["version_raw"].setText("v2")
-    page.apply_edits()
+    page.edit_cell("version_raw", "v2")
     assert not page.reviewed_issues
 
 
@@ -196,16 +201,15 @@ def test_error_cannot_be_acknowledged_instead_of_corrected(own):
     assert not page.save_button.isEnabled()
 
 
-def test_review_acknowledgement_does_not_discard_unapplied_editor_text(own):
+def test_review_acknowledgement_keeps_edited_value(own):
     page = import_page(own)
     page.draft = draft(row())
     page.select_row(1)
+    page.edit_cell("version_raw", "고친 값")
     page.issues = (Issue(IssueLevel.REVIEW, "원본 대조 필요", 1, "version_raw", "I1"),)
     page._render()
-    page.inputs["version_raw"].setText("입력 중인 값")
     page._activate_issue(page.issue_model.index(0, page.issue_model.action_column))
-    assert page.inputs["version_raw"].text() == "입력 중인 값"
-    assert not page.save_button.isEnabled()
+    assert page.draft.row(1).value("version_raw") == "고친 값"
 
 
 def test_comparison_does_not_fake_zero_and_rejects_invalid_counts(own):
@@ -251,7 +255,7 @@ def test_progress_and_tabs_stay_fixed_when_import_content_scrolls(own):
     QTest.qWait(50)
     assert page.import_scroll.verticalScrollBar().value() > 0
     assert page.steps.mapTo(window, QPoint()).y() == before
-    assert page.tabs.mapTo(window, QPoint()).y() < before
+    assert not page.tab_strip.isVisibleTo(window)   # 앱에서는 탭이 하나만 남아 탭 줄을 숨긴다
     assert page.mapTo(window, QPoint(0, page.height())).y() <= window.height()
 
 
@@ -275,25 +279,23 @@ def test_leaving_pending_comparison_restores_controls_without_accepting_late_res
     assert page.comparison_card.comparison is None
 
 
-def test_saved_banner_routes_only_after_success_and_locks_second_save(own):
+def test_save_success_shows_toast_and_returns_to_first_step(own):
+    """저장 성공은 토스트로 알리고 1단계로 돌아간다. 같은 초안을 두 번 저장할 수 없다 (11-10 2차 1-1·1-2)."""
     saver = MemoryImportSaver("합성 저장소")
     page = import_page(own, saver=saver)
     page.draft = draft(row())
     page.workbook_name = page.draft.workbook_name
     page.select_row(1)
     page._changed()
-    assert not page.saved_banner.isVisibleTo(page)
+    receipts = []
+    page.saved.connect(lambda receipt: receipts.append((receipt, page.draft)))
     assert page.save()
     wait_for_extraction(page)
-    assert page.receipt is not None and page.saved_banner.isVisibleTo(page)
-    assert page.progress_steps.stage == 4 and not page.save_button.isEnabled()
-    assert not page.save()
-    routes = []
-    page.navigate_requested.connect(routes.append)
-    next(b for b in page.saved_banner.findChildren(QPushButton) if b.text() == "히트맵에서 보기").click()
-    assert routes == ["heatmap"] and len(saver.saved) == 1
-    page.kind_combo.setCurrentIndex(1)
-    assert page.draft is None and page.receipt is None and not page.saved_banner.isVisibleTo(page)
+    assert len(receipts) == 1 and receipts[0][1] is not None   # 받는 쪽은 저장한 초안을 읽을 수 있다
+    assert not page.toast.isHidden() and "저장했습니다" in page.toast.text.text() and "1행" in page.toast.text.text()
+    assert page.draft is None and page.receipt is None and page.result_label.text() == ""
+    assert not page.saved_banner.isVisibleTo(page) and page.progress_steps.stage == 0
+    assert not page.save() and len(saver.saved) == 1
 
 
 def test_data_status_distinguishes_four_states_and_date_selection(own):

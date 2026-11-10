@@ -41,7 +41,7 @@ def test_step_numbers_and_korean_captions_remain_after_completion(own):
         assert [v.text() for v in steps.captions] == list(steps.TITLES)
         for index, caption in enumerate(steps.captions):
             assert all(QFontMetrics(caption.font()).inFontUcs4(ord(c)) for c in caption.text())
-            assert steps.completions[index].isVisibleTo(steps) == (index < stage)
+            assert not steps.completions[index].isVisibleTo(steps)   # '완료' 글자 없이 색으로만 구분한다
             assert str(index + 1) in steps.buttons[index].accessibleName()
 
 
@@ -106,8 +106,8 @@ def test_ai_badge_and_button_free_popup_follow_actual_extraction_until_completio
     finally:
         gate.set()
         wait_for_extraction(page)
-    assert page.source_badge.text().startswith("AI 추출 완료")
-    assert "EXAMPLE" in page.source_badge.text()  # 예제를 실제 AI로 표시하지 않는다.
+    assert page.source_badge.text() == "추출 완료" and page.source_badge.tone == "warning"
+    assert "EXAMPLE" in page.source_badge.toolTip()  # 예제를 실제 AI로 표시하지 않는다.
     assert not page.progress_dialog.isVisible()
 
 
@@ -140,7 +140,8 @@ def test_slow_save_progress_closes_for_all_outcomes_and_never_duplicates(own, fa
         gate.set()
         wait_for_extraction(page)
     assert not page.progress_dialog.isVisible()
-    assert page.state == ("saved" if failure is None else "unknown" if isinstance(failure, DatabaseCommitUnknownError) else "failed")
+    # 저장에 성공하면 1단계로 돌아간다 (11-10 2차 1-2).
+    assert page.state == ("idle" if failure is None else "unknown" if isinstance(failure, DatabaseCommitUnknownError) else "failed")
     assert len(saver.saved) == (1 if failure is None else 0)
     assert page.save_button.isEnabled() == (isinstance(failure, DatabaseSaveError)
                                             and not isinstance(failure, DatabaseCommitUnknownError))

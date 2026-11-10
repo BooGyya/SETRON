@@ -294,14 +294,16 @@ def test_preview_shows_raw_cells_addresses_and_merged_ranges(page):
 
 def test_example_extract_is_labelled_and_blocked_until_reviewed(page, saver):
     draft = extracted(page)
-    assert "EXAMPLE" in page.source_badge.text() and "실제 AI 결과 아님" in page.source_badge.text()
+    assert page.source_badge.text() == "추출 완료" and page.source_badge.tone == "warning"
+    assert "EXAMPLE" in page.source_badge.toolTip() and "실제 AI 결과 아님" in page.source_badge.toolTip()
     assert not page.save_button.isEnabled() and any(issue.field == "base_date" and issue.blocks_save for issue in page.issues)
     assert not page.save()
-    page.inputs["base_date"].setText("2026-10-21")
-    assert page.apply_edits()
+    assert page.edit_cell("base_date", "2026-10-21")
     assert page.draft.row(1).original.get("base_date") is None  # AI 원본은 바뀌지 않는다
     assert page.draft.row(1).edited_fields == ("base_date",)
-    assert "수정됨" in page.row_model.rows[0][1] and "AI: 빈 값" in page.row_model.rows[0][2]
+    assert "수정됨" in page.row_model.rows[0][1]
+    edited = page.row_model.index(0, 2 + page.draft.fields.index("base_date"))
+    assert "원래 값 빈 값 → 새 값 2026-10-21" in page.row_model.data(edited, Qt.ItemDataRole.ToolTipRole)
     assert page.save_button.isEnabled() and draft.row(1).edits == {}
     assert saver.saved == []
 
@@ -317,20 +319,16 @@ def test_unrelated_edit_does_not_confirm_automatic_blank_but_explicit_clear_does
     page.draft = source
     page._changed(initial=True)
     page.select_row(1)
-    assert page.inputs["production_area"].text() == ""
-    assert not page.inputs["production_area"].isModified()
-    page.inputs["base_date"].setText("2026-11-03")
-    assert page.apply_edits()
+    assert page.draft.row(1).value("production_area") in (None, "")
+    assert page.edit_cell("base_date", "2026-11-03")
     assert page.draft.row(1).edited_fields == ("base_date",)
     assert any(i.field == "production_area" and i.blocks_save for i in page.issues)
     assert not page.save_button.isEnabled()
 
-    field = page.inputs["production_area"]
-    field.setFocus()
-    QTest.keyClicks(field, "x")
-    QTest.keyClick(field, Qt.Key.Key_Backspace)
-    assert field.text() == "" and field.isModified()
-    assert page.apply_edits()
+    # 빈 칸을 표에서 직접 열어 빈 채로 확정하면 자동 공란 오류가 풀린다.
+    cell = page.row_model.index(0, 2 + page.draft.fields.index("production_area"))
+    assert page.row_model.setData(cell, "")
+    QTest.qWait(10)
     assert page.draft.row(1).edits["production_area"] is None
     assert not any(i.blocks_save for i in page.issues)
     assert page.save_button.isEnabled()
@@ -344,58 +342,56 @@ def test_unrelated_edit_does_not_confirm_automatic_blank_but_explicit_clear_does
 
 def test_cancelled_confirmation_saves_nothing(page, saver):
     extracted(page)
-    page.inputs["base_date"].setText("2026-10-21")
-    page.apply_edits()
+    page.edit_cell("base_date", "2026-10-21")
     page.confirm = lambda text: False
     assert not page.save()
     QTest.qWait(10)
     assert saver.saved == [] and page.state == "idle" and page.save_button.isEnabled()
 
 
-def test_confirmed_save_shows_saving_then_success_and_prevents_duplicates(window, page, saver):
+def test_confirmed_save_shows_toast_and_returns_to_first_step(window, page, saver):
+    """저장을 마치면 아래 결과 문구 없이 토스트를 띄우고 1단계로 돌아간다 (11-10 2차 1-1·1-2)."""
     extracted(page)
-    page.inputs["base_date"].setText("2026-10-21")
-    page.apply_edits()
+    page.edit_cell("base_date", "2026-10-21")
     query, targets = window.query_state.applied, window.query_state.target_draft
+    workbook = page.workbook_combo.currentData()
     assert page.save()
     assert EQUIPMENT_BOOK in page.confirms[0] and "Memory" in page.confirms[0] and "테스트 메모리 저장소" in page.confirms[0]
     assert page.state == "saving" and page.status.text() == "저장 중"
     assert not page.save_button.isEnabled() and not page.read_button.isEnabled() and not page.save()
     wait_for_extraction(page)
-    assert page.state == "saved" and page.status.tone == "success"
     assert len(saver.saved) == 1 and saver.saved[0].rows[0].edited_fields == ("base_date",)
     assert EQUIPMENT_BOOK not in str(saver.saved[0].raw_data)
-    assert "조회 적용" in page.result_label.text()
-    assert not page.save_button.isEnabled() and not page.save() and not page.apply_edit_button.isEnabled()
-    assert all(field.isReadOnly() for field in page.inputs.values())
-    assert len(saver.saved) == 1
-    # 저장으로 조회 결과·목표 N이 바뀌지 않고, 이동 버튼은 이동만 한다.
-    assert page.requery_button.isVisible()
-    page.requery_button.click()
-    assert window.route == "dashboard" and window.query_state.applied is query
-    assert window.query_state.target_draft == targets
+    assert page.toast is not None and not page.toast.isHidden() and "저장했습니다" in page.toast.text.text()
+    assert page.toast.tone == "success"
+    # 처음으로: 통합문서 선택은 남고, 시트·미리보기·검토 내용·결과 문구는 비운다.
+    assert page.state == "idle" and page.draft is None and page.snapshot is None and page.receipt is None
+    assert page.workbook_combo.currentData() == workbook and page.sheet_combo.currentIndex() == -1
+    assert page.result_label.text() == "" and page.progress_steps.stage == 0
+    assert not page.save() and len(saver.saved) == 1
+    # 저장으로 조회 결과·목표 N이 바뀌지 않는다.
+    assert window.query_state.applied is query and window.query_state.target_draft == targets
 
 
 def test_failed_save_keeps_draft_and_retry_uses_same_request(page, saver):
     saver.failures.append(DatabaseSaveError("데이터 저장에 실패해 이번 저장 묶음을 취소했습니다."))
     extracted(page)
-    page.inputs["base_date"].setText("2026-10-21")
-    page.apply_edits()
+    page.edit_cell("base_date", "2026-10-21")
     request_id = page.request_id
     page.save()
     wait_for_extraction(page)
     assert page.state == "failed" and page.status.tone == "danger" and "기존 자료는 그대로" in page.result_label.text()
+    assert not page.toast.isHidden() and page.toast.tone == "danger" and "기존 자료는 그대로" in page.toast.text.text()
     assert page.save_button.isEnabled() and page.draft.row(1).value("base_date") == "2026-10-21"
     page.save()
     wait_for_extraction(page)
-    assert page.state == "saved" and [r.request_id for r in saver.saved] == [request_id]
+    assert page.draft is None and [r.request_id for r in saver.saved] == [request_id]
 
 
 def test_unknown_commit_result_locks_retry(page, saver):
     saver.failures.append(DatabaseCommitUnknownError("최종 저장 중 DB 연결이 끊겨 저장 결과를 확인할 수 없습니다."))
     extracted(page)
-    page.inputs["base_date"].setText("2026-10-21")
-    page.apply_edits()
+    page.edit_cell("base_date", "2026-10-21")
     page.save()
     wait_for_extraction(page)
     assert page.state == "unknown" and page.status.tone == "warning"
@@ -417,7 +413,10 @@ def test_issue_selects_row_and_highlights_source_cell(page):
     extracted(page)
     page.selected_row_id = None
     page.open_issue(next(i for i, issue in enumerate(page.issues) if issue.row_id == 1 and issue.field == "base_date"))
-    assert page.selected_row_id == 1 and not page.editor.isHidden()
+    assert page.selected_row_id == 1
+    # 검토 항목을 누르면 추출 표의 해당 칸으로 간다 (값 수정 칸은 없앴다).
+    current = page.row_table.currentIndex()
+    assert current.row() == 0 and current.column() == 2 + page.draft.fields.index("base_date")
     page.kind_combo.setCurrentIndex(page.kind_combo.findData(ExtractKind.RELEASE_NOTE.value))
     extracted(page, book=RELEASE_BOOK, sheet="Release")
     page.open_issue(next(i for i, issue in enumerate(page.issues) if issue.address == "E3"))

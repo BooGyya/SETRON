@@ -265,6 +265,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 저장 자료 삭제로 옮긴다 (같은 객체·연결 유지).
     data_page.attach_deletion(importer.deletion)
     importer.tabs.setTabVisible(1, False)
+    importer.tab_strip.hide()      # 탭이 '가져오기' 하나만 남아 탭 줄을 통째로 숨긴다 (11-10 2차 7-1)
     versions.configure(management_gateway, release_refresh_context, edit_allowed=lambda: (
         not management.busy and not management.locked and management.state not in {"review", "saving"}
         and not management.pending and not management.pending_applicability))
@@ -509,7 +510,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         # 데이터 가져오기 화면은 '합성 예시' 안내 박스를 숨긴다. DB 접속 실패 경고는 그대로 보인다.
         warning = window.data_warning.text()
         window.data_warning.setVisible(bool(warning) and not (window.route == "import" and warning.startswith("DB 접속 설정이 없어")))
-        window.header.toolbar.setVisible(window.route not in {"items", "replay", "versions", "data", "reports", "settings"})
+        # 데이터 가져오기 화면도 머리 줄 '설비 목록' 버튼을 숨긴다 (11-10 2차 3-1).
+        window.header.toolbar.setVisible(window.route not in {"import", "items", "replay", "versions", "data", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
@@ -1014,13 +1016,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if invalid:
             details = " / ".join(f"{model_name(source, target.model_id)}·계열 {family_name(source, target.family_id)}: "
                                  f"{target.reason}" for target in invalid)
-            importer.result_label.setText(importer.result_label.text() + "\n목표 N 재선택·적용 근거 확인 필요: " + details)
+            # 저장 뒤 가져오기 화면은 1단계로 돌아가므로, 확인할 점은 토스트로 알린다 (11-10 2차 1-2).
+            importer.show_toast("목표 N 재선택·적용 근거 확인 필요: " + details, "warning", 10000)
         unresolved = judgments.unresolved_risk_ids if judgments else ()
         if unresolved:
             identifiers = ", ".join(str(identifier) for identifier in unresolved)
-            importer.result_label.setText(importer.result_label.text() +
-                f"\n수동 위험 지정 {len(unresolved)}건이 미확인으로 유지되었습니다 (지정 번호: {identifiers}). "
-                "대상 버전·Item과 적용 범위를 확인해 주세요. 위험이 해제된 상태가 아닙니다.")
+            importer.show_toast(
+                f"수동 위험 지정 {len(unresolved)}건이 미확인으로 유지되었습니다 (지정 번호: {identifiers}). "
+                "대상 버전·Item과 적용 범위를 확인해 주세요. 위험이 해제된 상태가 아닙니다.", "warning", 10000)
         window.notice.setText(f"DB 저장 완료 · 입력 작업 {receipt.batch_id} · {receipt.row_count}행")
 
     importer.saved.connect(invalidate_saved_results)

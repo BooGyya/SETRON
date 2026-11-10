@@ -450,7 +450,7 @@ def test_replay_has_no_main_horizontal_overflow_and_header_layout_recovers(own, 
     assert page.width() <= window.scroll.viewport().width()
     assert page.reset_button.iconSize() == window.query_panel.reset_button.iconSize()
     assert page.query_panel.card.property("outlined") is True
-    window.navigate("import")
+    window.navigate("dashboard")   # 데이터 가져오기는 머리 줄 툴바를 숨기므로(11-10 2차 3-1) 대시보드로 확인한다
     assert window.header.toolbar.isVisibleTo(window)
 
 

@@ -29,6 +29,13 @@ def test_any_text_click_starts_typing_from_first_digit_without_clearing_date(own
     field.setText(initial)
     QTest.qWait(10)
     QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=QPoint(click_x, field.height() // 2))
+    if name == "common_date":
+        # 가져오기 기준일은 칸 어디를 눌러도 달력이 열린다 (11-10 2차 6-2). 닫으면 키보드 입력은 그대로다.
+        assert field.calendar_menu.isVisible()
+        field.calendar_menu.close()
+        field.setFocus()
+    else:
+        assert not hasattr(field, "calendar_menu")   # 다른 날짜 칸은 달력 그림을 눌러야 열린다.
     assert field.hasFocus() and field.cursorPosition() == 0
     assert field.text() == initial  # 클릭만으로 이미 입력된 날짜를 버리지 않는다.
     QTest.keyClicks(field, "20261108")
@@ -105,6 +112,8 @@ def test_import_common_date_hides_block_cursor_and_keeps_selection_and_calendar(
     field.setText("2026-11-08")
     QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=QPoint(80, field.height() // 2))
     QTest.qWait(20)
+    field.calendar_menu.close()
+    field.setFocus()
     assert field.hasFocus() and field.cursorPosition() == 0
     first = field.grab().toImage()
     field.setCursorPosition(6)

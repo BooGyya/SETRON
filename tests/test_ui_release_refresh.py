@@ -160,7 +160,8 @@ def test_app_captures_applied_targets_and_invalidates_results_after_save(app, re
         assert window.pages["heatmap"].snapshot is None
         assert state.applied.targets == (TargetN(1, 1, selected),)
         assert state.target_draft == (TargetN(1, 1, None),)
-        assert "목표 N 재선택" in importer.result_label.text()
+        # 저장 뒤 가져오기 화면은 1단계로 돌아가므로 확인할 점은 토스트로 알린다 (11-10 2차 1-2).
+        assert importer.toast.tone == "warning" and "목표 N 재선택" in importer.toast.text.text()
     finally:
         window.close()
         window.deleteLater()

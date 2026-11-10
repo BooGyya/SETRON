@@ -17,12 +17,13 @@ from datetime import date, datetime, timedelta
 from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QButtonGroup, QComboBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QAbstractItemView, QButtonGroup, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QMessageBox, QStackedWidget, QTabBar, QTableWidget, QTableWidgetItem, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from setron.features.management.schemas import RecordEdit
+from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.equipment import ignore_width
 from setron.ui.read_worker import BackgroundRead, ReadRequest
@@ -149,7 +150,7 @@ class SheetPanel(_Panel):
         card = Card(padding=20)
         body.addWidget(card)
         row = QHBoxLayout()
-        self.sheet_combo = QComboBox()
+        self.sheet_combo = ComboBox()
         self.sheet_combo.setAccessibleName("현황표 선택 (기준일 · Site · 시트)")
         self.sheet_combo.setMinimumWidth(360)
         self.sheet_combo.currentIndexChanged.connect(self._sheet_changed)
@@ -319,10 +320,10 @@ class AddGroupDialog(QDialog):
         form = QFormLayout(self)
         self.name = QLineEdit()
         self.name.setPlaceholderText("C7")
-        self.category = QComboBox()
+        self.category = ComboBox()
         for value in ("POLY", "OXIDE", "KCTC"):
             self.category.addItem(value, value)
-        self.parent_combo = QComboBox()
+        self.parent_combo = ComboBox()
         self.parent_combo.addItem("없음 (기본형)", None)
         for group in groups:
             if group.parent_id is None and group.category in ("POLY", "OXIDE", "KCTC"):
@@ -387,7 +388,7 @@ class EquipmentPanel(_Panel):
         filters = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("설비 ID 검색")
-        self.site_filter, self.line_filter = QComboBox(), QComboBox()
+        self.site_filter, self.line_filter = ComboBox(), ComboBox()
         for widget in (self.search, self.site_filter, self.line_filter):
             filters.addWidget(widget)
         self.search.textChanged.connect(self._render_equipment)
@@ -835,7 +836,7 @@ class HistoryPanel(_Panel):
         body.addWidget(left, 1)
         body.addWidget(right)
         filters = QHBoxLayout()
-        self.period, self.kind = QComboBox(), QComboBox()
+        self.period, self.kind = ComboBox(), ComboBox()
         for text, value in self.PERIODS:
             self.period.addItem(text, value)
         for text, value in self.KINDS:

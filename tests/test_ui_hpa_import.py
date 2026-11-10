@@ -135,7 +135,7 @@ def test_native_sdk_pipeline_saves_hpa_from_selected_original(app, pages):
     page.confirm = lambda _: True
     try:
         prepare(page)
-        assert "REAL" in page.source_badge.text() and len(requests) == 1
+        assert "REAL" in page.source_badge.toolTip() and len(requests) == 1
         assert "읽은 범위: B5:I7" in requests[0]["messages"][1]["content"]
         assert page.draft.row(2).value("equipment_code") == "TEST-HPA-UI"
         assert page.draft.row(2).value("version_raw") == "vHPA.2_d5 "
@@ -165,8 +165,7 @@ def test_blank_hpa_sw_shows_actual_position_and_requires_explicit_completion(pag
     assert any(row[5:] == ("HPA_화면검증.xlsx", "현황", "7", "8") for row in page.issue_model.rows)
     assert not page.save() and not saver.saved
     page.select_row(2)
-    page.inputs["version_raw"].setText("vHPA.USER")
-    assert page.apply_edits() and page.save_button.isEnabled() and page.save()
+    assert page.edit_cell("version_raw", "vHPA.USER") and page.save_button.isEnabled() and page.save()
     wait_for_extraction(page)
     assert len(saver.saved[0].rows) == 2
     assert saver.saved[0].raw_data["cells"]["H7"] is None
@@ -190,7 +189,7 @@ def test_native_ui_hpa_exclusion_cannot_hide_required_errors_with_missing_classi
     page = ImportPage(excel=excel, saver=saver, confirm=lambda _: True, sheet_extractor=native)
     pages.append(page)
     prepare(page)
-    assert "REAL" in page.source_badge.text()
+    assert "REAL" in page.source_badge.toolTip()
     assert page.select_row(2) and page.toggle_excluded()
 
     problems = [issue for issue in page.issues if issue.row_id == 2 and issue.field == missing and issue.blocks_save]
@@ -200,9 +199,9 @@ def test_native_ui_hpa_exclusion_cannot_hide_required_errors_with_missing_classi
     assert page.toggle_excluded()
     for name in ("model_name", "group_name", "family_name"):
         if page.draft.row(2).value(name) is None:
-            page.inputs[name].setText("HPA")
-    page.inputs[missing].setText("TEST-HPA-UI" if missing == "equipment_code" else "vHPA.USER")
-    assert page.apply_edits() and page.save_button.isEnabled() and page.save()
+            page.edit_cell(name, "HPA")
+    assert page.edit_cell(missing, "TEST-HPA-UI" if missing == "equipment_code" else "vHPA.USER")
+    assert page.save_button.isEnabled() and page.save()
     wait_for_extraction(page)
     assert len(saver.saved[0].rows) == 2
     assert saver.saved[0].raw_data["cells"]["F7" if missing == "equipment_code" else "H7"] is None
@@ -280,13 +279,10 @@ def test_user_confirms_ambiguous_blank_source_and_invalid_address_keeps_original
     prepare(page)
     assert any(issue.code == "REQUIRED_SOURCE_UNRESOLVED" for issue in page.issues)
     page.select_row(2)
-    page.inputs["version_raw"].setText("vHPA.USER")
-    assert page.apply_edits() and not page.save_button.isEnabled()
+    assert page.edit_cell("version_raw", "vHPA.USER") and not page.save_button.isEnabled()
     before = page.draft
-    page.source_inputs["version_raw"].setText("ZZ9999")
-    assert not page.apply_edits() and page.draft is before
-    page.source_inputs["version_raw"].setText("J7")
-    assert page.apply_edits() and page.save_button.isEnabled() and page.save()
+    assert not page.edit_source("ZZ9999") and page.draft is before
+    assert page.edit_source("J7") and page.save_button.isEnabled() and page.save()
     wait_for_extraction(page)
     assert saver.saved[0].rows[1].source_reference["version_raw"] == {"sheet": "현황", "cells": ["J7"]}
     assert saver.saved[0].raw_data["cells"]["J7"] is None and saver.saved[0].raw_data["cells"]["H7"] is None
