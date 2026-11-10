@@ -1,30 +1,23 @@
 """VER5 / 6 Version Replay. 한 화면의 날짜·재생 상태만 바꾸는 읽기 전용 UI."""
 
-from dataclasses import replace
-
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QDate, QSignalBlocker, QTimer, Qt
 from PySide6.QtWidgets import (
-    QButtonGroup, QDialog, QFrame, QHBoxLayout, QProgressBar, QSizePolicy, QVBoxLayout, QWidget,
+    QButtonGroup, QDialog, QHBoxLayout, QProgressBar, QTabBar, QVBoxLayout, QWidget,
 )
 
-from setron.features.excel_import.service import parse_date
-from setron.features.targets.groups import with_saved_groups
-from setron.ui.combo_box import ComboBox
-from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.dashboard_charts import series_color
+from setron.ui.components import Card, button, label
+from setron.ui.dashboard import TAB_STYLE
+from setron.ui.dashboard_charts import series_button_style, series_color
 from setron.ui.equipment import ignore_width
 from setron.ui.equipment_drawer import EquipmentDrawer
-from setron.ui.heatmap import RISK_LINE, TIER_FILL, TIER_LEGEND
 from setron.ui.heatmap_data import EquipmentSelection
-from setron.ui.import_widgets import PeriodDateField, import_combo_style
-from setron.ui.query_panel import _WrapRow
-from setron.ui.query_state import UNASSIGNED, QuerySelection, QueryState
+from setron.ui.query_panel import QueryPanel, _WrapRow
+from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.replay_data import INTERVALS, ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
 from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap
-from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font, set_widget_font
+from setron.ui.theme import LINE, PRIMARY, SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
-from setron.ui.versions import _field
 
 
 class ReplayPage(QWidget):
@@ -33,7 +26,7 @@ class ReplayPage(QWidget):
         self.source, self.loader, self.targets_provider = source, loader, targets_provider
         self.state = QueryState(source.catalog)  # 공통 조회 초안·적용 N과 독립적인 조회 상태.
         self.data, self.pending_request = None, None
-        self.index, self.epoch, self.dirty, self._filling = 0, 0, True, False
+        self.index, self.epoch, self.dirty = 0, 0, True
         self.version_dialog, self.drawer = None, None
         self.read_request = ReadRequest(self)
         self.read_request.completed.connect(self._loaded)
@@ -41,87 +34,18 @@ class ReplayPage(QWidget):
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.advance)
         self.legend_buttons, self.legend_tools, self.frames = {}, (), ()  # frames: 지금 재생 간격의 시점들
+        self._legend_available = set()
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.filters = Card(padding=20)
-        self.filters.body.setSpacing(12)
-        self.filters.setStyleSheet(f"QFrame#card {{background:white;border:1px solid {LINE};border-radius:8px;}}")
-        self.start, self.end = PeriodDateField(), PeriodDateField()
-        days = source.analysis_dates or source.dates
-        if days:
-            self.start.setText(str(days[0]))
-            self.end.setText(str(days[-1]))
-        for control, name in ((self.start, "Replay 시작 날짜"), (self.end, "Replay 종료 날짜")):
-            control.setAccessibleName(name)
-            control.setFixedHeight(38)
-            control.setFixedWidth(160)
-        period = QWidget()
-        period.setFixedWidth(346)
-        period_row = QHBoxLayout(period)
-        period_row.setContentsMargins(0, 0, 0, 0)
-        period_row.setSpacing(8)
-        period_row.addWidget(_field("시작 날짜", self.start))
-        separator = label("~", 14, color=SECONDARY)
-        separator.setFixedWidth(10)
-        period_row.addWidget(separator, 0, Qt.AlignmentFlag.AlignBottom)
-        period_row.addWidget(_field("종료 날짜", self.end))
-        self.combos, fields = {}, [period]
-        # 설비군은 조회 조건이 아니라 그래프 위 설비군 버튼에서 고른다 (요청 1-1, 2-2).
-        for key, title in (("site_key", "Site"), ("fab_key", "Fab"), ("line_key", "Line")):
-            control = ComboBox()
-            control.setAccessibleName("Replay " + title)
-            control.setProperty("queryField", True)
-            control.setFixedHeight(38)
-            control.setMinimumWidth(0)
-            control.setStyleSheet(import_combo_style())
-            control.currentIndexChanged.connect(lambda _, field=key: self._select(field))
-            self.combos[key] = control
-            fields.append(_field(title, control))
-        tools = QWidget()
-        tools.setFixedWidth(150)
-        tools_box = QVBoxLayout(tools)
-        tools_box.setContentsMargins(0, 0, 0, 0)
-        tools_box.setSpacing(0)
-        tools_box.addStretch()
-        tools_row = QHBoxLayout()
-        tools_row.setSpacing(12)
-        tools_box.addLayout(tools_row)
-        self.reset_button = button("", asset="replay-ver5/65ae3.svg")
-        self.reset_button.setProperty("assetFile", "replay-ver5/65ae3.svg")
-        self.reset_button.setAccessibleName("Replay 조건 초기화")
-        self.reset_button.setToolTip("기간과 조회 조건 초기화 · 공통 목표 N은 변경하지 않습니다")
-        self.reset_button.setFixedSize(48, 38)
-        self.reset_button.setStyleSheet("QPushButton {background:#e8ecfc;border:1px solid #a8b8f7;border-radius:10px;padding:0;"
-                                       "min-height:36px;max-height:36px;}"
-                                       f"QPushButton:focus {{border:2px solid {PRIMARY};min-height:34px;max-height:34px;}}")
-        self.apply_button = button("조회 적용", primary=True)
-        self.apply_button.setStyleSheet("QPushButton {padding:0;min-height:36px;max-height:36px;}"
-                                       "QPushButton:focus {min-height:34px;max-height:34px;}")
-        self.apply_button.setFixedSize(90, 38)
-        tools_row.addWidget(self.reset_button)
-        tools_row.addWidget(self.apply_button)
-        fields.append(tools)
-        self.filters.body.addWidget(_WrapRow(fields, 106, fields=True))
-        self.version_button = button("조회 버전 설정")
-        self.version_button.setStyleSheet("QPushButton {padding:0;min-height:38px;max-height:38px;}"
-                                         "QPushButton:focus {min-height:36px;max-height:36px;}")
-        self.version_button.setFixedSize(170, 40)
-        self.version_button.setAccessibleName("Replay 버전 다중 선택 조회")
-        self.version_button.setToolTip("조회할 버전을 여러 개 선택합니다. 목표 N은 변경하지 않습니다.")
-        self.filters.body.addWidget(self.version_button, 0, Qt.AlignmentFlag.AlignLeft)
-        body.addWidget(self.filters)
-        self.applied_row = QWidget()
-        applied = QHBoxLayout(self.applied_row)
-        applied.setContentsMargins(0, 0, 0, 0)
-        applied.setSpacing(12)
-        self.badge = StatusBadge("조회 적용 전", "info")
-        self.context = label("기간과 조회 조건을 선택해 주세요.", 13, color=SECONDARY, wrap=True)
-        ignore_width(self.context)
-        applied.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignTop)
-        applied.addWidget(self.context, 1)
-        body.addWidget(self.applied_row)
+        self.query_panel = QueryPanel(self.state, period=True)
+        self.start, self.end = self.query_panel.start_date, self.query_panel.end_date
+        self.reset_button = self.query_panel.reset_button
+        self.version_button = self.query_panel.version_button
+        self.version_button.setEnabled(True)
+        self._reset_period()
+        body.addWidget(self.query_panel)
         self.message = label("", 13, color=SECONDARY, wrap=True)
         self.message.hide()
         ignore_width(self.message)
@@ -130,15 +54,6 @@ class ReplayPage(QWidget):
         self.content.setStyleSheet("QFrame#card {background:white;border:0;border-radius:12px;}")
         self.content.body.setSpacing(12)
         self.content.body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.snapshot_title = label("관측 시점", 20, medium=True)
-        self.content.body.addWidget(self.snapshot_title)
-        self.content.body.addWidget(label("선택 설비군 기준 집계 · 그날 저장되지 않은 설비는 이전 마지막 관측으로 계산 (대시보드와 같은 규칙)",
-                                          13, color=SECONDARY, wrap=True))
-        # 그날 실제로 저장된 설비와 이전 관측을 이어받은 설비 수 (QA R-01).
-        self.observation_note = label("", 13, color=SECONDARY, wrap=True)
-        self.observation_note.setAccessibleName("선택 시점의 관측 구성")
-        ignore_width(self.observation_note)
-        self.content.body.addWidget(self.observation_note)
         # 날짜 칩 대신 재생 간격 (요청 2-1). 하나만 고르는 세그먼트 버튼. 바꾸면 다시 조회하지 않고 시점만 다시 만든다.
         self.timeline = QWidget()
         interval_row = QHBoxLayout(self.timeline)
@@ -174,27 +89,16 @@ class ReplayPage(QWidget):
         interval_row.addWidget(segment)
         interval_row.addStretch()
         self.content.body.addWidget(self.timeline)
-        self.chart_card = Card(padding=20)
-        self.chart_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        self.chart_card.body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.chart_card.setStyleSheet("QFrame#card {background:white;border:0;border-radius:12px;}")
-        self.chart_card.body.setSpacing(12)
-        self.chart_card.body.addWidget(label("설비군별 목표 적용 추이", 20, medium=True))
-        self.chart_context = label("전체 설비 · 기본 목표 N", 14, color=SECONDARY, wrap=True)
-        self.chart_card.body.addWidget(self.chart_context)
         self.legend_host = QWidget()
         self.legend_body = QVBoxLayout(self.legend_host)
         self.legend_body.setContentsMargins(0, 0, 0, 0)
-        self.chart_card.body.addWidget(self.legend_host)
-        self.chart = ReplayChart()
-        self.chart.date_selected.connect(self.select_date)
-        self.chart_card.body.addWidget(self.chart)
-        self.content.body.addWidget(self.chart_card)
-        # 재생 버튼: 그래프 아래, 재생 상태 글자 위. 글자 대신 기호 (요청 2-3, 3-3).
+        self.content.body.addWidget(self.legend_host)
+        # 두 보기에서 같은 재생 상태를 제어한다.
         playback = QWidget()
         playback_row = QHBoxLayout(playback)
         playback_row.setContentsMargins(0, 0, 0, 0)
         playback_row.setSpacing(8)
+        playback_row.addStretch(1)
         # 앱 글꼴(IBM Plex Sans KR)에 있는 기호만 쓴다. ⏸·⏮는 글꼴에 없어 네모로 깨진다.
         self.play_button, self.pause_button, self.restart_button = button("▶", primary=True), button("‖"), button("↺")
         for control, name in ((self.play_button, "재생"), (self.pause_button, "일시정지"), (self.restart_button, "처음부터")):
@@ -205,10 +109,8 @@ class ReplayPage(QWidget):
                                   "QPushButton:focus {min-height:36px;max-height:36px;}")
             control.setFixedSize(56, 40)
             playback_row.addWidget(control)
-        playback_row.addStretch()
+        playback_row.addStretch(1)
         self.content.body.addWidget(playback)
-        self.playback_status = label("일시정지 · 0 / 0", 15, medium=True)
-        self.content.body.addWidget(self.playback_status)
         self.achievement = label("등록 SW 목표 달성 —", 20, medium=True, wrap=True)
         self.content.body.addWidget(self.achievement)
         self.progress = QProgressBar()
@@ -220,49 +122,30 @@ class ReplayPage(QWidget):
         self.progress.setStyleSheet(f"QProgressBar {{background:#e8ebfc;border:0;border-radius:0;}}"
                                    f"QProgressBar::chunk {{background:{PRIMARY};border-radius:0;}}")
         self.content.body.addWidget(self.progress)
-        self.heatmap_title = label("선택 시점의 설비 Heatmap", 16, medium=True)
-        self.content.body.addWidget(self.heatmap_title)
-        description = label("재생하면 시점 순서대로 타일 색이 바뀝니다 · 위 설비군 버튼에서 고른 설비군만 보입니다 · "
-                            "버전 히트맵과 같은 설비군 → Line → 설비 묶음",
-                            12, color=SECONDARY, wrap=True)
-        ignore_width(description)
-        self.content.body.addWidget(description)
-        # 타일 채움색과 같은 5단계 범례 + 위험 후보 빨간 테두리 (버전 히트맵과 같음, QA R-02).
-        self.legend_items = []
-        for color, caption in [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보")]:
-            item = QWidget()
-            row = QHBoxLayout(item)
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(6)
-            dot = QFrame()
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background:{color};border-radius:5px;" if color else
-                              f"background:white;border:2px solid {RISK_LINE};border-radius:3px;")
-            row.addWidget(dot)
-            row.addWidget(label(caption, 12, color=SECONDARY))
-            row.addStretch()
-            item.setAccessibleName("범례 " + caption)
-            self.legend_items.append(item)
-        self.content.body.addWidget(_WrapRow(self.legend_items, 120))
-        self.content.body.addWidget(label("설비군 → Line → 설비", 16, medium=True))
-        group_policy = label("Site·Fab은 조회 조건으로 유지 · Line 미확정 값은 원본 구역으로 구분합니다. "
-                             "복수 SW는 여러 설비군에 표시되며 전체 물리 대수는 중복하지 않습니다.",
-                             11, color=SECONDARY, wrap=True)
-        ignore_width(group_policy)
-        self.content.body.addWidget(group_policy)
+        self.view_tabs = QTabBar()
+        self.view_tabs.setAccessibleName("리플레이 보기")
+        self.view_tabs.setDrawBase(False)
+        self.view_tabs.setExpanding(False)
+        self.view_tabs.setStyleSheet(TAB_STYLE)
+        set_widget_font(self.view_tabs, font(14, medium=True))
+        for caption in ("달성률 추이", "히트맵"):
+            self.view_tabs.addTab(caption)
+        self.content.body.addWidget(self.view_tabs, 0, Qt.AlignmentFlag.AlignLeft)
+        self.chart = ReplayChart()
+        self.chart.date_selected.connect(self.select_date)
+        self.content.body.addWidget(self.chart)
         self.heatmap = ReplayHeatmap()
         self.heatmap.equipment_selected.connect(self.open_equipment)
         self.content.body.addWidget(self.heatmap)
+        self.view_tabs.currentChanged.connect(self._show_view)
+        self._show_view(self.view_tabs.currentIndex())
         body.addWidget(self.content)
-        self.start.textChanged.connect(self._changed)
-        self.end.textChanged.connect(self._changed)
+        self.query_panel.confirmed.connect(self._confirm_filters)
         self.reset_button.clicked.connect(self.reset_filters)
-        self.apply_button.clicked.connect(self.apply_query)
         self.version_button.clicked.connect(self.open_versions)
         self.play_button.clicked.connect(self.play)
         self.pause_button.clicked.connect(self.pause)
         self.restart_button.clicked.connect(self.restart)
-        self._fill_choices()
         self._sync_controls()
 
     @property
@@ -274,56 +157,37 @@ class ReplayPage(QWidget):
         return self.frames[self.index] if self.data is not None and self.frames else None
 
     def selected_groups(self):
-        """설비군 버튼에서 고른 설비군 키. 보이는 버튼을 모두 골랐으면 None(전체)."""
-        chosen = {key for key, control in self.legend_buttons.items() if control.isChecked()}
-        return None if chosen == set(self.legend_buttons) else chosen
+        """조회 범위에 설비가 있는 설비군을 모두 골랐으면 None(전체)."""
+        chosen = {key for key in self._legend_available if self.legend_buttons[key].isChecked()}
+        return None if chosen == self._legend_available else chosen
 
-    def _fill_choices(self):
-        self._filling = True
-        try:
-            for key, options in (("site_key", self.state.catalog.sites), ("fab_key", self.state.available_fabs()),
-                                 ("line_key", self.state.available_lines())):
-                combo = self.combos[key]
-                combo.clear()
-                combo.addItem("전체", None)
-                if key in ("fab_key", "line_key"):
-                    combo.addItem("미지정", UNASSIGNED)
-                for option in options:
-                    combo.addItem(option.label, option.key)
-                value = getattr(self.state.draft, key)
-                combo.setCurrentIndex(max(0, combo.findData(value)))
-        finally:
-            self._filling = False
+    def _show_view(self, index):
+        self.chart.setVisible(index == 0)
+        self.heatmap.setVisible(index == 1)
+        if self.drawer is not None:
+            self.drawer.close_panel(restore_focus=False)
 
-    def _select(self, key):
-        if self._filling:
-            return
-        self.state.select(key, self.combos[key].currentData())
-        self._fill_choices()
-        self._changed()
-
-    def _changed(self, *_):
-        if self._filling:
-            return
-        self.pause()
-        self.epoch += 1
-        self.dirty = True
-        self.badge.setText("재적용 필요" if self.data else "조회 적용 전")
-        self._sync_controls()
+    def _confirm_filters(self):
+        if self.data is not None and not self.dirty:
+            request = self.data.request
+            if (self.start.date().toPython(), self.end.date().toPython(), self.state.draft) == (
+                    request.start, request.end, request.query.selection):
+                return
+        self.apply_query()
 
     def _sync_controls(self):
         ready = self.data is not None and not self.dirty and not self.busy
-        for control in (self.start, self.end, *self.combos.values(), self.reset_button, self.version_button, self.apply_button):
-            control.setEnabled(not self.busy)
-        self.apply_button.setText("조회 중" if self.busy else "조회 적용")
+        self.query_panel.card.setEnabled(not self.busy)
         self.play_button.setEnabled(ready and can_replay(self.frames) and not self.timer.isActive())
         self.pause_button.setEnabled(ready and self.timer.isActive())
         self.restart_button.setEnabled(ready and bool(self.frames))
         for step, control in self.interval_buttons.items():
             # 간격이 기간보다 길어 시점이 2개 미만이면 그 간격은 고를 수 없다. 저장일마다는 항상 고를 수 있다.
             control.setEnabled(ready and (step is None or can_replay(self.data.frames_for(step))))
-        for control in (*self.legend_buttons.values(), *self.legend_tools):
-            control.setEnabled(ready)
+        for key, control in self.legend_buttons.items():
+            control.setEnabled(ready and key in self._legend_available)
+        for control in self.legend_tools:
+            control.setEnabled(ready and bool(self._legend_available))
         self.heatmap.setEnabled(ready)
         self.chart.setEnabled(ready)
 
@@ -334,8 +198,6 @@ class ReplayPage(QWidget):
 
     def enter(self):
         if self.state.catalog != self.source.catalog:
-            self.state.replace_catalog(self.source.catalog)
-            self._fill_choices()
             self.invalidate()
         if self.data is None and not self.busy:
             self.apply_query()
@@ -344,20 +206,28 @@ class ReplayPage(QWidget):
         if self.busy:
             return False
         self.pause()
+        start, end = self.start.date().toPython(), self.end.date().toPython()
+        if start > end:
+            self.dirty = True
+            self._notice("시작 날짜는 종료 날짜와 같거나 앞서야 합니다.", error=True)
+            self._sync_controls()
+            return False
         try:
-            start, end = parse_date(self.start.text()), parse_date(self.end.text())
             self.state.set_target_draft(self.targets_provider())
-            query = self.state.apply()
+            query = self.query_panel.apply_draft()
             request = ReplayRequest(start, end, query)
         except (ValueError, TypeError):
-            self._notice("시작·종료 날짜를 YYYY-MM-DD로 입력하고 시작일이 종료일보다 늦지 않은지 확인해 주세요.", error=True)
+            self.dirty = True
+            self._notice("조회 조건과 기준 버전을 확인해 주세요.", error=True)
+            self._sync_controls()
             return False
         self.epoch += 1
         self.pending_request = request
         self.data, self.index, self.frames = None, 0, ()
         self.dirty = False
+        if self.drawer is not None:
+            self.drawer.close_panel(restore_focus=False)
         self._clear_display()
-        self.badge.setText("조회 중")
         self._notice("저장된 관측 자료를 읽고 있습니다…")
         work = (lambda: self.loader(request)) if self.loader is not None else (lambda: load_replay(self.source, request))
         started = self.read_request.start(BackgroundRead(work))
@@ -367,7 +237,6 @@ class ReplayPage(QWidget):
     def _loaded(self, data, error):
         if error is not None or not isinstance(data, ReplayData) or data.request != self.pending_request:
             self.data, self.frames = None, ()
-            self.badge.setText("조회 실패")
             self._notice("관측 자료를 읽지 못했습니다. 날짜와 조건을 확인한 뒤 다시 조회해 주세요.", error=True)
             self._sync_controls()
             return
@@ -378,16 +247,6 @@ class ReplayPage(QWidget):
             self.interval_buttons[None].setChecked(True)
         self.index = max(0, len(self.frames) - 1)
         self.epoch += 1
-        self.badge.setText("적용됨")
-        selection = data.request.query.selection
-        scope = self.state.describe(replace(selection, as_of=data.request.end))
-        scope = scope.replace(f" · 기준일 {data.request.end}", "")
-        # 개별 목표 N과 저장 N 그룹을 합친 실제 판정 기준 수 (대시보드·히트맵과 같은 방식, QA R-03).
-        n = (len(data.frames[0].snapshot.effective_targets) if data.frames
-             else len(with_saved_groups(data.source.targets, data.source.saved_groups)))
-        self.context.setText(f"기간 {data.request.start} ~ {data.request.end} · 저장된 기준일 {len(data.frames)}개 · "
-                             f"{scope} · 목표 N {n}개 · 위험 판정 기준 고정")
-        self.context.setToolTip(data.source.source_label)
         self._make_legend()
         self._render_frame()
         self._notice("기간 안에 저장된 관측일이 없습니다." if not data.frames else
@@ -419,44 +278,40 @@ class ReplayPage(QWidget):
             widget.deleteLater()
 
     def _make_legend(self):
-        """설비군 버튼 (요청 2-2). 조회 결과(선택한 Site 등)에 설비가 있는 설비군만 만들고, 앞에 전체 선택·해제를 둔다."""
-        previous = {key: b.isChecked() for key, b in self.legend_buttons.items()}
+        """대시보드와 같은 색으로 설비군을 표시하고, 자료가 없는 설비군은 비활성화한다."""
+        previous = {key: self.legend_buttons[key].isChecked() for key in self._legend_available}
         self._empty_layout(self.legend_body)
         self.legend_buttons = {}
         known = self.data.frames + ((self.data.seed,) if self.data.seed else ())
-        present = {cell.group_keys[0] for frame in known for cell in frame.snapshot.groups
-                   if len(cell.group_keys) == 1 and cell.equipment_ids}
-        # 전체 선택·해제는 버튼 하나: 모두 골라져 있으면 '전체 해제', 아니면 '전체 선택' (11-10 요청).
+        self._legend_available = {cell.group_keys[0] for frame in known for cell in frame.snapshot.groups
+                                  if len(cell.group_keys) == 1 and cell.equipment_ids}
         self.toggle_all_button = button("전체 해제")
-        self.toggle_all_button.setFixedHeight(36)
+        self.toggle_all_button.setCheckable(True)
         self.toggle_all_button.setMinimumWidth(96)
-        self.toggle_all_button.setStyleSheet("QPushButton {padding:0 12px;min-height:34px;max-height:34px;}"
-                                             "QPushButton:focus {min-height:32px;max-height:32px;}")
+        set_widget_font(self.toggle_all_button, font(13, medium=True))
+        self.toggle_all_button.setStyleSheet(series_button_style(PRIMARY))
         self.toggle_all_button.clicked.connect(self.toggle_all_groups)
         self.legend_tools = (self.toggle_all_button,)
         for group in self.data.source.catalog.groups:
-            if group.key not in present:
-                continue
+            available = group.key in self._legend_available
             control = button(group.label)
             control.setCheckable(True)
-            control.setChecked(previous.get(group.key, True))
-            control.setFixedHeight(36)
+            control.setChecked(available and previous.get(group.key, True))
+            control.setEnabled(available)
             control.setMinimumWidth(120)
-            color = series_color(group.key)
-            control.setStyleSheet(f"QPushButton {{background:white;color:{SECONDARY};border:1px solid {LINE};border-radius:10px;padding:0 14px;}}"
-                                 "QPushButton {min-height:34px;max-height:34px;}"
-                                 f"QPushButton:checked {{color:{INK};border:2px solid {color};min-height:32px;max-height:32px;}}"
-                                 "QPushButton:focus {background:#f7f9fc;}")
+            set_widget_font(control, font(13, medium=True))
+            control.setStyleSheet(series_button_style(series_color(group.key)))
             control.setAccessibleName(f"설비군 {group.label} 보기")
             control.toggled.connect(self._groups_changed)
             self.legend_buttons[group.key] = control
         widgets = [*self.legend_tools, *self.legend_buttons.values()] if self.legend_buttons else []
         self.legend_body.addWidget(_WrapRow(widgets, 120) if widgets else QWidget())
-        self._update_chart_context()
+        self._update_bulk_toggle()
 
     def set_all_groups(self, checked):
         """설비군 버튼 전체 선택·해제. 화면은 한 번만 다시 그린다."""
-        for control in self.legend_buttons.values():
+        for key in self._legend_available:
+            control = self.legend_buttons[key]
             blocked = control.blockSignals(True)
             control.setChecked(checked)
             control.blockSignals(blocked)
@@ -464,38 +319,34 @@ class ReplayPage(QWidget):
 
     def toggle_all_groups(self):
         """한 번 누르면 전체 선택, 모두 골라져 있을 때 누르면 전체 해제."""
-        self.set_all_groups(not all(control.isChecked() for control in self.legend_buttons.values()))
+        self.set_all_groups(self.selected_groups() is not None)
 
     def _groups_changed(self, *_):
         """고른 설비군이 바뀌면 그래프 선·달성률·히트맵을 같은 설비군으로 다시 그린다 (요청 2-2)."""
-        self._update_chart_context()
+        self._update_bulk_toggle()
         if self.data is not None and not self.dirty:
             self._render_frame()
 
-    def _update_chart_context(self):
-        total = len(self.legend_buttons)
-        chosen = sum(control.isChecked() for control in self.legend_buttons.values())
+    def _update_bulk_toggle(self):
         if self.legend_tools:
-            self.toggle_all_button.setText("전체 해제" if chosen == total else "전체 선택")
+            all_selected = bool(self._legend_available) and self.selected_groups() is None
+            self.toggle_all_button.setChecked(all_selected)
+            self.toggle_all_button.setText("전체 해제" if all_selected else "전체 선택")
             self.toggle_all_button.setAccessibleName("설비군 " + self.toggle_all_button.text())
-        self.chart_context.setText(("설비군 전체" if chosen == total else f"설비군 {chosen} / {total}개 선택")
-                                   + " · 달성률과 히트맵도 고른 설비군 기준 · 조회 적용 시 목표 N 고정")
 
     def _draw_chart(self, *_):
         if self.data is not None:
-            self.chart.show_data(self.data, {key for key, control in self.legend_buttons.items() if control.isChecked()},
+            groups = self.selected_groups()
+            self.chart.show_data(self.data, self._legend_available if groups is None else groups,
                                  current=self.index, frames=self.frames)
 
     def _clear_display(self):
         self.chart.clear()
         self.heatmap.clear()
-        self.snapshot_title.setText("관측 시점")
-        self.playback_status.setText("일시정지 · 0 / 0")
         self.achievement.setText("등록 SW 목표 달성 —")
         self.achievement.setToolTip("")  # 이전 조회의 대수 설명이 남지 않게 한다 (QA R-06).
-        self.observation_note.setText("")
         self.progress.setValue(0)
-        self.heatmap_title.setText("선택 시점의 설비 Heatmap")
+        self.progress.setAccessibleDescription("")
 
     def _render_frame(self):
         if self.drawer is not None:
@@ -505,15 +356,11 @@ class ReplayPage(QWidget):
         frame = self.frame
         if frame is None:
             return
-        self.snapshot_title.setText(f"{frame.day} 관측 스냅샷")
-        self.heatmap_title.setText(f"선택 시점({frame.day})의 설비 Heatmap")
-        self.playback_status.setText(f"{'재생 중' if self.timer.isActive() else '일시정지'} · {self.index + 1} / {len(self.frames)}")
         groups = self.selected_groups()
         summary, observed_count, carried_count = group_view(self.data, frame, groups)
         if summary is None:
             self.achievement.setText("등록 SW 목표 달성 — · 설비군을 하나 이상 골라 주세요")
             self.achievement.setToolTip("")
-            self.observation_note.setText("")
             self.progress.setValue(0)
             self.progress.setAccessibleDescription("설비군 선택 없음")
         else:
@@ -525,9 +372,8 @@ class ReplayPage(QWidget):
                 observed += f" · 이전 관측 이어받음 {carried_count}대"
             if frame.at is not None and frame.at != frame.snapshot.base_date:
                 observed += f" · 마지막 저장일 {frame.snapshot.base_date} 기준"
-            self.observation_note.setText(observed)
             hpa = f" · HPA {summary.hpa_excluded}대 제외" if groups is None else ""
-            self.achievement.setToolTip(f"분석 {summary.equipment_count}대 ({observed}){hpa} · "
+            self.achievement.setToolTip(f"{frame.day} · 분석 {summary.equipment_count}대 ({observed}){hpa} · "
                                         f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
             self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
             self.progress.setAccessibleDescription(value)
@@ -556,8 +402,6 @@ class ReplayPage(QWidget):
 
     def pause(self):
         self.timer.stop()
-        if self.data is not None and self.frames:
-            self.playback_status.setText(f"일시정지 · {self.index + 1} / {len(self.frames)}")
         self._sync_controls()
 
     def restart(self):
@@ -576,17 +420,18 @@ class ReplayPage(QWidget):
         if self.index == len(self.frames) - 1:
             self.pause()
 
+    def _reset_period(self):
+        days = self.source.analysis_dates or self.source.dates
+        with QSignalBlocker(self.start), QSignalBlocker(self.end):
+            self.start.setDate(QDate.fromString(str(days[0]), "yyyy-MM-dd") if days else QDate.currentDate())
+            self.end.setDate(QDate.fromString(str(days[-1]), "yyyy-MM-dd") if days else QDate.currentDate())
+
     def reset_filters(self):
         if self.busy:
             return False
-        self._filling = True
-        days = self.source.analysis_dates or self.source.dates
-        self.start.setText(str(days[0]) if days else "")
-        self.end.setText(str(days[-1]) if days else "")
-        self.state.set_draft(QuerySelection())
-        self._fill_choices()
-        self._changed()
-        return True
+        self._reset_period()
+        self.query_panel.reset_draft()
+        return self.apply_query()
 
     def open_versions(self):
         if self.busy:
@@ -602,8 +447,8 @@ class ReplayPage(QWidget):
         self.version_dialog = dialog
         def done(result):
             if result == QDialog.DialogCode.Accepted and self.epoch == epoch:
-                self.state.set_draft(replace(self.state.draft, versions=dialog.result_filter))
-                self._changed()
+                self.query_panel.set_version_filter(dialog.result_filter)
+                self._confirm_filters()
             self.version_dialog = None
             dialog.deleteLater()
         dialog.finished.connect(done)
@@ -630,9 +475,10 @@ class ReplayPage(QWidget):
         self.read_request.cancel()
         self.epoch += 1
         self.data, self.pending_request, self.dirty, self.frames = None, None, True, ()
+        if self.state.catalog != self.source.catalog:
+            self.query_panel.set_catalog(self.source.catalog)
         self._clear_display()
-        self.badge.setText("재조회 필요")
-        self._notice("저장 자료가 변경되었습니다. 조회 적용으로 다시 확인해 주세요.")
+        self._notice("저장 자료가 변경되었습니다. 조회 조건을 다시 선택해 주세요.")
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
         self._sync_controls()
@@ -645,6 +491,8 @@ class ReplayPage(QWidget):
             self._sync_controls()
         if self.version_dialog is not None:
             self.version_dialog.reject()
+        if self.query_panel.filter_popup is not None:
+            self.query_panel.filter_popup.reject()
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
         super().hideEvent(event)

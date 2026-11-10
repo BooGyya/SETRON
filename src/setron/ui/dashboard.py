@@ -1,7 +1,6 @@
 """작업 단위 4: 조회 적용과 연결되는 대시보드 한 페이지, 표/구성비/막대/추이 보기."""
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QBoxLayout, QPushButton, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QScrollArea,
     QSizePolicy, QTabBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -11,7 +10,7 @@ from setron.features.aggregation.service import summarize
 from setron.features.version.schemas import CompareStatus
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import (
-    DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, series_color, trend_point_rate,
+    DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, series_button_style, series_color, trend_point_rate,
 )
 from setron.ui.dashboard_data import (
     DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, RiskRuleState, count_value, missing_sw_count,
@@ -499,18 +498,12 @@ class DashboardPage(QWidget):
         trends = self.snapshot.trends if mode == 3 and self.snapshot is not None else ()
         available = bar_groups if mode == 2 else {group.group_key for group in trends
                                                  if any(trend_point_rate(point) is not None for point in group.points)}
-        for index, (group, check) in enumerate(zip(self.source.catalog.groups, self.series_widgets)):
-            color = series_color(group.key, index)
+        for group, check in zip(self.source.catalog.groups, self.series_widgets):
             enabled = mode not in (2, 3) or group.key in available
             check.setEnabled(enabled)
             with QSignalBlocker(check):
                 check.setChecked(enabled and group.key in self.visible_groups)
-            fill = QColor.fromRgbF(*(0.4 + 0.6 * channel for channel in QColor(color).getRgbF()[:3])).name()
-            style = (f"QPushButton {{color:{INK};background:white;border:1px solid {color};border-radius:8px;"
-                     "padding:6px 12px;min-height:0;}"
-                     f"QPushButton:checked:enabled {{background:{fill};border-color:{color};}}"
-                     f"QPushButton:disabled {{color:#8b95a8;background:{SOFT};border-color:{LINE};}}"
-                     f"QPushButton:focus {{border-color:{PRIMARY};}}")
+            style = series_button_style(series_color(group.key))
             if check.styleSheet() != style:
                 check.setStyleSheet(style)
 

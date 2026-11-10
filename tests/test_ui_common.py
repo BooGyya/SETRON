@@ -61,6 +61,15 @@ def test_sidebar_removes_standalone_history_menu(window):
         window.navigate("history")
 
 
+@pytest.mark.parametrize("route,title", [("replay", "버전 리플레이"), ("data", "데이터 관리")])
+def test_sidebar_route_uses_same_label_in_header(window, route, title):
+    window.register_page(route, QWidget())
+    nav = window.nav[route]
+    assert nav.caption.text() == nav.accessibleName() == title
+    QTest.mouseClick(nav, Qt.MouseButton.LeftButton)
+    assert window.route == route and window.header.title.text() == title
+
+
 def test_original_assets_and_fonts_are_usable(window):
     assert {"Inter", "IBM Plex Sans KR"} <= set(QFontDatabase.families())
     for asset in ASSETS.glob("*.svg"):

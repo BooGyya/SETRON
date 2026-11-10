@@ -223,19 +223,20 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     assert page.selected_id is None and not any(t.isChecked() for t in page.tile_buttons.values())
 
 
-def test_figma_tiles_show_risk_first_and_markers_and_original_icon_size(window):
+def test_tiles_show_risk_border_and_tooltip_and_original_icon_size(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     # 위험 후보는 굵은 빨간 테두리로 표시하고 판정 설명은 툴팁으로 확인한다.
     style = page.tile_buttons[2].styleSheet()
     assert f"2px solid {RISK_LINE}" in style and RISK_FILL not in style
     assert TIER_FILL[page.tile_buttons[2].data.tier] in style
-    assert page.tile_buttons[2].marker == "위험" and page.tile_buttons[3].marker == ""
+    assert page.tile_buttons[2].data.risk is RiskStatus.RISK and page.tile_buttons[3].data.risk is RiskStatus.UNKNOWN
     assert "위험 후보" in page.tile_buttons[2].toolTip()
     assert page.tile_buttons[2].data.goal is GoalState.MET
     assert page.risk_button.iconSize() == svg_size("7880d.svg")
     tile = page.tile_buttons[1]
-    assert tile.detail_label is None and tile.version_label.text() == "v99 / v2"
+    assert tile.version_label.text() == "v99 / v2"
+    assert set(tile.findChildren(QLabel)) == {tile.code_label, tile.version_label}
     assert all(text.alignment() == Qt.AlignmentFlag.AlignCenter for text in (tile.code_label, tile.version_label))
 
 
@@ -247,7 +248,7 @@ def test_no_question_mark_decoration_in_any_tile_view(window, view, layout):
     page.view_toggle.setChecked(bool(view))
     page.layout_buttons.button(layout).click()
     tiles = page.findChildren(TileButton)
-    assert tiles and all(tile.marker != "?" for tile in tiles)
+    assert tiles
     assert all(child.text() != "?" for tile in tiles for child in tile.findChildren(QLabel))
     assert not any(child.text().startswith("? ") for child in page.findChildren(QLabel))
     unknown = next(tile for tile in tiles if tile.data.equipment_id == 3)

@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import replace
 from datetime import date
 
-from PySide6.QtCore import QDate, QSize, Qt, Signal
+from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
@@ -105,16 +105,18 @@ class _FilterButton(QPushButton):
 
 class QueryPanel(QWidget):
     applied = Signal(object)  # AppliedQuery: 공통 조건 계약, 데이터 조회 완료 신호가 아님
+    confirmed = Signal()  # 필터·날짜 선택 완료
     draft_changed = Signal(object)  # QuerySelection
     catalog_changed = Signal(object)  # QueryCatalog
     targets_changed = Signal(object)  # 목표 초안 변경. 조회 적용과 별개
 
-    def __init__(self, state: QueryState):
+    def __init__(self, state: QueryState, *, period=False):
         super().__init__()
         self.state = state
         self.target_describer = None
         self.combos: dict[str, _FilterButton] = {}
         self.filter_popup = None
+        self.date_edit = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(12)
@@ -144,8 +146,25 @@ class QueryPanel(QWidget):
         self.draft_summary.hide()
         self.card.body.addWidget(self.draft_summary)
         self.source_label = label("", 12, color=SECONDARY, wrap=True)
-        fields = [self._date_field()]
+        if period:
+            start_field, self.start_date = self._date_field("시작 날짜")
+            end_field, self.end_date = self._date_field("종료 날짜")
+            fields = [start_field, end_field]
+            for control in (self.start_date, self.end_date):
+                control.dateChanged.connect(lambda _day, edit=control: self._confirm_period_edit(edit))
+                control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
+                control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
+        else:
+            date_field, self.date_edit = self._date_field("기준 날짜")
+            self.date_edit.setObjectName("query_as_of")
+            self.date_edit.setToolTip("클릭하여 날짜를 선택합니다. 선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
+            self.date_edit.dateChanged.connect(self._choose_date)
+            self.date_edit.calendarWidget().clicked.connect(self._confirm_date)
+            self.date_edit.calendarWidget().activated.connect(self._confirm_date)
+            fields = [date_field]
         for key, caption in FILTER_CAPTIONS.items():
+            if period and key == "group_key":
+                continue  # 리플레이의 설비군 버튼은 조회한 기간 안에서 함께 반영한다.
             field = QWidget()
             layout = QVBoxLayout(field)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -204,7 +223,9 @@ class QueryPanel(QWidget):
         # 화면 단순화: 안내 문구·선택지 출처·적용 상태 줄은 표시하지 않는다(값은 내부·접근성용으로 유지).
         for hidden in (self.hint, self.source_label, self.status, self.applied_summary):
             hidden.hide()
-        self.reset_button.clicked.connect(self._reset_and_apply)
+        if not period:
+            self.confirmed.connect(self.apply_draft)
+            self.reset_button.clicked.connect(self._reset_and_apply)
         self._render()
 
     def _filter_options(self, field):
@@ -245,37 +266,41 @@ class QueryPanel(QWidget):
             anchor.arrow.set_expanded(False)
             if result == QDialog.DialogCode.Accepted and state.draft == original and state.catalog_revision == revision:
                 self.select(field, popup.selected_keys or None)
-                self.apply_draft()
+                self.confirmed.emit()
             popup.deleteLater()
 
         popup.finished.connect(finish)
         popup.open()
 
-    def _date_field(self):
-        """기준일 선택. 비워 두면(오늘) 최신 관측, 과거 날짜면 그날 이전 최신 관측으로 계산한다."""
+    @staticmethod
+    def _date_field(caption):
         field = QWidget()
         layout = QVBoxLayout(field)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        title = label("기준 날짜", medium=True, color=INK)
-        self.date_edit = DateEdit(open_on_click=True)
-        self.date_edit.setObjectName("query_as_of")
-        self.date_edit.setProperty("queryField", True)
-        self.date_edit.setAccessibleName("기준 날짜")
+        title = label(caption, medium=True, color=INK)
+        control = DateEdit(open_on_click=True)
+        control.setProperty("queryField", True)
+        control.setAccessibleName(caption)
         calendar_icon = (ASSETS / "import-ver5/fdb91.svg").as_posix()
-        self.date_edit.setStyleSheet(f"QDateEdit::down-arrow {{image:url({calendar_icon});width:16px;height:16px;}}")
-        self.date_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.date_edit.setFixedHeight(38)
-        self.date_edit.setKeyboardTracking(False)
-        self.date_edit.setToolTip("클릭하여 날짜를 선택합니다. 선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
-        self.date_edit.dateChanged.connect(self._choose_date)
-        self.date_edit.calendarWidget().clicked.connect(self._confirm_date)
-        self.date_edit.calendarWidget().activated.connect(self._confirm_date)
-        title.setBuddy(self.date_edit)
+        control.setStyleSheet(f"QDateEdit::down-arrow {{image:url({calendar_icon});width:16px;height:16px;}}")
+        control.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        control.setFixedHeight(38)
+        control.setKeyboardTracking(False)
+        title.setBuddy(control)
         layout.addWidget(title)
-        layout.addWidget(self.date_edit)
+        layout.addWidget(control)
         field.setMinimumWidth(128)
-        return field
+        return field, control
+
+    def _confirm_period_edit(self, control):
+        if not control.calendarWidget().isVisible():
+            self.confirmed.emit()
+
+    def _confirm_period_date(self, control, day):
+        with QSignalBlocker(control):
+            control.setDate(day)
+        self.confirmed.emit()
 
     def _choose_date(self, value):
         if not self.date_edit.calendarWidget().isVisible():
@@ -359,12 +384,13 @@ class QueryPanel(QWidget):
             caption = "전체" if not names else names[0] if len(names) == 1 else f"{names[0]} 외 {len(names) - 1}개"
             combo.set_caption(caption, ", ".join(names) if names else caption)
             combo.setEnabled(bool(options))
-        today = date.today()
-        previous_block = self.date_edit.blockSignals(True)
-        self.date_edit.setMaximumDate(QDate(today.year, today.month, today.day))
-        shown = self.state.draft.as_of or today
-        self.date_edit.setDate(QDate(shown.year, shown.month, shown.day))
-        self.date_edit.blockSignals(previous_block)
+        if self.date_edit is not None:
+            today = date.today()
+            previous_block = self.date_edit.blockSignals(True)
+            self.date_edit.setMaximumDate(QDate(today.year, today.month, today.day))
+            shown = self.state.draft.as_of or today
+            self.date_edit.setDate(QDate(shown.year, shown.month, shown.day))
+            self.date_edit.blockSignals(previous_block)
         self.draft_summary.setText("선택 중 · " + self.state.describe(self.state.draft))
         if self.target_describer is not None:
             self.draft_summary.setText(self.draft_summary.text() + "\n선택 중 목표 N · " + self.target_describer(self.state.target_draft))

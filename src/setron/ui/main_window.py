@@ -35,7 +35,7 @@ MENUS = (
     Menu("items", "아이템 매니저", *_ver5("items")),
     Menu("ai", "AI 분석", *_ver5("ai")),
     Menu("import", "데이터 가져오기", *_ver5("import")),
-    Menu("replay", "Version Replay", *_ver5("replay")),
+    Menu("replay", "버전 리플레이", *_ver5("replay")),
     # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 기존 버전 관리·관리 데이터 메뉴를 대신한다.
     Menu("data", "데이터 관리", *_ver5("versions")),
     Menu("versions", "버전 관리", *_ver5("versions")),

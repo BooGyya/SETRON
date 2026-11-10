@@ -174,7 +174,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         remembered_pair = last_group_pair or settings.store.version_group_pair()
         dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=single_selection(state.draft.group_key),
                                     pair_key=remembered_pair, parent=window)
-        dialog.criteria_confirmed.connect(window.query_panel.apply_draft)
+        def apply_criteria():
+            window.query_panel.apply_draft()
+            if window.route == "replay":
+                replay.apply_query()
+
+        dialog.criteria_confirmed.connect(apply_criteria)
         window.group_dialog = dialog
         initial_pair = dialog.pair.key if dialog.pair is not None else None
 
@@ -249,6 +254,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         return (applied.targets if applied is not None and applied.targets is not None else
                 initial_targets(source))
     replay = ReplayPage(source, targets_provider=replay_targets)
+    replay.query_panel.goal_button.setEnabled(True)
+    replay.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
+    replay.query_panel.goal_button.clicked.connect(open_groups)
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
     # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 저장은 같은 관리 저장 흐름(after_management_save)을 쓴다.
     data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context,
