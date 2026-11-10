@@ -1,21 +1,20 @@
 """VER5 Replay의 데이터 꺾은선과 설비군→Line→설비 묶음. 기존 타일 부품을 재사용한다."""
 
 from dataclasses import replace
+from functools import partial
 
 from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QCursor, QPen
-from PySide6.QtWidgets import QFrame, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QPen
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from setron.ui.appearance import ui_color
 from setron.ui.components import label
-from setron.ui.dashboard_charts import DashboardChart, series_color
-from setron.ui.equipment import ignore_width
-from setron.features.risk.schemas import RiskStatus
-from setron.ui.heatmap import GroupCards, TileButton, TileGrid, _version_text, tile_detail_text, tile_style
+from setron.ui.dashboard_charts import DashboardChart, series_color, trend_tooltip
+from setron.ui.equipment import FlowGrid
+from setron.ui.heatmap import HeatmapGroupCard, HeatmapLegend, TileButton
 from setron.ui.heatmap_data import GoalState
-from setron.ui.replay_data import group_completion
-from setron.ui.theme import LINE, SECONDARY
+from setron.ui.theme import SECONDARY
 
 # 그래프 시리즈 이름. 범례는 숨겨져 있고, 테스트·접근성에서 선의 역할을 구분하는 데 쓴다.
 CURRENT_MARKER = "현재 시점"
@@ -32,37 +31,32 @@ class ReplayChart(DashboardChart):
         self.setMinimumHeight(300)
         self.setMaximumHeight(300)
         self.setAccessibleName("설비군별 목표 적용 추이 · 저장된 관측일의 달성률")
-        self.values, self.completion, self.labels, self.days = {}, {}, {}, ()
+        self.values, self.days = {}, ()
         self.current = None
 
     def clear(self):
         super().clear()
-        self.values, self.completion, self.labels, self.days = {}, {}, {}, ()
+        self.values, self.days = {}, ()
         self.current = None
         self.setAccessibleDescription("")
 
-    def _hover(self, key, point, state):
-        """점에 마우스를 올리면 그 설비군의 그날 완료 설비 수를 보인다 (요청 3-2)."""
-        if not state:
-            QToolTip.hideText()
-            return
-        index = round(point.x())
-        counts = self.completion.get(key, ())
-        if not 0 <= index < len(counts) or counts[index] is None:
-            return
-        done, judged = counts[index]
-        QToolTip.showText(QCursor.pos(), f"{done}/{judged}대 완료", self)
+    def _hover(self, chart, series, label, days, summaries, points, position, hovered):
+        text = ""
+        if hovered:
+            index, _ = min(points, key=lambda point: abs(point[0] - position.x()))
+            text = trend_tooltip(days[index], label, summaries[index])
+        self._hover_tooltip(chart, series, text)
 
     def show_data(self, data, visible_groups, current=None, frames=None):
         """설비군별 꺾은선 (계단형은 11-10 요청으로 되돌림).
 
         current(재생 중인 날짜 번호)까지는 진한 실선, 이후는 흐린 점선, 현재 날짜에는 세로선과 큰 점을 둔다.
-        실제 시점마다 점을 찍고, 점을 누르면 그 날짜로 가고 마우스를 올리면 완료 설비 수가 나온다.
+        실제 시점마다 점을 찍고, 점을 누르면 그 날짜로 가고 마우스를 올리면 대시보드와 같은 집계를 보인다.
         frames를 주지 않으면 실제 저장 날짜(data.frames)를 쓴다. current가 None이면 마지막 시점을 현재로 본다.
         """
         frames = data.frames if frames is None else frames
         chart = self._chart()
-        self.values, self.completion, self.labels, self.days = {}, {}, {}, ()
+        self.values, self.days = {}, ()
         self.setAccessibleDescription("")
         if not frames:
             return
@@ -95,12 +89,12 @@ class ReplayChart(DashboardChart):
         for group in data.source.catalog.groups:
             if group.key not in visible_groups:
                 continue
-            values, counts, segments, segment = [], [], [], []
+            values, summaries, segments, segment = [], [], [], []
             for i, frame in enumerate(frames):
                 cell = next((g for g in frame.snapshot.groups if g.group_keys == (group.key,)), None)
                 rate = cell.summary.rate if cell is not None else None
                 values.append(rate)
-                counts.append(group_completion(cell) if cell is not None else None)
+                summaries.append(cell.summary if cell is not None else None)
                 if rate is None:
                     if segment:
                         segments.append(segment)
@@ -109,15 +103,14 @@ class ReplayChart(DashboardChart):
                     segment.append((i, rate * 100))
             if segment:
                 segments.append(segment)
-            self.values[group.key], self.completion[group.key] = tuple(values), tuple(counts)
-            self.labels[group.key] = group.label
+            self.values[group.key] = tuple(values)
             color = ui_color(series_color(group.key))
             faded = QColor(color)
             faded.setAlpha(90)
 
-            def connect(series, key=group.key):
+            def connect(series, points):
                 series.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
-                series.hovered.connect(lambda point, state, key=key: self._hover(key, point, state))
+                series.hovered.connect(partial(self._hover, chart, series, group.label, days, summaries, points))
 
             for points in segments:
                 past = [p for p in points if p[0] <= current]
@@ -137,7 +130,7 @@ class ReplayChart(DashboardChart):
                         for px, py in part:
                             line.append(px, py)
                         add(line)
-                        line.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
+                        connect(line, part)
                     dots = QScatterSeries()
                     dots.setName(name + POINT_SUFFIX)
                     dots.setColor(pen_color)
@@ -146,7 +139,7 @@ class ReplayChart(DashboardChart):
                     for px, py in part:
                         dots.append(px, py)
                     add(dots)
-                    connect(dots)
+                    connect(dots, part)
             # 현재 날짜 점을 크게 표시한다. 판단 불가인 날은 점을 찍지 않는다(0%로 그리지 않음).
             if values[current] is not None:
                 dot = QScatterSeries()
@@ -156,7 +149,7 @@ class ReplayChart(DashboardChart):
                 dot.setMarkerSize(12)
                 dot.append(current, values[current] * 100)
                 add(dot)
-                connect(dot)
+                connect(dot, [(current, values[current] * 100)])
         self.setAccessibleDescription(f"현재 {days[current]} · " + " · ".join(
             f"{group}: " + ", ".join(f"{day} {'확인 필요' if value is None else f'{value:.1%}'}"
                                      for day, value in zip(days, values))
@@ -168,9 +161,13 @@ class ReplayHeatmap(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(0, 0, 0, 0)
-        self.body.setSpacing(12)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(12)
+        self.legend = HeatmapLegend()
+        root.addWidget(self.legend)
+        self.body = QVBoxLayout()
+        root.addLayout(self.body)
         self.tile_buttons, self.tile_occurrences, self.group_cards = {}, [], []
         self.visible_ids = ()
         self._titles, self._cards, self._grid = None, [], None  # 날짜를 넘길 때 다시 쓰는 카드 (QA R-04)
@@ -186,58 +183,37 @@ class ReplayHeatmap(QWidget):
             widget.hide()
             widget.deleteLater()
 
-    def _tile(self, tile, families, title):
-        control = TileButton(tile, expanded=True, families=families, group_name=title)
-        control.setMinimumHeight(88)
+    def _tile(self, tile, families):
+        control = TileButton(tile, expanded=True, families=families)
         control.clicked.connect(lambda checked=False, eid=tile.equipment_id: self.equipment_selected.emit(eid))
         # 타일에 보이는 내용만 비교한다. 관측일·위험 근거는 상세에서만 쓰므로 바뀌어도 다시 그리지 않는다.
-        control.visual = (replace(tile, observation_date=None, findings=()), families, title)
+        control.visual = (replace(tile, observation_date=None, findings=()), families)
         self.rebuilt_tiles += 1
         return control
 
     def _card(self, title, lines):
         """설비군 카드 하나. 돌려주는 slots는 카드 안 타일 자리(TileGrid, 번호) 목록이다."""
-        card = QFrame()
-        card.setObjectName("replayGroup")
-        card.setStyleSheet(f"QFrame#replayGroup {{background:white;border:1px solid {LINE};border-radius:8px;}}")
-        body = QVBoxLayout(card)
-        body.setContentsMargins(12, 12, 12, 12)
-        body.setSpacing(12)
-        body.addWidget(label(f"{title} / {sum(len(items) for _, items in lines)}대", 18, medium=True))
+        card = HeatmapGroupCard(title, sum(len(items) for _, items in lines))
         slots = []
         for (site, line), items in lines:
-            heading = label(f"{site} · {line or '구역 미확인'} / {len(items)}대", 14, medium=True, wrap=True)
-            ignore_width(heading)
-            body.addWidget(heading)
-            tile_grid = TileGrid([self._tile(tile, families, title) for tile, families in items],
-                                 expanded=True, target_width=160)
+            tile_grid = card.add_area(site, line, [self._tile(tile, families) for tile, families in items], expanded=True)
             slots.extend((tile_grid, index) for index in range(len(items)))
-            body.addWidget(tile_grid)
         return card, slots
 
-    def _update_tiles(self, slots, title, lines):
-        """같은 자리 타일은 위젯을 다시 쓰고 색·글자만 바꾼다. '위험' 표시처럼 모양이 바뀐 타일만 새로 만든다."""
+    def _update_tiles(self, slots, lines):
+        """같은 자리 타일은 위젯을 다시 쓰고 색·버전·툴팁만 바꾼다."""
         entries = [(tile, families) for _, items in lines for tile, families in items]
         for (grid, index), (tile, families) in zip(slots, entries):
             old = grid.tiles[index]
-            visual = (replace(tile, observation_date=None, findings=()), families, title)
-            marker = "위험" if tile.risk is RiskStatus.RISK and tile.goal is not GoalState.EXCLUDED else ""
-            if old.visual == visual or (old.marker == marker and old.data.code == tile.code
-                                        and old.version_label is not None):
+            visual = (replace(tile, observation_date=None, findings=()), families)
+            if old.data.code == tile.code:
+                old.set_data(tile)
                 if old.visual != visual:
-                    style = tile_style(tile)
-                    if style != old.style_text:
-                        old.style_text = style
-                        old.setStyleSheet(style)
-                    old.version_label.setText(_version_text(tile, families))
-                    old.detail_label.setText(tile_detail_text(tile, title))
+                    old.update_appearance(families)
                     old.visual = visual
                     self.restyled_tiles += 1
-                old.data = tile
-                old.setToolTip(tile.description)
-                old.setAccessibleName(tile.description)
             else:
-                control = self._tile(tile, families, title)
+                control = self._tile(tile, families)
                 grid.grid.replaceWidget(old, control)
                 grid.tiles[index] = control
                 old.hide()
@@ -298,7 +274,7 @@ class ReplayHeatmap(QWidget):
             for card, (title, lines) in zip(self._cards, plan):
                 key = self._card_key(title, lines)
                 if key == card["key"]:
-                    self._update_tiles(card["slots"], title, lines)
+                    self._update_tiles(card["slots"], lines)
                     continue
                 widget, slots = self._card(title, lines)
                 index = self._grid.items.index(card["widget"])
@@ -310,7 +286,7 @@ class ReplayHeatmap(QWidget):
                 card.update(key=key, widget=widget, slots=slots)
         else:
             self.clear()
-            self._grid = GroupCards(340, spacing=12, max_columns=3)
+            self._grid = FlowGrid(340, spacing=16, max_columns=3)
             for title, lines in plan:
                 widget, slots = self._card(title, lines)
                 self._cards.append(dict(key=self._card_key(title, lines), widget=widget, slots=slots))

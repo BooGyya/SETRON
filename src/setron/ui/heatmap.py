@@ -19,7 +19,6 @@ from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, 
 # 타일 채움색은 5단계: 진초록 N+1 이상 · 연초록 N · 연분홍 N-1 · 진분홍 N-2 이하 · 회색 비교 불가·HPA.
 # 위험 후보는 빨강(N-2 이하)과 헷갈리지 않게 채움색 대신 굵은 빨간 테두리로 보인다 (범례 설명과 같은 규칙).
 RISK_LINE = "#c9485e"
-RISK_INK = "#ad344d"
 RISK_FILL = "#fde2e7"
 GOAL_FILL = {GoalState.MET: "#ddf4e5", GoalState.BELOW: "#fff0b7", GoalState.UNKNOWN: "#eceef1",
              GoalState.EXCLUDED: "#eceef1"}
@@ -27,8 +26,6 @@ TIER_FILL = {Tier.ABOVE: "#a9dbbd", Tier.AT: "#ddf4e5", Tier.ONE_BELOW: "#fce4e7
              Tier.UNKNOWN: "#eceef1"}
 TIER_LEGEND = ((Tier.ABOVE, "N+1 이상"), (Tier.AT, "N"), (Tier.ONE_BELOW, "N-1"), (Tier.TWO_BELOW, "N-2 이하"),
                (Tier.UNKNOWN, "비교 불가 · HPA"))
-GOAL_SHORT = {GoalState.MET: "달성", GoalState.BELOW: "미달", GoalState.UNKNOWN: "확인 필요",
-              GoalState.EXCLUDED: "분석 제외"}
 
 
 def _tile_label(text, size, *, medium=False, color=INK):
@@ -61,62 +58,48 @@ def tile_style(data, *, minimum_height=0):
             f"QPushButton#equipmentTile:focus, QPushButton#equipmentTile:checked {{outline:none;border:2px solid {PRIMARY};}}")
 
 
-def tile_detail_text(data, group_name):
-    """펼친 타일 둘째 줄: 구역 · 설비군(복수 SW) · 달성 여부."""
-    name = group_name or (data.model_name if data.goal is GoalState.EXCLUDED else None)
-    if data.multi_sw and group_name:
-        name = f"{group_name} · 복수 SW"
-    return " · ".join([data.area or "구역 미확인"] + ([name] if name else []) + [GOAL_SHORT[data.goal]])
-
-
 class TileButton(QPushButton):
-    def __init__(self, data, *, expanded=False, families=None, group_name=None, show_context=True):
+    def __init__(self, data, *, expanded=False, families=None):
         super().__init__()
-        self.data = data
         families = data.families if families is None else families
         self.setObjectName("equipmentTile")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self.setAccessibleName(data.description)
+        self.set_data(data)
         self.setAccessibleDescription("Space 또는 클릭으로 설비 선택")
-        self.setToolTip(data.description)
-        risk = data.risk is RiskStatus.RISK and data.goal is not GoalState.EXCLUDED
-        # Replay가 같은 자리 타일의 글자만 바꿀 때 쓴다 (펼친 타일만 있음).
-        self.version_label = self.detail_label = None
+        self.version_label = None
         body = QVBoxLayout(self)
         body.setContentsMargins(10, 8 if not expanded else 10, 10, 8 if not expanded else 10)
         body.setSpacing(4)
-        self.code_label = label(data.code, 13 if show_context else 16, medium=True, color=INK)
-        self.marker = "위험" if expanded and risk else ""
-        if show_context:
-            identity = QHBoxLayout()
-            identity.setSpacing(4)
-            identity.addWidget(self.code_label)
-            identity.addStretch()
-            if self.marker:
-                identity.addWidget(label(self.marker, 10, medium=True, color=RISK_INK),
-                                   0, Qt.AlignmentFlag.AlignTop)
-            body.addLayout(identity)
-        else:
-            body.addStretch()
-            self.code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            body.addWidget(self.code_label)
+        self.code_label = label(data.code, 16, medium=True, color=INK)
+        self.code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body.addStretch()
+        body.addWidget(self.code_label)
         if expanded:
-            versions = _version_text(data, families, show_tier=show_context)
-            self.version_label = _tile_label(versions, 11 if show_context else 14)
+            self.version_label = _tile_label("", 14)
+            self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             body.addWidget(self.version_label)
-            if show_context:
-                self.detail_label = _tile_label(tile_detail_text(data, group_name), 10, color=SECONDARY)
-                body.addWidget(self.detail_label)
-            else:
-                self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         for child in self.findChildren(QWidget):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         body.addStretch()
+        self.style_text = ""
+        self.update_appearance(families)
+
+    def set_data(self, data):
+        self.data = data
+        description = data.description
+        self.setAccessibleName(description)
+        self.setToolTip(description)
+
+    def update_appearance(self, families):
+        if self.version_label is not None:
+            self.version_label.setText(_version_text(self.data, families, show_tier=False))
         # Qt가 QSS의 최소 높이를 레이아웃 힌트보다 우선하므로 타일 본문을 기준으로 지정한다.
-        self.style_text = tile_style(data, minimum_height=body.minimumSize().height())
-        self.setStyleSheet(self.style_text)
+        style = tile_style(self.data, minimum_height=self.layout().minimumSize().height())
+        if style != self.style_text:
+            self.style_text = style
+            self.setStyleSheet(style)
 
     def minimumSizeHint(self):
         return QSize(0, self.layout().minimumSize().height())
@@ -130,23 +113,6 @@ class TileButton(QPushButton):
     def heightForWidth(self, width):
         height = self.layout().totalHeightForWidth(width)
         return height if height >= 0 else self.sizeHint().height()
-
-
-class GroupCards(FlowGrid):
-    """설비군 카드 묶음(최대 3열). 카드 높이가 달라도 위쪽에 맞춘다."""
-
-    def _arrange(self, columns):
-        if columns == self.columns:
-            return
-        for widget in self.items:
-            self.grid.removeWidget(widget)
-        for index in range(max(columns, self.columns, 1)):
-            self.grid.setColumnStretch(index, int(index < columns))
-        for index, widget in enumerate(self.items):
-            self.grid.addWidget(widget, index // columns, index % columns, Qt.AlignmentFlag.AlignTop)
-            widget.show()
-        self.columns = columns
-        self.updateGeometry()
 
 
 class TileGrid(QWidget):
@@ -185,6 +151,50 @@ class TileGrid(QWidget):
     def resizeEvent(self, event):
         self._arrange(max(1, min(12, (event.size().width() + 8) // (self.target_width + 8))))
         super().resizeEvent(event)
+
+
+class HeatmapLegend(QWidget):
+    def __init__(self):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(20)
+        self.items = []
+        for color, text in [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보")]:
+            item = QWidget()
+            item.setAccessibleName("범례 " + text)
+            body = QHBoxLayout(item)
+            body.setContentsMargins(0, 0, 0, 0)
+            body.setSpacing(6)
+            dot = QFrame()
+            dot.setFixedSize(10, 10)
+            dot.setStyleSheet(f"background:{color};border-radius:5px;" if color else
+                              f"background:white;border:2px solid {RISK_LINE};border-radius:3px;")
+            body.addWidget(dot)
+            body.addWidget(label(text, 12, color=SECONDARY))
+            row.addWidget(item)
+            self.items.append(item)
+        row.addStretch()
+
+
+class HeatmapGroupCard(QFrame):
+    def __init__(self, title, count):
+        super().__init__()
+        self.setObjectName("heatmapGroup")
+        self.setStyleSheet(f"QFrame#heatmapGroup {{background:white;border:1px solid {LINE};border-radius:8px;}}")
+        self.body = QVBoxLayout(self)
+        self.body.setContentsMargins(12, 12, 12, 12)
+        self.body.setSpacing(8)
+        self.body.addWidget(label(f"{title} / {count}대", 18, medium=True, wrap=True))
+        self.body.addStretch()
+
+    def add_area(self, site, area, tiles, *, expanded):
+        heading = label(f"{site} · {area or '구역 미확인'} / {len(tiles)}대", 14, medium=True, wrap=True)
+        ignore_width(heading)
+        self.body.insertWidget(self.body.count() - 1, heading)
+        grid = TileGrid(tiles, expanded=expanded, target_width=140)
+        self.body.insertWidget(self.body.count() - 1, grid)
+        return grid
 
 
 class HeatmapPage(QWidget):
@@ -317,21 +327,7 @@ class HeatmapPage(QWidget):
         self.controls.setVerticalSpacing(10)
         self.content.body.addWidget(controls_host)
 
-        legend = QHBoxLayout()
-        legend.setSpacing(20)
-        legend_items = [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보")]
-        for color, text in legend_items:
-            item = QHBoxLayout()
-            item.setSpacing(6)
-            dot = QFrame()
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background:{color};border-radius:5px;" if color else
-                              f"background:white;border:2px solid {RISK_LINE};border-radius:3px;")
-            item.addWidget(dot)
-            item.addWidget(label(text, 12, color=SECONDARY))
-            legend.addLayout(item)
-        legend.addStretch()
-        self.content.body.addLayout(legend)
+        self.content.body.addWidget(HeatmapLegend())
         legend_note = label("채움색은 목표 N 대비 버전 차이, 굵은 테두리는 위험 판정으로 서로 별개입니다. "
                             "5단계는 11/05 팀 결정(멘토 확인)입니다. 위험 상태는 상세 패널에서 확인 · 회색: 비교 불가·HPA 분석 제외 · "
                             "파란 테두리: 마우스를 올렸거나 선택한 설비", 11,
@@ -565,35 +561,24 @@ class HeatmapPage(QWidget):
         return result
 
     def _group_card(self, title, members, expanded, group_name):
-        card = QFrame()
-        card.setObjectName("heatmapGroup")
-        card.setStyleSheet(f"QFrame#heatmapGroup {{background:white;border:1px solid {LINE};border-radius:8px;}}")
-        card_body = QVBoxLayout(card)
-        card_body.setContentsMargins(12, 12, 12, 12)
-        card_body.setSpacing(8)
-        card_body.addWidget(label(f"{title} / {len(members)}대", 18, medium=True, wrap=True))
+        card = HeatmapGroupCard(title, len(members))
         order = {o.key: index for index, o in enumerate(self.source.catalog.sites)}
         lines = {}
         for tile in members:
             lines.setdefault((tile.site_key, tile.area), []).append(tile)
         for (site_key, area), tiles in sorted(lines.items(), key=lambda item: (order.get(item[0][0], 99),
                                                                                item[0][1] is None, item[0][1] or "")):
-            card_body.addWidget(label(f"{tiles[0].site_label} · {area or '구역 미확인'} / {len(tiles)}대",
-                                      14, medium=True, wrap=True))
             buttons = []
             for tile in tiles:
                 families = tuple(f for f in tile.families
                                  if group_name is None or group_name in f.title.split(" · ")[0].split(" / ")) or tile.families
-                control = TileButton(tile, expanded=expanded, families=families, show_context=False)
+                control = TileButton(tile, expanded=expanded, families=families)
                 control.setChecked(tile.equipment_id == self.selected_id)
                 control.clicked.connect(lambda checked=False, eid=tile.equipment_id: self._select(eid))
                 self.tile_buttons.setdefault(tile.equipment_id, control)
                 self.tile_occurrences.append(control)
                 buttons.append(control)
-            grid = TileGrid(buttons, expanded=expanded, target_width=140)
-            self.tile_grids.append(grid)
-            card_body.addWidget(grid)
-        card_body.addStretch()
+            self.tile_grids.append(card.add_area(tiles[0].site_label, area, buttons, expanded=expanded))
         return card
 
     def _set_list_compact(self, compact):

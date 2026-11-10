@@ -6,13 +6,14 @@ from html import escape
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QCursor, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
 
 from setron.features.aggregation.schemas import Summary
 from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import chart_font, chart_text_font, ui_color
-from setron.ui.theme import INK, PRIMARY, SECONDARY, font
+from setron.ui.dashboard_data import denominator_equipment_ids
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, SOFT, font
 
 
 SERIES_COLORS = {
@@ -24,6 +25,15 @@ SERIES_COLORS = {
 def series_color(key, index=0):
     # 추가 설비군도 조회로 시리즈 순서가 바뀌었다고 범례/선의 색이 달라지면 안 된다.
     return SERIES_COLORS.get(key, tuple(SERIES_COLORS.values())[sum(map(ord, key)) % len(SERIES_COLORS)])
+
+
+def series_button_style(color):
+    fill = QColor.fromRgbF(*(0.4 + 0.6 * channel for channel in QColor(color).getRgbF()[:3])).name()
+    return (f"QPushButton {{color:{INK};background:white;border:1px solid {color};border-radius:8px;"
+            "padding:6px 12px;min-height:0;}"
+            f"QPushButton:checked:enabled {{background:{fill};border-color:{color};}}"
+            f"QPushButton:disabled {{color:#8b95a8;background:{SOFT};border-color:{LINE};}}"
+            f"QPushButton:focus {{border-color:{PRIMARY};}}")
 
 
 def trend_point_rate(point):
@@ -57,6 +67,12 @@ def equipment_count_tooltip(title: str, equipment_ids: Iterable[int]) -> str:
     """차트에 표시된 집계와 실제 설비 대수를 함께 표시한다."""
     lines = [*title.splitlines(), f"설비 {len(set(equipment_ids))}대"]
     return "<qt>" + "<br>".join(map(escape, lines)) + "</qt>"
+
+
+def trend_tooltip(day, label, summary):
+    decided = summary.compliant + summary.below
+    title = f"{day:%Y.%m.%d} · {label}\n목표 달성 {summary.compliant} / {decided}건 ({summary.rate:.1%})"
+    return equipment_count_tooltip(title, denominator_equipment_ids(summary))
 
 
 def composition_cohorts(summary: Summary) -> tuple[tuple[int, ...], ...]:
@@ -214,12 +230,9 @@ class DashboardChart(QChartView):
             self._hover_tooltip(chart, series, "")
             return
         # 선분 위에서는 그 선분을 실제로 구성하는 관측일 중 가장 가까운 값을 보여준다.
-        index, percent = min(segment, key=lambda item: abs(item[0] - position.x()))
+        index, _ = min(segment, key=lambda item: abs(item[0] - position.x()))
         point = group.points[index]
-        summary = point.summary
-        decided = summary.compliant + summary.below
-        title = f"{point.day:%Y.%m.%d} · {group.label}\n목표 달성 {summary.compliant} / {decided}건 ({percent:.1f}%)"
-        self._hover_tooltip(chart, series, equipment_count_tooltip(title, point.denominator_equipment_ids))
+        self._hover_tooltip(chart, series, trend_tooltip(point.day, group.label, point.summary))
 
     def trend(self, snapshot, visible_groups):
         chart = self._chart()
