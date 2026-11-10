@@ -376,6 +376,9 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(current)
         self.stack.updateGeometry()
         self.route = key
+        # 펼침 행이 스크롤 임계점을 지나도 목록의 가로 폭을 유지한다.
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn if key == "items"
+                                               else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.query_panel.setVisible(key in self._query_routes)
         menu_key = self._page_parents.get(key, key)
         self.header.title.setText(self._page_titles.get(key, self._menus[menu_key].title))

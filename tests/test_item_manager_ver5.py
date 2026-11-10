@@ -57,7 +57,7 @@ def test_async_search_tab_original_and_stale_answer(app, data):
     window.show()
     window.navigate("items")
     page = window.pages["items"]
-    assert page.tabs.tabText(0) == "Item 분석" and page.tabs.tabText(1) == "Item 관리"
+    assert page.tabs.tabText(0) == "아이템 조회" and page.tabs.tabText(1) == "위험 기준 관리"
     assert page.original.model.headings == ("No", "항목", "REMARK")
     assert page.original.model.rows == (("7", "다른 Item", "원본 비고"),)
     original_query = window.query_state.applied
@@ -77,6 +77,48 @@ def test_async_search_tab_original_and_stale_answer(app, data):
     assert page.manager.isHidden() and not page.list_view.isHidden()
     page.search.setText("없는 질문")
     assert page.answer is None and page.answer_card.isHidden()
+    window.close()
+
+
+def test_query_candidates_and_rule_drilldown(app, data):
+    from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
+    rule = RiskRule(9, RuleType.SAFETY_REQUIRED, 10, "필수 기능", item_id=1,
+                    mapping_status=MappingStatus.VERIFIED)
+    window = create_window(item_loader=lambda: replace(data, risk_rules=(rule,)))
+    window.show()
+    window.navigate("items")
+    page = window.pages["items"]
+    page.search.setText("7")
+    assert page.search_answer()
+    wait_until(lambda: not page.answer_request.busy)
+    assert tuple(page.result_buttons) == (1, 2) and page.selected_id is None
+    assert page.open_row(0)
+    assert page.list_view.isVisible() and page.detail_view.isVisible()
+    page.result_buttons[2].click()
+    assert page.selected_id == 2 and page.search.text() == "7"
+    assert page.result_rows.indexOf(page.detail_view) == page.result_rows.indexOf(page.result_buttons[2]) + 1
+    page.result_buttons[2].click()
+    assert page.detail_view.isHidden()
+    page.result_buttons[1].click()
+    assert page.result_rows.indexOf(page.detail_view) + 1 == page.result_rows.indexOf(page.result_buttons[2])
+    assert "EQ-2" in page.inline_equipment.text() and "미적용으로 기록" in page.inline_equipment.text()
+    assert "v99" in page.content.text() and page.equipment_model.ids == (2,)
+    page.site_filter.setCurrentIndex(1)
+    page.refresh_after_save(preserve_detail=True)
+    assert page.selected_id == 1 and page.site_filter.currentData() == "Site A"
+    assert page.answer.item_ids == (1, 2) and page.equipment_model.ids == (2,)
+    page.tabs.setCurrentIndex(1)
+    manager = page.manager
+    assert manager.detail_card.isHidden()
+    assert page.result_buttons[1].rule_badge.text() == "등록된 기준 1건 ›"
+    assert page.result_buttons[2].rule_badge is None
+    page.tabs.setCurrentIndex(0)
+    page.result_buttons[1].rule_badge.click()
+    assert page.tabs.currentIndex() == 1
+    assert manager.model.ids == (2,)
+    assert "저장된 버전별 Item 상태" in manager.model.rows[0][4]
+    manager.status_filter.setCurrentIndex(1)
+    assert set(manager.model.ids) == {3, 5}
     window.close()
 
 
@@ -145,12 +187,40 @@ def test_risk_dialog_preview_invalidated_cancel_and_explicit_submit(app, data):
     assert not dialog.save_button.isEnabled() and not dialog.save()
     dialog.preview_impact()
     wait_until(lambda: not dialog.request.busy)
+    assert not dialog.save_button.isEnabled()
+    dialog.verified.setChecked(True)
     assert dialog.save() and len(submitted) == 1
     assert not dialog.save() and len(submitted) == 1  # 같은 창의 중복 저장 금지
     assert submitted[0]["item_manager"]["memo"] == "변경"
     cancel = ItemRiskDialog(None, data, gateway, lambda: None, lambda v: submitted.append(v))
     cancel.reject()
     assert len(submitted) == 1
+
+
+def test_selected_item_and_preview_appear_without_search_or_preview_click(app, data):
+    calls = []
+    impact = SimpleNamespace(problems=(), base_date=data.base_date, newly_risky=1, hpa_excluded=0,
+                             saveable=True, count=lambda _: 1)
+    def preview(values, context):
+        calls.append(values)
+        return impact
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=preview), lambda: None,
+                            lambda _: False, family_id=10, item_id=2)
+    dialog.show()
+    wait_until(lambda: dialog.preview_valid)
+    assert dialog.item_editor.isHidden() and not dialog.item_search.isVisible()
+    assert data.versions.items[1].item.content in dialog.item_note.text()
+    assert len(calls) == 1 and calls[0]["item_id"] == 2
+    assert "원본" in dialog.next_step.text()
+    dialog.change_item.click()
+    assert dialog.item_search.isVisible()
+    dialog.item.setCurrentIndex(dialog.item.findData(1))
+    wait_until(lambda: dialog.preview_valid)
+    assert calls[-1]["item_id"] == 1 and not dialog.save_button.isEnabled()
+    dialog.name.clear()
+    wait_until(lambda: dialog.next_step.text() == "기준명을 입력하세요.")
+    assert not dialog.save_button.isEnabled()
+    dialog.reject()
 
 
 def test_answer_navigation_applies_only_selected_family_and_leaves_global_sources_unchanged(app):

@@ -8,7 +8,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from setron.features.item.schemas import Item
+from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
 from setron.features.version.schemas import ReleaseVersion
 from setron.ui.item_data import ItemManagerData
 from setron.ui.items import ItemsPage
@@ -92,7 +92,8 @@ def context(app, request):
     """
     catalog = VersionCatalog((ModelFamily(1, "모델", 2, "SW"),),
                              (ReleaseEntry(ReleaseVersion(3, 2, "v1"), (1,)),),
-                             (ItemEntry(Item(4, 1, "내용")),), source_label="지연 테스트 자료")
+                             (ItemEntry(Item(4, 1, "내용")),),
+                             (VersionItem(3, 4, ItemState.APPLIED, TargetScope.ALL),), source_label="지연 테스트 자료")
     kind = request.param
     value = catalog if kind is VersionsPage else ItemManagerData(catalog)
     pages, loaders = [], []
@@ -243,7 +244,8 @@ def test_reload_clears_previous_detail_and_accepts_empty(context):
     page.loader = BackgroundRead(second)
     page.reload()
     assert page.mode == "list" and page.selected_id is None
-    assert result(page) is None and page.list_model.rowCount() == 0
+    assert result(page) is None
+    assert (page.list_model.rowCount() if isinstance(page, VersionsPage) else len(page.result_buttons)) == 0
     second.release.set()
     wait_until(lambda: not page.read_request.busy)
     assert result(page) is empty and "실패" not in page.status.text()

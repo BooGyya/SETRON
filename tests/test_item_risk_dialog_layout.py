@@ -32,7 +32,7 @@ def test_scroll_form_keeps_footer_visible_for_all_criteria(dialog, size, criteri
     assert dialog.scroll.widget().width() <= dialog.scroll.viewport().width()
     assert dialog.scroll.horizontalScrollBar().maximum() == 0
     assert not dialog.scroll.isAncestorOf(dialog.footer)
-    for control in (dialog.preview_button, dialog.cancel_button, dialog.save_button):
+    for control in (dialog.next_step, dialog.cancel_button, dialog.save_button):
         bounds = control.rect().translated(control.mapTo(dialog, QPoint()))
         assert dialog.rect().contains(bounds) and control.isVisible()
     footer_position = dialog.footer.pos()
@@ -42,13 +42,11 @@ def test_scroll_form_keeps_footer_visible_for_all_criteria(dialog, size, criteri
     assert dialog.values() == before and not dialog.save_button.isEnabled()
     if size[1] == 500:
         assert dialog.scroll.verticalScrollBar().maximum() > 0
-    dialog.scroll.ensureWidgetVisible(dialog.verified, 0, 4)
-    QTest.qWait(20)
-    verified = dialog.verified.rect().translated(dialog.verified.mapTo(dialog.scroll.viewport(), QPoint()))
-    assert dialog.scroll.viewport().rect().contains(verified)
+    verified = dialog.verified.rect().translated(dialog.verified.mapTo(dialog, QPoint()))
+    assert dialog.rect().contains(verified) and dialog.footer.isAncestorOf(dialog.verified)
 
 
-def test_tab_focus_scrolls_last_input_into_view_and_cancel_stays_accessible(dialog):
+def test_tab_focus_reaches_fixed_confirmation_and_cancel_stays_accessible(dialog):
     dialog.resize(460, 500)
     dialog.show()
     dialog.name.setFocus()
@@ -59,7 +57,7 @@ def test_tab_focus_scrolls_last_input_into_view_and_cancel_stays_accessible(dial
             break
         QTest.keyClick(dialog.focusWidget(), Qt.Key.Key_Tab)
     assert dialog.verified.hasFocus()
-    assert dialog.scroll.verticalScrollBar().value() > 0
+    assert dialog.verified.isVisible()
     assert not dialog.save_button.isEnabled()
     dialog.cancel_button.click()
     assert not dialog.isVisible()

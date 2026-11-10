@@ -35,7 +35,7 @@ def test_family_title_is_outside_wrapping_choice_group(window, width):
     window.resize(width, 900)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    assert page.family_title.text() == "설비군 선택"
+    assert page.family_title.text() == "SW 계열"
     assert not page.family_host.isAncestorOf(page.family_title)
     title_bottom = page.family_title.mapTo(page.list_view, page.family_title.rect().bottomLeft()).y()
     choices_top = page.family_choices.mapTo(page.list_view, QPoint()).y()
@@ -57,24 +57,18 @@ def test_family_title_is_outside_wrapping_choice_group(window, width):
 
 
 @pytest.mark.parametrize("width", [960, 1100, 1920])
-def test_risk_add_button_aligns_with_input_boxes_when_filters_wrap(window, width):
+def test_registration_visible_before_choosing_rule(window, width):
     page = window.pages["items"]
     page.tabs.setCurrentIndex(1)
     manager = page.manager
     window.resize(width, 900)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    # 검색칸과 추가 버튼은 넓은 한 줄과 좁은 마지막 줄에서 같은 행에 배치된다.
-    search = manager.search.rect().translated(manager.search.mapTo(manager.filter_row, QPoint()))
-    add = manager.add_button.rect().translated(manager.add_button.mapTo(manager.filter_row, QPoint()))
-    # 네이티브 버튼 테두리의 1px 여백 차이는 허용하되, 실제 입력칸 하단은 같아야 한다.
-    assert abs(search.top() - add.top()) <= 1 and search.bottom() == add.bottom()
-    assert search.height() == 40 and abs(search.height() - add.height()) <= 1
-    assert manager.filter_row.rect().contains(add)
-    assert manager.add_button.text() == "+ 위험 아이템 추가"
-    if width == 1920:
-        for control in (manager.site, manager.line, manager.group, manager.rule):
-            assert control.mapTo(manager.filter_row, QPoint()).y() == search.top()
+    assert manager.filters.isHidden()
+    assert manager.detail_card.isHidden()
+    assert manager.add_button.isVisible()
+    assert manager.add_button.text() == "+ 위험 기준 등록"
+    assert manager.rect().contains(manager.add_button.mapTo(manager, QPoint()))
 
 
 def test_empty_and_reloaded_family_group_keep_heading_and_single_message(window):
@@ -82,7 +76,7 @@ def test_empty_and_reloaded_family_group_keep_heading_and_single_message(window)
     original = page.data
     page.data = None
     page.render_families()
-    assert page.family_title.text() == "설비군 선택"
+    assert page.family_title.text() == "SW 계열"
     assert page.family_empty.text() == "조회 결과 미확인" and not page.family_empty.isHidden()
     assert page.family_flow.count() == 1
     page.data = original

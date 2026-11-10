@@ -41,12 +41,17 @@ class ItemManagerData:
         if len({r.equipment_id for r in self.records}) != len(self.records):
             raise ValueError("같은 설비 ID가 중복되었습니다.")
 
-    def search(self, query=""):
-        items = tuple(e.item for e in self.versions.items)
-        found = search_items(items, query) if query.strip() else sorted(
+    def search(self, query="", *, family_id=None):
+        entries = self.versions.items
+        if family_id is not None:
+            releases = {e.release.release_version_id for e in self.versions.releases if e.release.family_id == family_id}
+            linked = {r.item_id for r in self.versions.version_items if r.release_version_id in releases}
+            entries = tuple(e for e in entries if e.item.item_id in linked)
+        items = tuple(e.item for e in entries)
+        found = search_items(items, query, match_words=True) if query.strip() else sorted(
             items, key=lambda i: (i.item_no is None, i.item_no or 0, i.item_id))
-        entries = {e.item.item_id: e for e in self.versions.items}
-        return tuple(entries[i.item_id] for i in found)
+        by_id = {e.item.item_id: e for e in entries}
+        return tuple(by_id[i.item_id] for i in found)
 
     def catalog(self):
         return ItemCatalog(self.versions.families(), self.versions.version_items)

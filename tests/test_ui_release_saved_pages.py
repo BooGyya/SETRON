@@ -104,8 +104,10 @@ def test_failed_page_refresh_clears_old_data_and_retry_reads_current_db(app, rev
         window.pages["import"].saved.emit(receipt)
         ready_pages(window)
         assert window.pages["versions"].catalog is None and window.pages["items"].data is None
+        assert window.pages["versions"].list_model.rowCount() == 0
+        assert not window.pages["items"].result_buttons
         for page in (window.pages["versions"], window.pages["items"]):
-            assert page.list_model.rowCount() == 0 and "실패" in page.status.text()
+            assert "실패" in page.status.text()
         assert {row["version_raw"] for row in all_rows(storage, "release_version")} == {"v2"}
         source._loader = original_loader
         window.pages["versions"].reload()

@@ -17,6 +17,7 @@ from datetime import date
 
 from setron.features.aggregation.schemas import EquipmentRecord
 from setron.features.item.service import ItemCatalog
+from setron.features.risk.item_scope import targets
 from setron.features.risk.schemas import FindingBasis, MappingStatus, RiskFinding, RiskRule, RiskStatus
 from setron.features.risk.service import RiskAssessor, validate_rule
 from setron.features.version.schemas import ReleaseVersion
@@ -71,6 +72,7 @@ class RuleImpact:
     releases: tuple[ReleaseImpact, ...] = ()
     equipment: tuple[EquipmentImpact, ...] = ()
     hpa_excluded: int = 0
+    target_count: int = 0
 
     @property
     def saveable(self) -> bool:
@@ -145,13 +147,12 @@ def preview_rule_impact(
         for finding in only.release_findings(release)
     )
     equipment = []
-    for record in records:
-        if record.is_hpa:
-            continue
+    scoped_records = tuple(record for record in records if not record.is_hpa and targets(draft, record))
+    for record in scoped_records:
         findings = only.equipment_risk(record).findings
         if not findings:
             continue
         equipment.append(EquipmentImpact(record, findings, before.equipment_risk(record).status,
                                          after.equipment_risk(record).status))
     equipment.sort(key=lambda e: (e.status is not RiskStatus.RISK, e.record.site, e.record.equipment_code))
-    return RuleImpact(draft, base_date, (), releases, tuple(equipment), hpa)
+    return RuleImpact(draft, base_date, (), releases, tuple(equipment), hpa, len(scoped_records))

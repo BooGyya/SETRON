@@ -7,7 +7,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
 
 from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
-from setron.ui.item_risk_page import ItemRiskPage, ItemStatusDelegate
+from setron.ui.item_risk_page import ItemRiskPage
 from setron.ui.items import _style_raw_table
 
 from test_ui_items import app, data
@@ -25,30 +25,53 @@ def test_status_cells_have_one_painter_and_enough_space(app, data, width, with_r
     page.show()
     QTest.qWait(30)
     try:
-        assert isinstance(page.table.itemDelegateForColumn(5), ItemStatusDelegate)
-        assert page.model.rowCount() == 5
-        expected = {"위험 후보", "적용 완료", "미확인", "대상 외"} if with_rule else {"위험 기준 없음"}
-        assert {row[5] for row in page.model.rows} == expected
-        for row in range(page.model.rowCount()):
-            index = page.model.index(row, 5)
-            # 위젯 배지와 기본 셀 텍스트를 겹쳐 놓지 않는다.
-            assert page.table.indexWidget(index) is None
-            text = index.data()
-            required = page.status_delegate.required_size(text)
-            assert page.table.columnWidth(5) >= required.width()
-            assert page.table.rowHeight(row) >= required.height()
-            assert index.data(Qt.ItemDataRole.AccessibleTextRole) == text
-            page.table.selectRow(row)
-            page.table.viewport().repaint()
-        page.search.setText("EQ-1")
+        if not with_rule:
+            assert page.detail_card.isHidden() and page.no_rules.isVisible()
+            return
+        page.select_rule(1)
+        QTest.qWait(30)
+        assert page.model.ids == (2,)
+        geometry = page.table.geometry()
+        for tab in (1, 2, 0):
+            page.status_filter.setCurrentIndex(tab)
+            QTest.qWait(30)
+            assert page.table.geometry() == geometry
+            assert page.table.horizontalScrollBar().maximum() == 0
+        assert page.model.columnCount() == 5
+        reason = page.model.index(0, 4)
+        assert page.table.indexWidget(reason) is None
+        assert reason.data(Qt.ItemDataRole.AccessibleTextRole) == reason.data()
+        page.search.setText("EQ-2")
         assert page.model.rowCount() == 1
         page.search.clear()
         page.resize(width - 40, 760)
         QTest.qWait(20)
-        for row in range(page.model.rowCount()):
-            assert page.table.columnWidth(5) >= page.status_delegate.required_size(page.model.rows[row][5]).width()
-            assert page.table.indexWidget(page.model.index(row, 5)) is None
+        assert page.table.horizontalScrollBar().maximum() == 0
     finally:
         page.close()
         page.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+def test_rule_drilldown_and_page_controls(app, data):
+    rule = RiskRule(1, RuleType.SAFETY_REQUIRED, 10, "첫 기준", item_id=1)
+    records = tuple(replace(data.records[0], equipment_id=i+1, equipment_code=f"EQ-{i+1}") for i in range(16))
+    page = ItemRiskPage()
+    page.set_data(replace(data, records=records, risk_rules=(rule, replace(rule, risk_rule_id=2))))
+    page.show()
+    try:
+        for rid in (1, 2):
+            page.rule_buttons[rid].click()
+            assert page.rule_rows.indexOf(page.detail_card) == page.rule_rows.indexOf(page.rule_buttons[rid]) + 1
+            assert not page.condition.isVisible() and not page.source_button.isVisible()
+            assert page.pager.isVisible() and page.page_label.text() == "1 / 2"
+            page.next.click()
+            assert page.model.rowCount() == 1 and page.page_label.text() == "2 / 2"
+            page.info_toggle.click()
+            assert page.condition.isVisible() and page.source_button.isVisible()
+        page.filter_toggle.click()
+        page.search.setText("EQ-16")
+        assert page.model.rowCount() == 1 and page.pager.isHidden()
+        page.rule_buttons[2].click()
+        assert page.detail_card.isHidden()
+    finally:
+        page.close()

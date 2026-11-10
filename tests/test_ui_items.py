@@ -115,11 +115,11 @@ def test_mixed_pm_missing_sw_and_unregistered_remain_explicit(window, data):
     page.reload()
     page.open_row(0)
     rows = page.equipment_model.rows
-    assert [r[3] for r in rows] == ["미적용", "미확인", "미확인", "대상 외"]
+    assert [r[3] for r in rows] == ["미적용", "미확인", "미확인"]
     assert "v99" in rows[0][4] and "v2" in rows[0][4]
     assert "등록 릴리즈 대응 없음" in rows[1][4]
     assert "관측 SW 버전 없음" in rows[2][4]
-    assert "PM/SW 관측 없음" in rows[3][4]
+    assert 22 not in page.equipment_model.ids  # 선택 계열의 PM이 없는 설비
 
 
 def test_connected_empty_observations_are_zero_not_disconnected(window, data):
@@ -136,28 +136,70 @@ def test_connected_empty_observations_are_zero_not_disconnected(window, data):
 def test_detail_keyboard_sources_four_states_and_return(window):
     page = window.pages["items"]
     page.search.setText("7")
-    page.table.setCurrentIndex(page.list_model.index(0, 0))
-    QTest.keyClick(page.table, Qt.Key.Key_Return)
+    page.result_buttons[1].setFocus()
+    QTest.keyClick(page.result_buttons[1], Qt.Key.Key_Return)
     assert page.mode == "detail" and page.selected_id == 1
-    assert page.content.text() == "Alarm <원문> & 보존"
-    assert page.content.textFormat() == Qt.TextFormat.PlainText
+    assert page.title.text() == "Alarm <원문> & 보존"
+    assert page.title.textFormat() == Qt.TextFormat.PlainText
     assert "C9" in page.source_model.rows[0][2]
     assert "미확인 · 저장 행 없음" in page.release_model.rows[-1]
+    assert page.state_filter.currentData() == Application.NOT_APPLIED
+    assert {row[3] for row in page.equipment_model.rows} == {"미적용"}
+    page.state_filter.setCurrentIndex(0)
     assert {row[3] for row in page.equipment_model.rows} == {"적용", "미적용", "미확인", "대상 외"}
     assert "HPA 제외 1대" in page.summary.text()
     assert "2026-01-02" in page.observation_note.text()
     page.state_filter.setCurrentIndex(page.state_filter.findData(Application.UNKNOWN))
     assert len(page.equipment_model.rows) == 2
     assert all(row[3] == "미확인" for row in page.equipment_model.rows)
-    QTest.mouseClick(page.back, Qt.MouseButton.LeftButton)
-    assert page.search.text() == "7" and page.table.currentIndex().row() == 0
+    QTest.mouseClick(page.result_buttons[1], Qt.MouseButton.LeftButton)
+    assert page.search.text() == "7" and page.mode == "list"
+    assert page.isAncestorOf(page.result_buttons[1]) and not page.result_buttons[1].isChecked()
     assert page.open_row(1) and page.selected_id == 2
-    assert page.state_filter.currentData() is None
+    assert page.state_filter.currentData() == Application.NOT_APPLIED
+
+
+def test_expanding_result_keeps_search_and_row_geometry(window):
+    page = window.pages["items"]
+    first, second = page.result_buttons.values()
+    window.resize(1280, 760)
+    QTest.qWait(30)
+    row_size = first.size()
+    search_width = page.search.width()
+    for button in (first, second, second):
+        QTest.mousePress(button, Qt.MouseButton.LeftButton)
+        assert button.size() == row_size
+        QTest.mouseRelease(button, Qt.MouseButton.LeftButton)
+        QTest.qWait(30)
+        assert first.size() == second.size() == row_size
+        assert page.search.width() == search_width
+    assert page.detail_view.isHidden()
+
+
+def test_family_list_filters_in_place_and_restores_on_clear(window, data):
+    page = window.pages["items"]
+    versions = replace(data.versions,
+        pairs=(*data.versions.pairs, ModelFamily(3, "모델 C", 20, "SW B")),
+        releases=(*data.versions.releases, ReleaseEntry(ReleaseVersion(5, 20, "v1", 1), (3,))),
+        version_items=(*data.versions.version_items, VersionItem(5, 3, ItemState.APPLIED, TargetScope.ALL)))
+    page.loader = lambda: replace(data, versions=versions)
+    page.reload()
+    assert page.results_card.isVisible() and page.count.text() == "SW A 아이템 전체 2건"
+    assert tuple(page.result_buttons) == (1, 2)
+    page.result_buttons[1].click()
+    assert page.result_rows.indexOf(page.detail_view) == page.result_rows.indexOf(page.result_buttons[1]) + 1
+    page.search.setText("Alarm")
+    assert tuple(page.result_buttons) == (1,) and page.detail_view.isHidden()
+    page.search.clear()
+    assert tuple(page.result_buttons) == (1, 2)
+    page.select_family(20)
+    assert page.count.text() == "SW B 아이템 전체 1건" and tuple(page.result_buttons) == (3,)
 
 
 def test_unlinked_item_does_not_claim_all_equipment_not_target(window):
     page = window.pages["items"]
-    page.open_row(2)
+    assert not page.open_row(2) and 3 not in page.result_buttons
+    assert page.open_item_id(3)
     assert not page.equipment_model.rows
     assert "미확인" in page.summary.text()
     assert not page.state_filter.isEnabled()
@@ -190,13 +232,14 @@ def test_failure_retry_and_removed_items_clear_detail(window, data):
     assert page.data is data and page.search.isEnabled()
     page.loader = lambda: replace(data, versions=replace(data.versions, items=(), version_items=()))
     page.reload()
-    assert not page.list_model.rows and not page.open_row(0)
+    assert not page.result_buttons and not page.open_row(0)
 
 
 def test_pagination_menu_return_and_a_state_unchanged(window, data):
     page = window.pages["items"]
     page.loader = lambda: replace(data, versions=replace(data.versions,
-        items=tuple(ItemEntry(Item(i, i, f"항목 {i}")) for i in range(1, 29))))
+        items=tuple(ItemEntry(Item(i, i, f"항목 {i}")) for i in range(1, 29)),
+        version_items=tuple(VersionItem(1, i, ItemState.APPLIED, TargetScope.ALL) for i in range(1, 29))))
     page.reload()
     window.navigate("dashboard")
     window.query_panel.apply_draft()
@@ -212,10 +255,10 @@ def test_pagination_menu_return_and_a_state_unchanged(window, data):
     assert not window.query_panel.isVisible()
     assert not window.header.actions["equipment_list"].isEnabled()
     page.back_to_list()
-    assert page.page_index == 1 and page.table.currentIndex().row() == 3
+    assert page.page_index == 1 and page.visible_entries[3].item.item_id == page.selected_id
     assert window.query_state.applied is applied and window.query_state.target_draft == targets
     page.search.setText("없는 검색")
-    assert not page.list_model.rows and page.page_index == 0
+    assert not page.result_buttons and page.page_index == 0
     assert not page.previous.isEnabled() and not page.next.isEnabled()
 
 
@@ -231,7 +274,7 @@ def test_narrow_window_and_long_original_content(window, data, size):
     page.open_row(0)
     QTest.qWait(30)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    assert page.content.text() == "<원문>&" * 250
+    assert page.title.text() == "<원문>&" * 250
 
 
 def test_release_note_groups_stored_rows_only_and_opens_detail(window):
