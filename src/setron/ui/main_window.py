@@ -40,7 +40,7 @@ MENUS = (
     # VER5 사이드바에 없는 기존 메뉴. 기능을 유지하고 데이터 관리 묶음에 둔다.
     Menu("management", "관리 데이터", *_ver5("management", "settings")),
     Menu("reports", "보고서", *_ver5("reports")),
-    Menu("settings", "기준 · 설정", *_ver5("settings")),
+    Menu("settings", "설정", *_ver5("settings")),
 )
 # 첫 묶음(현황 분석)은 제목 없이 표시한다.
 MENU_GROUPS = (
@@ -281,12 +281,9 @@ class MainWindow(QMainWindow):
         description = label("SW 버전 현황 관리", 13, color=INK)
         description.setObjectName("serviceDescription")
         side.addWidget(description)
-        self.personal_menu_layout = None
         for title, keys in MENU_GROUPS:
             group = QVBoxLayout()
             group.setSpacing(4)
-            if title is None:
-                self.personal_menu_layout = group
             if title is not None:
                 caption = label(title, 11, color=INK)
                 caption.setObjectName("navGroup")
@@ -304,15 +301,6 @@ class MainWindow(QMainWindow):
         self.sidebar_scroll.setWidget(content)
         outer.addWidget(self.sidebar_scroll)
         return sidebar
-
-    def set_menu_order(self, order):
-        from setron.ui.appearance_data import MENU_ORDER
-        if len(order) != len(MENU_ORDER) or set(order) != set(MENU_ORDER):
-            raise ValueError("메뉴 순서가 올바르지 않습니다.")
-        for key in MENU_ORDER:
-            self.personal_menu_layout.removeWidget(self.nav[key])
-        for key in order:
-            self.personal_menu_layout.addWidget(self.nav[key])
 
     def set_data_warning(self, text: str | None) -> None:
         """실제 자료가 아님을 알리는 경고를 모든 화면에 계속 띄운다. 빈 문구면 숨긴다 (QA Q-03)."""

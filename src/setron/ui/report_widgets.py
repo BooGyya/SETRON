@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTabBar, QVBoxLayout, QWidget,
 )
 
-from setron.ui.appearance import ui_color
+from setron.ui.appearance import chart_font, ui_color
 from setron.ui.chat_export import chart_png, export_folder
 from setron.ui.components import button, label
 from setron.ui.import_dialogs import ImportBusyBar, ImportConfirmDialog, ImportDialog
@@ -305,7 +305,7 @@ def data_chart(table, kind):
     chart = QChart()
     chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
     chart.setBackgroundRoundness(0)
-    chart.legend().setFont(font(12))
+    chart_font(chart.legend(), "font", font(12))
     chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
     view = QChartView(chart)
     view.setRenderHint(QPainter.RenderHint.Antialiasing)

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 
 from setron.ui.components import button, label
 from setron.ui.query_state import VersionFilter
-from setron.ui.theme import SECONDARY, font
+from setron.ui.theme import SECONDARY, font, set_widget_font
 
 
 def choice_caption(value):
@@ -25,7 +25,7 @@ class VersionChoice(QCheckBox):
         super().__init__()
         self.setAccessibleName(text)
         self.setToolTip(text)
-        self.setFont(font(14, medium=True))
+        set_widget_font(self, font(14, medium=True))
         self.setMinimumHeight(40)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)

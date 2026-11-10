@@ -16,7 +16,7 @@ from setron.ui.dashboard_data import (
     DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, count_value, missing_sw_count,
     undetermined_breakdown, upgrade_caption,
 )
-from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size
+from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size, set_widget_font
 
 # Figma VER4 대시보드 셀 색 (--met / --below / --soft / --v4-red). 이 화면에서만 쓴다.
 MET = "#ddf4e5"
@@ -69,10 +69,12 @@ def _equipment_state(status):
 
 
 class DashboardGrid(QWidget):
-    def __init__(self, widgets, *, minimum_width=260, maximum_columns=4, spacing=16):
+    def __init__(self, widgets, *, minimum_width=260, maximum_columns=4, spacing=16,
+                 alignment=Qt.AlignmentFlag(0)):
         super().__init__()
         self.widgets, self.minimum_width, self.maximum_columns = widgets, minimum_width, maximum_columns
         self.spacing = spacing
+        self.alignment = alignment
         self.columns = 0
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(0, 0, 0, 0)
@@ -91,7 +93,7 @@ class DashboardGrid(QWidget):
         for index in range(max(columns, self.columns)):
             self.grid.setColumnStretch(index, int(index < columns))
         for index, widget in enumerate(self.widgets):
-            self.grid.addWidget(widget, index // columns, index % columns)
+            self.grid.addWidget(widget, index // columns, index % columns, self.alignment)
         self.columns = columns
         self.updateGeometry()
 
@@ -220,7 +222,7 @@ class DashboardPage(QWidget):
         self.tabs.setAccessibleName("대시보드 보기 방식")
         self.tabs.setExpanding(False)
         self.tabs.setDrawBase(False)
-        self.tabs.setFont(font(14, medium=True))
+        set_widget_font(self.tabs, font(14, medium=True))
         self.tabs.setStyleSheet(TAB_STYLE)
         for title in ("표", "구성비", "막대", "적용 추이"):
             self.tabs.addTab(title)
@@ -254,7 +256,7 @@ class DashboardPage(QWidget):
             check = button(group.label)
             check.setCheckable(True)
             check.setChecked(True)
-            check.setFont(font(13, medium=True))
+            set_widget_font(check, font(13, medium=True))
             check.setAccessibleName(group.label + " 차트 표시")
             check.toggled.connect(lambda checked, key=group.key, control=check:
                                   self._toggle_group(key, checked) if control.isEnabled() else None)
@@ -807,7 +809,7 @@ class DashboardPage(QWidget):
             if cell.risky_ids:
                 risk = button(f"후보 {len(cell.risky_ids)}")
                 risk.setProperty("dashboardRiskBadge", True)
-                risk.setFont(font(10, medium=True))
+                set_widget_font(risk, font(10, medium=True))
                 risk.setStyleSheet("QPushButton {color:#ad344d;background:#fce2e7;border:1px solid transparent;"
                                    "border-radius:4px;padding:0 5px;min-height:16px;max-height:16px;}"
                                    f"QPushButton:focus {{border:1px solid {PRIMARY};}}")

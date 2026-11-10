@@ -22,7 +22,7 @@ from setron.ui.query_state import UNASSIGNED, QuerySelection, QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.replay_data import INTERVALS, ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
 from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap
-from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.versions import _field
 
@@ -200,7 +200,7 @@ class ReplayPage(QWidget):
         for control, name in ((self.play_button, "재생"), (self.pause_button, "일시정지"), (self.restart_button, "처음부터")):
             control.setAccessibleName(name)
             control.setToolTip(name)
-            control.setFont(font(16, medium=True))
+            set_widget_font(control, font(16, medium=True))
             control.setStyleSheet("QPushButton {padding:0;min-height:38px;max-height:38px;}"
                                   "QPushButton:focus {min-height:36px;max-height:36px;}")
             control.setFixedSize(56, 40)

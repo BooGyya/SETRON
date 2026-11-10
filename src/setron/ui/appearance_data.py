@@ -7,7 +7,7 @@ import re
 from PySide6.QtCore import QSettings
 
 
-MENU_ORDER = ("dashboard", "heatmap", "items", "ai", "import", "replay")
+FONT_SCALES = {"small": 0.86, "normal": 1.0, "large": 1.15}
 ACCENTS = {"Blue": "#3c5ce9", "Teal": "#078494", "Violet": "#7c4ae5"}
 
 
@@ -24,8 +24,11 @@ class Appearance:
     surface: str | None = None
     # 밝은 배경 HEX가 어두운 화면까지 덮지 않도록 모드별 선택을 보관한다.
     dark_colors: dict[str, str] = field(default_factory=dict)
+    font_size: str = "normal"
 
     def __post_init__(self):
+        if self.font_size not in ("small", "normal", "large"):
+            raise ValueError("글자 크기는 작게, 보통, 크게 중에서 선택하세요.")
         if self.mode not in ("light", "dark", "system") or self.palette not in ("standard", "distinct", "custom"):
             raise ValueError("표시 모드 또는 히트맵 색상 선택을 확인하세요.")
         for key in ("accent", "met", "below", "risk", "rate", "canvas", "surface"):
@@ -37,6 +40,10 @@ class Appearance:
                 or not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", value)
                 for key, value in self.dark_colors.items()):
             raise ValueError("어두운 화면의 색상은 #RRGGBB 형식으로 입력하세요.")
+
+    @property
+    def font_scale(self):
+        return FONT_SCALES[self.font_size]
 
     def with_colors(self, dark, **values):
         return replace(self, dark_colors={**self.dark_colors, **values}) if dark else replace(self, **values)
@@ -81,16 +88,6 @@ class PersonalSettings:
             return Appearance(**(self._read("appearance", {}) or {}))
         except (ValueError, TypeError):
             return Appearance()
-
-    def personal(self):
-        data = self._read("personal", {})
-        data = data if isinstance(data, dict) else {}
-        order = data.get("order", MENU_ORDER)
-        if not isinstance(order, (list, tuple)) or len(order) != len(MENU_ORDER) or set(order) != set(MENU_ORDER):
-            order = MENU_ORDER
-        return {"order": tuple(order), "home": "heatmap" if data.get("home") == "heatmap" else "metrics",
-                "lines": data.get("lines") if isinstance(data.get("lines"), list) else None,
-                "groups": data.get("groups") if isinstance(data.get("groups"), list) else None}
 
     def version_group_pair(self) -> tuple[int, int] | None:
         value = self._read("version_group_pair", None)

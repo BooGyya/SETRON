@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
 
 from setron.features.aggregation.schemas import Summary
 from setron.features.version.schemas import CompareStatus
-from setron.ui.appearance import ui_color
+from setron.ui.appearance import chart_font, chart_text_font, ui_color
 from setron.ui.theme import INK, PRIMARY, SECONDARY, font
 
 
@@ -116,7 +116,7 @@ class DashboardChart(QChartView):
 
     @staticmethod
     def _axis(axis):
-        axis.setLabelsFont(font(11))
+        chart_font(axis, "labelsFont", font(11))
         axis.setLabelsColor(ui_color(SECONDARY))
         axis.setLinePen(QPen(ui_color("#e9eef6")))
         axis.setGridLinePen(QPen(ui_color("#e9eef6")))
@@ -141,17 +141,19 @@ class DashboardChart(QChartView):
         chart.legend().hide()  # 범례는 화면 오른쪽 상태 칩으로 표시한다.
         rate = snapshot.summary.rate
         center = QGraphicsSimpleTextItem("계산 불가" if rate is None else f"{rate:.1%}", chart)
-        center.setFont(font(34, medium=True, numeric=True))
+        chart_text_font(center, font(34, medium=True, numeric=True))
         center.setBrush(QBrush(ui_color(INK)))
         decided = snapshot.summary.compliant + snapshot.summary.below
         caption = QGraphicsSimpleTextItem(f"{snapshot.summary.compliant} / {decided}건 목표 달성" if total else "자료 없음", chart)
-        caption.setFont(font(13))
+        chart_text_font(caption, font(13))
         caption.setBrush(QBrush(ui_color(SECONDARY)))
         def place_center(rect):
             size, below = center.boundingRect(), caption.boundingRect()
             top = rect.center().y() - (size.height() + 6 + below.height()) / 2
             center.setPos(rect.center().x() - size.width() / 2, top)
             caption.setPos(rect.center().x() - below.width() / 2, top + size.height() + 6)
+
+        chart._setron_place_labels = place_center
         chart.plotAreaChanged.connect(place_center)
         # 조회를 다시 적용하면 차트 영역이 이미 배치되어 변경 신호가 추가로 오지 않을 수 있다.
         place_center(chart.plotArea())
@@ -167,7 +169,7 @@ class DashboardChart(QChartView):
                 continue
             group_set = QBarSet(label)
             group_set.setColor(ui_color(series_color(key)))
-            group_set.setLabelFont(font(10))
+            chart_font(group_set, "labelFont", font(10))
             group_set.append([len(ids) for ids in cohorts])
             series.append(group_set)
             shown[group_set] = label, cohorts
@@ -185,7 +187,7 @@ class DashboardChart(QChartView):
         y.setRange(0, max(2, maximum + 1))
         y.setLabelFormat("%d")
         y.setTitleText("대수 (대)")
-        y.setTitleFont(font(12))
+        chart_font(y, "titleFont", font(12))
         y.setTickCount(min(5, int(y.max()) + 1))
         for axis, alignment in ((x, Qt.AlignmentFlag.AlignBottom), (y, Qt.AlignmentFlag.AlignLeft)):
             self._axis(axis)

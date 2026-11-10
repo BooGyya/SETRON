@@ -20,7 +20,7 @@ from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_sc
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
 from setron.features.item.schemas import APPLICATION_LABELS
-from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size, set_widget_font, paint_font
 
 
 
@@ -125,7 +125,7 @@ class ReadTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.UserRole and self.ids:
             return self.ids[index.row()]
         if role == Qt.ItemDataRole.FontRole:
-            return font(14 if self.ids and index.column() == 0 else 13,
+            return paint_font(14 if self.ids and index.column() == 0 else 13,
                         medium=bool(self.ids) and index.column() == 0, numeric=index.column() in self.numeric_columns)
         if role == Qt.ItemDataRole.ForegroundRole and self.tones and index.column() == 4:
             return ui_color(TONES[self.tones[index.row()]][1])
@@ -160,7 +160,7 @@ def read_table(model, name, widths):
     table.setAccessibleName(name)
     table.setMinimumWidth(0)
     table.setMinimumHeight(260)
-    table.setFont(font(13))
+    set_widget_font(table, font(13))
     table.setWordWrap(True)
     table.setTextElideMode(Qt.TextElideMode.ElideNone)
     table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)

@@ -25,7 +25,7 @@ from setron.ui.item_answer_card import ItemAnswerCard
 from setron.ui.item_original_table import EvidenceDelegate, ItemOriginalTable
 from setron.ui.item_risk_page import ItemRiskPage
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import ACCENT_SOFT, INK, PRIMARY, SECONDARY, font
+from setron.ui.theme import ACCENT_SOFT, INK, PRIMARY, SECONDARY, font, set_widget_font, paint_font
 from setron.ui.versions import VersionsPage, _fit
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.source_notice import source_description, observation_description
@@ -210,7 +210,7 @@ class _ReleaseNoteModel(ReadTableModel):
         if not index.isValid():
             return None
         if role == Qt.ItemDataRole.FontRole:
-            return font(12, medium=index.column() == 3)
+            return paint_font(12, medium=index.column() == 3)
         if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (1, 3):
             return Qt.AlignmentFlag.AlignCenter
         if role == Qt.ItemDataRole.ForegroundRole and index.column() == 4:
@@ -233,10 +233,10 @@ class _VersionDelegate(QStyledItemDelegate):
         if index.row() in model.group_starts:
             rect = option.rect.adjusted(12, 9, -8, -9)
             painter.setPen(ui_color(INK))
-            painter.setFont(font(13, medium=True))
+            painter.setFont(paint_font(13, medium=True))
             painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, index.data())
             painter.setPen(ui_color(SECONDARY))
-            painter.setFont(font(11))
+            painter.setFont(paint_font(11))
             painter.drawText(rect.adjusted(0, 19, 0, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                              model.dates[index.row()])
         painter.restore()
@@ -249,7 +249,7 @@ def _chip(text):
     chip = QPushButton(text)
     chip.setCheckable(True)
     chip.setCursor(Qt.CursorShape.PointingHandCursor)
-    chip.setFont(font(14, medium=True))
+    set_widget_font(chip, font(14, medium=True))
     chip.setObjectName("familyChip")
     chip.setFixedHeight(36)
     chip.setStyleSheet("QPushButton#familyChip {background:transparent;border:1px solid transparent;border-radius:10px;"
@@ -366,7 +366,7 @@ class ItemsPage(QWidget):
         self.search.setPlaceholderText("기능명이나 증상을 입력하세요. 예) Recipe Edit 경고")
         self.search.setFixedHeight(40)
         self.search.setMinimumWidth(0)
-        self.search.setFont(font(15))
+        set_widget_font(self.search, font(15))
         self.search.setStyleSheet("QLineEdit {background:transparent;border:0;padding:0;}")
         row.addWidget(self.search, 1)
         self.ai_search = button("검색", primary=True)
@@ -430,7 +430,7 @@ class ItemsPage(QWidget):
         self.results_card = card
         card.body.setContentsMargins(24, 20, 24, 20)
         self.count = label("검색 결과", 16, medium=True)
-        self.count.setFont(font(18, medium=True))
+        set_widget_font(self.count, font(18, medium=True))
         card.body.addWidget(self.count)
         self.result_rows = QVBoxLayout()
         self.result_rows.setSpacing(0)
@@ -460,7 +460,7 @@ class ItemsPage(QWidget):
         card = Card()
         card.body.setContentsMargins(24, 20, 24, 20)
         self.title, self.content = _text("", 20), _text("", 14)
-        self.title.setFont(font(20, medium=True))
+        set_widget_font(self.title, font(20, medium=True))
         card.body.setSpacing(8)
         detail_panel = self.full_detail = card
         heading = QHBoxLayout()

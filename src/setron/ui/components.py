@@ -7,14 +7,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from setron.ui.theme import SECONDARY, TONES, font, icon, svg_size
+from setron.ui.theme import SECONDARY, TONES, font, icon, svg_size, set_widget_font
 
 
 def label(text: str, size: int = 14, *, medium: bool = False,
           color: str | None = None, numeric: bool = False, wrap: bool = False) -> QLabel:
     result = QLabel(text)
     result.setTextFormat(Qt.TextFormat.PlainText)
-    result.setFont(font(size, medium=medium, numeric=numeric))
+    set_widget_font(result, font(size, medium=medium, numeric=numeric))
     result.setWordWrap(wrap)
     if color:
         result.setStyleSheet(f"color: {color};")
@@ -24,7 +24,7 @@ def label(text: str, size: int = 14, *, medium: bool = False,
 def button(text: str, *, primary: bool = False, asset: str | None = None) -> QPushButton:
     result = QPushButton(text)
     result.setProperty("primary", primary)
-    result.setFont(font(14, medium=True))
+    set_widget_font(result, font(14, medium=True))
     result.setCursor(Qt.CursorShape.PointingHandCursor)
     if asset:
         result.setIcon(icon(asset))
@@ -82,7 +82,7 @@ class StatusBadge(QLabel):
     def __init__(self, text: str, tone: str = "neutral"):
         super().__init__(text)
         self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setFont(font(12, medium=True))
+        set_widget_font(self, font(12, medium=True))
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.set_tone(tone)
 
@@ -114,10 +114,10 @@ class PageHeader(QWidget):
     def __init__(self):
         super().__init__()
         self.title = label("대시보드", 30, medium=True)
-        title_font = self.title.font()
+        title_font = font(30, medium=True)
         title_font.setWeight(QFont.Weight.DemiBold)
         title_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, -0.6)
-        self.title.setFont(title_font)
+        set_widget_font(self.title, title_font)
         self.back = back_button()
         self.heading = QWidget()
         heading = QHBoxLayout(self.heading)

@@ -15,7 +15,7 @@ from setron.infrastructure.ai_client import ResponseSource
 from setron.ui.ai_data import FreshAnalysisData, VIEW_LABELS, VIEW_ROUTES, ConditionStatus, check_apply, interpret, selection_for
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import INK, PRIMARY, SECONDARY, font, icon, svg_size
+from setron.ui.theme import INK, PRIMARY, SECONDARY, font, icon, svg_size, set_widget_font
 from setron.ui.read_worker import ReadRequest
 
 SOURCE_LABELS = {
@@ -82,7 +82,7 @@ def _sparkle(size=18):
 def _tag(text):
     result = QLabel(text)
     result.setObjectName("aiTag")
-    result.setFont(font(12, medium=True))
+    set_widget_font(result, font(12, medium=True))
     result.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
     return result
 
@@ -98,7 +98,7 @@ class _UserBubble(QWidget):
         self.text = QLabel()
         self.text.setObjectName("aiBubble")
         self.text.setTextFormat(Qt.TextFormat.PlainText)
-        self.text.setFont(font(15, medium=True))
+        set_widget_font(self.text, font(15, medium=True))
         self.text.setWordWrap(True)
         self.text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         row.addWidget(self.text, 0, Qt.AlignmentFlag.AlignRight)
@@ -128,7 +128,7 @@ class _OptionalText(QLabel):
         super().__init__("")
         self.heading = heading
         self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setFont(font(size))
+        set_widget_font(self, font(size))
         self.setWordWrap(True)
         if color:
             self.setStyleSheet(f"color: {color};")
@@ -254,7 +254,7 @@ class AIPage(QWidget):
         self.condition_list.setAccessibleName("해석된 조건 목록")
         self.condition_list.setWordWrap(True)
         self.condition_list.setFixedHeight(200)
-        self.condition_list.setFont(font(13))
+        set_widget_font(self.condition_list, font(13))
         self.condition_list.itemChanged.connect(lambda *_: self._render_apply())
         condition.body.addWidget(self.condition_list)
         self.view_label = _OptionalText(13, SECONDARY)
@@ -313,7 +313,7 @@ class AIPage(QWidget):
         for text, question in QUICK_QUESTIONS:
             chip = QPushButton(text)
             chip.setObjectName("aiQuick")
-            chip.setFont(font(12, medium=True))
+            set_widget_font(chip, font(12, medium=True))
             chip.setCursor(Qt.CursorShape.PointingHandCursor)
             chip.setToolTip(f"질문 입력란에 ‘{question}’을 채웁니다. 전송해야 해석합니다.")
             chip.clicked.connect(lambda checked=False, value=question: self._prefill(value))
@@ -329,7 +329,7 @@ class AIPage(QWidget):
         self.question = QLineEdit()
         self.question.setAccessibleName("AI 질문")
         self.question.setPlaceholderText("질문을 입력하세요. 예) 화성 C4 설비 버전 현황 보여줘")
-        self.question.setFont(font(15))
+        set_widget_font(self.question, font(15))
         self.question.setMinimumWidth(80)
         self.question.setFixedHeight(40)
         self.question.returnPressed.connect(self.parse)
