@@ -130,9 +130,16 @@ def test_start_draft_edits_and_apply_use_one_shared_result(window, monkeypatch):
     query = window.query_panel.apply_draft()
     assert calls == [query]
     assert dashboard.snapshot is heatmap.snapshot
+    visible_texts = [widget.text() for widget in heatmap.findChildren(QLabel) if widget.isVisible()]
+    assert "적용됨" not in visible_texts and "설비군 → Line → 설비" not in visible_texts
+    assert not any(text.startswith(("적용 기준 ", "Site·Fab은 조회 조건으로 유지")) for text in visible_texts)
+    assert [heatmap.metrics[key].value.text() for key in ("analysis", "met", "below", "unknown")] == [
+        "4대", "1대", "1대", "2대",
+    ]
+    assert heatmap.strip_note.text() == "전체 5대 · HPA 제외 1대"
     assert heatmap.metrics["total"].value.text() == "5대"
     assert heatmap.metrics["rate"].value.text() == "66.7%"
-    assert heatmap.metrics["risk"].value.text() == "2대"
+    assert heatmap.metrics["risk"].value.text() == "2대" and heatmap.metrics["risk"].value.tone == "danger"
     assert heatmap.metrics["upgrade"].value.text() == "1대"
     previous = heatmap.snapshot
     window.query_panel.select("site_key", "s2")
@@ -189,6 +196,7 @@ def test_risk_summary_and_filter_after_requery(window, source, state, risks, sum
     assert not page.risk_footer.isVisibleTo(page)
     assert page.snapshot.risk_rule_state is state
     assert page.metrics["risk"].value.text() == summary
+    assert page.metrics["risk"].value.tone == ("neutral" if summary == "0대" else "warning")
     assert page.risk_button.text() == page.risk_button.accessibleName() == filter_text
     assert not page.risk_button.isEnabled() and not page.risk_button.isChecked()
     assert set(page.visible_ids) == {1, 2, 3, 4, 5}
@@ -321,6 +329,35 @@ def test_responsive_tiles_have_no_main_horizontal_overflow(window, size, mode):
     assert all(grid.columns >= 1 for grid in page.tile_grids)
 
 
+def test_search_follows_compact_view_button_at_wide_and_narrow_sizes(window):
+    window.query_panel.apply_draft()
+    page = window.pages["heatmap"]
+    viewport = window.scroll.viewport()
+    compact_view = page.view_buttons.button(0)
+    page.search.setText("TEST-2")
+    assert page.visible_ids == (2,)
+    assert page.show_below()
+    assert not page.search.text() and page.below_filter.isVisible()
+    assert page.visible_ids == (1,)
+
+    for size in ((1600, 960), (960, 600), (1600, 960)):
+        window.resize(*size)
+        QTest.qWait(45)
+        button_right = compact_view.mapTo(viewport, QPoint(compact_view.width(), compact_view.height() // 2))
+        search_left = page.search.mapTo(viewport, QPoint(0, page.search.height() // 2))
+        assert 0 < search_left.x() - button_right.x() <= 12
+        assert abs(search_left.y() - button_right.y()) <= 1
+        for control in (page.search, page.below_filter, page.risk_button, *page.layout_buttons.buttons()):
+            left = control.mapTo(viewport, QPoint(0, 0)).x()
+            assert control.isVisible() and 0 <= left < left + control.width() <= viewport.width()
+        assert page.search.width() >= page.search.minimumWidth()
+        assert window.scroll.horizontalScrollBar().maximum() == 0
+
+    page.below_filter.click()
+    page.layout_buttons.button(1).click()
+    assert page.list_table.isVisible() and set(page.visible_ids) == {1, 2, 3, 4, 5}
+
+
 def test_default_demo_two_modes_and_catalog_mismatch(app):
     window = create_window()
     window.show()
@@ -329,8 +366,12 @@ def test_default_demo_two_modes_and_catalog_mismatch(app):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     assert len(page.tile_buttons) == len(page.snapshot.equipment_ids) == 63
-    page.view_buttons.button(1).click()
-    QTest.qWait(60)
+    for mode in (0, 1):
+        page.view_buttons.button(mode).click()
+        QTest.qWait(60)
+        assert all(tile.height() >= tile.minimumSizeHint().height() for tile in page.tile_occurrences)
+        assert all(grid.height() >= grid.minimumSizeHint().height() for grid in page.tile_grids)
+        assert all(grid.rect().contains(tile.geometry()) for grid in page.tile_grids for tile in grid.tiles)
     assert page.tiles[0].multi_sw
     window.set_query_catalog(replace(page.source.catalog, sites=(*page.source.catalog.sites, SiteOption("extra", "새 Site"))))
     window.query_panel.apply_draft()

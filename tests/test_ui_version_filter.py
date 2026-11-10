@@ -179,7 +179,6 @@ def test_confirm_then_apply_updates_same_snapshot_and_list_not_targets(window):
     assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot.equipment_ids == (1, 2)
     assert not panel.version_pending.isVisible()
     assert dashboard.snapshot.query.selection.versions == VersionFilter(("v2",))
-    assert "1개 선택" in heatmap._applied_caption(heatmap.snapshot)
     window.header.action_requested.emit("equipment_list")
     assert window.route == "equipment"
     assert window.pages["equipment"].snapshot is dashboard.snapshot
