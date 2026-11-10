@@ -107,7 +107,8 @@ def test_query_candidates_and_rule_drilldown(app, data):
     assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건 ›"
     assert page.result_buttons[2].rule_badge is None
     # 배지 툴팁은 기준명 하나만, 부모 행 툴팁에는 기준명을 겹쳐 넣지 않는다(툴팁 중복 방지).
-    assert page.result_buttons[1].toolTip() == "Alarm <원문> & 보존"
+    # 행 툴팁은 전체 제목 + 릴리즈 정보 하나(기준명은 배지 툴팁에만 둔다).
+    assert page.result_buttons[1].toolTip().startswith("Alarm <원문> & 보존\n") and "v99" in page.result_buttons[1].toolTip()
     assert page.result_buttons[1].rule_badge.toolTip() == "필수 기능"
     # 배지는 상세를 열지 않고 그 Item의 위험 기준 판정 팝업을 연다.
     page.back_to_list()

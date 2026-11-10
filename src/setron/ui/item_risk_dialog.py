@@ -19,6 +19,7 @@ from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.theme import PRIMARY, SECONDARY, font, set_widget_font
+from setron.ui.version_data import family_display_name
 
 
 def choice(name):
@@ -220,7 +221,7 @@ class ItemRiskDialog(PopupDialog):
         self.family, self.item = choice("관련 릴리즈 계열"), choice("관련 릴리즈노트 Item")
         families = {p.family_id: p.family_name for p in data.versions.pairs}
         for fid, name in sorted(families.items()):
-            self.family.addItem(name, fid)
+            self.family.addItem(family_display_name(name), fid)
         if family_id in families:
             self.family.setCurrentIndex(self.family.findData(family_id))
         self.item_search = QLineEdit()
