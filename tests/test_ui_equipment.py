@@ -7,9 +7,9 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.risk.schemas import RiskStatus
@@ -156,10 +156,26 @@ def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, ri
     request = DashboardDrilldown(dashboard.snapshot.query, DAY, "테스트 A", ids, risk_only)
     dashboard.drilldown_requested.emit(request)
     page = window.pages["equipment"]
-    assert window.route == "equipment" and page.scope_ids == ids
+    drawer = window.equipment_list_drawer
+    assert window.route == "dashboard" and drawer.is_open and page.scope_ids == ids
+    assert drawer.panel.isAncestorOf(page.table)
+    assert drawer.panel.width() == window.equipment_drawer.panel_width
+    assert drawer.header.indexOf(drawer.close_button) < drawer.header.indexOf(drawer.expand_button) < drawer.header.indexOf(drawer.title)
+    QTest.qWait(20)
+    search_top = page.search.mapTo(page.list_card, QPoint()).y()
+    table_top = page.table.mapTo(page.list_card, QPoint()).y()
+    assert 0 <= table_top - search_top - page.search.height() <= 16
+    assert page.table.horizontalScrollBar().maximum() == 0
     assert tuple(t.equipment_id for t in page.visible_tiles) == ids
     assert page.metrics["total"].value.text() == f"{len(ids)}대"
     assert page.risk_button.isChecked() is risk_only
+    page.search.setText(f"TEST-{ids[-1]:03}")
+    drawer.expand_button.click()
+    assert window.route == "equipment" and drawer.isHidden()
+    assert page.isAncestorOf(page.table)
+    assert page.model.ids == (ids[-1],) and page.snapshot is dashboard.snapshot
+    window.header.back.click()
+    assert window.route == "dashboard" and not drawer.is_open
     assert row > 0
 
 
@@ -171,10 +187,43 @@ def test_actual_dashboard_general_cell_is_not_replaced_by_risk_only(window):
     dashboard.matrix_buttons[row, column].click()
     page = window.pages["equipment"]
     assert page.scope_ids == (1, 2) and not page.risk_button.isChecked()
-    page.return_button.click()
+    window.header.back.click()
     assert window.route == "dashboard"
     dashboard.risk_buttons[row, column].click()
     assert page.scope_ids == (1, 2) and page.risk_button.isChecked()
+
+
+def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(window):
+    query = window.query_panel.apply_draft()
+    dashboard = window.pages["dashboard"]
+    request = DashboardDrilldown(query, DAY, "테스트 A", (1, 2), False)
+    dashboard.drilldown_requested.emit(request)
+    drawer = window.equipment_list_drawer
+    page = window.pages["equipment"]
+    page.search.setText("TEST-002")
+    page.open_row(0)
+    assert window.route == "dashboard" and drawer.is_open and drawer.request.equipment_id == 2
+    assert page.mode == "detail" and page.selected_id == 2
+    assert drawer.panel.isAncestorOf(drawer.summary_title)
+    assert drawer.list_scroll.isHidden() and not drawer.scroll.isHidden()
+    assert not drawer.back_button.text() and not drawer.back_button.icon().isNull()
+
+    drawer.back_button.click()
+    assert window.route == "dashboard" and drawer.is_open
+    assert page.mode == "list" and page.model.ids == (2,) and page.search.text() == "TEST-002"
+    assert not drawer.list_scroll.isHidden() and drawer.scroll.isHidden()
+    assert drawer.panel.isAncestorOf(page.table)
+
+    page.open_row(0)
+    drawer.expand_button.click()
+    assert window.route == "equipment" and drawer.isHidden()
+    assert page.mode == "detail" and page.selected_id == 2
+    assert page.back_button.mapTo(page.detail_card, QPoint()).y() < page.meta_strip.mapTo(page.detail_card, QPoint()).y()
+    window.header.back.click()
+    assert window.route == "dashboard" and drawer.is_open
+    assert page.mode == "list" and page.model.ids == (2,) and page.search.text() == "TEST-002"
+    window.header.back.click()
+    assert not drawer.is_open and not window.header.back.isEnabled()
 
 
 def test_pagination_search_goal_sort_and_candidate_filters_only_change_display(window):
@@ -183,7 +232,7 @@ def test_pagination_search_goal_sort_and_candidate_filters_only_change_display(w
     assert page.model.ids == tuple(range(1, 13))
     page.next.click()
     assert page.page_index == 1 and page.model.ids == tuple(range(13, 19))
-    assert "13–18" in page.count.text() and not page.next.isEnabled()
+    assert page.page_caption.text() == "2 / 2" and not page.next.isEnabled()
     page.search.setText("test-003")
     assert page.page_index == 0 and page.model.ids == (3,)
     page.search.clear()
@@ -234,11 +283,12 @@ def test_heatmap_direct_detail_and_back_preserve_view_and_selection(window):
     heatmap.view_buttons.button(1).click()
     heatmap.tile_buttons[1].click()
     page = window.pages["equipment"]
+    drawer = window.equipment_drawer
     assert window.route == "heatmap" and page.mode == "detail" and page.selected_id == 1
-    assert window.equipment_drawer.isVisible()
+    assert drawer.isVisible()
     assert page.detail_model.rowCount() == 3
-    assert "위험 후보" in page.detail_summary.text() and "규칙·필수 Item·릴리즈 문서·원본 위치 미연결" in page.evidence.text()
-    window.equipment_drawer.close_button.click()
+    assert drawer.summary_title.text() == GoalState.BELOW.value and "위험 후보" in drawer.risk_badge.text()
+    drawer.close_button.click()
     assert window.route == "heatmap" and heatmap.view_buttons.checkedId() == 1
     assert heatmap.selected_id == 1 and heatmap.tile_buttons[1].isChecked()
 
@@ -247,8 +297,18 @@ def test_detail_does_not_call_subset_goal_whole_equipment_success(window):
     window.query_panel.set_draft(QuerySelection(group_key="o3"))
     page, query = open_list(window)
     page.open_detail(EquipmentSelection(query, DAY, 1), origin="list")
-    assert "선택 SW 판정: 목표 달성 / 설비 전체 등록 SW 판정: 목표 미달" in page.detail_summary.text()
-    assert page.detail_model.rowCount() == 3 and "현재 설비군 밖의 SW도 표시" in page.scope_note.text()
+    detail = next(item for item in page.data.details if item.record.equipment_id == 1)
+    assert detail.selected.goal is GoalState.MET and detail.whole.goal is GoalState.BELOW
+    assert GoalState.BELOW.value in page.detail_goal_badge.text()
+    assert page.detail_model.rowCount() == 3 and page.detail_table.isVisibleTo(page.detail_card)
+    assert page.meta_values["date"].text() == str(DAY) and page.back_button.isVisibleTo(page.detail_card)
+    assert window.notice.isHidden() and page.result_status.isHidden() and page.context.isHidden()
+    assert page.detail_location.isHidden() and page.scope_note.isHidden() and page.evidence.isHidden()
+    assert not page.detail_summary.isVisibleTo(page.detail_card)
+    visible = [label.text() for label in page.detail_card.findChildren(QLabel) if label.isVisibleTo(page.detail_card)]
+    removed = (" · 실제 관측일", "물리 설비 1대 · 전체 SW 관측", "PM 배치 메모", "위험 근거:", "관측 출처:",
+               "관측된 SW 카드와 원문 표는", "현재 설비군 밖의 SW도 표시", "모듈 수·필수 SW 목록은 미확정")
+    assert not any(fragment in text for fragment in removed for text in visible)
     assert page.metrics["rate"].value.text() == "100.0%"  # 선택 SW 지표는 그대로
     assert page.snapshot.query is query and page.scope_ids == (1,)
 
@@ -258,14 +318,16 @@ def test_detail_does_not_call_subset_goal_whole_equipment_success(window):
 def test_representative_states_use_one_reusable_detail(window, eid, goal):
     page, query = open_list(window)
     assert page.open_detail(EquipmentSelection(query, DAY, eid))
-    assert goal.value in page.detail_summary.text()
+    assert goal.value in page.detail_goal_badge.text()
     assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai", "management", "replay", "reports", "settings"}
     if eid == 3:
         assert page.detail_model.rows[0][2] == "미입력" and "버전 값이 비어" in page.detail_model.rows[0][5]
+    if eid in (4, 5):
+        assert not page.detail_model.rows and page.detail_table.isHidden()
     if eid == 4:
-        assert not page.detail_model.rows and "SW 관측이 없습니다" in page.evidence.text()
+        assert page.evidence.isVisibleTo(page.detail_card) and page.evidence.text() == "SW 관측이 없습니다."
     if eid == 5:
-        assert not page.detail_model.rows and "HPA는 분석 제외" in page.evidence.text()
+        assert page.evidence.isHidden() and page.judgement["goal"][0].text() == "분석 제외"
 
 
 def test_draft_changes_do_not_change_detail_but_reapply_does(window):
@@ -276,7 +338,7 @@ def test_draft_changes_do_not_change_detail_but_reapply_does(window):
     assert page.snapshot is snapshot and page.selected_id == 1 and page.mode == "detail"
     window.query_panel.apply_draft()
     assert page.snapshot is not snapshot and page.selected_id is None and page.mode == "list"
-    assert page.detail_model.rows == () and page.detail_summary.text() == ""
+    assert page.detail_model.rows == () and page.detail_card.isHidden()
     assert not page.open_detail(EquipmentSelection(query, DAY, 1))
 
 
@@ -396,6 +458,7 @@ def test_hpa_raw_observation_is_visible_without_comparison(window, source, monke
 @pytest.mark.parametrize("size", [(1600, 960), (1100, 800), (960, 600)])
 @pytest.mark.parametrize("mode", ["list", "detail"])
 def test_responsive_layout_scrolls_tables_not_main_content(window, size, mode):
+    window.navigate("heatmap")
     page, query = open_list(window)
     if mode == "detail":
         page.open_detail(EquipmentSelection(query, DAY, 1), origin="list")
@@ -408,5 +471,36 @@ def test_responsive_layout_scrolls_tables_not_main_content(window, size, mode):
     table = page.detail_table if mode == "detail" else page.table
     if size[0] == 960:
         assert table.horizontalScrollBar().maximum() > 0
+    if mode == "list":
+        controls = (page.all_button, page.risk_button, page.search, page.goal_filter, page.sort, page.global_button)
+        bounds = tuple(QRect(control.mapTo(page.list_card, QPoint()), control.size()) for control in controls)
+        assert all(control.isVisibleTo(page.list_card) and page.list_card.rect().contains(rect)
+                   for control, rect in zip(controls, bounds))
+        same_row = bounds if size[0] == 1600 else bounds[2:5]
+        assert max(rect.top() for rect in same_row) <= min(rect.bottom() for rect in same_row)
+        assert all(left.right() < right.left() for left, right in zip(same_row, same_row[1:]))
+        assert page.all_button.size() == page.risk_button.size()
+        for combo in (page.goal_filter, page.sort):
+            style = combo.property("setronOriginalStyle") or combo.styleSheet()
+            assert "caret-down.svg" in style
+        visible_labels = [label for label in page.list_card.findChildren(QLabel) if label.isVisibleTo(page.list_card)]
+        assert not any(label.text().startswith(("결과 ", "좁은 창에서는 표를", "12대씩")) for label in visible_labels)
+        heading = next(label for label in visible_labels if label.text() == "설비 전체 목록")
+        title_rect = QRect(heading.mapTo(page.list_card, QPoint()), heading.size())
+        return_rect = QRect(page.return_button.mapTo(page.list_card, QPoint()), page.return_button.size())
+        assert page.list_card.rect().contains(return_rect) and title_rect.right() < return_rect.left()
+        assert max(title_rect.top(), return_rect.top()) <= min(title_rect.bottom(), return_rect.bottom())
+        assert return_rect.bottom() < min(rect.top() for rect in bounds)
+        assert tuple(page.metrics) == ("rate", "total", "upgrade", "risk")
+        assert page.metrics["rate"].property("appearanceRate") == "background"
+        assert not any(label.text() == "목록 전달 범위 전체 요약" for label in page.list_view.findChildren(QLabel))
+        positions = [(card, card.mapTo(page, QPoint(0, 0))) for card in page.metrics.values()]
+        assert all(pos.y() + card.height() <= point.y() and pos.x() + card.width() <= page.width()
+                   for card, pos in positions)
+        if size[0] == 1600:
+            assert len({pos.y() for _, pos in positions}) == 1
+        elif size[0] == 960:
+            assert len({pos.y() for _, pos in positions}) > 1
     for card in page.metrics.values():
+        assert card.picture.isHidden()
         assert card.picture.pixmap().deviceIndependentSize().toSize() == svg_size(card.picture.property("assetFile"))

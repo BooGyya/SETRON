@@ -114,8 +114,9 @@ def test_header_list_opens_latest_hpa_search_and_actual_observation_detail(windo
     QTest.keyClick(page.table, Qt.Key.Key_Return)
     assert page.mode == "detail" and page.selected_id == 9
     assert page.detail_model.rows[0][2:5] == ("vHPA.2_d5 ", "—", "분석 제외")
-    assert str(LATEST) in page.detail_location.text() and "L-new" in page.detail_location.text()
-    assert f"일반 분석 기준일 {ANALYSIS}" in page.scope_note.text()
+    assert page.meta_values["date"].text() == str(LATEST) and page.meta_values["area"].text() == "L-new"
+    evidence = {title: value for _, title, value in page.evidence_values}
+    assert evidence["실제 관측일"] == f"{LATEST} (일반 분석 기준일 {ANALYSIS})"
     assert page.snapshot is snapshot and page.snapshot.query is query
 
 
@@ -129,7 +130,7 @@ def test_detail_checks_query_date_and_actual_hpa_date_separately(windows):
     assert not page.open_detail(EquipmentSelection(query, LATEST, 9, LATEST))
     assert not page.open_detail(EquipmentSelection(query, ANALYSIS, 9, ANALYSIS))
     assert page.open_detail(EquipmentSelection(query, ANALYSIS, 10, OTHER_HPA))
-    assert str(OTHER_HPA) in page.detail_location.text()
+    assert page.meta_values["date"].text() == str(OTHER_HPA)
 
 
 def test_hpa_lookup_does_not_expand_dashboard_or_risk_drilldowns(windows):
@@ -164,7 +165,7 @@ def test_filtered_dashboard_scope_keeps_its_hpa_observation_when_latest_is_outsi
     assert page.scope_ids == (9,) and page.model.ids == (9,)
     assert page.open_detail(EquipmentSelection(query, ANALYSIS, 9, ANALYSIS))
     assert page.detail_model.rows[0][2] == "vHPA.old"
-    assert "L-old" in page.detail_location.text() and str(ANALYSIS) in page.detail_location.text()
+    assert page.meta_values["area"].text() == "L-old" and page.meta_values["date"].text() == str(ANALYSIS)
     assert not page.open_detail(EquipmentSelection(query, ANALYSIS, 9, LATEST))
 
 
@@ -191,7 +192,7 @@ def test_hpa_only_source_lists_each_equipment_latest_date_without_common_analysi
     assert page.snapshot.summary.equipment_count == 0 and page.snapshot.summary.rate is None
     assert page.snapshot.observations == ()
     assert page.open_detail(EquipmentSelection(query, LATEST, 10, OTHER_HPA))
-    assert str(OTHER_HPA) in page.detail_location.text()
+    assert page.meta_values["date"].text() == str(OTHER_HPA)
     assert page.detail_model.rows[0][2] == "vHPA.other"
 
 
@@ -225,7 +226,7 @@ def test_hpa_lookup_is_bound_to_snapshot_when_source_changes(app):
         assert page.accept_result(query, snapshot)
         assert page.open_detail(EquipmentSelection(query, ANALYSIS, 9, LATEST))
         assert page.detail_model.rows[0][2] == "vHPA.2_d5 "
-        assert str(LATEST) in page.detail_location.text() and "L-new" in page.detail_location.text()
+        assert page.meta_values["date"].text() == str(LATEST) and page.meta_values["area"].text() == "L-new"
     finally:
         page.deleteLater()
         app.processEvents()

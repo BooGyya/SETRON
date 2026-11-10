@@ -73,7 +73,7 @@ def test_detail_opens_for_equipment_above_n(app):
         page = window.pages["equipment"]
         window.header.actions["equipment_list"].click()
         assert page.open_detail(EquipmentSelection(query, DAY, 1))
-        assert GoalState.MET.value in page.detail_summary.text()
+        assert page.judgement["goal"][0].text() == GoalState.MET.value
     finally:
         window.close()
         window.deleteLater()

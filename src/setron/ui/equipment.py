@@ -1,6 +1,6 @@
 """6번: 한 목록·한 상세 화면. 조회/저장/정정/이력 기능을 새로 시작하지 않는다."""
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
@@ -13,14 +13,14 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
-from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.dashboard import MetricCard
+from setron.ui.components import Card, StatusBadge, back_button, button, label
+from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
 from setron.features.item.schemas import APPLICATION_LABELS
-from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
 
 
 
@@ -92,22 +92,6 @@ class FlowGrid(QWidget):
         super().resizeEvent(event)
 
 
-def priority_text(entry, thresholds):
-    """설비 상세의 업그레이드 우선순위(BE-017)·버전 경과(BE-016) 줄. 순위와 노후도는 별개로 보인다."""
-    if entry is None:
-        return "업그레이드 우선순위: 분석 제외"
-    rank = f"{entry.rank}위" if entry.rank else "확인 필요 (" + " · ".join(entry.messages) + ")"
-    oldest = entry.representative
-    if thresholds is None:
-        age = "기간 기준 설정 오류 · 관리 화면에서 확인"
-    elif oldest is None or oldest.age.elapsed_label is None:
-        age = "출시일 미확인"
-    else:
-        age = (f"{oldest.pm.pm_name or '공통 SW'} {oldest.pm.version_raw} · {oldest.age.elapsed_label} · {oldest.age.label}"
-               f" (기준: {thresholds.description})")
-    steps = f" · 목표 N보다 {entry.steps_behind}단계 낮음" if entry.steps_behind else ""
-    return f"업그레이드 우선순위: {rank}{steps}\n가장 오래된 버전 경과: {age}"
-
 class ReadTableModel(QAbstractTableModel):
     """원문은 Qt DisplayRole의 일반 텍스트로만 표시한다. 호기 ID는 행 데이터와 함께 보관한다."""
 
@@ -157,13 +141,16 @@ class ReadTable(QTableView):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.resize_columns()
+        if self.model() is not None:
+            self.resizeRowsToContents()
+
+    def resize_columns(self):
         width = self.viewport().width()
         ratio = width / sum(self.base_widths) if width >= 900 else 1
         for index, original in enumerate(self.base_widths):
             minimum = getattr(self, "minimum_column_widths", {}).get(index, 0)
             self.setColumnWidth(index, max(minimum, int(original * ratio)))
-        if self.model() is not None:
-            self.resizeRowsToContents()
 
 
 def read_table(model, name, widths):
@@ -195,10 +182,13 @@ def read_table(model, name, widths):
     return table
 
 
-def fit_rows(table):
+def fit_rows(table, *, compact=False):
     table.resizeRowsToContents()
-    height = sum(table.rowHeight(i) for i in range(table.model().rowCount()))
-    table.setFixedHeight(max(260, min(800, height + table.horizontalHeader().height() + 28)))
+    height = table.horizontalHeader().height() + sum(table.rowHeight(i) for i in range(table.model().rowCount()))
+    if compact:
+        table.setFixedHeight(min(800, height + 2 * table.frameWidth()))
+    else:
+        table.setFixedHeight(max(260, min(800, height + 28)))
 
 
 class EquipmentPage(QWidget):
@@ -210,11 +200,10 @@ class EquipmentPage(QWidget):
         self.state, self.source = state, source
         self.snapshot, self.data = None, None
         self.scope_ids, self.visible_tiles = (), ()
-        self.scope_label, self.origin, self.detail_back = "적용 범위 전체", "heatmap", "list"
+        self.origin, self.detail_back = "heatmap", "list"
         self.page_index, self.page_size, self.selected_id = 0, 12, None
         self.mode = "list"
         self.item_request, self._item_restore = None, None
-        self._wide = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
@@ -223,12 +212,20 @@ class EquipmentPage(QWidget):
         self.context = label("공통 조건에서 조회 적용을 눌러 주세요.", 13, color=SECONDARY, wrap=True)
         body.addWidget(self.context)
         self.list_view = QWidget()
-        self.primary = QGridLayout(self.list_view)
-        self.primary.setContentsMargins(0, 0, 0, 0)
-        self.primary.setSpacing(24)
+        list_body = QVBoxLayout(self.list_view)
+        list_body.setContentsMargins(0, 0, 0, 0)
+        list_body.setSpacing(24)
         self.list_card = Card()
-        self.list_card.body.addWidget(label("설비 전체 목록", 20, medium=True))
-        toolbar = QHBoxLayout()
+        self._list_host = None
+        self.list_heading = QWidget()
+        heading = QHBoxLayout(self.list_heading)
+        heading.setContentsMargins(0, 0, 0, 0)
+        heading.addWidget(label("설비 전체 목록", 20, medium=True), 1)
+        self.return_button = back_button("이전 조회로 돌아가기")
+        self.return_button.clicked.connect(lambda: self.back_requested.emit(self.origin))
+        heading.addWidget(self.return_button)
+        self.list_card.body.addWidget(self.list_heading)
+
         self.all_button = button("범위 전체")
         self.all_button.clicked.connect(lambda: self.risk_button.setChecked(False))
         self.risk_button = button("후보만")
@@ -236,49 +233,68 @@ class EquipmentPage(QWidget):
         self.risk_button.setProperty("dashboardRisk", True)
         self.risk_button.setStyleSheet("QPushButton:checked {border:2px solid #c9485e;}")
         self.risk_button.toggled.connect(self._filter_changed)
-        toolbar.addWidget(self.all_button)
-        toolbar.addWidget(self.risk_button)
-        toolbar.addStretch()
+        self.scope_controls = QWidget()
+        scope = QHBoxLayout(self.scope_controls)
+        scope.setContentsMargins(0, 0, 0, 0)
+        scope.setSpacing(8)
+        scope.addWidget(self.all_button)
+        scope.addWidget(self.risk_button)
         self.global_button = button("적용 범위 전체로")
+        self.global_button.setFixedHeight(38)
         self.global_button.clicked.connect(lambda: self.open_all(self.origin))
-        toolbar.addWidget(self.global_button)
-        self.list_card.body.addLayout(toolbar)
         self.search = QLineEdit()
         self.search.setAccessibleName("설비 목록 검색")
-        self.search.setPlaceholderText("설비명·위치·모델·버전 원문 검색")
-        self.search.setStyleSheet("QLineEdit {background:#f7f9fc;border:1px solid #e5eaf3;border-radius:10px;padding:10px;}")
+        self.search.setPlaceholderText("설비 검색")
+        self.search.setToolTip("설비명·위치·모델·버전 원문 검색")
+        self.search.addAction(icon("b2c35.svg"), QLineEdit.ActionPosition.LeadingPosition)
+        self.search.setFixedHeight(38)
+        self.search.setMinimumWidth(144)
+        self.search.setStyleSheet(f"QLineEdit {{background:white;border:1px solid {LINE};border-radius:10px;padding:0 10px;}}"
+                                  f"QLineEdit:focus {{border:2px solid {PRIMARY};}}")
         self.search.textChanged.connect(self._filter_changed)
         self.goal_filter = ComboBox()
         self.goal_filter.setAccessibleName("목표 상태 필터")
-        self.goal_filter.setProperty("queryField", True)
-        self.goal_filter.setFixedHeight(38)
         self.goal_filter.addItem("목표 상태 전체", None)
         for goal in GoalState:
             self.goal_filter.addItem(goal.value, goal)
         self.goal_filter.currentIndexChanged.connect(self._filter_changed)
         self.sort = ComboBox()
         self.sort.setAccessibleName("설비 목록 정렬")
-        self.sort.setProperty("queryField", True)
-        self.sort.setFixedHeight(38)
         for caption, value in (("설비명 ↑", "code"), ("설비명 ↓", "code-desc"), ("Site · 설비명", "site"),
                                ("업그레이드 우선순위", "priority")):
             self.sort.addItem(caption, value)
         self.sort.currentIndexChanged.connect(self._filter_changed)
-        self.filters = QGridLayout()
-        self.filters.addWidget(self.search, 0, 0, 1, 2)
-        self.filters.addWidget(self.goal_filter, 1, 0)
-        self.filters.addWidget(self.sort, 1, 1)
-        self.filters.setColumnStretch(0, 1)
-        self.filters.setColumnStretch(1, 1)
-        self.list_card.body.addLayout(self.filters)
-        self.count = label("조회 적용 전", 13, color=SECONDARY, wrap=True)
-        self.list_card.body.addWidget(self.count)
+        caret = (ASSETS / "caret-down.svg").as_posix()
+        for combo in (self.goal_filter, self.sort):
+            combo.setProperty("queryField", True)
+            combo.setFixedHeight(38)
+            combo.setStyleSheet(
+                "QComboBox {padding-right:28px;} QComboBox::drop-down {border:0;width:28px;}"
+                f"QComboBox::down-arrow {{image:url({caret});width:12px;height:12px;}}"
+            )
+        self.filter_controls = QWidget()
+        filters = QHBoxLayout(self.filter_controls)
+        filters.setContentsMargins(0, 0, 0, 0)
+        filters.setSpacing(10)
+        filters.addWidget(self.search, 1)
+        filters.addWidget(self.goal_filter)
+        filters.addWidget(self.sort)
+        toolbar = QWidget()
+        ignore_width(toolbar)
+        self.list_controls = QGridLayout(toolbar)
+        self.list_controls.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.list_controls.setContentsMargins(0, 0, 0, 0)
+        self.list_controls.setSpacing(10)
+        self.list_controls.setColumnStretch(1, 1)
+        self.list_controls.addWidget(self.scope_controls, 0, 0)
+        self.list_controls.addWidget(self.global_button, 0, 2)
+        self._compact_list_controls = None
+        self.list_card.body.addWidget(toolbar)
         self.model = ReadTableModel(("설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거"), numeric_columns=(3,))
         self.table = read_table(self.model, "선택 범위 설비 목록", (110, 164, 170, 216, 140, 220))
         self.table.activated.connect(lambda index: self.open_row(index.row()))
         self.table.clicked.connect(lambda index: self.open_row(index.row()))
         self.list_card.body.addWidget(self.table)
-        self.list_card.body.addWidget(label("좁은 창에서는 표를 좌우로 스크롤할 수 있습니다. 행 선택 또는 Enter → 설비 상세", 12, color=SECONDARY, wrap=True))
         self.message = label("조회 적용 전입니다.", color=SECONDARY, wrap=True)
         self.list_card.body.addWidget(self.message)
         paging = QHBoxLayout()
@@ -290,47 +306,69 @@ class EquipmentPage(QWidget):
         paging.addWidget(self.previous)
         paging.addWidget(self.page_caption)
         paging.addWidget(self.next)
-        paging.addStretch()
-        paging.addWidget(label("12대씩 · 물리 설비 기준", 12, color=SECONDARY))
+        paging.addStretch(1)
         self.list_card.body.addLayout(paging)
-        self.return_button = button("이전 조회로 돌아가기")
-        self.return_button.clicked.connect(lambda: self.back_requested.emit(self.origin))
-        self.list_card.body.addWidget(self.return_button, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.summary = QWidget()
-        summary_body = QVBoxLayout(self.summary)
-        summary_body.setContentsMargins(0, 0, 0, 0)
-        summary_body.setSpacing(12)
-        summary_body.addWidget(label("목록 전달 범위 전체 요약", 13, color=SECONDARY, wrap=True))
         self.metrics = {}
-        for key, title, asset, tone in (("risk", "안전·결함 후보", "60dbd.svg", "risk"),
-                                       ("rate", "선택 SW 목표 달성률", "bbc12.svg", "achievement"),
-                                       ("total", "물리 설비", "32ac4.svg", "neutral"),
-                                       ("upgrade", "업그레이드 필요", "e53b6.svg", "neutral")):
-            card = MetricCard(title, asset, tone=tone)
-            summary_body.addWidget(card)
-            self.metrics[key] = card
-        summary_body.addStretch()
+        for key, title, asset in (("rate", "선택 SW 목표 달성률", "bbc12.svg"),
+                                  ("total", "물리 설비", "32ac4.svg"),
+                                  ("upgrade", "목표 미달", "e53b6.svg"),
+                                  ("risk", "안전·결함 위험 후보", "60dbd.svg")):
+            self.metrics[key] = DashboardKpi(title, asset, accent=key == "rate")
+        self.summary = DashboardGrid(tuple(self.metrics.values()), minimum_width=200, maximum_columns=4, spacing=12)
+        list_body.addWidget(self.summary)
+        list_body.addWidget(self.list_card)
+        self.list_card.installEventFilter(self)
         body.addWidget(self.list_view)
         self._build_detail()
-        actions = QHBoxLayout()
-        self.back_button = button("이전 조회로 돌아가기")
-        self.back_button.clicked.connect(self._back)
-        self.list_button = button("적용 범위 전체 목록")
-        self.list_button.clicked.connect(lambda: self.open_all(self.origin))
-        self.history_button = button("선택 설비 관측 이력")
-        self.history_button.setEnabled(False)
-        self.history_button.setToolTip("관측 이력 화면은 후속 작업입니다.")
-        actions.setSpacing(10)
-        for control in (self.back_button, self.list_button, self.history_button):
-            control.setMinimumWidth(0)
-            control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-            control.setFixedHeight(40)
-            actions.addWidget(control, 1)
-        self.detail_card.body.addLayout(actions)
         body.addWidget(self.detail_card)
-        self._reflow(False)
         self._set_mode("list")
         self._render_list()
+
+    def mount_list(self, layout):
+        """목록 상태를 유지한 채 같은 카드를 외부 패널에 표시한다."""
+        if self._list_host is layout:
+            return
+        self.restore_list()
+        self.list_card.hide()
+        self.list_view.layout().removeWidget(self.list_card)
+        self.list_heading.hide()
+        layout.addWidget(self.list_card, alignment=Qt.AlignmentFlag.AlignTop)
+        self._list_host = layout
+        self._set_list_compact(True)
+        self.list_card.show()
+
+    def restore_list(self):
+        if self._list_host is None:
+            return
+        self.list_card.hide()
+        self._list_host.removeWidget(self.list_card)
+        self._list_host = None
+        self.list_view.layout().addWidget(self.list_card)
+        self.list_heading.show()
+        self._set_list_compact(False)
+        self.list_card.show()
+
+    def _set_list_compact(self, compact):
+        padding = 12 if compact else 24
+        self.list_card.body.setContentsMargins(padding, padding, padding, padding)
+        self.list_card.body.setSpacing(10 if compact else 16)
+        self.search.setMinimumWidth(108 if compact else 144)
+        self.table.setWordWrap(not compact)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight if compact else Qt.TextElideMode.ElideNone)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff if compact
+                                                else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.verticalHeader().setMinimumSectionSize(38 if compact else 56)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(not compact)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch if compact else QHeaderView.ResizeMode.Interactive)
+        # 패널에서는 설비명·모델/계열·선택 SW 판정을 한 화면에 표시한다. 전체 목록은 원래 열을 유지한다.
+        for column in (1, 3, 5):
+            self.table.setColumnHidden(column, compact)
+        self.table.horizontalScrollBar().setValue(0)
+        if not compact:
+            self.table.resize_columns()
+        self._layout_list_controls()
+        fit_rows(self.table, compact=compact)
 
     # ----- 설비 상세 (VER4 사이드 패널 구성: 헤더 · 위치 띠 · 판정 요약 · 관측된 SW · 판정·원본 근거 · 동작) -----
 
@@ -346,6 +384,22 @@ class EquipmentPage(QWidget):
         heading.addWidget(self.detail_goal_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         heading.addWidget(self.detail_risk_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         self.detail_card.body.addLayout(heading)
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        self.back_button = back_button("이전 조회로 돌아가기", size=40)
+        self.back_button.clicked.connect(self._back)
+        actions.addWidget(self.back_button)
+        self.list_button = button("적용 범위 전체 목록")
+        self.list_button.clicked.connect(lambda: self.open_all(self.origin))
+        self.history_button = button("선택 설비 관측 이력")
+        self.history_button.setEnabled(False)
+        self.history_button.setToolTip("관측 이력 화면은 후속 작업입니다.")
+        for control in (self.list_button, self.history_button):
+            control.setMinimumWidth(0)
+            control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            control.setFixedHeight(40)
+            actions.addWidget(control, 1)
+        self.detail_card.body.addLayout(actions)
         self.detail_location = label("", 12, color=SECONDARY, wrap=True)
         self.detail_card.body.addWidget(self.detail_location)
         # 위치 띠: Site · Fab · Line · 원본 구역 · 실제 관측일
@@ -365,7 +419,7 @@ class EquipmentPage(QWidget):
         meta_grid.set_widgets(cells)
         strip_body.addWidget(meta_grid)
         self.detail_card.body.addWidget(self.meta_strip)
-        # 관측 범위 안내: 물리 설비 1대 · SW n건 · 판정 · 우선순위 원문
+        # Item 적용 상세에서만 사용하는 요약 띠
         notice = QFrame()
         notice.setObjectName("detailNotice")
         notice.setStyleSheet(f"QFrame#detailNotice {{background:{ACCENT_SOFT};border-radius:10px;}}")
@@ -442,8 +496,8 @@ class EquipmentPage(QWidget):
         self.detail_model = ReadTableModel(("모듈 / SW 관측", "설비군 · 계열", "설치 버전 원문", "목표 N", "N 비교", "비교 근거"), numeric_columns=(2, 3))
         self.detail_table = read_table(self.detail_model, "선택 설비 전체 SW 관측", (165, 190, 230, 200, 130, 255))
         self.detail_card.body.addWidget(self.detail_table)
-        for widget in (self.detail_title, self.detail_location, self.detail_summary, self.scope_note, self.evidence, self.context):
-            widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        ignore_width(self.detail_title, self.detail_location, self.detail_summary, self.scope_note,
+                     self.evidence, self.context)
         self.item_evidence_model = ReadTableModel(("근거 대상", "확인된 내용", "출처 / 저장 상태", "원본 위치 / 모델 범위"))
         self.item_evidence_table = read_table(self.item_evidence_model, "선택 Item 근거와 원본 출처", (180, 330, 340, 300))
         self.item_evidence_table.hide()
@@ -452,6 +506,7 @@ class EquipmentPage(QWidget):
                      12, color=SECONDARY, wrap=True)
         ignore_width(note)
         self.detail_card.body.addWidget(note)
+        self.item_detail_notes = (self.detail_location, notice, self.scope_note, note)
 
     @staticmethod
     def _field(asset, title, spacing=8):
@@ -587,29 +642,38 @@ class EquipmentPage(QWidget):
         self._set_evidence_rows(())
         self._render_sw_cards()
 
-    def _reflow(self, wide):
-        if self._wide is wide:
+    def _layout_list_controls(self):
+        body = self.list_card.body.contentsMargins()
+        frame = self.list_card.contentsMargins()
+        available = self.list_card.width() - body.left() - body.right() - frame.left() - frame.right()
+        needed = sum(widget.minimumSizeHint().width() for widget in (self.scope_controls, self.filter_controls,
+                                                                    self.global_button))
+        compact = available < needed + 2 * self.list_controls.horizontalSpacing()
+        if self._compact_list_controls is compact:
             return
-        self.primary.removeWidget(self.list_card)
-        self.primary.removeWidget(self.summary)
-        self.summary.setMinimumWidth(0)
-        self.summary.setMaximumWidth(288 if wide else 16777215)
-        if wide:
-            self.summary.setMinimumWidth(288)
-        self.primary.addWidget(self.list_card, 0, 0)
-        self.primary.addWidget(self.summary, 0 if wide else 1, 1 if wide else 0,
-                               alignment=Qt.AlignmentFlag.AlignTop)
-        self.primary.setColumnStretch(0, 1)
-        self._wide = wide
+        self.list_controls.removeWidget(self.filter_controls)
+        if compact:
+            self.list_controls.addWidget(self.filter_controls, 1, 0, 1, 3)
+        else:
+            self.list_controls.addWidget(self.filter_controls, 0, 1)
+        self._compact_list_controls = compact
 
-    def resizeEvent(self, event):
-        self._reflow(event.size().width() >= 1160)
-        super().resizeEvent(event)
+    def eventFilter(self, watched, event):
+        if watched is self.list_card and event.type() == QEvent.Type.Resize:
+            self._layout_list_controls()
+        return super().eventFilter(watched, event)
 
     def _set_mode(self, mode):
         self.mode = mode
         self.list_view.setVisible(mode == "list")
         self.detail_card.setVisible(mode == "detail")
+        show_item_detail = mode == "detail" and self.item_request is not None
+        for widget in self.item_detail_notes:
+            widget.setVisible(show_item_detail)
+        self.evidence.setVisible(mode == "detail" and bool(self.evidence.text()))
+        show_status = show_item_detail or (mode == "list" and self.snapshot is None)
+        self.result_status.setVisible(show_status)
+        self.context.setVisible(show_status)
         self.mode_changed.emit(mode)
         self.updateGeometry()
 
@@ -641,8 +705,6 @@ class EquipmentPage(QWidget):
             self.clear("설비 결과 표시 실패 · 재조회 필요")
             return False
         self.snapshot, self.data = snapshot, data
-        self.result_status.setText(f"{getattr(self.source, 'result_label', '예시 결과')} · 조회 적용됨")
-        self.result_status.set_tone("info")
         self.selected_id = None
         self.open_all(self.origin)
         return True
@@ -666,7 +728,7 @@ class EquipmentPage(QWidget):
             return False
         self.close_item_detail()
         self.origin = origin if origin in ("dashboard", "heatmap") else self.origin
-        self.scope_ids, self.scope_label = self.data.equipment_ids, "적용 범위 전체"
+        self.scope_ids = self.data.equipment_ids
         self._reset_filters()
         self._update_scope()
         self._set_mode("list")
@@ -683,18 +745,12 @@ class EquipmentPage(QWidget):
             return False
         self.origin = origin if origin in ("dashboard", "heatmap") else "dashboard"
         self.scope_ids = request.equipment_ids
-        self.scope_label = request.label + (" · 후보 전달 범위" if request.risk_only else " · 전달 범위 전체")
         self._reset_filters(request.risk_only)
         self._update_scope()
         self._set_mode("list")
         return True
 
     def _update_scope(self):
-        query = self.snapshot.query
-        self.context.setText(f"적용 #{query.revision} · 일반 분석 기준일 {self.snapshot.base_date} · {query.description}\n"
-                             f"현재 목록: {self.scope_label} · {len(self.scope_ids)}대 · 검색/후보 필터는 표시만 변경\n"
-                             "HPA는 조건에 맞는 최신 자료와 기존 전달 범위의 관측을 조회하며 실제 관측일을 표시합니다.\n"
-                             + self.snapshot.source_label)
         ids = set(self.scope_ids)
         records = tuple(r for r in self.snapshot.selected_records if r.equipment_id in ids)
         summary = summarize(records, self.source.families, self.snapshot.effective_targets)
@@ -730,6 +786,10 @@ class EquipmentPage(QWidget):
         current = self._current()
         for control in (self.search, self.goal_filter, self.sort, self.risk_button, self.all_button, self.global_button):
             control.setEnabled(current)
+        width = max(self.all_button.sizeHint().width(), self.risk_button.sizeHint().width())
+        for control in (self.all_button, self.risk_button):
+            control.setFixedSize(width, 38)
+        self._layout_list_controls()
         goal = self.goal_filter.currentData()
         self.visible_tiles = filtered_tiles(self.data, self.scope_ids, text=self.search.text(), risk_only=self.risk_button.isChecked(),
                                             goal=GoalState(goal) if goal is not None else None,
@@ -752,11 +812,10 @@ class EquipmentPage(QWidget):
                          "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
         self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones)
-        fit_rows(self.table)
+        fit_rows(self.table, compact=self._list_host is not None)
         self.table.setVisible(bool(page))
         self.message.setVisible(not page)
         self.message.setText("표시 조건에 맞는 설비가 없습니다. 검색·목표·후보 필터를 확인해 주세요." if current else "조회 결과가 없습니다. 위에서 조회 적용을 눌러 주세요.")
-        self.count.setText(f"결과 {total}대 · {start + 1 if total else 0}–{start + len(page)} 표시 / 전달 범위 {len(self.scope_ids)}대" if current else "표시할 조회 결과가 없습니다.")
         self.page_caption.setText(f"{self.page_index + 1 if total else 0} / {(total + self.page_size - 1) // self.page_size}")
         self.previous.setEnabled(current and self.page_index > 0)
         self.next.setEnabled(current and start + self.page_size < total)
@@ -781,14 +840,6 @@ class EquipmentPage(QWidget):
             self.origin = origin if origin in ("dashboard", "heatmap") else self.origin
         self.selected_id = request.equipment_id
         self.detail_title.setText(detail.record.equipment_code + " · 설비 상세")
-        self.detail_location.setText(detail.whole.location + f" · 실제 관측일 {detail.record.base_date}")
-        self.detail_summary.setText(f"물리 설비 1대 · 전체 SW 관측 {len(detail.record.pms)}건 · 모듈 수 미확정\n"
-                                    f"선택 SW 판정: {detail.selected.goal.value} / 설비 전체 등록 SW 판정: {detail.whole.goal.value}\n"
-                                    f"설비 위험: {detail.whole.risk_label} · 목표 상태와 별도\n"
-                                    + priority_text(self.data.priority.get(detail.record.equipment_id), self.data.thresholds))
-        self.scope_note.setText("관측된 SW 카드와 원문 표는 선택 설비의 전체 SW 관측입니다. 현재 설비군 밖의 SW도 표시하지만 대시보드·목록의 적용 범위를 넓히지는 않습니다.\n"
-                               f"일반 분석 기준일 {self.snapshot.base_date} · 현재 적용: {self.snapshot.query.description}"
-                               + ("\nHPA 원본 조회는 공통 분석에 포함하지 않습니다." if detail.record.is_hpa else ""))
         models = {mid: g.label for g in self.source.catalog.groups for mid in self.source.bindings[g.key]}
         rows, tones = [], []
         if detail.status:
@@ -811,10 +862,7 @@ class EquipmentPage(QWidget):
         self.detail_table.setVisible(bool(rows))
         self._render_sw_cards(tones)
         self._show_detail_extras(detail, rows)
-        extra = "HPA는 분석 제외입니다." if detail.record.is_hpa else "SW 관측이 없습니다." if not rows else "PM 배치 메모로 안전 Item 미적용을 추정하지 않습니다."
-        risk_detail = (detail.whole.risk_detail or detail.whole.risk_label) if getattr(self.source, "assessor", None) else "규칙·필수 Item·릴리즈 문서·원본 위치 미연결"
-        self.evidence.setText(f"{extra}\n위험 근거: {risk_detail}\n"
-                               f"관측 출처: {self.snapshot.source_label} · 실제 관측일 {detail.record.base_date} · 원본 셀 연결은 확인 필요")
+        self.evidence.setText("SW 관측이 없습니다." if not rows and not detail.record.is_hpa else "")
         self._set_mode("detail")
         return True
 
@@ -925,7 +973,8 @@ class EquipmentPage(QWidget):
         fit_rows(self.item_evidence_table)
         self.item_evidence_table.show()
         self.list_button.setEnabled(False)
-        self.back_button.setText("Item 적용 현황으로 돌아가기")
+        self.back_button.setAccessibleName("Item 적용 현황으로 돌아가기")
+        self.back_button.setToolTip("Item 적용 현황으로 돌아가기")
         self._set_mode("detail")
         return True
 
@@ -946,14 +995,19 @@ class EquipmentPage(QWidget):
             widget.clear()
         self._reset_detail_extras()
         self.list_button.setEnabled(True)
-        self.back_button.setText("이전 조회로 돌아가기")
+        self.back_button.setAccessibleName("이전 조회로 돌아가기")
+        self.back_button.setToolTip("이전 조회로 돌아가기")
         if previous_mode == "detail" and self._current() and selected is not None:
             self.open_detail(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, selected), origin=detail_back)
         else:
             self._set_mode("list")
 
+    def return_to_list(self):
+        """현재 전달 범위와 목록 필터를 유지하고 목록으로 돌아간다."""
+        self._set_mode("list")
+
     def _back(self):
         if self.detail_back == "list":
-            self._set_mode("list")
+            self.return_to_list()
         else:
             self.back_requested.emit(self.detail_back)

@@ -23,7 +23,6 @@ class EquipmentData:
     details: tuple[EquipmentDetail, ...]
     # 업그레이드 우선순위(BE-017)와 노후도(BE-016). 설비 ID → PriorityEntry. 순위가 없으면 '확인 필요'.
     priority: dict = field(default_factory=dict)
-    thresholds: object = None
 
     @property
     def equipment_ids(self):
@@ -50,7 +49,7 @@ def equipment_data(snapshot: DashboardSnapshot, source: DashboardSource) -> Equi
     thresholds = age_thresholds(source)
     return EquipmentData(snapshot, tuple(EquipmentDetail(tile, whole[tile.equipment_id], records[tile.equipment_id],
                                                         statuses.get(tile.equipment_id)) for tile in selected),
-                         upgrade_priority(snapshot, source, normal, thresholds), thresholds)
+                         upgrade_priority(snapshot, source, normal, thresholds))
 
 
 def age_thresholds(source):

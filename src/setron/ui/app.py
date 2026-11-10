@@ -21,8 +21,10 @@ from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env, data_exporter_from_env
 from setron.ui.heatmap_data import below_evidence_lines
 from setron.ui.heatmap import HeatmapPage
+from setron.ui.heatmap_data import EquipmentSelection
 from setron.ui.equipment import EquipmentPage
 from setron.ui.equipment_drawer import EquipmentDrawer
+from setron.ui.equipment_list_drawer import EquipmentListDrawer
 from setron.ui.target_data import describe_targets, initial_targets, target_pairs, validate_targets
 from setron.ui.query_state import QuerySelection, TargetN
 from setron.ui.group_dialog import VersionGroupDialog
@@ -413,62 +415,96 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     items.answer_navigation.connect(navigate_item_answer)
     window.navigate_item_answer = navigate_item_answer
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
-    drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
+    drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget(), allow_expand=True)
+    list_drawer = window.equipment_list_drawer = EquipmentListDrawer(window.centralWidget())
     window.equipment_edit_request = ReadRequest(window)
     drawer.closed.connect(window.equipment_edit_request.cancel)
+    list_drawer.closed.connect(window.equipment_edit_request.cancel)
 
     def close_drawer(*_):
         drawer.close_panel(restore_focus=False)
 
-    window.page_changed.connect(lambda key: close_drawer() if key != "heatmap" else None)
+    def close_inactive_drawers(key):
+        if key != "heatmap":
+            close_drawer()
+        if key != "dashboard":
+            list_drawer.close_panel(restore_focus=False)
+
+    window.page_changed.connect(close_inactive_drawers)
     equipment.mode_changed.connect(lambda mode: close_drawer() if mode != "detail" else None)
     window.destroyed.connect(window.equipment_edit_request.cancel)
 
-    def open_installed_version_editor(table, key):
-        if (not drawer.isVisible() or window.route != "heatmap" or drawer.request is None
-                or not window.query_state.is_current(drawer.request.query) or window.management_saving
+    def active_detail_drawer():
+        panel = {"dashboard": list_drawer, "heatmap": drawer}.get(window.route)
+        if (panel is not None and panel.is_open and panel.request is not None
+                and window.query_state.is_current(panel.request.query)):
+            return panel
+        return None
+
+    def open_installed_version_editor(panel, table, key):
+        if (panel is not active_detail_drawer() or window.management_saving
                 or window.management_refresh.busy):
             return
         if management.open_record(table, key):
             window.navigate("management")
         else:
-            drawer.set_edit_loading(False, "관리 화면의 저장·검토를 마친 뒤 다시 시도해 주세요.")
+            panel.set_edit_loading(False, "관리 화면의 저장·검토를 마친 뒤 다시 시도해 주세요.")
 
-    def request_installed_version_editor():
-        request = drawer.request
-        if (request is None or not window.query_state.is_current(request.query) or window.route != "heatmap"
-                or not callable(getattr(management_gateway, "equipment_versions", None))):
+    def request_installed_version_editor(panel):
+        if panel is not active_detail_drawer() or not callable(getattr(management_gateway, "equipment_versions", None)):
             return
         if (management.busy or management.locked or management.state in {"review", "saving"}
                 or window.management_saving or window.management_refresh.busy):
-            drawer.set_edit_loading(False, "관리 화면의 조회·저장·검토를 마친 뒤 다시 시도해 주세요.")
+            panel.set_edit_loading(False, "관리 화면의 조회·저장·검토를 마친 뒤 다시 시도해 주세요.")
             return
-        observation_date = drawer.detail.record.base_date
-        drawer.set_edit_loading(True)
+        request = panel.request
+        observation_date = panel.detail.record.base_date
+        panel.set_edit_loading(True)
         window.equipment_edit_request.start(BackgroundRead(lambda: management_gateway.equipment_versions(
             request.equipment_id, observation_date)))
 
     def installed_version_choices(choices, error):
-        if (drawer.request is None or not drawer.isVisible() or window.route != "heatmap"
-                or not window.query_state.is_current(drawer.request.query)):
+        panel = active_detail_drawer()
+        if panel is None:
             return
         if error is not None:
-            drawer.set_edit_loading(False, "수정할 SW 기록을 읽지 못했습니다. DB 연결을 확인한 뒤 다시 시도해 주세요.")
+            panel.set_edit_loading(False, "수정할 SW 기록을 읽지 못했습니다. DB 연결을 확인한 뒤 다시 시도해 주세요.")
         else:
-            drawer.choose_edit_record(choices)
+            panel.choose_edit_record(choices)
 
-    drawer.edit_requested.connect(request_installed_version_editor)
-    drawer.record_requested.connect(open_installed_version_editor)
+    for panel in (drawer, list_drawer):
+        panel.edit_requested.connect(lambda panel=panel: request_installed_version_editor(panel))
+        panel.record_requested.connect(lambda table, key, panel=panel: open_installed_version_editor(panel, table, key))
     window.equipment_edit_request.completed.connect(installed_version_choices)
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
     origin_scroll = {}
     overview_notice = window.notice.text()
+    dashboard_detail_snapshot = None
+
+    def sync_back():
+        action = None
+        if window.route == "dashboard" and list_drawer.is_open:
+            action = equipment.return_to_list if list_drawer.request is not None else list_drawer.close_panel
+        elif window.route == "heatmap" and drawer.is_open:
+            action = drawer.close_panel
+        elif window.route == "equipment" and equipment.mode == "detail":
+            action = equipment.back_button.click
+        elif window.route == "items" and items.mode == "detail" and items.tabs.currentIndex() == 0:
+            action = items.back_to_list
+        elif window.route == "versions" and versions.active_tab == 1 and versions.mode == "detail":
+            action = versions.back_to_list
+        elif window.route == "settings" and settings.stack.currentWidget() is settings.location:
+            action = settings.location.back_requested.emit
+        window.set_page_back(action)
 
     def sync_mode(*_):
+        sync_back()
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
         quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions", "reports", "settings") + (("ai",) if chat_enabled else ())
-        window.notice.setVisible(window.route not in quiet or window.management_saving)
+        showing_equipment_result = (window.route == "equipment" and equipment.snapshot is not None
+                                    and equipment.item_request is None)
+        window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
         window.header.toolbar.setVisible(window.route not in {"replay", "versions", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
@@ -513,9 +549,37 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             origin_scroll[window.route] = window.scroll.verticalScrollBar().value()
 
     def open_scope(request):
-        remember_origin()
-        if equipment.open_scope(request, origin="dashboard"):
+        if window.route != "dashboard" or not equipment.open_scope(request, origin="dashboard"):
+            return
+        focus = QApplication.focusWidget()
+        list_drawer.open_list(equipment, return_focus=focus if focus and dashboard.isAncestorOf(focus) else None)
+        sync_back()
+
+    def expand_list():
+        nonlocal dashboard_detail_snapshot
+        if window.route == "dashboard" and list_drawer.is_open:
+            if list_drawer.request is not None:
+                dashboard_detail_snapshot = equipment.snapshot
+                equipment.detail_back = "dashboard"
+            remember_origin()
             window.navigate("equipment")
+
+    def equipment_mode_changed(mode):
+        nonlocal dashboard_detail_snapshot
+        if mode == "list":
+            dashboard_detail_snapshot = None
+            if equipment.snapshot is None:
+                list_drawer.close_panel(restore_focus=False)
+            elif list_drawer.is_open and list_drawer.request is not None:
+                window.equipment_edit_request.cancel()
+                list_drawer.show_list()
+        elif window.route == "dashboard" and list_drawer.is_open and equipment.detail_back == "list":
+            detail = next(d for d in equipment.data.details if d.record.equipment_id == equipment.selected_id)
+            snapshot = equipment.snapshot
+            request = EquipmentSelection(snapshot.query, snapshot.base_date, detail.record.equipment_id, detail.record.base_date)
+            list_drawer.show_detail(request, detail, equipment.detail_model.rows, equipment.evidence_values,
+                                    snapshot.source_label,
+                                    edit_available=callable(getattr(management_gateway, "equipment_versions", None)))
 
     def open_below_heatmap():
         if dashboard.snapshot is not heatmap.snapshot or not heatmap.show_below():
@@ -542,6 +606,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                                equipment.snapshot.source_label, below_evidence=below_evidence,
                                return_focus=heatmap.tile_buttons.get(request.equipment_id),
                                edit_available=callable(getattr(management_gateway, "equipment_versions", None)))
+            sync_back()
+
+    def expand_detail():
+        if window.route == "heatmap" and drawer.is_open:
+            remember_origin()
+            window.navigate("equipment")
 
     export_action = window.header.actions["export"]
     if db_exporter is not None or management_gateway is not None or data_exporter is not None:
@@ -681,12 +751,21 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 window.navigate("equipment")
 
     def go_back(origin):
+        reopen_list = (origin == "dashboard" and dashboard_detail_snapshot is not None
+                       and dashboard_detail_snapshot is equipment.snapshot and equipment.mode == "detail")
         item_revision = items.revision
-        if window.navigate(origin):
+        restored_by_history = window.go_back_route(origin)
+        if restored_by_history or window.navigate(origin, record_history=False):
+            if reopen_list:
+                equipment.return_to_list()
+                list_drawer.open_list(equipment)
+                sync_back()
             if origin == "items":
                 focus = items.distribution.tiles.get(items.selected_equipment_id) if items.distribution_view.currentData() == "heatmap" else items.equipment_table
                 if focus is not None:
                     focus.setFocus(Qt.FocusReason.OtherFocusReason)
+            if restored_by_history:
+                return
             def restore_scroll():
                 if window.route == origin and (origin != "items" or items.revision == item_revision):
                     window.scroll.verticalScrollBar().setValue(origin_scroll.get(origin, 0))
@@ -708,7 +787,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if equipment.item_request is not None:
             equipment.close_item_detail()
             if window.route == "equipment":
-                window.navigate("items")
+                if not window.go_back_route("items"):
+                    window.navigate("items", record_history=False)
 
     def leave_item_detail(*_):
         if window.route != "equipment" and equipment.item_request is not None:
@@ -720,10 +800,18 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     dashboard.drilldown_requested.connect(open_scope)
     heatmap.equipment_selected.connect(open_detail)
+    list_drawer.expand_requested.connect(expand_list)
+    list_drawer.back_requested.connect(equipment.return_to_list)
+    drawer.expand_requested.connect(expand_detail)
+    list_drawer.closed.connect(sync_back)
+    drawer.closed.connect(sync_back)
     equipment.back_requested.connect(go_back)
+    equipment.mode_changed.connect(equipment_mode_changed)
     equipment.mode_changed.connect(sync_mode)
     versions.mode_changed.connect(sync_mode)
     items.mode_changed.connect(sync_mode)
+    items.tabs.currentChanged.connect(lambda _: sync_back())
+    settings.stack.current_changed.connect(sync_back)
     window.page_changed.connect(sync_mode)
     sync_mode()  # 첫 화면(대시보드)에도 안내 배지 표시 규칙을 바로 적용한다.
     def ensure_loaded(key):

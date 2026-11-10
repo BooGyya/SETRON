@@ -34,6 +34,16 @@ def button(text: str, *, primary: bool = False, asset: str | None = None) -> QPu
     return result
 
 
+def back_button(description="이전 화면으로 돌아가기", *, size=36) -> QPushButton:
+    result = button("", asset="arrow-left.svg")
+    result.setText("")
+    result.setAccessibleName(description)
+    result.setToolTip(description)
+    result.setFixedSize(size, size)
+    result.setStyleSheet("QPushButton {padding:0;}")
+    return result
+
+
 class DisclosureArrow(QLabel):
     """원본 16px 셰브론을 접힘/펼침 방향으로 표시한다. 접어도 슬롯은 유지한다."""
 
@@ -108,6 +118,13 @@ class PageHeader(QWidget):
         title_font.setWeight(QFont.Weight.DemiBold)
         title_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, -0.6)
         self.title.setFont(title_font)
+        self.back = back_button()
+        self.heading = QWidget()
+        heading = QHBoxLayout(self.heading)
+        heading.setContentsMargins(0, 0, 0, 0)
+        heading.setSpacing(12)
+        heading.addWidget(self.back)
+        heading.addWidget(self.title, 1)
         self.actions = {}
         self.toolbar = QWidget()
         actions = QHBoxLayout(self.toolbar)
@@ -136,9 +153,9 @@ class PageHeader(QWidget):
     def _reflow(self, compact: bool):
         if self._compact == compact:
             return
-        self.grid.removeWidget(self.title)
+        self.grid.removeWidget(self.heading)
         self.grid.removeWidget(self.toolbar)
-        self.grid.addWidget(self.title, 0, 0)
+        self.grid.addWidget(self.heading, 0, 0)
         self.grid.addWidget(self.toolbar, 1 if compact else 0, 0 if compact else 1,
                             alignment=Qt.AlignmentFlag.AlignLeft if compact else Qt.AlignmentFlag.AlignRight)
         self._compact = compact

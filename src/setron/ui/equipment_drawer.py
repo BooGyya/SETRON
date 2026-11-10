@@ -6,16 +6,15 @@
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QMenu,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QMenu, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
 from setron.ui.components import DisclosureArrow, StatusBadge, button, label
+from setron.ui.drawer import SideDrawer
 from setron.ui.equipment import icon_label, ignore_width
 from setron.ui.heatmap_data import GoalState
 from setron.ui.theme import CANVAS, SECONDARY
@@ -147,55 +146,28 @@ class SoftwareCard(QFrame):
             observation.model + " SW 카드 " + ("접기" if expanded else "펼치기")))
 
 
-class EquipmentDrawer(QWidget):
+class EquipmentDrawer(SideDrawer):
     """중앙 캔버스 위에 얹는 560px 패널. 화면 라우트/필터/스크롤은 바꾸지 않는다."""
 
     closed = Signal()
     edit_requested = Signal()
     record_requested = Signal(str, object)
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setObjectName("equipmentDrawerOverlay")
-        self.setAccessibleName("히트맵 설비 상세 패널")
+    def __init__(self, parent, *, allow_expand=False, object_name="equipmentDrawer", accessible_name="설비 상세 패널"):
+        super().__init__(parent, object_name=object_name, accessible_name=accessible_name,
+                         allow_expand=allow_expand)
         self.request, self.detail, self.return_focus = None, None, None
         self.edit_available = False
         self.software_cards = []
         self.edit_menu = None
-        parent.installEventFilter(self)
-        self.backdrop = QPushButton(self)
-        self.backdrop.setAccessibleName("설비 상세 패널 닫기")
-        self.backdrop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.backdrop.setStyleSheet("QPushButton {background:rgba(20,32,51,0.12);border:0;border-radius:0;padding:0;}")
-        self.backdrop.clicked.connect(self.close_panel)
-        self.panel = QFrame(self)
-        self.panel.setObjectName("equipmentDrawerPanel")
-        self.panel.setStyleSheet(f"QFrame#equipmentDrawerPanel {{background:{CANVAS};border:1px solid #d5d7da;}}")
-        shadow = QGraphicsDropShadowEffect(self.panel)
-        shadow.setBlurRadius(20)
-        shadow.setOffset(-4, 0)
-        self.panel.setGraphicsEffect(shadow)
-        layout = QVBoxLayout(self.panel)
-        layout.setContentsMargins(24, 16, 24, 24)
-        layout.setSpacing(14)
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        self.close_button = button("", asset="529be.svg")
-        self.close_button.setAccessibleName("설비 상세 닫기")
-        self.close_button.setToolTip("닫기 (Esc)")
-        self.close_button.setFixedSize(32, 32)
-        self.close_button.setStyleSheet("QPushButton {padding:0;border:0;background:transparent;}"
-                                        "QPushButton:focus {border:2px solid #3c5ce9;}")
-        self.close_button.clicked.connect(self.close_panel)
-        header.addWidget(self.close_button)
         self.title = label("설비 상세", 24, medium=True, wrap=True)
         ignore_width(self.title)
-        header.addWidget(self.title, 1)
-        layout.addLayout(header)
+        self.header.addWidget(self.title, 1)
+        self.panel_layout.addLayout(self.header)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        layout.addWidget(self.scroll, 1)
+        self.panel_layout.addWidget(self.scroll, 1)
         self.body_widget = QWidget()
         self.body_widget.setObjectName("equipmentDrawerBody")
         self.body_widget.setStyleSheet(f"QWidget#equipmentDrawerBody {{background:{CANVAS};}}")
@@ -204,32 +176,6 @@ class EquipmentDrawer(QWidget):
         self.body.setSpacing(14)
         self.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll.setWidget(self.body_widget)
-        self.escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
-        self.escape.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.escape.activated.connect(self.close_panel)
-        self.hide()
-
-    def eventFilter(self, watched, event):
-        if watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
-            self._position()
-        return super().eventFilter(watched, event)
-
-    def _position(self):
-        self.setGeometry(self.parentWidget().rect())
-        self.backdrop.setGeometry(self.rect())
-        width = min(560, self.width())
-        self.panel.setGeometry(self.width() - width, 0, width, self.height())
-
-    def focusNextPrevChild(self, forward):
-        # Tab이 가려진 히트맵/조회 입력으로 빠져나가지 않게 패널 내부를 순환한다.
-        controls = [w for w in self.panel.findChildren(QWidget)
-                    if w.isVisibleTo(self.panel) and w.isEnabled() and w.focusPolicy() & Qt.FocusPolicy.TabFocus]
-        if not controls:
-            return False
-        focus = QApplication.focusWidget()
-        index = controls.index(focus) if focus in controls else (-1 if forward else 0)
-        controls[(index + (1 if forward else -1)) % len(controls)].setFocus(Qt.FocusReason.TabFocusReason)
-        return True
 
     def open_detail(self, request, detail, rows, evidence, source, *, return_focus=None, edit_available=False, below_evidence=()):
         self.closed.emit()  # 같은 패널 재선택 시 이전 비동기 편집 조회도 취소한다.
@@ -296,11 +242,8 @@ class EquipmentDrawer(QWidget):
         ignore_width(self.edit_notice)
         self.edit_notice.hide()
         self.body.addWidget(self.edit_notice)
-        self._position()
-        self.show()
-        self.raise_()
+        self.show_panel()
         self.scroll.verticalScrollBar().setValue(0)
-        self.close_button.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _build_evidence(self, evidence):
         frame = QFrame()
@@ -399,18 +342,23 @@ class EquipmentDrawer(QWidget):
                         child.widget().deleteLater()
         self.software_cards = []
 
-    def close_panel(self, *, restore_focus=True):
-        if self.isHidden():
-            return
-        self.hide()
+    def clear_detail(self):
         if self.edit_menu is not None:
             self.edit_menu.close()
         self.request, self.detail = None, None
+
+    def close_panel(self, *, restore_focus=True):
+        if not self.is_open:
+            if not restore_focus:
+                self.hide_panel(animated=False)
+            return
+        self.hide_panel(animated=restore_focus)
+        self.clear_detail()
+        return_focus, self.return_focus = self.return_focus, None
         self.closed.emit()
-        if restore_focus and self.return_focus is not None:
+        if restore_focus and return_focus is not None:
             try:
-                if self.return_focus.isVisible() and self.return_focus.isEnabled():
-                    self.return_focus.setFocus(Qt.FocusReason.OtherFocusReason)
+                if return_focus.isVisible() and return_focus.isEnabled():
+                    return_focus.setFocus(Qt.FocusReason.OtherFocusReason)
             except RuntimeError:
                 pass  # 새 조회로 타일 위젯이 이미 교체된 경우
-        self.return_focus = None

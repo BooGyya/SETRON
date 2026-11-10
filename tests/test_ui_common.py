@@ -239,6 +239,29 @@ def test_keyboard_navigation_and_page_state_are_preserved(window, app):
     assert edit.text() == "담당 화면의 임시 입력"
 
 
+def test_back_retraces_distinct_pages_and_restores_scroll(window):
+    tall = QWidget()
+    tall.setMinimumHeight(2200)
+    window.register_page("heatmap", tall)
+    window.register_page("settings", QWidget())
+    assert not window.header.back.isEnabled()
+    assert not window.navigate("import")
+    window.navigate("heatmap")
+    window.navigate("heatmap")
+    QTest.qWait(20)
+    window.scroll.verticalScrollBar().setValue(400)
+    window.navigate("settings")
+    window.header.toolbar.hide()
+    assert window.header.back.isVisible() and window.header.back.isEnabled()
+
+    window.header.back.click()
+    QTest.qWait(20)
+    assert window.route == "heatmap" and window.nav["heatmap"].isChecked()
+    assert window.scroll.verticalScrollBar().value() == 400
+    window.header.back.click()
+    assert window.route == "dashboard" and not window.header.back.isEnabled()
+
+
 def test_tall_hidden_page_does_not_stretch_short_page(window, app):
     baseline = window.scroll.verticalScrollBar().maximum()
     tall = QWidget()

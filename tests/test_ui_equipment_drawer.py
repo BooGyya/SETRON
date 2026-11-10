@@ -56,7 +56,7 @@ def test_open_close_preserves_applied_query_scroll_view_search_selection(window,
     assert tuple(c.value.text() for c in dashboard.metrics.values()) == metrics
     assert drawer.panel.width() == 560 and drawer.panel.height() == window.centralWidget().height()
     drawer.close_button.click()
-    app.processEvents()
+    wait_for(app, drawer.isHidden)
     assert drawer.isHidden() and bar.value() == position and page.snapshot is before
     assert page.view_buttons.checkedId() == 1 and page.selected_id == 1
     assert page.tile_buttons[1].isChecked() and app.focusWidget() is page.tile_buttons[1]
@@ -64,13 +64,60 @@ def test_open_close_preserves_applied_query_scroll_view_search_selection(window,
 
 def test_escape_backdrop_and_tab_keep_keyboard_in_panel(window, app):
     drawer = open_tile(window)
+    assert app.focusWidget() is drawer.panel
+    QTest.keyClick(app.focusWidget(), Qt.Key.Key_Tab)
+    assert app.focusWidget() is drawer.close_button
     for _ in range(18):
         QTest.keyClick(app.focusWidget(), Qt.Key.Key_Tab)
         assert drawer.isAncestorOf(app.focusWidget())
     QTest.keyClick(app.focusWidget(), Qt.Key.Key_Escape)
-    assert drawer.isHidden() and app.focusWidget() is window.pages["heatmap"].tile_buttons[1]
+    assert not drawer.is_open and app.focusWidget() is window.pages["heatmap"].tile_buttons[1]
+    wait_for(app, drawer.isHidden)
     open_tile(window)
     drawer.backdrop.click()
+    wait_for(app, drawer.isHidden)
+
+
+def test_drawer_slides_each_time_and_can_reopen_during_close(window, app):
+    drawer = open_tile(window)
+    assert drawer.panel.geometry().right() > drawer.rect().right()
+    wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
+    drawer.close_button.click()
+    assert not drawer.is_open and drawer.isVisible()
+    wait_for(app, lambda: drawer.panel.geometry().right() > drawer.rect().right())
+    open_tile(window, 2)
+    assert drawer.is_open and drawer.request.equipment_id == 2
+    wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
+    drawer.close_button.click()
+    wait_for(app, drawer.isHidden)
+    open_tile(window)
+    assert drawer.panel.geometry().right() > drawer.rect().right()
+    wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
+
+
+def test_expand_opens_full_detail_and_back_restores_heatmap(window, app):
+    heatmap, equipment = window.pages["heatmap"], window.pages["equipment"]
+    window.resize(1100, 600)
+    heatmap.view_buttons.button(1).click()
+    bar = window.scroll.verticalScrollBar()
+    wait_for(app, lambda: bar.maximum() > 0)
+    bar.setValue(bar.maximum() // 2)
+    scroll, snapshot = bar.value(), heatmap.snapshot
+    drawer = open_tile(window, 1)
+    wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
+    assert drawer.expand_button.isVisible()
+    assert drawer.close_button.geometry().right() < drawer.expand_button.geometry().left()
+    assert drawer.expand_button.y() == drawer.close_button.y()
+    QTest.mouseClick(drawer.expand_button, Qt.MouseButton.LeftButton)
+    assert window.route == "equipment" and equipment.mode == "detail" and equipment.selected_id == 1
+    assert equipment.snapshot is snapshot and drawer.isHidden()
+    for control in (window.header.back, equipment.back_button):
+        assert not control.text() and not control.icon().isNull()
+        assert control.accessibleName() == control.toolTip() and control.toolTip()
+    QTest.mouseClick(window.header.back, Qt.MouseButton.LeftButton)
+    wait_for(app, lambda: window.route == "heatmap" and bar.value() == scroll)
+    assert heatmap.snapshot is snapshot and heatmap.view_buttons.checkedId() == 1
+    assert heatmap.selected_id == 1 and heatmap.tile_buttons[1].isChecked()
     assert drawer.isHidden()
 
 
@@ -211,6 +258,7 @@ def test_stale_query_or_wrong_observation_does_not_open_panel(window):
 
 def test_resize_and_long_text_stay_inside_panel_without_horizontal_scroll(window, app):
     drawer = open_tile(window)
+    wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
     drawer.evidence_toggle.click()
     for width, height in ((960, 600), (1920, 1080), (1440, 960)):
         window.resize(width, height)
@@ -346,7 +394,7 @@ def test_edit_multiple_pms_require_explicit_choice_and_cancelled_read_is_ignored
     drawer.edit_button.click()
     drawer.close_button.click()
     gateway.lookup_gate.set()
-    QTest.qWait(30)
+    wait_for(app, drawer.isHidden)
     assert drawer.isHidden() and window.route == "heatmap" and gateway.saves == []
 
 

@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QPainter, QPixmap, QRegion
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QFont, QKeySequence, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLayout, QMainWindow, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -151,6 +151,8 @@ class NavButton(QPushButton):
 class PageStack(QWidget):
     """위젯은 보존하되 현재 페이지만 배치해 숨겨진 페이지의 최소 높이를 격리한다."""
 
+    current_changed = Signal()
+
     def __init__(self):
         super().__init__()
         self._pages: list[QWidget] = []
@@ -188,6 +190,7 @@ class PageStack(QWidget):
         page.show()
         self._body.invalidate()
         self.updateGeometry()
+        self.current_changed.emit()
 
 
 class MainWindow(QMainWindow):
@@ -201,6 +204,9 @@ class MainWindow(QMainWindow):
         self.resize(1440, 960)
         self.pages: dict[str, QWidget] = {}
         self.route = "dashboard"
+        self._route_history: list[tuple[str, int]] = []
+        self._navigation_id = 0
+        self._page_back = None
         self.nav: dict[str, NavButton] = {}
         self._menus = {menu.key: menu for menu in MENUS}
         self._page_parents: dict[str, str] = {}
@@ -223,6 +229,11 @@ class MainWindow(QMainWindow):
         self.body.setContentsMargins(28, 28, 28, 28)
         self.body.setSpacing(20)
         self.header = PageHeader()
+        self.header.back.clicked.connect(self.go_back)
+        self.back_shortcut = QAction("뒤로 가기", self)
+        self.back_shortcut.setShortcuts(QKeySequence.StandardKey.Back)
+        self.back_shortcut.triggered.connect(self.go_back)
+        self.addAction(self.back_shortcut)
         self.body.addWidget(self.header)
         # 실제 업무 자료가 아닐 때(DB 미연결로 합성 예시 자료 등)의 경고. 공통 안내 칸(notice)과 달리
         # 화면별 숨김 규칙을 따르지 않고 모든 화면에 계속 보인다 (QA Q-03).
@@ -347,11 +358,16 @@ class MainWindow(QMainWindow):
         if uses_query:
             self._query_routes.add(key)
 
-    def navigate(self, key: str) -> bool:
+    def navigate(self, key: str, *, record_history: bool = True) -> bool:
         if key not in self._menus and key not in self._page_parents:
             raise ValueError(f"알 수 없는 메뉴입니다: {key}")
         if key not in self.pages and key != "dashboard":
             return False
+        if key != self.route:
+            if record_history:
+                self._route_history.append((self.route, self.scroll.verticalScrollBar().value()))
+            self._page_back = None
+        self._navigation_id += 1
         current = self.pages.get(key, self.placeholder)
         for index in range(self.stack.count()):
             page = self.stack.widget(index)
@@ -367,6 +383,40 @@ class MainWindow(QMainWindow):
             nav.setChecked(menu_key == self._page_parents.get(key, key))
         self.scroll.verticalScrollBar().setValue(0)
         self.page_changed.emit(key)
+        self._sync_back()
+        return True
+
+    def set_page_back(self, action) -> None:
+        """현재 화면 안에서 먼저 되돌릴 패널 또는 상세가 있으면 연결한다."""
+        self._page_back = action
+        self._sync_back()
+
+    def _sync_back(self) -> None:
+        enabled = self._page_back is not None or bool(self._route_history)
+        self.header.back.setEnabled(enabled)
+        self.back_shortcut.setEnabled(enabled)
+
+    def go_back(self) -> bool:
+        if self._page_back is not None:
+            self._page_back()
+            return True
+        return self.go_back_route()
+
+    def go_back_route(self, expected: str | None = None) -> bool:
+        if not self._route_history:
+            return False
+        key, offset = self._route_history[-1]
+        if expected is not None and key != expected:
+            return False
+        self._route_history.pop()
+        navigation_id = self._navigation_id + 1
+        self.navigate(key, record_history=False)
+
+        def restore_scroll():
+            if self._navigation_id == navigation_id:
+                self.scroll.verticalScrollBar().setValue(offset)
+
+        QTimer.singleShot(0, self, lambda: QTimer.singleShot(0, self, restore_scroll))
         return True
 
     def set_query_catalog(self, catalog: QueryCatalog) -> None:
