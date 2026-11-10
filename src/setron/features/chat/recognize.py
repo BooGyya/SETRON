@@ -17,16 +17,24 @@ from .schemas import ChatRequest, GroupBy, Intent, Verdict
 
 _WORDS: dict[Intent, tuple[str, ...]] = {
     Intent.REPORT: ("보고서", "리포트"),
-    Intent.FORECAST: ("예측", "예상", "언제", "통일될", "통일 시점", "완료될"),
+    Intent.FORECAST: ("예측", "예상", "언제", "통일될", "통일 시점", "완료될",
+                      "끝나", "끝날", "다 올리", "마무리", "완료 예정"),                  # 11/11 말투 넓히기 (A)
     Intent.CHANGE: ("지난달", "지난 달", "전월", "이전 기준일", "이전보다", "변화", "떨어진", "떨어졌", "올라간", "올랐",
-                    "줄어든", "늘어난", "바뀐", "변경된", "변경 이력", "이후"),
+                    "줄어든", "늘어난", "바뀐", "변경된", "변경 이력", "이후",
+                    "나아졌", "좋아졌", "나빠졌", "지난번", "저번", "전보다", "늘었", "줄었", "개선됐", "개선되었"),
     Intent.CAUSE: ("왜", "원인", "이유", "때문"),
-    Intent.PRIORITY: ("우선순위", "어디부터", "먼저", "업그레이드 순서", "순서대로", "급한"),
+    Intent.PRIORITY: ("우선순위", "어디부터", "먼저", "업그레이드 순서", "순서대로", "급한",
+                      "뭐부터", "무엇부터", "어떤 것부터", "어느 것부터", "어떤 설비부터", "부터 손", "손봐", "손 봐",
+                      "손볼", "고쳐야", "시급", "급하"),
     Intent.COMPARE: ("비교", "가장 낮", "가장 높", "제일 낮", "제일 높", "어디가", "구역별", "라인별", "사업장별",
-                     "모델별", "설비군별", "달성률", "적용률", "표준화율"),
+                     "모델별", "설비군별", "달성률", "적용률", "표준화율",
+                     "더 안 좋", "제일 안 좋", "가장 안 좋", "더 나쁘", "더 나쁜", "제일 나쁜", "가장 나쁜", "뒤처", "뒤쳐",
+                     "제일 안 된", "가장 안 된", "덜 된", "꼴찌", "뭐가 더", "어느 쪽", "어디 쪽", "더 잘 된", "더 잘된",
+                     "제일 잘", "가장 잘"),
     Intent.VERSION_INFO: ("최신 버전", "최신버전", "출시일", "릴리즈", "어떤 버전", "버전 목록", "버전별"),
     Intent.SEARCH: ("보여", "목록", "몇 대", "몇대", "대수", "뽑아", "찾아", "어디 있", "어디에 있", "리스트", "현황",
-                    "알려", "쓰는 설비", "쓰고 있는", "적용된 설비"),
+                    "알려", "쓰는 설비", "쓰고 있는", "적용된 설비",
+                    "어때", "어떻게 돼", "어떻게 되", "상태", "상황", "괜찮", "요즘", "전반", "전체적으로", "요약"),
 }
 _ORDER = (Intent.SEARCH, Intent.COMPARE, Intent.CHANGE, Intent.CAUSE, Intent.PRIORITY, Intent.FORECAST,
           Intent.VERSION_INFO, Intent.REPORT)
@@ -40,6 +48,12 @@ _VERDICT: tuple[tuple[Verdict, tuple[str, ...]], ...] = (
 )
 _GROUP_BY = ((GroupBy.LINE, ("구역", "라인")), (GroupBy.SITE, ("사업장", "site")), (GroupBy.MODEL, ("모델별", "설비군별")))
 _SMALLTALK = ("안녕", "고마", "감사", "수고", "반가")
+_COMPARE_NEGATIVE = ("제일 안 된", "가장 안 된", "덜 된")      # '안 된'이 미달 판정이 아니라 비교 표현인 경우
+
+
+def is_smalltalk(question: str) -> bool:
+    """인사·감사처럼 분석 질문이 아닌 말 (AI 분류를 부르지 않는다)."""
+    return _has(_norm(question), _SMALLTALK)
 _FOLLOW = ("그중", "그 중", "그럼", "거기서", "거기에서", "여기서", "이 중", "이중에", "그 설비", "그 구역", "그 라인",
            "방금", "그거", "그것", "이어서", "그 결과")
 _KNOWN_SITE_WORDS = ("화성", "평택", "기흥", "천안", "온양", "중국", "미국", "시안", "오스틴", "청주", "이천")
@@ -214,6 +228,11 @@ def recognize(question: str, catalog, ai_conditions: QueryConditions | None = No
         return ChatRequest(question=question, intents=intents or previous.intents, conditions=conditions,
                            areas=areas or previous.areas, verdict=verdict or previous.verdict,
                            group_by=group_by or previous.group_by, understood=True, follow_up=True)
+    if Intent.COMPARE in intents and verdict is Verdict.BELOW and _has(text, _COMPARE_NEGATIVE):
+        verdict = None                        # '제일 안 된 데'는 미달 설비 목록이 아니라 가장 낮은 곳 비교
+    if Intent.COMPARE in intents and group_by is None and len(conditions.groups) + len(conditions.models) > 1 \
+            and len(conditions.sites) <= 1 and not conditions.lines:
+        group_by = GroupBy.MODEL              # 'O2랑 C3 중에 뭐가 더 안 좋아?'는 모델끼리 비교
     if not intents and (has_conditions or verdict or areas):
         intents = (Intent.SEARCH,)
     if not intents and conditions.versions:

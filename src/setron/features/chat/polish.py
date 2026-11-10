@@ -49,4 +49,6 @@ def polish(answer: ChatAnswer, client) -> ChatAnswer:
     text = (reply.content or "").strip().strip('"').strip()
     if not text or len(text) > len(original) * 2 or facts(text) != facts(original):
         return answer
+    if text[:1] in "{[<`" or "```" in text:
+        return answer                                   # JSON·코드처럼 생긴 답은 문장이 아니다 (숫자 없는 문장 검사 보완)
     return replace(answer, summary=text, polished=True)

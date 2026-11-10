@@ -12,13 +12,14 @@ from __future__ import annotations
 from PySide6.QtCharts import (
     QBarCategoryAxis, QBarSet, QChart, QChartView, QDateTimeAxis, QLineSeries, QStackedBarSeries, QValueAxis,
 )
-from PySide6.QtCore import QDateTime, QEvent, QPoint, Qt, QTime, QTimer, Signal
+from PySide6.QtCore import QDateTime, QEvent, QObject, QPoint, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QProgressBar,
+    QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget, QProgressBar,
 )
 
+from setron.features.chat.classify import OUT_OF_SCOPE_TITLE
 from setron.features.chat.report import ReportPart
 from setron.features.chat.schemas import INTENT_LABELS, BarChart, ChatAnswer, Intent, LineChart, Table
 from setron.ui.appearance import ui_color
@@ -55,6 +56,9 @@ QPushButton#aiStarterQuestion {{ background: white; border: 1px solid #e3e6ec; b
     color: {INK}; text-align: left; min-height: 38px; max-height: 38px; }}
 QPushButton#aiStarterQuestion:hover {{ background: #edf0fd; border-color: {PRIMARY}; }}
 QLabel#chatNote {{ background: #fff5d9; color: #8a5a00; border-radius: 6px; padding: 4px 8px; }}
+QToolButton#chatBasisToggle {{ border: none; background: transparent; color: {SECONDARY}; padding: 2px 0; font-weight: 500; }}
+QToolButton#chatBasisToggle:hover {{ color: {INK}; }}
+QLabel#chatBasisLine {{ color: {SECONDARY}; padding: 1px 0 1px 18px; }}
 QLabel#chatIssue {{ background: #fdecec; color: #c62828; border-radius: 6px; padding: 4px 8px; }}
 QLabel#chatStale {{ background: #eef0f3; color: {SECONDARY}; border-radius: 6px; padding: 3px 8px; }}
 QTableWidget#chatTable {{ background: white; border: 1px solid #dee0e5; border-radius: 10px; gridline-color: #eef0f3; }}
@@ -231,7 +235,10 @@ class AnswerCard(QWidget):
         body.setContentsMargins(22, 18, 22, 18)
         body.setSpacing(12)
         if self.empty_kind == "unrecognized":
-            body.addWidget(_wrap("조건 인식 실패 · 조건을 정확히 이해하지 못했어요", 13, name="chatNote"))
+            # 못 알아들은 질문은 빨간 안내 (11/11). 자료와 무관한 질문은 조건 문제가 아니라 '답할 수 없는 질문'.
+            banner = ("답할 수 없는 질문 · 설비 SW 버전 자료와 관련 없는 질문이에요" if result.title == OUT_OF_SCOPE_TITLE
+                      else "조건 인식 실패 · 조건을 정확히 이해하지 못했어요")
+            body.addWidget(_wrap(banner, 13, name="chatIssue"))
         elif self.empty_kind == "unavailable":
             body.addWidget(_wrap("자료 없음 · 조건은 이해했지만 해당 자료가 없어요", 13, name="chatStale"))
         self.intent_tags = [_tag(INTENT_LABELS[i]) for i in result.request.intents]
@@ -286,8 +293,10 @@ class AnswerCard(QWidget):
             body.addWidget(widget)
         if result.report is not None:
             body.addWidget(self._report_card(result, on_report, on_pdf))
-        for notice in result.notices:
-            body.addWidget(_wrap(notice, 12, name="chatNote"))
+        self.basis_toggle, self.basis_body = self._basis(result.notices)
+        if self.basis_toggle is not None:
+            body.addWidget(self.basis_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+            body.addWidget(self.basis_body)
         if result.suggestions:
             body.addWidget(_WrapRow([_chip(question, on_question) for question in result.suggestions], 240))
         if (unavailable or result.issues) and result.request.understood and on_navigate is not None:
@@ -317,6 +326,36 @@ class AnswerCard(QWidget):
             self.footer = AnswerActions(result_actions, file_actions)
             body.addWidget(self.footer)
         row.addWidget(frame, 1)
+
+    def _basis(self, notices) -> tuple[QToolButton | None, QFrame | None]:
+        """참고 문장을 '판단 근거 N건' 한 줄로 접어 둔다 (11/11: 노란 상자가 답보다 눈에 띄던 문제).
+
+        누르면 펼쳐져 회색 글씨 목록으로 보인다. 처음에는 접혀 있다.
+        """
+        if not notices:
+            return None, None
+        toggle = QToolButton()
+        toggle.setObjectName("chatBasisToggle")
+        toggle.setCheckable(True)
+        toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.ArrowType.RightArrow)
+        toggle.setText(f"판단 근거 {len(notices)}건")
+        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle.setStyleSheet(f"QToolButton {{border: none; background: transparent; color: {SECONDARY}; padding: 2px 0;}}"
+                             f"QToolButton:hover {{color: {INK};}}")          # 어디에 놓여도 상자 없는 글자 버튼
+        holder = QFrame()
+        column = QVBoxLayout(holder)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)
+        for notice in notices:
+            column.addWidget(_wrap(notice, 12, name="chatBasisLine"))
+        holder.hide()
+
+        def flip(opened):
+            toggle.setArrowType(Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow)
+            holder.setVisible(opened)
+        toggle.toggled.connect(flip)
+        return toggle, holder
 
     def _report_card(self, result: ChatAnswer, on_report, on_pdf) -> QFrame:
         """'보고서 만들어줘' 답의 파일 카드 (화면 10-3): 파일 이름 · 구성 · Word로 저장."""
@@ -378,8 +417,18 @@ class AnswerCard(QWidget):
                 widget.setToolTip("자료가 바뀌었습니다. 다시 질문한 뒤 저장해 주세요.")
 
 
+class _ProgressRelay(QObject):
+    """워커 스레드의 진행 알림을 화면 스레드로 넘긴다 (위젯은 화면 스레드에서만 바꾼다)."""
+
+    step = Signal(int)
+
+
 class PendingCard(QWidget):
-    """분석 중: 단계 표시와 중지. 워커가 진행률을 알려 주지 않으므로 마지막 단계는 답이 와야 끝난다."""
+    """분석 중: 단계 표시와 중지.
+
+    진행을 알려 주는 서비스면 실제로 끝난 단계만 ✓로 바꾼다(가짜 진행률은 만들지 않는다).
+    알려 주지 않는 서비스면 단계는 그대로 두고 답이 와야 끝난다.
+    """
 
     stop_requested = Signal()
 
@@ -404,7 +453,9 @@ class PendingCard(QWidget):
         self.steps = [label(f"○ {step}", 13, color=SECONDARY) for step in STEPS]
         for step in self.steps:
             body.addWidget(step)
-        body.addWidget(_wrap("응답 대기 중 · 단계별 진행률은 제공되지 않습니다.", 11, SECONDARY))
+        self.note = _wrap("응답을 기다리고 있습니다.", 11, SECONDARY)
+        body.addWidget(self.note)
+        self.finished = False
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setFixedHeight(4)
@@ -429,7 +480,25 @@ class PendingCard(QWidget):
         self.done = 0
         self.timer = QTimer(self)
 
+    def advance(self, done: int):
+        """실제로 끝난 단계 수를 받아 표시한다. 끝난 단계 ✓, 지금 단계 ◐, 남은 단계 ○."""
+        if self.finished:
+            return                                         # 중지했거나 답이 온 뒤 늦게 온 알림은 버린다
+        done = max(0, min(done, len(STEPS)))
+        for index, (widget, name) in enumerate(zip(self.steps, STEPS)):
+            if index < done:
+                widget.setText(f"✓ {name}")
+                widget.setStyleSheet(f"color: {INK};")
+            elif index == done:
+                widget.setText(f"◐ {name} 중")
+                widget.setStyleSheet(f"color: {PRIMARY};")
+            else:
+                widget.setText(f"○ {name}")
+                widget.setStyleSheet(f"color: {SECONDARY};")
+        self.note.setText(f"{done}/{len(STEPS)}단계 완료" if done else "질문을 이해하고 있습니다.")
+
     def finish(self, text: str):
+        self.finished = True
         self.timer.stop()
         self.stop_button.hide()
         self.progress.hide()
@@ -899,7 +968,22 @@ class ChatPage(QWidget):
         self._append(self.pending)
         self._fit_height()
         service, previous = self.service, self.previous
-        self.request.start(BackgroundRead(lambda: service.ask(question, previous)))
+        if getattr(service, "reports_progress", False):
+            old = getattr(self, "_relay", None)
+            if old is not None:
+                old.deleteLater()                            # 이전 질문의 전달자 정리 (늦은 알림은 report가 무시)
+            relay = self._relay = _ProgressRelay(self)      # 화면 스레드에서 만든 전달자 (워커는 신호만 보낸다)
+            relay.step.connect(self.pending.advance)
+            self.pending.advance(0)
+
+            def report(done, relay=relay):
+                try:
+                    relay.step.emit(done)
+                except RuntimeError:                         # 화면이 먼저 사라진 경우
+                    pass
+            self.request.start(BackgroundRead(lambda: service.ask(question, previous, progress=report)))
+        else:
+            self.request.start(BackgroundRead(lambda: service.ask(question, previous)))
         self._sync()
         return True
 

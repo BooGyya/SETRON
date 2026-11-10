@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from dataclasses import replace
 
 from setron.features.analysis.service import explain
 from collections import Counter
 
 from setron.features.chat import ChatAnswer, ChatData, ChatRequest, answer, polish, recognize
-from setron.features.chat.answers import josa, latest_until, report_answers
+from setron.features.chat.answers import SUGGESTIONS, josa, latest_until, report_answers
+from setron.features.chat.classify import OUT_OF_SCOPE_MESSAGE, OUT_OF_SCOPE_TITLE, classify
+from setron.features.chat.recognize import is_smalltalk
 from setron.features.chat.export import query_export
 from setron.features.query.schemas import FamilyChoice, GroupChoice, QueryCatalog
 from setron.features.targets.groups import with_saved_groups
@@ -117,10 +120,38 @@ class ChatService:
                 ("원인·우선순위", "왜 낮은지·어디부터 올릴지", ("목표 N 달성률이 가장 낮은 원본 구역을 분석해줘", "어디부터 업그레이드해야 해?")),
                 ("예측·보고서", "통일 시점·표준화 보고서", (f"{josa(family, '은/는')} 언제 통일될까?", "이번 달 표준화 보고서 만들어줘")))
 
-    def ask(self, question: str, previous: ChatRequest | None = None) -> ChatAnswer:
+    reports_progress = True          # 화면 대기 카드에 실제 진행 단계를 알려 준다
+
+    def ask(self, question: str, previous: ChatRequest | None = None, progress=None) -> ChatAnswer:
+        """질문 → 답. 규칙으로 먼저 이해하고, 못 알아들은 질문만 AI에게 '요청 종류·조건' 분류를 부탁한다.
+
+        AI는 분류만 한다. 숫자·표는 언제나 DB 계산이고, AI가 바꿔 준 질문도 규칙이 다시 확인한다.
+
+        param
+        - progress: 실제 단계가 끝날 때마다 끝난 단계 수를 받는 함수 (워커 스레드에서 불림).
+          2 = 질문 이해·데이터 조회 끝, 4 = 표·그래프·원인·우선순위 계산 끝(이제 답변 작성).
+        """
+        step = progress or (lambda done: None)
         data = self.data()
         request = recognize(question, data.catalog, previous=previous)
-        return polish(answer(request, data), self.client)
+        interpreted = ""
+        if not request.understood and self.client is not None and not is_smalltalk(question):
+            guess = classify(self.client, question, data.catalog)
+            if guess is not None and guess.out_of_scope:
+                return ChatAnswer(request, OUT_OF_SCOPE_TITLE, OUT_OF_SCOPE_MESSAGE, suggestions=SUGGESTIONS[:4],
+                                  title=OUT_OF_SCOPE_TITLE)
+            if guess is not None and guess.question:
+                retry = recognize(guess.question, data.catalog, previous=previous)
+                if retry.understood:
+                    request, interpreted = replace(retry, question=question), guess.question
+        step(2)                                            # 질문 이해 · 데이터 조회 끝
+        result = answer(request, data)
+        step(4)                                            # 표 · 그래프 · 원인 · 우선순위 끝 → 답변 작성
+        if interpreted:
+            result = replace(result, notices=(f"질문을 ‘{interpreted}’(으)로 이해했어요.", *result.notices))
+        if not request.understood:
+            return result                                   # 정해진 안내 문장은 AI로 다듬지 않는다
+        return polish(result, self.client)
 
     def export_data(self, result: ChatAnswer):
         """답 → Excel 내보내기 자료. 원본 출처(셀 위치)는 자료 출처에 없어 비워 둔다."""
