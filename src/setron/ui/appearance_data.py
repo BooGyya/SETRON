@@ -88,9 +88,7 @@ class PersonalSettings:
         order = data.get("order", MENU_ORDER)
         if not isinstance(order, (list, tuple)) or len(order) != len(MENU_ORDER) or set(order) != set(MENU_ORDER):
             order = MENU_ORDER
-        return {"order": tuple(order), "home": "heatmap" if data.get("home") == "heatmap" else "metrics",
-                "lines": data.get("lines") if isinstance(data.get("lines"), list) else None,
-                "groups": data.get("groups") if isinstance(data.get("groups"), list) else None}
+        return {"order": tuple(order), "home": "heatmap" if data.get("home") == "heatmap" else "metrics"}
 
     def version_group_pair(self) -> tuple[int, int] | None:
         value = self._read("version_group_pair", None)

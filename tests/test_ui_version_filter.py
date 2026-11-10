@@ -147,38 +147,43 @@ def open_filter(window):
 
 
 def test_popup_matches_figma_controls_cancels_and_blocks_zero(window):
+    applied = window.query_state.applied
     dialog = open_filter(window)
     assert isinstance(dialog, VersionFilterDialog)
     assert dialog.columns == 2 and all(c.isChecked() for c in dialog.choices.values())
-    dialog.clear_button.click()
+    assert dialog.all_button.text() == "전체 해제"
+    dialog.all_button.click()
+    assert dialog.all_button.text() == "전체 선택"
+    assert not any(c.isChecked() for c in dialog.choices.values())
     assert not dialog.confirm_button.isEnabled() and "하나 이상" in dialog.error.text()
     dialog.accept()
     assert dialog.isVisible() and window.query_state.draft.versions is None
     dialog.choices["v2"].setFocus()
     QTest.keyClick(dialog.choices["v2"], Qt.Key.Key_Space)
-    assert dialog.choices["v2"].isChecked() and "1개" in dialog.count.text()
+    assert dialog.choices["v2"].isChecked() and dialog.count.text() == "1개 선택 중"
+    assert dialog.all_button.text() == "전체 선택"
     QTest.keyClick(dialog, Qt.Key.Key_Escape)
     assert window.version_filter_dialog is None and window.query_state.draft.versions is None
+    assert window.query_state.applied is applied
 
 
-def test_confirm_then_apply_updates_same_snapshot_and_list_not_targets(window):
+def test_confirm_immediately_updates_shared_snapshot_and_list_not_targets(window):
     panel, state = window.query_panel, window.query_state
     panel.apply_draft()
     previous = window.pages["dashboard"].snapshot
     targets = state.target_draft
     dialog = open_filter(window)
-    dialog.clear_button.click()
+    dialog.all_button.click()
     dialog.choices["v2"].click()
     dialog.confirm_button.click()
     assert state.draft.versions == VersionFilter(("v2",))
-    assert state.applied is previous.query and window.pages["heatmap"].snapshot is previous
     assert state.target_draft == targets and "1개 선택" in panel.version_button.text()
-    assert panel.version_pending.isVisible()
-    panel.apply_draft()
     dashboard, heatmap = window.pages["dashboard"], window.pages["heatmap"]
-    assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot.equipment_ids == (1, 2)
+    filtered = dashboard.snapshot
+    assert filtered is heatmap.snapshot and filtered.equipment_ids == (1, 2)
+    assert state.applied is filtered.query and state.applied.revision == previous.query.revision + 1
     assert not panel.version_pending.isVisible()
-    assert dashboard.snapshot.query.selection.versions == VersionFilter(("v2",))
+    assert filtered.query.selection.versions == VersionFilter(("v2",))
     window.header.action_requested.emit("equipment_list")
     assert window.route == "equipment"
     assert window.pages["equipment"].snapshot is dashboard.snapshot
@@ -187,14 +192,16 @@ def test_confirm_then_apply_updates_same_snapshot_and_list_not_targets(window):
     dialog = open_filter(window)
     dialog.all_button.click()
     dialog.confirm_button.click()
-    assert state.draft.versions is None and state.applied.selection.versions == VersionFilter(("v2",))
-    panel.apply_draft()
+    assert state.draft.versions is None and state.applied.selection.versions is None
+    assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot is not filtered
     assert dashboard.snapshot.summary.equipment_count == 7
 
 
 def test_stale_dialog_does_not_overwrite_changed_draft(window, source):
+    applied = window.query_state.applied
     dialog = open_filter(window)
     window.query_panel.set_version_filter(VersionFilter(("v1",)))
+    assert window.query_state.applied is applied
     dialog.accept()
     assert dialog.isVisible() and "바뀌었습니다" in dialog.error.text()
     assert window.query_state.draft.versions == VersionFilter(("v1",))
@@ -203,32 +210,51 @@ def test_stale_dialog_does_not_overwrite_changed_draft(window, source):
     source.records = source.records[:-1]
     dialog.accept()
     assert dialog.isVisible() and "바뀌었습니다" in dialog.error.text()
+    assert window.query_state.applied is applied
 
 
 def test_empty_and_removed_options_do_not_implicitly_widen_to_all(app):
     empty = VersionFilterDialog(())
-    assert not empty.confirm_button.isEnabled()
+    assert empty.all_button.text() == "전체 선택"
+    assert not empty.all_button.isEnabled() and not empty.confirm_button.isEnabled()
     empty.accept()
     assert empty.result() != empty.DialogCode.Accepted
     old = VersionFilterDialog(("v2",), VersionFilter(("v1",)))
     assert old.choices["v1"].isChecked() and not old.choices["v2"].isChecked()
+    assert old.all_button.text() == "전체 선택"
+    old.all_button.click()
+    assert old.all_button.text() == "전체 해제" and all(c.isChecked() for c in old.choices.values())
+    old.all_button.click()
+    assert not any(c.isChecked() for c in old.choices.values())
+    old.choices["v1"].click()
     old.accept()
     assert old.result_filter == VersionFilter(("v1",))
     empty.deleteLater()
     old.deleteLater()
 
 
-def test_popup_scrolls_many_versions_and_wraps_long_raw_without_html(app):
+@pytest.mark.parametrize("size,columns", [((420, 360), 1), ((720, 560), 2)])
+def test_popup_scrolls_many_versions_and_wraps_long_raw_without_html(app, size, columns):
     raw = "<b>" + "v1_DFB_" * 30 + "</b>"
     dialog = VersionFilterDialog((raw, *(f"v{i}" for i in range(80))))
-    dialog.resize(440, 400)
+    dialog.resize(*size)
     dialog.show()
     app.processEvents()
-    assert dialog.columns == 1 and dialog.scroll.verticalScrollBar().maximum() > 0
+    assert dialog.columns == columns and dialog.scroll.verticalScrollBar().maximum() > 0
     assert dialog.choices[raw].accessibleName() == raw
     assert dialog.choices[raw].caption.text() == raw
     assert dialog.scroll.horizontalScrollBar().maximum() == 0
-    assert dialog.choices[raw].width() <= dialog.scroll.viewport().width()
+    viewport = dialog.scroll.viewport()
+    first, last = dialog.choices[raw], tuple(dialog.choices.values())[columns - 1]
+    assert first.mapTo(viewport, first.rect().topLeft()).x() == 12
+    assert last.mapTo(viewport, last.rect().topRight()).x() == viewport.width() - 13
+    assert dialog.cancel_button.size() == dialog.confirm_button.size()
+    first.setFocus()
+    QTest.keyClick(first, Qt.Key.Key_Space)
+    assert not first.isChecked() and dialog.count.text() == "80개 선택 중"
+    heading = dialog.layout().itemAt(0).widget()
+    assert heading.geometry().left() == dialog.all_button.geometry().left() == dialog.scroll.geometry().left()
+    assert dialog.count.geometry().right() == dialog.confirm_button.geometry().right() == dialog.scroll.geometry().right()
     dialog.reject()
     dialog.deleteLater()
 

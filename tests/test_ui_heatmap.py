@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLabel
 
@@ -136,11 +137,10 @@ def test_start_draft_edits_and_apply_use_one_shared_result(window, monkeypatch):
     assert [heatmap.metrics[key].value.text() for key in ("analysis", "met", "below", "unknown")] == [
         "4대", "1대", "1대", "2대",
     ]
-    assert heatmap.strip_note.text() == "전체 5대 · HPA 제외 1대"
-    assert heatmap.metrics["total"].value.text() == "5대"
-    assert heatmap.metrics["rate"].value.text() == "66.7%"
-    assert heatmap.metrics["risk"].value.text() == "2대" and heatmap.metrics["risk"].value.tone == "danger"
-    assert heatmap.metrics["upgrade"].value.text() == "1대"
+    assert tuple(heatmap.metrics) == ("analysis", "met", "below", "unknown")
+    assert all(card.caption is None and card.title.alignment() == Qt.AlignmentFlag.AlignCenter
+               and card.value.alignment() == Qt.AlignmentFlag.AlignCenter for card in heatmap.metrics.values())
+    assert len(heatmap.summary.widgets) == 4
     previous = heatmap.snapshot
     window.query_panel.select("site_key", "s2")
     assert heatmap.snapshot is previous and heatmap.snapshot.query is query
@@ -153,13 +153,15 @@ def test_mode_toggle_and_risk_filter_change_display_only_and_can_return(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     before = page.snapshot
-    QTest.mouseClick(page.view_buttons.button(1), Qt.MouseButton.LeftButton)
-    assert page.view_buttons.checkedId() == 1
+    QTest.mouseClick(page.view_toggle, Qt.MouseButton.LeftButton)
+    assert not page.view_toggle.isChecked() and page.view_toggle.text() == "상세보기"
+    QTest.mouseClick(page.view_toggle, Qt.MouseButton.LeftButton)
+    assert page.view_toggle.isChecked() and page.view_toggle.text() == "간략히 보기"
     assert "PM1 · v99 · N-1" in page.tile_buttons[1].accessibleName()
     page.risk_button.click()
     assert tuple(page.tile_buttons) == (1, 2)
     assert "표시 2대 / 선택 범위 5대" in page.view_count.text()
-    assert page.metrics["total"].value.text() == "5대" and page.snapshot is before
+    assert page.metrics["analysis"].value.text() == "4대" and page.snapshot is before
     page.risk_button.click()
     assert set(page.tile_buttons) == {1, 2, 3, 4, 5}
     assert window.query_state.applied is before.query
@@ -169,21 +171,20 @@ def test_candidate_filter_empty_message_does_not_hide_unknown_as_safe(window):
     window.query_panel.select("site_key", "s2")
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    assert "위험 미확인 1대" in page.metrics["risk"].caption.text()
     page.risk_button.click()
     assert not page.risk_button.isEnabled()
     assert page.risk_button.text() == "위험 미확인 1대"
     assert tuple(page.tile_buttons) == (3, 4)
 
 
-@pytest.mark.parametrize("state,risks,summary,filter_text", [
-    (RiskRuleState.UNREGISTERED, {}, "위험 규칙 미등록", "위험 규칙 미등록"),
-    (RiskRuleState.ALL_DISABLED, {}, "위험 규칙 모두 비활성", "위험 규칙 모두 비활성"),
-    (RiskRuleState.ACTIVE, {}, "미확인", "위험 미확인 4대"),
-    (RiskRuleState.ACTIVE, {1: RiskStatus.NO_RISK}, "일부 미확인", "확인된 후보 0대 · 미확인 3대"),
-    (RiskRuleState.ACTIVE, dict.fromkeys((1, 2, 3, 5), RiskStatus.NO_RISK), "0대", "위험 후보 0대"),
+@pytest.mark.parametrize("state,risks,filter_text", [
+    (RiskRuleState.UNREGISTERED, {}, "위험 규칙 미등록"),
+    (RiskRuleState.ALL_DISABLED, {}, "위험 규칙 모두 비활성"),
+    (RiskRuleState.ACTIVE, {}, "위험 미확인 4대"),
+    (RiskRuleState.ACTIVE, {1: RiskStatus.NO_RISK}, "확인된 후보 0대 · 미확인 3대"),
+    (RiskRuleState.ACTIVE, dict.fromkeys((1, 2, 3, 5), RiskStatus.NO_RISK), "위험 후보 0대"),
 ])
-def test_risk_summary_and_filter_after_requery(window, source, state, risks, summary, filter_text):
+def test_risk_filter_after_requery(window, source, state, risks, filter_text):
     page = window.pages["heatmap"]
     window.query_panel.apply_draft()
     page.risk_button.click()
@@ -195,8 +196,6 @@ def test_risk_summary_and_filter_after_requery(window, source, state, risks, sum
     window.query_panel.apply_draft()
     assert not page.risk_footer.isVisibleTo(page)
     assert page.snapshot.risk_rule_state is state
-    assert page.metrics["risk"].value.text() == summary
-    assert page.metrics["risk"].value.tone == ("neutral" if summary == "0대" else "warning")
     assert page.risk_button.text() == page.risk_button.accessibleName() == filter_text
     assert not page.risk_button.isEnabled() and not page.risk_button.isChecked()
     assert set(page.visible_ids) == {1, 2, 3, 4, 5}
@@ -216,7 +215,7 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
                                    "reports", "settings"}
     assert window.route == "heatmap" and window.pages["equipment"].mode == "detail"
     assert window.equipment_drawer.isVisible()
-    page.view_buttons.button(1).click()
+    page.view_toggle.setChecked(True)
     assert page.tile_buttons[1].isChecked()
     page.tile_buttons[2].click()
     assert page.selected_id == 2 and not page.tile_buttons[1].isChecked()
@@ -227,13 +226,17 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
 def test_figma_tiles_show_risk_first_and_markers_and_original_icon_size(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    # 위험 후보는 빨강(N-2 이하)과 헷갈리지 않게 채움색 대신 굵은 빨간 테두리와 '위험' 표시로 보인다 (11/07, 5단계 색).
+    # 위험 후보는 굵은 빨간 테두리로 표시하고 판정 설명은 툴팁으로 확인한다.
     style = page.tile_buttons[2].styleSheet()
     assert f"2px solid {RISK_LINE}" in style and RISK_FILL not in style
     assert TIER_FILL[page.tile_buttons[2].data.tier] in style
     assert page.tile_buttons[2].marker == "위험" and page.tile_buttons[3].marker == ""
+    assert "위험 후보" in page.tile_buttons[2].toolTip()
     assert page.tile_buttons[2].data.goal is GoalState.MET
     assert page.risk_button.iconSize() == svg_size("7880d.svg")
+    tile = page.tile_buttons[1]
+    assert tile.detail_label is None and tile.version_label.text() == "v99 / v2"
+    assert all(text.alignment() == Qt.AlignmentFlag.AlignCenter for text in (tile.code_label, tile.version_label))
 
 
 @pytest.mark.parametrize("view", [0, 1])
@@ -241,7 +244,7 @@ def test_figma_tiles_show_risk_first_and_markers_and_original_icon_size(window):
 def test_no_question_mark_decoration_in_any_tile_view(window, view, layout):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    page.view_buttons.button(view).click()
+    page.view_toggle.setChecked(bool(view))
     page.layout_buttons.button(layout).click()
     tiles = page.findChildren(TileButton)
     assert tiles and all(tile.marker != "?" for tile in tiles)
@@ -266,8 +269,8 @@ def test_empty_scope_has_no_stale_tiles_or_fake_success(window):
     page = window.pages["heatmap"]
     window.query_panel.select("fab_key", "f2")
     window.query_panel.apply_draft()
-    assert page.tile_buttons == {} and page.metrics["total"].value.text() == "0대"
-    assert page.metrics["rate"].value.text() == "계산 불가"
+    assert page.tile_buttons == {}
+    assert all(card.value.text() == "0대" for card in page.metrics.values())
     assert "조건에 맞는 설비 없음" in page.result_status.text()
 
 
@@ -281,7 +284,8 @@ def test_failure_and_retry_clear_both_pages(window, monkeypatch):
     monkeypatch.setattr(source, "snapshot", fail)
     window.query_panel.apply_draft()
     assert page.snapshot is None and window.pages["dashboard"].snapshot is None
-    assert page.tile_buttons == {} and page.metrics["total"].value.text() == "—"
+    assert page.tile_buttons == {}
+    assert all(card.value.text() == "—" for card in page.metrics.values())
     assert "실패" in page.result_status.text()
     monkeypatch.setattr(source, "snapshot", original)
     window.query_panel.apply_draft()
@@ -304,13 +308,13 @@ def test_stale_result_and_catalog_generation_rejected(window):
 def test_mode_result_and_selection_survive_menu_navigation(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    page.view_buttons.button(1).click()
+    page.view_toggle.setChecked(True)
     page.tile_buttons[1].click()
     previous = page.snapshot
     window.navigate("dashboard")
     window.navigate("heatmap")
     assert page.snapshot is previous and page.selected_id == 1
-    assert page.view_buttons.checkedId() == 1 and page.tile_buttons[1].isChecked()
+    assert page.view_toggle.isChecked() and page.tile_buttons[1].isChecked()
 
 
 @pytest.mark.parametrize("size", [(1600, 960), (1100, 800), (960, 600)])
@@ -318,7 +322,7 @@ def test_mode_result_and_selection_survive_menu_navigation(window):
 def test_responsive_tiles_have_no_main_horizontal_overflow(window, size, mode):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    page.view_buttons.button(mode).click()
+    page.view_toggle.setChecked(bool(mode))
     window.resize(*size)
     QTest.qWait(100)
     assert window.scroll.horizontalScrollBar().maximum() == 0
@@ -327,35 +331,94 @@ def test_responsive_tiles_have_no_main_horizontal_overflow(window, size, mode):
         assert point.x() >= 0 and point.x() + tile.width() <= page.width()
         assert tile.code_label.width() >= tile.code_label.sizeHint().width()
     assert all(grid.columns >= 1 for grid in page.tile_grids)
+    group_cards = page.tile_body.itemAt(0).widget()
+    for start in range(0, len(group_cards.items), group_cards.columns):
+        row = group_cards.items[start:start + group_cards.columns]
+        assert len({(card.y(), card.height()) for card in row}) == 1
 
 
-def test_search_follows_compact_view_button_at_wide_and_narrow_sizes(window):
+def test_view_toggle_precedes_layout_buttons_at_wide_and_narrow_sizes(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     viewport = window.scroll.viewport()
-    compact_view = page.view_buttons.button(0)
+    view, card_mode = page.view_toggle, page.layout_buttons.button(0)
     page.search.setText("TEST-2")
     assert page.visible_ids == (2,)
-    assert page.show_below()
-    assert not page.search.text() and page.below_filter.isVisible()
+    page.below_filter.click()
+    assert page.search.text() == "TEST-2" and page.below_filter.isVisible()
+    assert not page.visible_ids
+    page.search.clear()
     assert page.visible_ids == (1,)
 
     for size in ((1600, 960), (960, 600), (1600, 960)):
         window.resize(*size)
         QTest.qWait(45)
-        button_right = compact_view.mapTo(viewport, QPoint(compact_view.width(), compact_view.height() // 2))
-        search_left = page.search.mapTo(viewport, QPoint(0, page.search.height() // 2))
-        assert 0 < search_left.x() - button_right.x() <= 12
-        assert abs(search_left.y() - button_right.y()) <= 1
-        for control in (page.search, page.below_filter, page.risk_button, *page.layout_buttons.buttons()):
+        view_right = view.mapTo(viewport, QPoint(view.width(), view.height() // 2))
+        card_left = card_mode.mapTo(viewport, QPoint(0, card_mode.height() // 2))
+        assert 0 < card_left.x() - view_right.x() <= 16
+        assert abs(card_left.y() - view_right.y()) <= 1
+        controls = (page.search, page.below_filter, page.risk_button, view)
+        layouts = page.layout_buttons.buttons()
+        assert all(control.height() == 38 for control in controls)
+        assert card_mode.parentWidget().height() == 38 and all(control.height() == 30 for control in layouts)
+        for control in (*controls, *layouts):
             left = control.mapTo(viewport, QPoint(0, 0)).x()
             assert control.isVisible() and 0 <= left < left + control.width() <= viewport.width()
+            assert 13 <= control.font().pixelSize() <= 14
         assert page.search.width() >= page.search.minimumWidth()
         assert window.scroll.horizontalScrollBar().maximum() == 0
+        assert page.risk_button.geometry().right() < page.below_filter.x()
 
     page.below_filter.click()
     page.layout_buttons.button(1).click()
     assert page.list_table.isVisible() and set(page.visible_ids) == {1, 2, 3, 4, 5}
+    model = page.list_model
+    assert model.headings[2] == "모델"
+    assert model.rows[model.ids.index(1)][2:5] == ("O2\nO3", "v99\nv2", "목표 미달")
+    assert model.rows[model.ids.index(2)][3] == "v2"
+    assert model.rows[model.ids.index(4)][3] == "분석 제외"
+    for column in range(model.columnCount()):
+        assert model.index(0, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+
+
+def test_compact_list_hides_detail_columns_and_keeps_row_selection(window):
+    window.query_panel.apply_draft()
+    page = window.pages["heatmap"]
+    page.layout_buttons.button(1).click()
+    table, model = page.list_table, page.list_model
+    row = model.ids.index(1)
+    detailed = model.rows[row]
+    assert detailed[1] == "테스트 A\nP1" and detailed[5].startswith("위험 후보\n")
+    assert not any(table.isColumnHidden(col) for col in range(model.columnCount()))
+    detailed_height = table.rowHeight(row)
+
+    page.view_toggle.click()
+    assert [model.headings[col] for col in range(model.columnCount()) if not table.isColumnHidden(col)] == [
+        "설비명", "Site / 원본 구역", "SW N 판정", "위험 판정",
+    ]
+    assert model.rows[row][1] == "테스트 A / P1" and model.rows[row][5] == "위험 후보"
+    assert table.rowHeight(row) < detailed_height
+    spy = QSignalSpy(page.equipment_selected)
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualRect(model.index(row, 0)).center())
+    assert spy.count() == 1 and spy.at(0)[0].equipment_id == page.selected_id == 1
+    window.equipment_drawer.close_panel(restore_focus=False)
+
+    for size in ((960, 600), (1600, 960)):
+        window.resize(*size)
+        QTest.qWait(45)
+        assert window.scroll.horizontalScrollBar().maximum() == table.horizontalScrollBar().maximum() == 0
+        assert table.horizontalHeader().length() == table.viewport().width()
+        assert table.selectionModel().selectedRows(0)[0].row() == row
+
+    table.setFocus()
+    QTest.keyClick(table, Qt.Key.Key_Return)
+    assert spy.count() == 2 and spy.at(1)[0].equipment_id == page.selected_id == 1
+    window.equipment_drawer.close_panel(restore_focus=False)
+    page.view_toggle.click()
+    assert not any(table.isColumnHidden(col) for col in range(model.columnCount()))
+    assert model.rows[row] == detailed and table.rowHeight(row) == detailed_height
+    assert table.selectionModel().selectedRows(0)[0].row() == row
+    assert page.list_table.horizontalHeader().defaultAlignment() == Qt.AlignmentFlag.AlignCenter
 
 
 def test_default_demo_two_modes_and_catalog_mismatch(app):
@@ -367,7 +430,7 @@ def test_default_demo_two_modes_and_catalog_mismatch(app):
     page = window.pages["heatmap"]
     assert len(page.tile_buttons) == len(page.snapshot.equipment_ids) == 63
     for mode in (0, 1):
-        page.view_buttons.button(mode).click()
+        page.view_toggle.setChecked(bool(mode))
         QTest.qWait(60)
         assert all(tile.height() >= tile.minimumSizeHint().height() for tile in page.tile_occurrences)
         assert all(grid.height() >= grid.minimumSizeHint().height() for grid in page.tile_grids)
@@ -381,17 +444,18 @@ def test_default_demo_two_modes_and_catalog_mismatch(app):
 
 
 def test_long_raw_version_is_plain_unchanged_and_wraps_inside_tile(window, source, monkeypatch):
-    raw = "v90.1.0.41(H) + Hotfix_Etch_2026 + Safety Fix <검토 중> " * 4
+    raw = "v90.1.0.41(H) · Hotfix_Etch_2026 + Safety Fix <검토 중> " * 4
     records = tuple(replace(record, pms=tuple(replace(pm, version_raw=raw) if pm.pm_name == "PM1" else pm
                                              for pm in record.pms)) for record in source.records)
     monkeypatch.setattr(source, "records", records)
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
-    page.view_buttons.button(1).click()
+    page.view_toggle.setChecked(True)
     window.resize(960, 600)
     QTest.qWait(100)
     tile = page.tile_buttons[1]
     assert raw in tile.accessibleName() and "<검토 중>" in tile.toolTip()
+    assert raw in tile.version_label.text() and "판단 불가" not in tile.version_label.text()
     assert page.tiles[0].families[0].versions[0] == f"PM1 · {raw} · 판단 불가"
     assert window.scroll.horizontalScrollBar().maximum() == 0
     for child in tile.findChildren(QLabel):
@@ -401,6 +465,8 @@ def test_long_raw_version_is_plain_unchanged_and_wraps_inside_tile(window, sourc
         assert point.y() + child.height() <= tile.height()
         if child.wordWrap():
             assert child.heightForWidth(child.width()) <= child.height()
+    page.layout_buttons.button(1).click()
+    assert page.list_model.rows[page.list_model.ids.index(1)][3] == f"{raw}\nv2"
 
 
 @pytest.mark.parametrize("status,steps,tone", [
@@ -421,7 +487,7 @@ def test_version_gap_colors_follow_requirement(status, steps, tone):
 
 
 def test_tiles_use_five_tiers_from_shared_tier_of():
-    """11/05 팀 결정 5단계: 진초록 N+1 이상 · 연초록 N · 노랑 N-1 · 빨강 N-2 이하 · 회색 비교 불가 (tier_of와 같은 기준)."""
+    """목표 이상은 녹색, 미달은 분홍 계열의 두 단계로 구분한다."""
     from setron.features.version.groups import Tier
     from setron.ui.heatmap_data import EquipmentTile, GoalState as Goal, TIER_TONES, worst_tier
     from setron.features.risk.schemas import RiskStatus
@@ -436,3 +502,6 @@ def test_tiles_use_five_tiers_from_shared_tier_of():
     assert tile(Goal.BELOW, Tier.TWO_BELOW).version_tone == "danger" and tile(Goal.UNKNOWN, Tier.UNKNOWN).version_tone == "neutral"
     assert tile(Goal.EXCLUDED, Tier.ABOVE).version_tone == "neutral"
     assert len(set(TIER_FILL.values())) == 5
+    mild, stronger = (QColor(TIER_FILL[tier]) for tier in (Tier.ONE_BELOW, Tier.TWO_BELOW))
+    assert mild.red() > mild.green() and stronger.red() > stronger.green()
+    assert mild.lightness() > stronger.lightness()

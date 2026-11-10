@@ -40,7 +40,7 @@ MENUS = (
     # VER5 사이드바에 없는 기존 메뉴. 기능을 유지하고 데이터 관리 묶음에 둔다.
     Menu("management", "관리 데이터", *_ver5("management", "settings")),
     Menu("reports", "보고서", *_ver5("reports")),
-    Menu("settings", "기준 · 설정", *_ver5("settings")),
+    Menu("settings", "설정", *_ver5("settings")),
 )
 # 첫 묶음(현황 분석)은 제목 없이 표시한다.
 MENU_GROUPS = (
@@ -207,6 +207,7 @@ class MainWindow(QMainWindow):
         self._route_history: list[tuple[str, int]] = []
         self._navigation_id = 0
         self._page_back = None
+        self._is_subpage = False
         self.nav: dict[str, NavButton] = {}
         self._menus = {menu.key: menu for menu in MENUS}
         self._page_parents: dict[str, str] = {}
@@ -252,7 +253,7 @@ class MainWindow(QMainWindow):
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.placeholder = EmptyState(
             "공통 화면 준비가 완료되었습니다",
-            "Site·Fab·Line·설비군을 선택하고 조회 적용으로 조건을 확정할 수 있습니다.\n"
+            "Site·Fab·Line·설비군 선택을 완료하면 조회 조건이 반영됩니다.\n"
             "대시보드의 지표·그래프, 히트맵, 설비 목록·상세는 아직 연결하지 않았습니다.\n\n"
             "회색 메뉴는 아직 업무 화면이 연결되지 않아 사용할 수 없습니다.",
         )
@@ -367,6 +368,7 @@ class MainWindow(QMainWindow):
             if record_history:
                 self._route_history.append((self.route, self.scroll.verticalScrollBar().value()))
             self._page_back = None
+            self._is_subpage = False
         self._navigation_id += 1
         current = self.pages.get(key, self.placeholder)
         for index in range(self.stack.count()):
@@ -386,14 +388,19 @@ class MainWindow(QMainWindow):
         self._sync_back()
         return True
 
-    def set_page_back(self, action) -> None:
+    def set_page_back(self, action, *, subpage: bool = False) -> None:
         """현재 화면 안에서 먼저 되돌릴 패널 또는 상세가 있으면 연결한다."""
         self._page_back = action
+        self._is_subpage = subpage
         self._sync_back()
 
     def _sync_back(self) -> None:
         enabled = self._page_back is not None or bool(self._route_history)
+        subpage = self._is_subpage or self.route in self._page_parents
         self.header.back.setEnabled(enabled)
+        self.header.back.setVisible(subpage and enabled)
+        for key in ("export", "settings"):
+            self.header.actions[key].setVisible(subpage)
         self.back_shortcut.setEnabled(enabled)
 
     def go_back(self) -> bool:

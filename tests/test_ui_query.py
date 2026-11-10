@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from setron.ui.main_window import MainWindow
 from setron.ui.query_state import (
@@ -26,7 +26,7 @@ def catalog():
         lines=(LineOption("l1", "테스트 Line A", "s1", "f1"),
                LineOption("l2", "테스트 Line B", "s2", "f2"),
                LineOption("l3", "Fab 미등록 Line", "s1", None)),
-        groups=(GroupOption("g1", "O2", "OXIDE"), GroupOption("g2", "Inline O2", "KCTC")),
+        groups=(GroupOption("g1", "O2", "OXIDE"), GroupOption("g2", "Inline O2", "KCTC"), GroupOption("g3", "C4", "POLY")),
         source_label="테스트 전용 선택지 · 실데이터 아님",
     )
 
@@ -103,8 +103,10 @@ def test_parent_changes_clear_dependents_but_not_group(state):
     assert [o.key for o in state.available_lines()] == ["l3"]
     state.select("line_key", "l3")
     state.select("site_key", "s2")
-    assert state.draft == QuerySelection("s2", None, None, "g2")
+    assert state.draft == QuerySelection("s2", UNASSIGNED, None, "g2")
     assert [o.key for o in state.available_fabs()] == ["f2"]
+    assert state.available_lines() == ()
+    state.select("fab_key", None)
     assert [o.key for o in state.available_lines()] == ["l2"]
 
 
@@ -204,48 +206,91 @@ def test_empty_catalog_and_preview_do_not_invent_fab_line_mapping():
         "Inline Ox", "Inline O2", "Cluster Ox", "Cluster O2"}
 
 
-def choose(panel, field, key):
-    combo = panel.combos[field]
-    combo.setCurrentIndex(next(i for i in range(combo.count()) if combo.itemData(i) == key))
+def open_filter(panel, field):
+    QTest.mouseClick(panel.combos[field], Qt.MouseButton.LeftButton)
+    popup = panel.filter_popup
+    assert popup is not None and popup.isVisible()
+    return popup
 
 
-def test_combo_chips_and_applied_signal_agree(window):
+def check_only(popup, *keys):
+    for key, check in popup.checks.items():
+        if check.isChecked() != (key in keys):
+            QTest.mouseClick(check, Qt.MouseButton.LeftButton)
+
+
+def choose(panel, field, *keys):
+    popup = open_filter(panel, field)
+    check_only(popup, *keys)
+    QTest.mouseClick(popup.confirm_button, Qt.MouseButton.LeftButton)
+    assert panel.filter_popup is None
+
+
+def test_filter_confirm_applies_once_escape_cancels_and_reset_applies(window):
     panel = window.query_panel
     spy = QSignalSpy(window.query_applied)
     draft_spy = QSignalSpy(panel.draft_changed)
     assert panel.status.text() == "미적용"
-    QTest.mouseClick(panel.quick_buttons["site_key", "s1"], Qt.MouseButton.LeftButton)
-    choose(panel, "fab_key", "f1")
-    choose(panel, "line_key", "l1")
-    choose(panel, "group_key", "g1")
-    assert draft_spy.count() == 4
-    assert spy.count() == 0
-    assert panel.quick_buttons["group_key", "g1"].isChecked()
-    assert not panel.quick_buttons["group_key", None].isChecked()
-    QTest.mouseClick(panel.apply_button, Qt.MouseButton.LeftButton)
+    popup = open_filter(panel, "site_key")
+    assert all(check.isChecked() for check in popup.checks.values())
+    check_only(popup, "s1")
+    assert spy.count() == draft_spy.count() == 0 and panel.state.draft == QuerySelection()
+    QTest.keyClick(popup.search, Qt.Key.Key_Escape)
+    assert panel.filter_popup is None and spy.count() == draft_spy.count() == 0
+    assert panel.state.applied is None and panel.combos["site_key"].caption == "전체"
+
+    choose(panel, "site_key", "s1")
     applied = window.query_state.applied
-    assert spy.count() == 1 and spy.at(0)[0] is applied
+    assert spy.count() == draft_spy.count() == 1 and spy.at(0)[0] is applied
+    assert applied.selection.site_key == "s1"
     assert panel.status.text() == "조건 적용됨"
-    assert "테스트 Line A" in panel.applied_summary.text()
+    assert "테스트 Site A" in panel.applied_summary.text()
+    panel.select("group_key", "g1")
+    panel.reset_draft()
+    assert panel.state.draft == QuerySelection() and panel.state.applied is applied and spy.count() == 1
+
     QTest.mouseClick(panel.reset_button, Qt.MouseButton.LeftButton)
-    assert panel.state.draft == QuerySelection()
-    assert panel.state.applied is applied
-    assert spy.count() == 1
-    assert "재적용 필요" in panel.status.text()
-    assert "테스트 Line A" in panel.applied_summary.text()
+    assert panel.state.applied.selection == panel.state.draft == QuerySelection()
+    assert spy.count() == 2 and spy.at(1)[0] is panel.state.applied
+    assert panel.status.text() == "조건 적용됨"
 
 
 def test_cascading_controls_and_unassigned_line(window):
     panel = window.query_panel
     panel.set_draft(QuerySelection("s1", "f1", "l1", "g1"))
+    spy = QSignalSpy(panel.applied)
     choose(panel, "site_key", "s2")
-    assert panel.state.draft == QuerySelection("s2", None, None, "g1")
-    assert [panel.combos["line_key"].itemData(i) for i in range(panel.combos["line_key"].count())] == [None, UNASSIGNED, "l2"]
-    panel.select("site_key", "s1")
-    QTest.mouseClick(panel.quick_buttons["fab_key", UNASSIGNED], Qt.MouseButton.LeftButton)
+    assert panel.state.applied.selection == QuerySelection("s2", None, None, "g1")
+    line_popup = open_filter(panel, "line_key")
+    assert tuple(line_popup.checks) == (UNASSIGNED, "l2")
+    line_popup.search.setText("테스트 Fab B")
+    assert line_popup.checks["l2"].isVisible() and not line_popup.checks[UNASSIGNED].isVisible()
+    line_popup.reject()
+    assert spy.count() == 1
+    choose(panel, "group_key", "g1", "g2")
+    assert panel.state.applied.selection.group_key == ("g1", "g2")
+    assert panel.combos["group_key"].toolTip() == "O2, Inline O2"
+    choose(panel, "site_key", "s1")
+    choose(panel, "fab_key", UNASSIGNED)
     choose(panel, "line_key", "l3")
-    assert panel.combos["fab_key"].currentData() is UNASSIGNED
-    assert panel.state.draft.line_key == "l3"
+    assert panel.combos["fab_key"].caption == "미지정"
+    assert panel.state.applied.selection == QuerySelection("s1", UNASSIGNED, "l3", ("g1", "g2"))
+    assert spy.count() == 5
+
+
+def test_line_popup_has_no_site_headers_and_distinguishes_duplicate_names(window, catalog):
+    window.set_query_catalog(replace(catalog, lines=(*catalog.lines,
+        LineOption("l4", "테스트 Line A", "s2", "f2"))))
+    popup = open_filter(window.query_panel, "line_key")
+    headings = {caption.text() for caption in popup.findChildren(QLabel)}
+    assert not headings.intersection({"테스트 Site A", "테스트 Site B", "테스트 Site A / 테스트 Fab A",
+                                      "테스트 Site B / 테스트 Fab B"})
+    assert popup.checks["l1"].caption.text() == "테스트 Line A · 테스트 Site A / 테스트 Fab A"
+    assert popup.checks["l4"].caption.text() == "테스트 Line A · 테스트 Site B / 테스트 Fab B"
+    assert popup.checks["l2"].caption.text() == "테스트 Line B"
+    popup.search.setText("테스트 Site B")
+    assert popup.checks["l4"].isVisible() and not popup.checks["l1"].isVisible()
+    popup.reject()
 
 
 def test_catalog_replacement_rebuilds_controls_but_keeps_applied_summary(window):
@@ -257,8 +302,8 @@ def test_catalog_replacement_rebuilds_controls_but_keeps_applied_summary(window)
     assert panel.state.applied is old
     assert panel.status.text() == "선택지 변경 · 재적용 필요"
     assert "테스트 Line A" in panel.applied_summary.text()
-    assert panel.combos["site_key"].count() == 1
-    assert ("site_key", "s1") not in panel.quick_buttons
+    assert not panel.combos["site_key"].isEnabled() and panel.combos["site_key"].caption == "전체"
+    assert panel.filter_popup is None
     assert spy.count() == 0
 
 
@@ -289,21 +334,25 @@ def test_invalid_registration_flag_has_no_partial_mutation(window):
     assert not window.nav["import"].isEnabled()
 
 
-def test_keyboard_apply_labels_and_unavailable_features(window):
+def test_keyboard_filter_labels_and_unavailable_features(window):
     panel = window.query_panel
     for field, caption in (("site_key", "Site"), ("fab_key", "Fab"), ("line_key", "Line"), ("group_key", "설비군")):
-        assert panel.combos[field].accessibleName() == caption
+        assert panel.combos[field].accessibleName() == f"{caption} 전체"
     assert not panel.goal_button.isEnabled()
     assert not panel.preferences_button.isEnabled()
     site = panel.combos["site_key"]
     site.setFocus()
-    QTest.keyClick(site, Qt.Key.Key_Home)
-    QTest.keyClick(site, Qt.Key.Key_Down)
-    assert panel.state.draft.site_key == "s1"
+    QTest.keyClick(site, Qt.Key.Key_Space)
+    popup = panel.filter_popup
+    assert popup is not None and popup.search.hasFocus()
+    other_site = popup.checks["s2"]
+    other_site.setFocus()
+    QTest.keyClick(other_site, Qt.Key.Key_Space)
+    assert not other_site.isChecked() and panel.state.draft.site_key is None
     assert panel.state.applied is None
-    panel.apply_button.setFocus()
-    QTest.keyClick(panel.apply_button, Qt.Key.Key_Space)
-    assert panel.state.applied.revision == 1
+    popup.confirm_button.setFocus()
+    QTest.keyClick(popup.confirm_button, Qt.Key.Key_Space)
+    assert panel.state.applied.revision == 1 and panel.state.applied.selection.site_key == "s1"
     assert "DB" not in panel.status.text()
 
 
@@ -315,16 +364,15 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
     window.resize(*size)
     panel = window.query_panel
     # 첫 줄은 위치·날짜, 둘째 줄은 목표 N 입력과 독립적인 버전 다중 조회.
-    assert not any(row.isVisible() for row in panel.quick_rows)
-    assert not hasattr(panel, "choice_button")
-    assert panel.reset_button.accessibleName() == "조건 초기화" and panel.apply_button.text() == "조회 적용"
-    assert [w.text().strip() for w in panel.actions_row.widgets] == ["버전(N) 기준 입력", "조회 버전 · 전체"]
+    assert panel.reset_button.accessibleName() == "조건 초기화"
+    assert not any(button.text() == "조회 적용" and button.isVisible() for button in panel.findChildren(QPushButton))
+    assert [w.text().strip() for w in panel.actions_row.widgets] == ["기준 버전 설정", "조회 버전 설정"]
     QTest.qWait(60)
     assert panel.goal_button.width() < 170 and panel.version_button.width() < 190
     assert all(w.height() == 38 and w.width() >= w.sizeHint().width() for w in panel.actions_row.widgets)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()
-    for widget in [panel.date_edit, *panel.combos.values(), panel.reset_button, panel.apply_button,
+    for widget in [panel.date_edit, *panel.combos.values(), panel.reset_button,
                    *panel.actions_row.widgets]:
         assert widget.isVisible()
         point = widget.mapTo(panel.card, QPoint(0, 0))
@@ -332,13 +380,11 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
         assert point.x() + widget.width() <= panel.card.width() - 20
         assert point.y() >= 16
         assert point.y() + widget.height() <= panel.card.height() - 16
-    for item in panel.quick_buttons.values():
-        assert item.height() == (36 if item.property("compactChoice") else 40)
-    assert panel.fields_row.columns == (6 if panel.fields_row.width() >= 960 else 2)
+    assert panel.fields_row.columns == (3 if size[0] == 960 else 6)
     default_width = panel.version_button.width()
     panel.set_version_filter(VersionFilter(tuple(f"v{i}" for i in range(123))))
     QTest.qWait(20)
-    assert panel.version_button.text() == "조회 버전 · 123개 선택"
+    assert panel.version_button.text() == "조회 버전 설정 · 123개 선택"
     assert panel.version_button.width() > default_width
     assert panel.version_button.width() >= panel.version_button.sizeHint().width()
     assert panel.version_button.geometry().right() < panel.actions_row.width()

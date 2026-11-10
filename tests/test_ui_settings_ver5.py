@@ -1,4 +1,4 @@
-"""기준·설정 프론트/전체 테마. 운영 DB·AI·Excel에는 연결하지 않는다."""
+"""설정 프론트/전체 테마. 운영 DB·AI·Excel에는 연결하지 않는다."""
 
 from dataclasses import replace
 import json
@@ -14,6 +14,7 @@ from setron.ui.appearance import contrasting, manager, ui_color
 from setron.ui.appearance_data import Appearance, MENU_ORDER, PersonalSettings
 from setron.ui.app import create_window
 from setron.ui.dashboard_demo import demo_dashboard_source
+from setron.ui.query_state import LineOption, QuerySelection
 from setron.ui.settings_location import AddReferenceDialog
 from setron.ui.settings_page import SettingsPage
 from test_ui_import_ver5 import own, until  # noqa: F401
@@ -56,8 +57,11 @@ def test_fixed_tabs_no_help_preview_cancel_reset_and_saved_theme(own, theme):
     current, store = theme
     p = page(own, theme)
     assert p.tabs.count() == 3 and not p.tabs.usesScrollButtons()
+    assert p.tabs.accessibleName() == "설정 화면 선택"
     assert p.stack.currentWidget() is p.appearance_page
     assert not any("도움말" in b.text() for b in p.findChildren(QPushButton))
+    assert not any(widget.text() in ("나의 라인 · 설비군", "라인·설비군 선택")
+                   for kind in (QLabel, QPushButton) for widget in p.findChildren(kind))
     p.mode_buttons["dark"].click()
     assert p.draft.mode == "dark" and not current.dark
     assert "#242b36" in p.preview.styleSheet()
@@ -106,18 +110,6 @@ def test_menu_order_draft_preview_cancel_save_and_defaults(own, theme):
     assert p.order_draft == list(MENU_ORDER)
 
 
-def test_personal_line_group_selection_is_local_and_explicit(own, theme):
-    p = page(own, theme)
-    p.open_personal()
-    dialog = p.personal_dialog
-    first = next(k for k in dialog.checks if k[0] == "groups")
-    dialog.checks[first].setChecked(False)
-    dialog.accept()
-    until(lambda: not p.operation.busy)
-    assert first[1] not in p.personal["groups"]
-    assert p.source.catalog.groups
-
-
 def test_location_scope_reset_preview_cancel_save_and_original_unchanged(own, theme):
     p = page(own, theme)
     loc = p.location
@@ -157,20 +149,38 @@ def test_location_stale_confirm_blocked_and_addition_validation(own, theme):
     assert dialog.result() == QDialog.DialogCode.Accepted
 
 
-def test_personal_choices_allow_the_same_query_on_all_result_pages(own, theme):
+def test_legacy_personal_choices_leave_full_catalog_and_active_query_intact(own, theme):
     _, store = theme
     source = demo_dashboard_source()
-    group = source.catalog.groups[0]
-    store.save("personal", {**store.personal(), "lines": [], "groups": [group.key]})
+    group = source.catalog.groups[1]
+    line = LineOption("test-line", "테스트 Line", source.catalog.sites[0].key, None)
+    source.catalog = replace(source.catalog, lines=(line,))
+    equipment_id = next(record.equipment_id for record in source.records
+                        if source.locations[record.equipment_id].site_key == line.site_key
+                        and any(pm.group_id in source.bindings[group.key] for pm in record.pms))
+    source.locations[equipment_id] = replace(source.locations[equipment_id], line_key=line.key)
+    order = tuple(reversed(MENU_ORDER))
+    store.save("personal", {"order": order, "home": "heatmap", "lines": [], "groups": [source.catalog.groups[0].key]})
+    assert store.personal() == {"order": order, "home": "heatmap"}
     window = own(create_window(source))
-    assert not window.query_state.catalog.lines
-    assert window.query_state.catalog.groups == (group,)
+    assert window.query_state.catalog == source.catalog
+    assert window.nav["settings"].caption.text() == window.nav["settings"].accessibleName() == "설정"
 
-    window.query_panel.apply_button.click()
+    window.query_panel.set_draft(QuerySelection(line_key=line.key, group_key=group.key))
+    query = window.query_panel.apply_draft()
     snapshot = window.pages["dashboard"].snapshot
-    assert snapshot is not None and snapshot.equipment_ids
+    assert snapshot.equipment_ids == (equipment_id,)
     assert window.pages["heatmap"].snapshot is snapshot
     assert window.pages["equipment"].snapshot is snapshot
+    window.navigate("settings")
+    assert window.header.title.text() == "설정"
+    settings = window.pages["settings"]
+    settings.open_layout()
+    settings._set_home("metrics")
+    assert settings.save_personal()
+    until(lambda: not settings.operation.busy)
+    assert window.query_state.applied is query and window.pages["dashboard"].snapshot is snapshot
+    assert set(json.loads(store.settings.value("personal"))) == {"order", "home"}
 
 
 def test_whole_app_dark_existing_new_widgets_charts_and_light_restore(own, theme):

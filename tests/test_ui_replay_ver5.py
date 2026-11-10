@@ -42,11 +42,15 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert "2026-05-21" in page.context.text() and "목표 N" in page.context.text()
     assert "기준일 최신" not in page.context.text()
     assert page.heatmap.visible_ids and len(page.heatmap.group_cards) == 9
+    assert page.version_button.text() == "조회 버전 설정"
+    card = page.heatmap.group_cards[0].layout()
+    for index, size in ((0, 18), (1, 14)):
+        heading = card.itemAt(index).widget()
+        assert " / " in heading.text() and heading.text().endswith("대") and heading.font().pixelSize() == size
     assert all(t.data.observation_date <= page.frame.day for t in page.heatmap.tile_occurrences)
     # R-02: 범례는 타일과 같은 5단계 색 + 위험 후보 테두리
     legend = [item.accessibleName() for item in page.legend_items]
-    assert legend == ["범례 N+1 이상", "범례 N 달성", "범례 N-1", "범례 N-2 이하", "범례 비교 불가 · HPA",
-                      "범례 위험 후보 (빨간 테두리)"]
+    assert legend == ["범례 N+1 이상", "범례 N", "범례 N-1", "범례 N-2 이하", "범례 비교 불가 · HPA", "범례 위험 후보"]
     assert page.observation_note.text().startswith("이날 저장 ")
     assert page.heatmap_title.text() == "선택 시점(2026-10-21)의 설비 Heatmap"
 
@@ -121,7 +125,8 @@ def test_version_popup_all_clear_cancel_confirm_and_reapply_without_changing_n(o
     n = dict(page.source.targets)
     page.open_versions()
     dialog = page.version_dialog
-    dialog.clear_button.click()
+    assert dialog.all_button.text() == "전체 해제"
+    dialog.all_button.click()
     assert not dialog.confirm_button.isEnabled() and "하나 이상" in dialog.error.text()
     dialog.choices["v1.0.1"].click()
     assert dialog.confirm_button.isEnabled()
@@ -129,7 +134,7 @@ def test_version_popup_all_clear_cancel_confirm_and_reapply_without_changing_n(o
     assert page.version_dialog is None and page.state.draft.versions is None and not page.dirty
     page.open_versions()
     dialog = page.version_dialog
-    dialog.clear_button.click()
+    dialog.all_button.click()
     dialog.choices["v1.0.1"].click()
     dialog.confirm_button.click()
     assert page.state.draft.versions == VersionFilter(("v1.0.1",))

@@ -252,13 +252,14 @@ def test_back_retraces_distinct_pages_and_restores_scroll(window):
     window.scroll.verticalScrollBar().setValue(400)
     window.navigate("settings")
     window.header.toolbar.hide()
-    assert window.header.back.isVisible() and window.header.back.isEnabled()
+    assert window.header.back.isHidden() and window.back_shortcut.isEnabled()
+    assert all(window.header.actions[key].isHidden() for key in ("export", "settings"))
 
-    window.header.back.click()
+    window.back_shortcut.trigger()
     QTest.qWait(20)
     assert window.route == "heatmap" and window.nav["heatmap"].isChecked()
     assert window.scroll.verticalScrollBar().value() == 400
-    window.header.back.click()
+    window.back_shortcut.trigger()
     assert window.route == "dashboard" and not window.header.back.isEnabled()
 
 

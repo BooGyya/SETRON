@@ -1,15 +1,14 @@
-"""VER5 10 기준·설정. 개인 설정은 로컬 저장, 업무 원본과 판정은 보존한다."""
+"""VER5 10 설정. 개인 설정은 로컬 저장, 업무 원본과 판정은 보존한다."""
 
 from dataclasses import replace
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QApplication, QCheckBox, QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.appearance import contrasting, manager
 from setron.ui.appearance_data import ACCENTS, MENU_ORDER, Appearance, PersonalSettings
 from setron.ui.components import button, label
 from setron.ui.dashboard import DashboardGrid, SplitRow
-from setron.ui.import_dialogs import ImportDialog
 from setron.ui.main_window import MENUS, PageStack
 from setron.ui.settings_location import LocationPanel
 from setron.ui.settings_tasks import SettingsSave
@@ -18,33 +17,6 @@ from setron.ui.version_management_widgets import actions, card, note, set_rows, 
 
 
 TITLES = {menu.key: menu.title for menu in MENUS}
-
-
-class PersonalDialog(ImportDialog):
-    def __init__(self, catalog, personal, parent=None):
-        super().__init__("나의 라인 · 설비군", parent)
-        self.checks = {}
-        for key, title, options in (("lines", "Line", catalog.lines), ("groups", "설비군", catalog.groups)):
-            self.body.addWidget(label(title, 15, medium=True))
-            choices = []
-            for option in options:
-                check = QCheckBox(option.label)
-                check.setChecked(personal[key] is None or option.key in personal[key])
-                self.checks[key, option.key] = check
-                choices.append(check)
-            if choices:
-                self.body.addWidget(DashboardGrid(choices, minimum_width=140, maximum_columns=3))
-            else:
-                self.body.addWidget(note("등록된 선택지가 없습니다."))
-        self.body.addWidget(note("선택한 항목은 대시보드·히트맵의 조회 선택지에만 적용됩니다. 저장 데이터는 삭제하지 않습니다."))
-        self.add_action("전체 선택", lambda: [check.setChecked(True) for check in self.checks.values()])
-        self.add_action("취소", self.reject, default=True)
-        self.add_action("저장", self.accept, primary=True)
-        self.finish_layout()
-
-    def values(self):
-        return {key: [value for (kind, value), check in self.checks.items() if kind == key and check.isChecked()]
-                for key in ("lines", "groups")}
 
 
 class SettingsPage(QWidget):
@@ -69,7 +41,7 @@ class SettingsPage(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(18)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.tabs = tabs(("위험 기준", "버전 계열 · 연결", "화면 · 테마"), "기준·설정 화면 선택")
+        self.tabs = tabs(("위험 기준", "버전 계열 · 연결", "화면 · 테마"), "설정 화면 선택")
         self.tabs.setUsesScrollButtons(False)
         body.addWidget(self.tabs)
         self.stack = PageStack()
@@ -103,7 +75,7 @@ class SettingsPage(QWidget):
     def _families(self):
         panel = card("버전 계열 · 연결")
         panel.body.addWidget(note("같은 계열의 확인된 순서로 버전을 비교합니다. 이름이 비슷하다는 이유로 다른 계열을 합치지 않습니다."))
-        goal, edit, location = button("버전(N) 기준 입력"), button("계열·적용 근거 관리"), button("위치 관리")
+        goal, edit, location = button("기준 버전 설정"), button("계열·적용 근거 관리"), button("위치 관리")
         goal.clicked.connect(self.targets_requested.emit)
         edit.clicked.connect(lambda: self.management_requested.emit("release_version"))
         location.clicked.connect(lambda: self.stack.setCurrentWidget(self.location))
@@ -112,7 +84,7 @@ class SettingsPage(QWidget):
         rows = []
         from setron.ui.dashboard_data import family_name
         for key, family in self.source.families.items():
-            rows.append((family_name(self.source, key), f"{len(family.releases)}개", "모델별 버전(N) 기준 입력에서 확인"))
+            rows.append((family_name(self.source, key), f"{len(family.releases)}개", "모델별 기준 버전 설정에서 확인"))
         set_rows(model, view, tuple(rows))
         panel.body.addWidget(view)
         return panel
@@ -257,11 +229,6 @@ class SettingsPage(QWidget):
         self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.appearance_row.box.setAlignment(self.preview, Qt.AlignmentFlag.AlignTop)
         body.addWidget(self.appearance_row)
-        mine = card("나의 라인 · 설비군", outlined=False)
-        self.mine_button = button("라인·설비군 선택")
-        self.mine_button.clicked.connect(self.open_personal)
-        mine.body.addWidget(actions(self.mine_button))
-        body.addWidget(mine)
         return page
 
     def _legend(self):
@@ -431,7 +398,7 @@ class SettingsPage(QWidget):
     def save_personal(self):
         if self.operation.busy:
             return False
-        candidate = {**self.personal, "order": tuple(self.order_draft), "home": self.home_draft}
+        candidate = {"order": tuple(self.order_draft), "home": self.home_draft}
         def stored(done):
             self.personal = candidate
             self.personal_changed.emit(candidate)
@@ -443,21 +410,3 @@ class SettingsPage(QWidget):
     def cancel_personal(self):
         self.order_draft, self.home_draft = list(self.personal["order"]), self.personal["home"]
         self.layout_editor.hide()
-
-    def open_personal(self):
-        if self.operation.busy:
-            return
-        dialog = PersonalDialog(self.source.catalog, self.personal, self)
-        self.personal_dialog = dialog
-        def finish(result):
-            if result == dialog.DialogCode.Accepted:
-                candidate = {**self.personal, **dialog.values()}
-                def stored(done):
-                    self.personal = candidate
-                    self.personal_changed.emit(candidate)
-                    self.feedback.setText("나의 라인·설비군을 저장했습니다.")
-                    done()
-                self.operation.start(self.store, "personal", candidate, "라인·설비군 저장 중", stored, self.feedback.setText)
-            dialog.deleteLater()
-        dialog.finished.connect(finish)
-        dialog.open()

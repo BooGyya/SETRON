@@ -1,6 +1,6 @@
 """6번: 한 목록·한 상세 화면. 조회/저장/정정/이력 기능을 새로 시작하지 않는다."""
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
@@ -17,10 +17,10 @@ from setron.ui.components import Card, StatusBadge, back_button, button, label
 from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
-from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings
+from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings, lookup_records
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
 from setron.features.item.schemas import APPLICATION_LABELS
-from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, svg_size
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font, icon, svg_size
 
 
 
@@ -95,10 +95,13 @@ class FlowGrid(QWidget):
 class ReadTableModel(QAbstractTableModel):
     """원문은 Qt DisplayRole의 일반 텍스트로만 표시한다. 호기 ID는 행 데이터와 함께 보관한다."""
 
-    def __init__(self, headings, *, numeric_columns=()):
+    def __init__(self, headings, *, numeric_columns=(), centered=False, tone_column=4):
         super().__init__()
         self.headings, self.rows, self.ids, self.tones = headings, (), (), ()
         self.numeric_columns = numeric_columns
+        self.tone_column = tone_column
+        self.alignment = (Qt.AlignmentFlag.AlignCenter if centered else
+                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
     def set_rows(self, rows, ids=(), tones=()):
         self.beginResetModel()
@@ -127,10 +130,10 @@ class ReadTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.FontRole:
             return font(14 if self.ids and index.column() == 0 else 13,
                         medium=bool(self.ids) and index.column() == 0, numeric=index.column() in self.numeric_columns)
-        if role == Qt.ItemDataRole.ForegroundRole and self.tones and index.column() == 4:
+        if role == Qt.ItemDataRole.ForegroundRole and self.tones and index.column() == self.tone_column:
             return ui_color(TONES[self.tones[index.row()]][1])
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            return self.alignment
         return None
 
 
@@ -209,7 +212,7 @@ class EquipmentPage(QWidget):
         body.setSpacing(20)
         self.result_status = StatusBadge("조회 적용 전 · 예시 데이터", "info")
         body.addWidget(self.result_status)
-        self.context = label("공통 조건에서 조회 적용을 눌러 주세요.", 13, color=SECONDARY, wrap=True)
+        self.context = label("날짜나 필터를 선택하면 결과가 표시됩니다.", 13, color=SECONDARY, wrap=True)
         body.addWidget(self.context)
         self.list_view = QWidget()
         list_body = QVBoxLayout(self.list_view)
@@ -226,22 +229,6 @@ class EquipmentPage(QWidget):
         heading.addWidget(self.return_button)
         self.list_card.body.addWidget(self.list_heading)
 
-        self.all_button = button("범위 전체")
-        self.all_button.clicked.connect(lambda: self.risk_button.setChecked(False))
-        self.risk_button = button("후보만")
-        self.risk_button.setCheckable(True)
-        self.risk_button.setProperty("dashboardRisk", True)
-        self.risk_button.setStyleSheet("QPushButton:checked {border:2px solid #c9485e;}")
-        self.risk_button.toggled.connect(self._filter_changed)
-        self.scope_controls = QWidget()
-        scope = QHBoxLayout(self.scope_controls)
-        scope.setContentsMargins(0, 0, 0, 0)
-        scope.setSpacing(8)
-        scope.addWidget(self.all_button)
-        scope.addWidget(self.risk_button)
-        self.global_button = button("적용 범위 전체로")
-        self.global_button.setFixedHeight(38)
-        self.global_button.clicked.connect(lambda: self.open_all(self.origin))
         self.search = QLineEdit()
         self.search.setAccessibleName("설비 목록 검색")
         self.search.setPlaceholderText("설비 검색")
@@ -249,25 +236,26 @@ class EquipmentPage(QWidget):
         self.search.addAction(icon("b2c35.svg"), QLineEdit.ActionPosition.LeadingPosition)
         self.search.setFixedHeight(38)
         self.search.setMinimumWidth(144)
+        self.search.setMaximumWidth(400)
         self.search.setStyleSheet(f"QLineEdit {{background:white;border:1px solid {LINE};border-radius:10px;padding:0 10px;}}"
                                   f"QLineEdit:focus {{border:2px solid {PRIMARY};}}")
         self.search.textChanged.connect(self._filter_changed)
         self.goal_filter = ComboBox()
         self.goal_filter.setAccessibleName("목표 상태 필터")
-        self.goal_filter.addItem("목표 상태 전체", None)
+        self.goal_filter.addItem("전체", None)
         for goal in GoalState:
             self.goal_filter.addItem(goal.value, goal)
         self.goal_filter.currentIndexChanged.connect(self._filter_changed)
         self.sort = ComboBox()
         self.sort.setAccessibleName("설비 목록 정렬")
         for caption, value in (("설비명 ↑", "code"), ("설비명 ↓", "code-desc"), ("Site · 설비명", "site"),
-                               ("업그레이드 우선순위", "priority")):
+                               ("업그레이드 순위", "priority")):
             self.sort.addItem(caption, value)
         self.sort.currentIndexChanged.connect(self._filter_changed)
         caret = (ASSETS / "caret-down.svg").as_posix()
         for combo in (self.goal_filter, self.sort):
             combo.setProperty("queryField", True)
-            combo.setFixedHeight(38)
+            combo.setFixedSize(146, 38)
             combo.setStyleSheet(
                 "QComboBox {padding-right:28px;} QComboBox::drop-down {border:0;width:28px;}"
                 f"QComboBox::down-arrow {{image:url({caret});width:12px;height:12px;}}"
@@ -279,19 +267,15 @@ class EquipmentPage(QWidget):
         filters.addWidget(self.search, 1)
         filters.addWidget(self.goal_filter)
         filters.addWidget(self.sort)
-        toolbar = QWidget()
-        ignore_width(toolbar)
-        self.list_controls = QGridLayout(toolbar)
-        self.list_controls.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
-        self.list_controls.setContentsMargins(0, 0, 0, 0)
-        self.list_controls.setSpacing(10)
-        self.list_controls.setColumnStretch(1, 1)
-        self.list_controls.addWidget(self.scope_controls, 0, 0)
-        self.list_controls.addWidget(self.global_button, 0, 2)
-        self._compact_list_controls = None
-        self.list_card.body.addWidget(toolbar)
-        self.model = ReadTableModel(("설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거"), numeric_columns=(3,))
+        filters.addStretch()
+        self.list_card.body.addWidget(self.filter_controls)
+        self.model = self.full_list_model = ReadTableModel(
+            ("설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거"),
+            numeric_columns=(3,))
+        self.drawer_list_model = ReadTableModel(("설비명", "모델", "계열", "적용현황"), centered=True, tone_column=3)
         self.table = read_table(self.model, "선택 범위 설비 목록", (110, 164, 170, 216, 140, 220))
+        self._full_list_widths = self.table.base_widths
+        self._full_header_alignment = self.table.horizontalHeader().defaultAlignment()
         self.table.activated.connect(lambda index: self.open_row(index.row()))
         self.table.clicked.connect(lambda index: self.open_row(index.row()))
         self.list_card.body.addWidget(self.table)
@@ -317,7 +301,6 @@ class EquipmentPage(QWidget):
         self.summary = DashboardGrid(tuple(self.metrics.values()), minimum_width=200, maximum_columns=4, spacing=12)
         list_body.addWidget(self.summary)
         list_body.addWidget(self.list_card)
-        self.list_card.installEventFilter(self)
         body.addWidget(self.list_view)
         self._build_detail()
         body.addWidget(self.detail_card)
@@ -349,28 +332,30 @@ class EquipmentPage(QWidget):
         self.list_card.show()
 
     def _set_list_compact(self, compact):
+        selected_id = self.table.currentIndex().data(Qt.ItemDataRole.UserRole)
+        self.model = self.drawer_list_model if compact else self.full_list_model
+        self.table.base_widths = (110, 110, 130, 130) if compact else self._full_list_widths
+        self.table.setModel(self.model)
         padding = 12 if compact else 24
         self.list_card.body.setContentsMargins(padding, padding, padding, padding)
         self.list_card.body.setSpacing(10 if compact else 16)
-        self.search.setMinimumWidth(108 if compact else 144)
         self.table.setWordWrap(not compact)
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight if compact else Qt.TextElideMode.ElideNone)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff if compact
                                                 else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.verticalHeader().setMinimumSectionSize(38 if compact else 56)
         header = self.table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter if compact else self._full_header_alignment)
         header.setStretchLastSection(not compact)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch if compact else QHeaderView.ResizeMode.Interactive)
-        # 패널에서는 설비명·모델/계열·선택 SW 판정을 한 화면에 표시한다. 전체 목록은 원래 열을 유지한다.
-        for column in (1, 3, 5):
-            self.table.setColumnHidden(column, compact)
         self.table.horizontalScrollBar().setValue(0)
         if not compact:
             self.table.resize_columns()
-        self._layout_list_controls()
-        fit_rows(self.table, compact=compact)
+        self._render_list()
+        if selected_id in self.model.ids:
+            self.table.selectRow(self.model.ids.index(selected_id))
 
-    # ----- 설비 상세 (VER4 사이드 패널 구성: 헤더 · 위치 띠 · 판정 요약 · 관측된 SW · 판정·원본 근거 · 동작) -----
+    # ----- 설비 상세 -----
 
     def _build_detail(self):
         self.detail_card = Card()
@@ -379,6 +364,8 @@ class EquipmentPage(QWidget):
         heading.setSpacing(10)
         self.detail_title = label("설비 상세", 24, medium=True, wrap=True)
         heading.addWidget(self.detail_title, 1)
+        self.observation_date = label("", 12, color=SECONDARY)
+        heading.addWidget(self.observation_date)
         self.detail_goal_badge = StatusBadge("판정 전", "neutral")
         self.detail_risk_badge = StatusBadge("위험 판정 전", "neutral")
         heading.addWidget(self.detail_goal_badge, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -402,23 +389,6 @@ class EquipmentPage(QWidget):
         self.detail_card.body.addLayout(actions)
         self.detail_location = label("", 12, color=SECONDARY, wrap=True)
         self.detail_card.body.addWidget(self.detail_location)
-        # 위치 띠: Site · Fab · Line · 원본 구역 · 실제 관측일
-        self.meta_strip = QFrame()
-        self.meta_strip.setObjectName("detailMeta")
-        self.meta_strip.setStyleSheet("QFrame#detailMeta {background:white;border:1px solid #dee0e5;border-radius:12px;}")
-        strip_body = QVBoxLayout(self.meta_strip)
-        strip_body.setContentsMargins(12, 12, 12, 12)
-        self.meta_values = {}
-        cells = []
-        for key, asset, title in (("site", "88d90.svg", "Site"), ("fab", "d865c.svg", "Fab"), ("line", "f50ce.svg", "Line"),
-                                  ("area", "c9350.svg", "원본 구역"), ("date", "962ae.svg", "실제 관측일")):
-            cell, value = self._field(asset, title, 6)
-            self.meta_values[key] = value
-            cells.append(cell)
-        meta_grid = FlowGrid(120, spacing=12)
-        meta_grid.set_widgets(cells)
-        strip_body.addWidget(meta_grid)
-        self.detail_card.body.addWidget(self.meta_strip)
         # Item 적용 상세에서만 사용하는 요약 띠
         notice = QFrame()
         notice.setObjectName("detailNotice")
@@ -490,12 +460,12 @@ class EquipmentPage(QWidget):
         evidence_body.addLayout(self.evidence_rows)
         self.evidence = label("", 12, color=SECONDARY, wrap=True)
         evidence_body.addWidget(self.evidence)
-        self.detail_card.body.addWidget(evidence_card)
         self.table_title = label("SW 관측 원문 표 · 표시 문자열 그대로", 13, medium=True, color=SECONDARY)
         self.detail_card.body.addWidget(self.table_title)
         self.detail_model = ReadTableModel(("모듈 / SW 관측", "설비군 · 계열", "설치 버전 원문", "목표 N", "N 비교", "비교 근거"), numeric_columns=(2, 3))
         self.detail_table = read_table(self.detail_model, "선택 설비 전체 SW 관측", (165, 190, 230, 200, 130, 255))
         self.detail_card.body.addWidget(self.detail_table)
+        self.detail_card.body.addWidget(evidence_card)
         ignore_width(self.detail_title, self.detail_location, self.detail_summary, self.scope_note,
                      self.evidence, self.context)
         self.item_evidence_model = ReadTableModel(("근거 대상", "확인된 내용", "출처 / 저장 상태", "원본 위치 / 모델 범위"))
@@ -523,12 +493,6 @@ class EquipmentPage(QWidget):
         text.addWidget(value)
         row.addLayout(text, 1)
         return cell, value
-
-    def _set_meta(self, values):
-        for key, value in values.items():
-            known = value not in (None, "")
-            self.meta_values[key].setText(str(value) if known else ("미지정" if key in ("fab", "line") else "미확인"))
-            self.meta_values[key].setStyleSheet(f"color:{INK if known else SECONDARY};")
 
     def _set_judgement(self, values):
         for key, (text, caption, color) in values.items():
@@ -566,10 +530,10 @@ class EquipmentPage(QWidget):
             self.evidence_rows.addWidget(row)
 
     SW_TONES = {
-        "danger": ("rgba(194,51,69,0.35)", "#faeff0", "#f6e2e5", "#c23345"),
-        "success": ("rgba(32,132,87,0.35)", "#eef7f1", "#d4ebdf", "#246b4a"),
-        "warning": ("rgba(184,128,0,0.35)", "#fdf6e3", "#fbe5a3", "#856009"),
-        "neutral": ("#dee0e5", "#f4f5f8", "#e9ecf2", SECONDARY),
+        "danger": ("#f6e2e5", "#ad344d"),
+        "success": ("#d4ebdf", "#246b4a"),
+        "warning": ("#fbe5a3", "#856009"),
+        "neutral": ("#e9ecf2", SECONDARY),
     }
 
     def _render_sw_cards(self, tones=()):
@@ -577,24 +541,25 @@ class EquipmentPage(QWidget):
         headings = self.detail_model.headings
         cards = []
         for index, row in enumerate(self.detail_model.rows):
-            border, header_bg, pill_bg, ink = self.SW_TONES[tones[index] if index < len(tones) else "neutral"]
+            pill_bg, ink = self.SW_TONES[tones[index] if index < len(tones) else "neutral"]
             card = QFrame()
             card.setObjectName("swCard")
-            card.setStyleSheet(f"QFrame#swCard {{background:white;border:2px solid {border};border-radius:12px;}}")
+            card.setStyleSheet(f"QFrame#swCard {{background:white;border:1px solid {LINE};border-radius:12px;}}")
             card_body = QVBoxLayout(card)
             card_body.setContentsMargins(0, 0, 0, 0)
             card_body.setSpacing(0)
             header = QFrame()
             header.setObjectName("swHeader")
-            header.setStyleSheet(f"QFrame#swHeader {{background:{header_bg};border:none;border-top-left-radius:10px;"
+            header.setStyleSheet(f"QFrame#swHeader {{background:{SOFT};border:none;border-top-left-radius:10px;"
                                  "border-top-right-radius:10px;}")
             header_row = QHBoxLayout(header)
             header_row.setContentsMargins(14, 10, 14, 10)
             header_row.setSpacing(10)
-            chip = label(row[0], 13, medium=True)
-            chip.setStyleSheet("background:#f4f5f8;border-radius:6px;padding:4px 8px;")
-            chip.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-            header_row.addWidget(chip)
+            if row[0] != "—":
+                chip = label(row[0], 13, medium=True)
+                chip.setStyleSheet("background:#f4f5f8;border-radius:6px;padding:4px 8px;")
+                chip.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+                header_row.addWidget(chip)
             title = label(row[1], 14, medium=True, wrap=True)
             ignore_width(title)
             header_row.addWidget(title, 1)
@@ -607,17 +572,16 @@ class EquipmentPage(QWidget):
             content.setSpacing(10)
             fields = QGridLayout()
             fields.setHorizontalSpacing(12)
-            fields.setVerticalSpacing(10)
-            for position, (asset, column) in enumerate((("50857.svg", 2), ("2c52c.svg", 3), ("ba1bd.svg", 1))):
+            for position, (asset, column) in enumerate((("50857.svg", 2), ("2c52c.svg", 3))):
                 cell, value = self._field(asset, headings[column])
                 value.setText(row[column])
-                fields.addWidget(cell, position // 2, position % 2)
+                fields.addWidget(cell, 0, position)
             fields.setColumnStretch(0, 1)
             fields.setColumnStretch(1, 1)
             content.addLayout(fields)
             reason = QFrame()
             reason.setObjectName("swReason")
-            reason.setStyleSheet(f"QFrame#swReason {{background:{header_bg};border:none;border-radius:8px;}}")
+            reason.setStyleSheet(f"QFrame#swReason {{background:{SOFT};border:none;border-radius:8px;}}")
             reason_row = QHBoxLayout(reason)
             reason_row.setContentsMargins(14, 10, 14, 10)
             reason_row.setSpacing(14)
@@ -637,31 +601,10 @@ class EquipmentPage(QWidget):
         self.detail_goal_badge.set_tone("neutral")
         self.detail_risk_badge.setText("위험 판정 전")
         self.detail_risk_badge.set_tone("neutral")
-        self._set_meta({key: None for key in self.meta_values})
+        self.observation_date.clear()
         self._set_judgement({key: ("—", "", INK) for key in self.judgement})
         self._set_evidence_rows(())
         self._render_sw_cards()
-
-    def _layout_list_controls(self):
-        body = self.list_card.body.contentsMargins()
-        frame = self.list_card.contentsMargins()
-        available = self.list_card.width() - body.left() - body.right() - frame.left() - frame.right()
-        needed = sum(widget.minimumSizeHint().width() for widget in (self.scope_controls, self.filter_controls,
-                                                                    self.global_button))
-        compact = available < needed + 2 * self.list_controls.horizontalSpacing()
-        if self._compact_list_controls is compact:
-            return
-        self.list_controls.removeWidget(self.filter_controls)
-        if compact:
-            self.list_controls.addWidget(self.filter_controls, 1, 0, 1, 3)
-        else:
-            self.list_controls.addWidget(self.filter_controls, 0, 1)
-        self._compact_list_controls = compact
-
-    def eventFilter(self, watched, event):
-        if watched is self.list_card and event.type() == QEvent.Type.Resize:
-            self._layout_list_controls()
-        return super().eventFilter(watched, event)
 
     def _set_mode(self, mode):
         self.mode = mode
@@ -690,7 +633,7 @@ class EquipmentPage(QWidget):
         self._set_mode("list")
         self.result_status.setText(text if isinstance(text, str) else "선택지 변경 · 재조회 필요")
         self.result_status.set_tone("warning")
-        self.context.setText("표시할 조회 결과가 없습니다. 조회 적용으로 다시 확인해 주세요.")
+        self.context.setText("표시할 조회 결과가 없습니다. 조회 조건을 다시 선택해 주세요.")
         for card in self.metrics.values():
             card.value.setText("—")
             card.caption.setText("결과 없음")
@@ -713,14 +656,13 @@ class EquipmentPage(QWidget):
     def _current(self):
         return self.snapshot is not None and self.state.is_current(self.snapshot.query)
 
-    def _reset_filters(self, risk_only=False):
-        for control in (self.search, self.goal_filter, self.sort, self.risk_button):
+    def _reset_filters(self):
+        for control in (self.search, self.goal_filter, self.sort):
             control.blockSignals(True)
         self.search.clear()
         self.goal_filter.setCurrentIndex(0)
         self.sort.setCurrentIndex(0)
-        self.risk_button.setChecked(risk_only)
-        for control in (self.search, self.goal_filter, self.sort, self.risk_button):
+        for control in (self.search, self.goal_filter, self.sort):
             control.blockSignals(False)
         self.page_index = 0
 
@@ -746,7 +688,7 @@ class EquipmentPage(QWidget):
             return False
         self.origin = origin if origin in ("dashboard", "heatmap") else "dashboard"
         self.scope_ids = request.equipment_ids
-        self._reset_filters(request.risk_only)
+        self._reset_filters()
         self._update_scope()
         self._set_mode("list")
         return True
@@ -770,8 +712,6 @@ class EquipmentPage(QWidget):
             self.metrics[key].caption.setText(caption)
         if summary.rate == 1 and (not summary.complete or missing_sw_count(summary)):
             self.metrics["rate"].caption.setText(self.metrics["rate"].caption.text() + " · 확인 필요")
-        self.all_button.setText(f"범위 전체 {len(ids)}")
-        self.risk_button.setText(f"후보만 {candidates}")
         self._render_list()
 
     def _filter_changed(self, *_):
@@ -783,16 +723,24 @@ class EquipmentPage(QWidget):
         self.page_index = max(0, min(last, self.page_index + delta))
         self._render_list()
 
+    def _drawer_model_families(self, record, model_names):
+        by_family = {}
+        raw_model = record.model_name or "—"
+        for pm in record.pms:
+            name = raw_model if record.is_hpa else model_names[pm.group_id]
+            by_family.setdefault(pm.family_id, {})[name] = None
+        if not by_family:
+            return raw_model, "—"
+        families = sorted(by_family)
+        return ("\n".join(" / ".join(by_family[family_id]) for family_id in families),
+                "\n".join(family_name(self.source, family_id) for family_id in families))
+
     def _render_list(self):
         current = self._current()
-        for control in (self.search, self.goal_filter, self.sort, self.risk_button, self.all_button, self.global_button):
+        for control in (self.search, self.goal_filter, self.sort):
             control.setEnabled(current)
-        width = max(self.all_button.sizeHint().width(), self.risk_button.sizeHint().width())
-        for control in (self.all_button, self.risk_button):
-            control.setFixedSize(width, 38)
-        self._layout_list_controls()
         goal = self.goal_filter.currentData()
-        self.visible_tiles = filtered_tiles(self.data, self.scope_ids, text=self.search.text(), risk_only=self.risk_button.isChecked(),
+        self.visible_tiles = filtered_tiles(self.data, self.scope_ids, text=self.search.text(),
                                             goal=GoalState(goal) if goal is not None else None,
                                             sort=self.sort.currentData()) if current else ()
         total = len(self.visible_tiles)
@@ -800,23 +748,31 @@ class EquipmentPage(QWidget):
         start = self.page_index * self.page_size
         rows, tones = [], []
         page = self.visible_tiles[start:start + self.page_size]
+        compact = self._list_host is not None
+        if compact and page:
+            records = {record.equipment_id: record for record in lookup_records(self.snapshot)}
+            model_names = {mid: model_name(self.source, mid) for ids in self.source.bindings.values() for mid in ids}
         for tile in page:
-            versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
-            names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
-            location = tile.location + (f" · 실제 관측일 {tile.observation_date}" if tile.goal is GoalState.EXCLUDED else "")
             code = tile.code
             if self.sort.currentData() == "priority":
                 entry = self.data.priority.get(tile.equipment_id)
                 code = (f"{entry.rank}위 · " if entry is not None and entry.rank else "확인 필요 · ") + code
-            rows.append((code, location.replace(" · ", "\n"), names, versions,
-                         tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else ""),
-                         "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
+            goal = tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else "")
+            if compact:
+                models, families = self._drawer_model_families(records[tile.equipment_id], model_names)
+                rows.append((code, models, families, goal))
+            else:
+                versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
+                names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
+                location = tile.location + (f" · 실제 관측일 {tile.observation_date}" if tile.goal is GoalState.EXCLUDED else "")
+                rows.append((code, location.replace(" · ", "\n"), names, versions, goal,
+                             "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
         self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones)
-        fit_rows(self.table, compact=self._list_host is not None)
+        fit_rows(self.table, compact=compact)
         self.table.setVisible(bool(page))
         self.message.setVisible(not page)
-        self.message.setText("표시 조건에 맞는 설비가 없습니다. 검색·목표·후보 필터를 확인해 주세요." if current else "조회 결과가 없습니다. 위에서 조회 적용을 눌러 주세요.")
+        self.message.setText("표시 조건에 맞는 설비가 없습니다. 검색과 목표 상태를 확인해 주세요." if current else "조회 결과가 없습니다. 날짜나 필터를 선택해 주세요.")
         self.page_caption.setText(f"{self.page_index + 1 if total else 0} / {(total + self.page_size - 1) // self.page_size}")
         self.previous.setEnabled(current and self.page_index > 0)
         self.next.setEnabled(current and start + self.page_size < total)
@@ -847,14 +803,14 @@ class EquipmentPage(QWidget):
             for family in detail.status.families:
                 for item in family.pms:
                     pm, comparison = item.pm, item.comparison
-                    rows.append((pm.pm_name or "모듈 미확정 · 공통 SW",
+                    rows.append((pm.pm_name or "—",
                                  f"{models[pm.group_id]} · 계열 {family_name(self.source, family.family_id)}",
                                  pm.version_raw if pm.version_raw is not None else "미입력",
                                  comparison.target.version_raw if comparison.target else "목표 미확인", comparison.label,
                                  comparison.message or "확인된 릴리즈 순서로 비교"))
                     tones.append(compare_tone(comparison.status, comparison.steps_below))
         elif detail.record.is_hpa:
-            rows = [(pm.pm_name or "모듈 미확정 · 공통 SW",
+            rows = [(pm.pm_name or "—",
                      f"{models.get(pm.group_id, detail.record.model_name)} · 계열 {family_name(self.source, pm.family_id)}",
                      pm.version_raw if pm.version_raw is not None else "미입력", "—", "분석 제외", "HPA는 N 비교에서 제외")
                     for pm in detail.record.pms]
@@ -875,8 +831,7 @@ class EquipmentPage(QWidget):
         self.detail_risk_badge.set_tone("danger" if whole.risk is RiskStatus.RISK and whole.goal is not GoalState.EXCLUDED
                                         else "warning" if whole.risk is RiskStatus.UNKNOWN and whole.goal is not GoalState.EXCLUDED
                                         else "neutral")
-        self._set_meta({"site": whole.site_label, "fab": whole.fab_label, "line": whole.line_label,
-                        "area": whole.area, "date": record.base_date})
+        self.observation_date.setText(f"관측일 {record.base_date}")
         counts = [f.status for f in whole.families]
         if whole.goal is GoalState.EXCLUDED:
             goal = ("분석 제외", "HPA는 목표 N 비교에서 제외", "#5e6b7a")
@@ -904,11 +859,9 @@ class EquipmentPage(QWidget):
             ("11605.svg", "실제 관측일", f"{record.base_date} (일반 분석 기준일 {self.snapshot.base_date})"),
             ("f5960.svg", "원본 모델", record.model_name or "미확인"),
             ("8cc7b.svg", "비교 목표 N", "HPA 비교 제외" if record.is_hpa else targets),
-            ("f8090.svg", "위치", whole.location),
             ("3c247.svg", "판정 규칙", format_findings(whole.findings) or (whole.risk_label if getattr(self.source, "assessor", None) else "미연결")),
             ("a2d12.svg", "필수 아이템명", " / ".join(e.item.content for e in entries) or "미연결"),
             ("ac176.svg", "릴리즈 문서 · 아이템 위치", " / ".join(dict.fromkeys(locations)) or "미연결"),
-            ("f5960.svg", "관측 출처", self.snapshot.source_label),
         ))
 
     def _show_item_extras(self, request, application):
@@ -922,7 +875,7 @@ class EquipmentPage(QWidget):
         reason = format_findings(result.findings) if result else ""
         self.detail_risk_badge.setText(risk_label)
         self.detail_risk_badge.set_tone("neutral")
-        self._set_meta({"site": record.site, "fab": None, "line": None, "area": None, "date": record.base_date})
+        self.observation_date.setText(f"관측일 {record.base_date}")
         self._set_judgement({
             "goal": (application.label, f"선택 Item ID {request.item_id} · 목표 N 비교는 이 보기에서 수행하지 않음", INK),
             "risk": (risk_label, reason or risk_label, "#5e6b7a"),

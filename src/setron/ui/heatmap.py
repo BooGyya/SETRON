@@ -2,29 +2,30 @@
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout, QLineEdit, QPushButton,
+    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLayout, QLineEdit, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from setron.features.risk.schemas import RiskStatus
 from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.dashboard_data import RiskRuleState, count_value, missing_sw_count, upgrade_caption
+from setron.ui.dashboard import DashboardGrid, DashboardKpi
+from setron.ui.dashboard_data import RiskRuleState
 from setron.ui.equipment import FlowGrid, ReadTableModel, fit_rows, ignore_width, read_table
 from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
-from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font, icon, svg_size
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size
 
 
-# 타일 채움색은 5단계(11/05 팀 결정·멘토 확인): 진초록 N+1 이상 · 연초록 N · 노랑 N-1 · 빨강 N-2 이하 · 회색 비교 불가·HPA.
+# 타일 채움색은 5단계: 진초록 N+1 이상 · 연초록 N · 연분홍 N-1 · 진분홍 N-2 이하 · 회색 비교 불가·HPA.
 # 위험 후보는 빨강(N-2 이하)과 헷갈리지 않게 채움색 대신 굵은 빨간 테두리로 보인다 (범례 설명과 같은 규칙).
 RISK_LINE = "#c9485e"
 RISK_INK = "#ad344d"
 RISK_FILL = "#fde2e7"
 GOAL_FILL = {GoalState.MET: "#ddf4e5", GoalState.BELOW: "#fff0b7", GoalState.UNKNOWN: "#eceef1",
              GoalState.EXCLUDED: "#eceef1"}
-TIER_FILL = {Tier.ABOVE: "#a9dbbd", Tier.AT: "#ddf4e5", Tier.ONE_BELOW: "#fff0b7", Tier.TWO_BELOW: "#fbd3da",
+TIER_FILL = {Tier.ABOVE: "#a9dbbd", Tier.AT: "#ddf4e5", Tier.ONE_BELOW: "#fce4e7", Tier.TWO_BELOW: "#f6c5cd",
              Tier.UNKNOWN: "#eceef1"}
-TIER_LEGEND = ((Tier.ABOVE, "N+1 이상"), (Tier.AT, "N 달성"), (Tier.ONE_BELOW, "N-1"), (Tier.TWO_BELOW, "N-2 이하"),
+TIER_LEGEND = ((Tier.ABOVE, "N+1 이상"), (Tier.AT, "N"), (Tier.ONE_BELOW, "N-1"), (Tier.TWO_BELOW, "N-2 이하"),
                (Tier.UNKNOWN, "비교 불가 · HPA"))
 GOAL_SHORT = {GoalState.MET: "달성", GoalState.BELOW: "미달", GoalState.UNKNOWN: "확인 필요",
               GoalState.EXCLUDED: "분석 제외"}
@@ -36,17 +37,17 @@ def _tile_label(text, size, *, medium=False, color=INK):
     return result
 
 
-def _version_text(data, families):
-    """'v90.1.0.41 · N-2'처럼 원문 버전과 N 미만 단계만. 같은 표기는 한 번만."""
+def _version_text(data, families, *, show_tier=True, separator=" / ", empty="SW 미등록"):
+    """원문 버전을 중복 없이 표시한다. 필요할 때만 비교 단계를 붙인다."""
     if data.goal is GoalState.EXCLUDED:
         parts = [v.split(" · ", 1)[-1] for v in data.raw_versions]
     else:
         parts = []
         for family in families:
             for version in family.versions:
-                _, raw, gap = (version.split(" · ", 2) + ["", ""])[:3]
-                parts.append(raw if raw == "미입력" or gap in ("", "N 이상") else f"{raw} · {gap}")
-    return " / ".join(dict.fromkeys(parts)) or "SW 미등록"
+                raw, gap = version.split(" · ", 1)[-1].rsplit(" · ", 1)
+                parts.append(raw if not show_tier or raw == "미입력" or gap == "N 이상" else f"{raw} · {gap}")
+    return separator.join(dict.fromkeys(parts)) or empty
 
 
 def tile_style(data, *, minimum_height=0):
@@ -69,7 +70,7 @@ def tile_detail_text(data, group_name):
 
 
 class TileButton(QPushButton):
-    def __init__(self, data, *, expanded=False, families=None, group_name=None):
+    def __init__(self, data, *, expanded=False, families=None, group_name=None, show_context=True):
         super().__init__()
         self.data = data
         families = data.families if families is None else families
@@ -86,23 +87,30 @@ class TileButton(QPushButton):
         body = QVBoxLayout(self)
         body.setContentsMargins(10, 8 if not expanded else 10, 10, 8 if not expanded else 10)
         body.setSpacing(4)
-        identity = QHBoxLayout()
-        identity.setSpacing(4)
-        self.code_label = label(data.code, 13, medium=True, color=INK)
-        identity.addWidget(self.code_label)
-        identity.addStretch()
-        self.marker = ""
-        if expanded and data.goal is not GoalState.EXCLUDED:
-            self.marker = "위험" if risk else ""
+        self.code_label = label(data.code, 13 if show_context else 16, medium=True, color=INK)
+        self.marker = "위험" if expanded and risk else ""
+        if show_context:
+            identity = QHBoxLayout()
+            identity.setSpacing(4)
+            identity.addWidget(self.code_label)
+            identity.addStretch()
             if self.marker:
-                identity.addWidget(label(self.marker, 10, medium=True, color=RISK_INK if risk else SECONDARY),
+                identity.addWidget(label(self.marker, 10, medium=True, color=RISK_INK),
                                    0, Qt.AlignmentFlag.AlignTop)
-        body.addLayout(identity)
+            body.addLayout(identity)
+        else:
+            body.addStretch()
+            self.code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            body.addWidget(self.code_label)
         if expanded:
-            self.version_label = _tile_label(_version_text(data, families), 11)
+            versions = _version_text(data, families, show_tier=show_context)
+            self.version_label = _tile_label(versions, 11 if show_context else 14)
             body.addWidget(self.version_label)
-            self.detail_label = _tile_label(tile_detail_text(data, group_name), 10, color=SECONDARY)
-            body.addWidget(self.detail_label)
+            if show_context:
+                self.detail_label = _tile_label(tile_detail_text(data, group_name), 10, color=SECONDARY)
+                body.addWidget(self.detail_label)
+            else:
+                self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         for child in self.findChildren(QWidget):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         body.addStretch()
@@ -179,30 +187,6 @@ class TileGrid(QWidget):
         super().resizeEvent(event)
 
 
-class StripMetric(QFrame):
-    """대수 지표와 위험 상태에 공통으로 쓰는 요약 항목."""
-
-    def __init__(self, title, color=INK, *, background=SOFT, status=False):
-        super().__init__()
-        if status:
-            body = QHBoxLayout(self)
-            body.setContentsMargins(0, 0, 0, 0)
-            body.setSpacing(8)
-            self.value = StatusBadge("—", "neutral")
-        else:
-            body = QVBoxLayout(self)
-            body.setContentsMargins(12, 8, 12, 8)
-            body.setSpacing(2)
-            self.setObjectName("heatmapStripMetric")
-            self.setStyleSheet(f"QFrame#heatmapStripMetric {{background:{background};border-radius:8px;}}")
-            self.value = label("—", 23, medium=True, color=color, numeric=True)
-        self.title = label(title, 12, medium=True, color=SECONDARY)
-        body.addWidget(self.title)
-        body.addWidget(self.value)
-        self.caption = label("", 11, color=SECONDARY, wrap=True)
-        ignore_width(self.caption)
-
-
 class HeatmapPage(QWidget):
     equipment_selected = Signal(object)
 
@@ -215,7 +199,7 @@ class HeatmapPage(QWidget):
         self.tiles, self.tile_buttons, self.tile_grids, self.tile_occurrences = (), {}, [], []
         self.visible_ids = ()
         self.selected_id = None
-        self._compact = None
+        self._control_rows = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
@@ -223,7 +207,7 @@ class HeatmapPage(QWidget):
         status_row.setSpacing(12)
         self.result_status = StatusBadge("조회 적용 전 · 예시 데이터", "info")
         status_row.addWidget(self.result_status, 0, Qt.AlignmentFlag.AlignTop)
-        self.context = label("대시보드와 같은 조건을 사용합니다. 위에서 조회 적용을 눌러 주세요.", 12, color=SECONDARY, wrap=True)
+        self.context = label("대시보드와 같은 조회 조건을 사용합니다.", 12, color=SECONDARY, wrap=True)
         ignore_width(self.context)
         status_row.addWidget(self.context, 1)
         body.addLayout(status_row)
@@ -231,33 +215,13 @@ class HeatmapPage(QWidget):
         self.result_status.hide()
         self.context.hide()
 
-        # 설비 대수와 목표 달성에 별도로 집계하는 위험 상태를 구분한다.
-        self.summary = Card(padding=12)
-        self.summary.body.setSpacing(8)
         self.metrics = {
-            "analysis": StripMetric("분석 설비"),
-            "met": StripMetric("목표 달성", TONES["success"][1], background=TONES["success"][0]),
-            "below": StripMetric("목표 미달", TONES["warning"][1], background=TONES["warning"][0]),
-            "unknown": StripMetric("확인 필요", SECONDARY),
+            "analysis": DashboardKpi("분석 설비", "32ac4.svg", accent=True, show_caption=False),
+            "met": DashboardKpi("목표 달성", "bbc12.svg", show_caption=False),
+            "below": DashboardKpi("목표 미달", "e53b6.svg", show_caption=False),
+            "unknown": DashboardKpi("확인 필요", "60dbd.svg", show_caption=False),
         }
-        strip = FlowGrid(132, spacing=8, max_columns=4)
-        strip.set_widgets(tuple(self.metrics.values()))
-        self.summary.body.addWidget(strip)
-
-        self.metrics["risk"] = StripMetric("위험 후보", status=True)
-        self.strip_note = label("", 12, color=SECONDARY, wrap=True)
-        ignore_width(self.strip_note)
-        footer = QHBoxLayout()
-        footer.setSpacing(12)
-        footer.addWidget(self.strip_note, 1)
-        footer.addWidget(self.metrics["risk"])
-        self.summary.body.addLayout(footer)
-
-        # 이 값들은 기존 판정 결과와 함께 계산하되 요약에 중복 표시하지 않는다.
-        for key, title, color in (("total", "전체 설비", INK), ("rate", "목표 N 달성률", PRIMARY),
-                                  ("upgrade", "업그레이드 필요", INK)):
-            self.metrics[key] = StripMetric(title, color)
-            self.metrics[key].hide()
+        self.summary = DashboardGrid(tuple(self.metrics.values()), minimum_width=150, spacing=12)
         body.addWidget(self.summary)
 
         self.content = Card(padding=20)
@@ -267,63 +231,54 @@ class HeatmapPage(QWidget):
         self.search.setPlaceholderText("설비 검색")
         self.search.setAccessibleName("설비 검색 · 설비명·위치·버전 원문")
         self.search.addAction(icon("b2c35.svg"), QLineEdit.ActionPosition.LeadingPosition)
-        self.search.setFont(font(15))
-        self.search.setFixedHeight(46)
+        self.search.setFont(font(14))
+        self.search.setFixedHeight(38)
         self.search.setMinimumWidth(136)
-        self.search.setStyleSheet(f"QLineEdit#heatmapSearch {{background:white;border:1px solid {LINE};border-radius:12px;"
+        self.search.setStyleSheet(f"QLineEdit#heatmapSearch {{background:white;border:1px solid {LINE};border-radius:10px;"
                                   "padding:0 10px;}"
                                   f"QLineEdit#heatmapSearch:focus {{border:2px solid {PRIMARY};}}")
         self.search.textChanged.connect(self._render_tiles)
-        self.below_filter = button("목표 미달만 · 해제 ×")
-        self.below_filter.setToolTip("목표 미달 필터 해제")
-        self.below_filter.setCheckable(True)
-        self.below_filter.hide()
-        self.below_filter.toggled.connect(self.below_filter.setVisible)
-        self.below_filter.toggled.connect(self._render_tiles)
-
-        self.view_buttons = QButtonGroup(self)
-        self.view_bar = QWidget()
-        view_row = QHBoxLayout(self.view_bar)
-        view_row.setContentsMargins(0, 0, 0, 0)
-        view_row.setSpacing(10)
-        # id 1 = 상세보기(버전 함께 보기), id 0 = 간략히 보기(밀집 보기). 화면 순서는 VER4와 같다.
-        for index, text in ((1, "상세보기"), (0, "간략히 보기")):
-            control = button(text)
-            control.setCheckable(True)
-            control.setChecked(index == 1)
-            control.setObjectName("heatmapView")
-            control.setFont(font(15, medium=True))
-            control.setStyleSheet(
-                f"QPushButton#heatmapView {{background:white;border:1px solid {LINE};border-radius:10px;padding:0 22px;"
-                "min-height:40px;max-height:40px;}"
-                f"QPushButton#heatmapView:checked {{background:{PRIMARY};border-color:{PRIMARY};color:white;}}"
-                f"QPushButton#heatmapView:focus {{border:2px solid {PRIMARY};}}")
-            self.view_buttons.addButton(control, index)
-            view_row.addWidget(control)
-        view_row.addWidget(self.search, 1)
-        view_row.addWidget(self.below_filter)
-        self.view_buttons.idClicked.connect(self._render_tiles)
+        self.view_toggle = button("간략히 보기")
+        self.view_toggle.setCheckable(True)
+        self.view_toggle.setChecked(True)
+        self.view_toggle.setObjectName("heatmapView")
+        self.view_toggle.setFixedSize(104, 38)
+        self.view_toggle.setStyleSheet(
+            f"QPushButton#heatmapView {{background:white;border:1px solid {LINE};border-radius:10px;"
+            "padding:0 10px;min-height:36px;max-height:36px;}"
+            f"QPushButton#heatmapView:checked {{background:{PRIMARY};border-color:{PRIMARY};color:white;}}"
+            f"QPushButton#heatmapView:focus {{border-color:{PRIMARY};}}"
+            f"QPushButton#heatmapView:checked:focus {{border-color:{INK};}}")
+        self.view_toggle.toggled.connect(self._change_view)
 
         self.filter_bar = QWidget()
         filter_row = QHBoxLayout(self.filter_bar)
         filter_row.setContentsMargins(0, 0, 0, 0)
-        filter_row.setSpacing(10)
+        filter_row.setSpacing(8)
         self.risk_button = QCheckBox("위험 후보만")
         self.risk_button.setIcon(icon("7880d.svg"))
         self.risk_button.setIconSize(svg_size("7880d.svg"))
-        self.risk_button.setFont(font(15, medium=True))
-        self.risk_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.risk_button.setStyleSheet(
-            "QCheckBox {spacing:8px;padding:0 6px;}"
-            "QCheckBox::indicator {width:16px;height:16px;border:2px solid rgba(20,32,51,0.55);border-radius:5px;background:white;}"
-            f"QCheckBox::indicator:checked {{background:{PRIMARY};border-color:{PRIMARY};}}"
-            "QCheckBox:disabled {color:#8b95a8;}")
-        self.risk_button.setEnabled(False)
-        self.risk_button.toggled.connect(self._render_tiles)
-        filter_row.addWidget(self.risk_button)
+        self.below_filter = QCheckBox("목표 미달만")
+        checkbox_style = (
+            "QCheckBox {spacing:6px;padding:0 4px;}"
+            f"QCheckBox::indicator {{width:14px;height:14px;border:1px solid {SECONDARY};border-radius:4px;background:white;}}"
+            "QCheckBox:disabled {color:#8b95a8;}"
+            f"QCheckBox::indicator:disabled {{background:{SOFT};border-color:{LINE};}}")
+        white_check = (ASSETS / "checkbox-tick.svg").as_posix()
+        for checkbox, checked_color, checked_image in (
+                (self.risk_button, PRIMARY, ""), (self.below_filter, "#3655c7", f"image:url({white_check});")):
+            checkbox.setFont(font(13, medium=True))
+            checkbox.setFixedHeight(38)
+            checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+            checkbox.setStyleSheet(checkbox_style + f"QCheckBox::indicator:checked {{"
+                                   f"background:{checked_color};border-color:{checked_color};{checked_image}}}")
+            checkbox.setEnabled(False)
+            checkbox.toggled.connect(self._render_tiles)
+            filter_row.addWidget(checkbox)
         segmented = QFrame()
         segmented.setObjectName("layoutSwitch")
-        segmented.setStyleSheet(f"QFrame#layoutSwitch {{background:white;border:1px solid {LINE};border-radius:12px;}}")
+        segmented.setFixedHeight(38)
+        segmented.setStyleSheet(f"QFrame#layoutSwitch {{background:white;border:1px solid {LINE};border-radius:10px;}}")
         segment_row = QHBoxLayout(segmented)
         segment_row.setContentsMargins(3, 3, 3, 3)
         segment_row.setSpacing(0)
@@ -336,16 +291,21 @@ class HeatmapPage(QWidget):
             control.setCheckable(True)
             control.setChecked(index == 0)
             control.setCursor(Qt.CursorShape.PointingHandCursor)
-            control.setFont(font(15, medium=True))
+            control.setFont(font(13, medium=True))
             control.setStyleSheet(
-                "QPushButton#layoutOption {background:transparent;border:none;border-radius:9px;padding:0 18px;"
-                "min-height:34px;max-height:34px;}"
-                f"QPushButton#layoutOption:checked {{background:rgba(60,92,233,0.1);color:{PRIMARY};}}"
-                f"QPushButton#layoutOption:focus {{border:2px solid {PRIMARY};}}")
+                "QPushButton#layoutOption {background:transparent;border:1px solid transparent;border-radius:7px;"
+                "padding:0 10px;min-height:28px;max-height:28px;}"
+                f"QPushButton#layoutOption:checked {{background:{ACCENT_SOFT};color:{PRIMARY};}}"
+                f"QPushButton#layoutOption:focus {{border-color:{PRIMARY};}}")
             self.layout_buttons.addButton(control, index)
             segment_row.addWidget(control)
         self.layout_buttons.idClicked.connect(self._render_tiles)
-        filter_row.addWidget(segmented)
+        self.display_bar = QWidget()
+        display_row = QHBoxLayout(self.display_bar)
+        display_row.setContentsMargins(0, 0, 0, 0)
+        display_row.setSpacing(8)
+        display_row.addWidget(self.view_toggle)
+        display_row.addWidget(segmented)
         controls_host = QWidget()
         ignore_width(controls_host)
         self.controls = QGridLayout(controls_host)
@@ -357,7 +317,7 @@ class HeatmapPage(QWidget):
 
         legend = QHBoxLayout()
         legend.setSpacing(20)
-        legend_items = [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보 (빨간 테두리)")]
+        legend_items = [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보")]
         for color, text in legend_items:
             item = QHBoxLayout()
             item.setSpacing(6)
@@ -386,14 +346,17 @@ class HeatmapPage(QWidget):
         self.tile_body.setContentsMargins(0, 4, 0, 0)
         self.tile_body.setSpacing(20)
         self.content.body.addWidget(self.tile_host)
-        self.list_model = ReadTableModel(("설비명", "Site / 원본 구역", "모델 · 계열", "설비 버전", "SW N 판정", "위험 판정"),
-                                         numeric_columns=(3,))
+        self.list_model = ReadTableModel(("설비명", "Site / 원본 구역", "모델", "설비 버전", "SW N 판정", "위험 판정"),
+                                         numeric_columns=(3,), centered=True)
         self.list_table = read_table(self.list_model, "히트맵 설비 목록형", (110, 150, 190, 230, 120, 160))
+        self._list_style = self.list_table.property("setronOriginalStyle") or self.list_table.styleSheet()
+        self._compact_list = False
+        self.list_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         self.list_table.activated.connect(lambda index: self._select_row(index.row()))
         self.list_table.clicked.connect(lambda index: self._select_row(index.row()))
         self.list_table.hide()
         self.content.body.addWidget(self.list_table)
-        self.message = label("조회 적용 전입니다.", color=SECONDARY, wrap=True)
+        self.message = label("날짜나 필터를 선택하면 결과가 표시됩니다.", color=SECONDARY, wrap=True)
         ignore_width(self.message)
         self.content.body.addWidget(self.message)
         self.risk_footer = label("", 11, color=SECONDARY)
@@ -413,40 +376,42 @@ class HeatmapPage(QWidget):
         self._reflow()
 
     def _reflow(self):
-        margins = self.content.body.contentsMargins()
+        margins = self.content.body.contentsMargins() + self.content.contentsMargins()
         available = self.width() - margins.left() - margins.right()
-        needed = self.view_bar.minimumSizeHint().width() + self.controls.horizontalSpacing() + self.filter_bar.minimumSizeHint().width()
-        compact = available < needed
-        if self._compact is compact:
+        spacing = self.controls.horizontalSpacing()
+        trailing_width = self.filter_bar.minimumSizeHint().width() + self.display_bar.minimumSizeHint().width() + spacing
+        rows = (1 if available >= self.search.minimumWidth() + spacing + trailing_width else
+                2 if available >= trailing_width else 3)
+        if self._control_rows == rows:
             return
-        self.controls.removeWidget(self.view_bar)
-        self.controls.removeWidget(self.filter_bar)
-        self.controls.addWidget(self.view_bar, 0, 0)
-        self.controls.addWidget(self.filter_bar, 1 if compact else 0, 0 if compact else 1,
-                                alignment=Qt.AlignmentFlag.AlignLeft if compact else Qt.AlignmentFlag.AlignRight)
+        for widget in (self.search, self.filter_bar, self.display_bar):
+            self.controls.removeWidget(widget)
+        if rows == 1:
+            self.controls.addWidget(self.search, 0, 0)
+            self.controls.addWidget(self.filter_bar, 0, 1)
+            self.controls.addWidget(self.display_bar, 0, 2, Qt.AlignmentFlag.AlignRight)
+        else:
+            self.controls.addWidget(self.search, 0, 0, 1, 3)
+            self.controls.addWidget(self.filter_bar, 1, 0, 1, rows, Qt.AlignmentFlag.AlignLeft)
+            if rows == 2:
+                self.controls.addWidget(self.display_bar, 1, 2, Qt.AlignmentFlag.AlignRight)
+            else:
+                self.controls.addWidget(self.display_bar, 2, 0, 1, 3, Qt.AlignmentFlag.AlignRight)
         self.controls.setColumnStretch(0, 1)
-        self._compact = compact
+        self._control_rows = rows
 
     def resizeEvent(self, event):
         self._reflow()
         super().resizeEvent(event)
 
-    def show_below(self):
-        if self.snapshot is None or not self.state.is_current(self.snapshot.query):
-            return False
-        with QSignalBlocker(self.search), QSignalBlocker(self.risk_button):
-            self.search.clear()
-            self.risk_button.setChecked(False)
-        if self.below_filter.isChecked():
-            self._render_tiles()
-        else:
-            self.below_filter.setChecked(True)
-        return True
+    def _change_view(self, expanded):
+        self.view_toggle.setText("간략히 보기" if expanded else "상세보기")
+        self._render_tiles()
 
     def _clear(self):
         with QSignalBlocker(self.below_filter):
             self.below_filter.setChecked(False)
-        self.below_filter.hide()
+        self.below_filter.setEnabled(False)
         self.snapshot, self.tiles, self.selected_id = None, (), None
         self.risk_button.setEnabled(False)
         self.risk_button.setChecked(False)
@@ -454,12 +419,6 @@ class HeatmapPage(QWidget):
         self.risk_button.setAccessibleName("위험 후보만")
         for card in self.metrics.values():
             card.value.setText("—")
-            card.caption.clear()
-        for key in ("total", "rate", "risk", "upgrade"):
-            self.metrics[key].caption.setText(f"{self.metrics[key].title.text()}: 결과 없음")
-        self.metrics["risk"].value.set_tone("neutral")
-        self.metrics["risk"].value.setToolTip("")
-        self.strip_note.clear()
         self.selection_notice.setText(self.selection_hint)
         self._render_tiles()
 
@@ -479,33 +438,32 @@ class HeatmapPage(QWidget):
         self._clear()
         self.result_status.setText("결과 표시 실패 · 다시 적용해 주세요")
         self.result_status.set_tone("danger")
-        self.message.setText(reason or "관측 자료·선택지 연결을 확인하고 조회 적용으로 다시 시도해 주세요.")
+        self.message.setText(reason or "관측 자료·선택지 연결을 확인하고 조회 조건을 다시 선택해 주세요.")
 
     def invalidate(self, *_):
         self._clear()
         self.result_status.setText("선택지 변경 · 재조회 필요")
         self.result_status.set_tone("warning")
         self.context.setText("선택지가 변경되어 이전 결과를 지웠습니다.")
-        self.message.setText("조회 적용으로 결과를 다시 확인해 주세요.")
+        self.message.setText("조회 조건을 다시 선택해 주세요.")
 
     @staticmethod
-    def _risk_labels(result):
+    def _risk_filter_label(result):
         if result.risk_rule_state in (RiskRuleState.UNREGISTERED, RiskRuleState.ALL_DISABLED):
-            label = result.risk_rule_state.value
-            return label, label
+            return result.risk_rule_state.value
         if not result.summary.equipment_count:
-            return "분석 대상 없음", "분석 대상 없음"
+            return "분석 대상 없음"
         candidates, unknown = len(result.risky_ids), result.risk_unknown
         if unknown == result.summary.equipment_count:
-            return "미확인", f"위험 미확인 {unknown}대"
+            return f"위험 미확인 {unknown}대"
         if candidates:
             label = f"위험 후보만 ({candidates}대)"
             if unknown:
                 label += f" · 미확인 {unknown}대"
-            return f"{candidates}대", label
+            return label
         if unknown:
-            return "일부 미확인", f"확인된 후보 0대 · 미확인 {unknown}대"
-        return "0대", "위험 후보 0대"
+            return f"확인된 후보 0대 · 미확인 {unknown}대"
+        return "위험 후보 0대"
 
     def accept_result(self, query, result):
         if (not self.state.is_current(query) or result.query is not query
@@ -519,42 +477,23 @@ class HeatmapPage(QWidget):
         self.result_status.set_tone("info")
         self.context.setText(f"적용 #{query.revision} · 일반 분석 기준일 {result.base_date} · {query.description}\n"
                              f"{result.source_label}\nHPA는 조건에 맞는 최신 자료와 기존 전달 범위의 관측이며 실제 관측일을 표시합니다.")
-        risk_value, filter_label = self._risk_labels(result)
+        filter_label = self._risk_filter_label(result)
         self.risk_button.setText(filter_label)
         self.risk_button.setAccessibleName(filter_label)
         self.risk_button.setEnabled(bool(result.risky_ids))
+        self.below_filter.setEnabled(bool(result.summary.equipment_count))
         if not result.risky_ids:
             with QSignalBlocker(self.risk_button):
                 self.risk_button.setChecked(False)
-        summary = result.summary
         goals = [t.goal for t in self.tiles]
-        self.strip_note.setText(f"전체 {len(self.tiles)}대 · HPA 제외 {goals.count(GoalState.EXCLUDED)}대")
         values = {
-            "analysis": (f"{summary.equipment_count}대", ""),
-            "total": (f"{len(self.tiles)}대", f"분석 {summary.equipment_count}대 · HPA 제외 {goals.count(GoalState.EXCLUDED)}대"),
-            "met": (f"{goals.count(GoalState.MET)}대", ""),
-            "below": (f"{goals.count(GoalState.BELOW)}대", ""),
-            "unknown": (f"{goals.count(GoalState.UNKNOWN)}대", ""),
-            "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
-                     f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건 · SW 미등록 {missing_sw_count(summary)}대"),
-            "risk": (risk_value,
-                     f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
-            "upgrade": (count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
-                        upgrade_caption("하나라도 N 미만인 물리 설비 · 중복 제거", summary.undetermined)),
+            "analysis": result.summary.equipment_count,
+            "met": goals.count(GoalState.MET),
+            "below": goals.count(GoalState.BELOW),
+            "unknown": goals.count(GoalState.UNKNOWN),
         }
-        for key, (value, caption) in values.items():
-            self.metrics[key].value.setText(value)
-            self.metrics[key].caption.setText(caption)
-        self.metrics["rate"].caption.setText(values["rate"][1] + " · 단위: 설비·계열 건 · 판단 불가는 분모 제외")
-        if summary.rate == 1 and (not summary.complete or missing_sw_count(summary)):
-            self.metrics["rate"].caption.setText(self.metrics["rate"].caption.text() + " · 확인 필요")
-        for key in ("total", "rate", "risk", "upgrade"):
-            metric = self.metrics[key]
-            metric.caption.setText(f"{metric.title.text()}: {metric.caption.text()}")
-        risk = self.metrics["risk"]
-        tone = "danger" if result.risky_ids else "neutral" if risk_value == "0대" else "warning"
-        risk.value.set_tone(tone)
-        risk.value.setToolTip(risk.caption.text())
+        for key, value in values.items():
+            self.metrics[key].value.setText(f"{value}대")
         self._render_tiles()
         return True
 
@@ -580,8 +519,9 @@ class HeatmapPage(QWidget):
                                 f" · 표시 {len(filtered)}대 / 선택 범위 {len(self.tiles)}대 · 요약은 선택 범위 전체 기준")
         self.message.setVisible(not filtered)
         if self.snapshot is not None:
-            self.message.setText("조건에 맞는 설비가 없습니다. 조건 변경 후 조회 적용을 눌러 주세요." if not self.tiles else
-                                 "위험 후보가 없습니다. 전체 보기로 돌아가려면 '위험 후보만'을 해제해 주세요." if not risk_filtered else
+            self.message.setText("조건에 맞는 설비가 없습니다. 날짜나 필터를 다시 선택해 주세요." if not self.tiles else
+                                 "목표 미달 설비가 없습니다." if not scoped else
+                                 "위험 후보가 없습니다. '위험 후보만'을 해제해 주세요." if not risk_filtered else
                                  f"'{self.search.text().strip()}' 검색 결과가 없습니다. 검색어를 지우면 전체 설비가 보입니다.")
         list_mode = self.layout_buttons.checkedId() == 1
         self.list_table.setVisible(list_mode and bool(filtered))
@@ -593,14 +533,14 @@ class HeatmapPage(QWidget):
         if list_mode:
             self._render_list(filtered)
             return
-        expanded = self.view_buttons.checkedId() == 1
+        expanded = self.view_toggle.isChecked()
         has_tiles = bool(filtered)
         self.hpa_button.setVisible(any(t.goal is GoalState.EXCLUDED for t in self.tiles))
         if not has_tiles:
             return
         cards = [self._group_card(title, members, expanded, name)
                  for title, members, name in self._groups(filtered)]
-        container = GroupCards(340, spacing=16, max_columns=3)
+        container = FlowGrid(340, spacing=16, max_columns=3)
         container.set_widgets(cards)
         self.tile_body.addWidget(container)
 
@@ -629,19 +569,20 @@ class HeatmapPage(QWidget):
         card_body = QVBoxLayout(card)
         card_body.setContentsMargins(12, 12, 12, 12)
         card_body.setSpacing(8)
-        card_body.addWidget(label(f"{title} · {len(members)}대", 15, medium=True))
+        card_body.addWidget(label(f"{title} / {len(members)}대", 18, medium=True, wrap=True))
         order = {o.key: index for index, o in enumerate(self.source.catalog.sites)}
         lines = {}
         for tile in members:
             lines.setdefault((tile.site_key, tile.area), []).append(tile)
         for (site_key, area), tiles in sorted(lines.items(), key=lambda item: (order.get(item[0][0], 99),
                                                                                item[0][1] is None, item[0][1] or "")):
-            card_body.addWidget(label(f"{tiles[0].site_label} · {area or '구역 미확인'} · {len(tiles)}대", 12, medium=True))
+            card_body.addWidget(label(f"{tiles[0].site_label} · {area or '구역 미확인'} / {len(tiles)}대",
+                                      14, medium=True, wrap=True))
             buttons = []
             for tile in tiles:
                 families = tuple(f for f in tile.families
                                  if group_name is None or group_name in f.title.split(" · ")[0].split(" / ")) or tile.families
-                control = TileButton(tile, expanded=expanded, families=families, group_name=group_name)
+                control = TileButton(tile, expanded=expanded, families=families, show_context=False)
                 control.setChecked(tile.equipment_id == self.selected_id)
                 control.clicked.connect(lambda checked=False, eid=tile.equipment_id: self._select(eid))
                 self.tile_buttons.setdefault(tile.equipment_id, control)
@@ -650,20 +591,47 @@ class HeatmapPage(QWidget):
             grid = TileGrid(buttons, expanded=expanded, target_width=140)
             self.tile_grids.append(grid)
             card_body.addWidget(grid)
+        card_body.addStretch()
         return card
 
+    def _set_list_compact(self, compact):
+        if self._compact_list is compact:
+            return
+        self._compact_list = compact
+        table = self.list_table
+        table.setWordWrap(not compact)
+        table.setTextElideMode(Qt.TextElideMode.ElideRight if compact else Qt.TextElideMode.ElideNone)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff if compact
+                                          else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.verticalHeader().setMinimumSectionSize(34 if compact else 56)
+        table.setStyleSheet(self._list_style + ("QTableView::item {padding:3px 8px;}" if compact else ""))
+        header = table.horizontalHeader()
+        header.setStretchLastSection(not compact)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch if compact else QHeaderView.ResizeMode.Interactive)
+        for column in (2, 3):
+            table.setColumnHidden(column, compact)
+        table.horizontalScrollBar().setValue(0)
+        if not compact:
+            table.resize_columns()
+
     def _render_list(self, filtered):
+        compact = not self.view_toggle.isChecked()
+        self._set_list_compact(compact)
         rows, tones = [], []
         for tile in filtered:
-            versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or (
-                "분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
-            names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
-            rows.append((tile.code, f"{tile.site_label}\n{tile.area or '구역 미확인'}", names, versions, tile.goal.value,
-                         "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
+            empty_version = "분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록"
+            versions = _version_text(tile, tile.families, show_tier=False, separator="\n", empty=empty_version)
+            models = dict.fromkeys(family.title.partition(" · 계열 ")[0] for family in tile.families)
+            names = tile.model_name or "\n".join(models) or "—"
+            position = tile.site_label, tile.area or "구역 미확인"
+            location = (" / ".join(" ".join(part.splitlines()) for part in position)
+                        if compact else "\n".join(position))
+            risk = tile.risk_label if compact else "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))
+            rows.append((tile.code, location, names, versions, tile.goal.value, risk))
             tones.append(tile.version_tone)
         self.list_model.set_rows(rows, tuple(t.equipment_id for t in filtered), tones)
         if rows:
-            fit_rows(self.list_table)
+            fit_rows(self.list_table, compact=compact)
             if self.selected_id in self.list_model.ids:
                 self.list_table.selectRow(self.list_model.ids.index(self.selected_id))
 

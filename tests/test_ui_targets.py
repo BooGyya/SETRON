@@ -218,7 +218,7 @@ def test_done_changes_only_goal_draft_and_apply_refreshes_all_views(window):
     new_query = window.query_panel.apply_draft()
     dashboard, heatmap, equipment = (window.pages[k] for k in ("dashboard", "heatmap", "equipment"))
     assert dashboard.snapshot is heatmap.snapshot is equipment.snapshot
-    assert dashboard.metrics["rate"].value.text() == heatmap.metrics["rate"].value.text() == "75.0%"
+    assert dashboard.metrics["rate"].value.text() == "75.0%"
     assert new_query.targets != old_query.targets and not window.query_state.is_current(old_query)
     assert heatmap.tiles[0].goal is GoalState.MET
     equipment.open_detail(EquipmentSelection(new_query, DAY, 1))

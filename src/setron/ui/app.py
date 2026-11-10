@@ -11,7 +11,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QTimer, Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
@@ -19,14 +19,13 @@ from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource, family_name, model_name
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env, data_exporter_from_env
-from setron.ui.heatmap_data import below_evidence_lines
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.heatmap_data import EquipmentSelection
 from setron.ui.equipment import EquipmentPage
 from setron.ui.equipment_drawer import EquipmentDrawer
 from setron.ui.equipment_list_drawer import EquipmentListDrawer
 from setron.ui.target_data import describe_targets, initial_targets, target_pairs, validate_targets
-from setron.ui.query_state import QuerySelection, TargetN
+from setron.ui.query_state import QuerySelection, TargetN, single_selection
 from setron.ui.group_dialog import VersionGroupDialog
 from setron.ui.target_dialog import TargetDialog
 from setron.ui.version_filter import version_options
@@ -113,6 +112,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         def finish(result):
             if result == dialog.DialogCode.Accepted:
                 window.query_panel.set_version_filter(dialog.result_filter)
+                window.query_panel.apply_draft()
             if window.version_filter_dialog is dialog:
                 window.version_filter_dialog = None
             dialog.deleteLater()
@@ -121,9 +121,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dialog.open()
 
     window.query_panel.version_button.clicked.connect(open_version_filter)
-    window.query_panel.goal_button.setToolTip("모델·계열별 N 칸(N-2 ~ N+2) 입력·저장 · 새 계산은 조회 적용 후")
-    window.query_panel.apply_button.setToolTip("선택한 위치·설비군·목표 N으로 합성 예시 결과를 함께 다시 계산합니다. DB 미연결." if demo
-                                              else "선택한 위치·설비군·목표 N으로 저장된 자료를 다시 읽어 계산합니다.")
+    window.query_panel.goal_button.setToolTip("모델·계열별 기준 버전을 설정합니다. 저장하면 바로 조회합니다.")
     window.target_dialog = None
 
     def open_targets():
@@ -142,7 +140,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             except RuntimeError as error:
                 window.notice.setText(str(error))
                 return
-        dialog = TargetDialog(source, state.target_draft, group_key=state.draft.group_key, is_current=current, parent=window)
+        dialog = TargetDialog(source, state.target_draft, group_key=single_selection(state.draft.group_key),
+                              is_current=current, parent=window)
         window.target_dialog = dialog
 
         def finish(result):
@@ -172,8 +171,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 window.notice.setText(str(error))
                 return
         remembered_pair = last_group_pair or settings.store.version_group_pair()
-        dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=state.draft.group_key,
+        dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=single_selection(state.draft.group_key),
                                     pair_key=remembered_pair, parent=window)
+        dialog.criteria_confirmed.connect(window.query_panel.apply_draft)
         window.group_dialog = dialog
         initial_pair = dialog.pair.key if dialog.pair is not None else None
 
@@ -197,7 +197,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.catalog_changed.connect(
         lambda catalog: window.query_panel.goal_button.setEnabled(catalog.is_view_of(source.catalog))
     )
-    dashboard = DashboardPage(window.query_state, source, drilldown_connected=True)
+    dashboard = DashboardPage(window.query_state, source)
     heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
     equipment = EquipmentPage(window.query_state, source)
     custom_versions = version_loader is not None
@@ -363,11 +363,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.navigate("management")
     settings.management_requested.connect(settings_management)
 
-    def personal_query_catalog(catalog, value):
-        return replace(catalog,
-            lines=tuple(o for o in catalog.lines if value["lines"] is None or o.key in value["lines"]),
-            groups=tuple(o for o in catalog.groups if value["groups"] is None or o.key in value["groups"]))
-
     def apply_personal(value):
         window.set_menu_order(value["order"])
         layout = dashboard.layout()
@@ -378,9 +373,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                          else (dashboard.kpi_grid, dashboard.overview))
         layout.insertWidget(position, first)
         layout.insertWidget(position + 1, second)
-        selected = personal_query_catalog(source.catalog, value)
-        if selected != window.query_state.catalog:
-            window.set_query_catalog(selected)
     settings.personal_changed.connect(apply_personal)
     apply_personal(settings.personal)
 
@@ -408,7 +400,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             if not pairs:
                 raise ValueError("이 계열에 연결된 조회 대상 모델이 없습니다.")
             if any(p.key in getattr(source, "saved_groups", {}) for p in pairs):
-                raise ValueError("저장된 N 그룹이 우선 적용 중입니다. 기준·설정에서 그룹을 확인한 뒤 이동해 주세요.")
+                raise ValueError("저장된 N 그룹이 우선 적용 중입니다. 설정에서 그룹을 확인한 뒤 이동해 주세요.")
             for pair in pairs:
                 if not any(o.release.release_version_id == first.release_version_id and o.unavailable_reason is None for o in pair.options):
                     raise ValueError("모델별 포함 기준 버전의 적용 근거·순서를 먼저 확인해 주세요.")
@@ -431,7 +423,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     items.answer_navigation.connect(navigate_item_answer)
     window.navigate_item_answer = navigate_item_answer
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
-    drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget(), allow_expand=True)
+    drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
     list_drawer = window.equipment_list_drawer = EquipmentListDrawer(window.centralWidget())
     window.equipment_edit_request = ReadRequest(window)
     drawer.closed.connect(window.equipment_edit_request.cancel)
@@ -496,7 +488,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
     origin_scroll = {}
     overview_notice = window.notice.text()
-    dashboard_detail_snapshot = None
 
     def sync_back():
         action = None
@@ -512,7 +503,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             action = versions.back_to_list
         elif window.route == "settings" and settings.stack.currentWidget() is settings.location:
             action = settings.location.back_requested.emit
-        window.set_page_back(action)
+        window.set_page_back(action, subpage=action is not None and window.route not in ("dashboard", "heatmap"))
 
     def sync_mode(*_):
         sync_back()
@@ -522,7 +513,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                                     and equipment.item_request is None)
         window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
         window.header.toolbar.setVisible(window.route not in {"replay", "versions", "reports", "settings"})
-        list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
+        list_action.setVisible(window.route not in ("dashboard", "heatmap"))
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)
@@ -571,19 +562,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         list_drawer.open_list(equipment, return_focus=focus if focus and dashboard.isAncestorOf(focus) else None)
         sync_back()
 
-    def expand_list():
-        nonlocal dashboard_detail_snapshot
-        if window.route == "dashboard" and list_drawer.is_open:
-            if list_drawer.request is not None:
-                dashboard_detail_snapshot = equipment.snapshot
-                equipment.detail_back = "dashboard"
-            remember_origin()
-            window.navigate("equipment")
-
     def equipment_mode_changed(mode):
-        nonlocal dashboard_detail_snapshot
         if mode == "list":
-            dashboard_detail_snapshot = None
             if equipment.snapshot is None:
                 list_drawer.close_panel(restore_focus=False)
             elif list_drawer.is_open and list_drawer.request is not None:
@@ -593,41 +573,18 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             detail = next(d for d in equipment.data.details if d.record.equipment_id == equipment.selected_id)
             snapshot = equipment.snapshot
             request = EquipmentSelection(snapshot.query, snapshot.base_date, detail.record.equipment_id, detail.record.base_date)
-            list_drawer.show_detail(request, detail, equipment.detail_model.rows, equipment.evidence_values,
-                                    snapshot.source_label,
+            list_drawer.show_detail(request, detail, equipment.detail_model.rows,
                                     edit_available=callable(getattr(management_gateway, "equipment_versions", None)))
-
-    def open_below_heatmap():
-        if dashboard.snapshot is not heatmap.snapshot or not heatmap.show_below():
-            return
-        window.navigate("heatmap")
-        # 공통 조회 조건은 유지하고 미달 설비가 있는 영역으로 이동한다.
-        def reveal_results():
-            if window.route == "heatmap" and heatmap.below_filter.isChecked():
-                top = heatmap.mapTo(window.scroll.widget(), QPoint()).y()
-                window.scroll.verticalScrollBar().setValue(max(0, top - 12))
-        QTimer.singleShot(0, reveal_results)
-
-    dashboard.below_requested.connect(open_below_heatmap)
 
     def open_detail(request):
         if window.route != "heatmap":
             return
         if equipment.open_detail(request, origin="heatmap"):
             detail = next(d for d in equipment.data.details if d.record.equipment_id == request.equipment_id)
-            # 미달 근거 문장은 화면 자료 모듈이 만든다 (앱 조립 파일은 업무 코드를 직접 부르지 않음)
-            below_evidence = (below_evidence_lines(heatmap.snapshot, request.equipment_id, source)
-                              if heatmap.below_filter.isChecked() else [])
-            drawer.open_detail(request, detail, equipment.detail_model.rows, equipment.evidence_values,
-                               equipment.snapshot.source_label, below_evidence=below_evidence,
+            drawer.open_detail(request, detail, equipment.detail_model.rows,
                                return_focus=heatmap.tile_buttons.get(request.equipment_id),
                                edit_available=callable(getattr(management_gateway, "equipment_versions", None)))
             sync_back()
-
-    def expand_detail():
-        if window.route == "heatmap" and drawer.is_open:
-            remember_origin()
-            window.navigate("equipment")
 
     export_action = window.header.actions["export"]
     if db_exporter is not None or management_gateway is not None or data_exporter is not None:
@@ -767,15 +724,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 window.navigate("equipment")
 
     def go_back(origin):
-        reopen_list = (origin == "dashboard" and dashboard_detail_snapshot is not None
-                       and dashboard_detail_snapshot is equipment.snapshot and equipment.mode == "detail")
         item_revision = items.revision
         restored_by_history = window.go_back_route(origin)
         if restored_by_history or window.navigate(origin, record_history=False):
-            if reopen_list:
-                equipment.return_to_list()
-                list_drawer.open_list(equipment)
-                sync_back()
             if origin == "items":
                 focus = items.distribution.tiles.get(items.selected_equipment_id) if items.distribution_view.currentData() == "heatmap" else items.equipment_table
                 if focus is not None:
@@ -816,9 +767,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     dashboard.drilldown_requested.connect(open_scope)
     heatmap.equipment_selected.connect(open_detail)
-    list_drawer.expand_requested.connect(expand_list)
     list_drawer.back_requested.connect(equipment.return_to_list)
-    drawer.expand_requested.connect(expand_detail)
     list_drawer.closed.connect(sync_back)
     drawer.closed.connect(sync_back)
     equipment.back_requested.connect(go_back)
@@ -883,6 +832,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def show_saved_date(day):
         window.query_panel.set_draft(replace(window.query_state.draft, as_of=day))
         window.navigate("dashboard")
+        window.query_panel.apply_draft()
     importer.date_selected.connect(show_saved_date)
     window.query_panel.catalog_changed.connect(dashboard.invalidate)
     window.query_panel.catalog_changed.connect(heatmap.invalidate)
@@ -936,7 +886,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             return
         if error is not None:
             prefix = "저장은 완료됐지만" if window.management_last_success else "기존값을 유지했지만"
-            window.notice.setText(prefix + " 화면을 다시 읽지 못했습니다. 조회 적용으로 재시도해 주세요.")
+            window.notice.setText(prefix + " 화면을 다시 읽지 못했습니다. 조회 조건을 다시 선택해 주세요.")
         elif snapshot is not None and query is not None and window.query_state.is_current(query):
             accept_current_snapshot(snapshot)
             prefix = "저장 완료" if window.management_last_success else "저장 실패 · 기존값 유지"
@@ -956,7 +906,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         except RuntimeError as error:
             window.notice.setText(str(error))
             return False
-        catalog = personal_query_catalog(catalog, settings.personal)
         if catalog == window.query_state.catalog:
             return False
         state = window.query_state
@@ -1045,7 +994,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         ai.invalidate_data()
         heatmap.invalidate()
         replay.invalidate()
-        equipment.clear("저장 자료 변경 · 조회 적용으로 다시 확인해 주세요.")
+        equipment.clear("저장 자료 변경 · 조회 조건을 다시 선택해 주세요.")
         list_action.setEnabled(False)
         versions.refresh_after_save()
         items.refresh_after_save()
@@ -1073,7 +1022,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dashboard.invalidate()
         heatmap.invalidate()
         replay.invalidate()
-        equipment.clear("저장 자료 삭제 · 조회 적용으로 다시 확인해 주세요.")
+        equipment.clear("저장 자료 삭제 · 조회 조건을 다시 선택해 주세요.")
         ai.invalidate_data()
         versions.refresh_after_save()
         items.refresh_after_save()

@@ -1,4 +1,4 @@
-"""Figma 2-1: 라우트 유지·단일 패널·실제 판정·근거·수정 경계 회귀 검사."""
+"""설비 정보 패널의 라우트 유지, 실제 판정·관측 버전 표시, 수정 경계 회귀 검사."""
 
 from dataclasses import replace
 from datetime import timedelta
@@ -7,7 +7,7 @@ from threading import Event, get_ident
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from setron.features.aggregation.schemas import PmVersion
 from setron.ui.app import create_window
@@ -44,7 +44,7 @@ def open_tile(window, eid=1):
 
 def test_open_close_preserves_applied_query_scroll_view_search_selection(window, app):
     page, dashboard = window.pages["heatmap"], window.pages["dashboard"]
-    page.view_buttons.button(1).click()
+    page.view_toggle.setChecked(True)
     before = page.snapshot
     metrics = tuple(c.value.text() for c in dashboard.metrics.values())
     bar = window.scroll.verticalScrollBar()
@@ -58,7 +58,7 @@ def test_open_close_preserves_applied_query_scroll_view_search_selection(window,
     drawer.close_button.click()
     wait_for(app, drawer.isHidden)
     assert drawer.isHidden() and bar.value() == position and page.snapshot is before
-    assert page.view_buttons.checkedId() == 1 and page.selected_id == 1
+    assert page.view_toggle.isChecked() and page.selected_id == 1
     assert page.tile_buttons[1].isChecked() and app.focusWidget() is page.tile_buttons[1]
 
 
@@ -95,85 +95,46 @@ def test_drawer_slides_each_time_and_can_reopen_during_close(window, app):
     wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
 
 
-def test_expand_opens_full_detail_and_back_restores_heatmap(window, app):
-    heatmap, equipment = window.pages["heatmap"], window.pages["equipment"]
-    window.resize(1100, 600)
-    heatmap.view_buttons.button(1).click()
-    bar = window.scroll.verticalScrollBar()
-    wait_for(app, lambda: bar.maximum() > 0)
-    bar.setValue(bar.maximum() // 2)
-    scroll, snapshot = bar.value(), heatmap.snapshot
+def test_back_action_closes_drawer_without_leaving_heatmap(window, app):
+    heatmap = window.pages["heatmap"]
+    heatmap.view_toggle.setChecked(True)
+    snapshot = heatmap.snapshot
     drawer = open_tile(window, 1)
-    wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
-    assert drawer.expand_button.isVisible()
-    assert drawer.close_button.geometry().right() < drawer.expand_button.geometry().left()
-    assert drawer.expand_button.y() == drawer.close_button.y()
-    QTest.mouseClick(drawer.expand_button, Qt.MouseButton.LeftButton)
-    assert window.route == "equipment" and equipment.mode == "detail" and equipment.selected_id == 1
-    assert equipment.snapshot is snapshot and drawer.isHidden()
-    for control in (window.header.back, equipment.back_button):
-        assert not control.text() and not control.icon().isNull()
-        assert control.accessibleName() == control.toolTip() and control.toolTip()
-    QTest.mouseClick(window.header.back, Qt.MouseButton.LeftButton)
-    wait_for(app, lambda: window.route == "heatmap" and bar.value() == scroll)
-    assert heatmap.snapshot is snapshot and heatmap.view_buttons.checkedId() == 1
+    controls = [drawer.header.itemAt(index).widget() for index in range(drawer.header.count())]
+    assert [control for control in controls if isinstance(control, QPushButton)] == [drawer.close_button]
+    assert window.back_shortcut.isEnabled()
+    window.back_shortcut.trigger()
+    wait_for(app, drawer.isHidden)
+    assert window.route == "heatmap"
+    assert heatmap.snapshot is snapshot and heatmap.view_toggle.isChecked()
     assert heatmap.selected_id == 1 and heatmap.tile_buttons[1].isChecked()
-    assert drawer.isHidden()
+    assert app.focusWidget() is heatmap.tile_buttons[1]
 
 
-def test_new_selection_reuses_one_panel_and_resets_accordions_scroll(window):
+def test_new_selection_reuses_one_panel_and_resets_scroll(window):
     drawer = open_tile(window)
-    drawer.evidence_toggle.click()
-    assert drawer.evidence_content.isVisible()
-    drawer.software_cards[0].toggle.click()
     drawer.scroll.verticalScrollBar().setValue(50)
-    open_tile(window, 2)
-    assert len(window.centralWidget().findChildren(EquipmentDrawer)) == 1
-    assert drawer.request.equipment_id == 2 and "TEST-2" in drawer.title.text()
-    assert not drawer.evidence_toggle.isChecked() and not drawer.evidence_content.isVisible()
-    assert all(c.toggle.isChecked() for c in drawer.software_cards)
-    assert all(c.chevron.expanded and c.chevron.isVisible() for c in drawer.software_cards)
-    assert not drawer.evidence_chevron.expanded and drawer.evidence_chevron.isVisible()
+    assert open_tile(window, 2) is drawer
+    assert window.centralWidget().findChildren(EquipmentDrawer, "equipmentDrawerOverlay") == [drawer]
+    assert drawer.request.equipment_id == 2 and drawer.info_values["설비명"].text() == "TEST-2"
+    assert len(drawer.software_cards) == 1
     assert drawer.scroll.verticalScrollBar().value() == 0
 
 
-def test_sw_disclosure_arrow_stays_visible_and_changes_direction_for_mouse_and_keyboard(window, app):
+def test_software_shows_current_and_target_on_separate_rows_without_verdict_or_count(window):
     drawer = open_tile(window)
-    for card in drawer.software_cards:
-        arrow = card.chevron
-        up = arrow.pixmap().toImage()
-        assert arrow.expanded and arrow.isVisible() and arrow.size() == svg_size("c9be0.svg")
-        for _ in range(2):
-            # 화살표 슬롯을 클릭해도 전체 헤더와 동일하게 토글한다.
-            QTest.mouseClick(card.toggle, Qt.MouseButton.LeftButton,
-                             pos=arrow.mapTo(card.toggle, QPoint(8, 8)))
-            app.processEvents()
-            assert not card.toggle.isChecked() and not card.contents.isVisible()
-            assert arrow.isVisible() and not arrow.expanded
-            assert arrow.pixmap().toImage() != up and arrow.pixmap().size() == svg_size("c9be0.svg")
-            assert card.toggle.accessibleName().endswith("펼치기")
-            card.toggle.setFocus()
-            QTest.keyClick(card.toggle, Qt.Key.Key_Space)
-            app.processEvents()
-            assert card.toggle.isChecked() and card.contents.isVisible()
-            assert arrow.isVisible() and arrow.expanded and arrow.pixmap().toImage() == up
-            assert card.toggle.accessibleName().endswith("접기")
-
-
-def test_evidence_uses_arrow_instead_of_visible_expand_collapse_text(window, app):
-    drawer = open_tile(window)
-    toggle, arrow = drawer.evidence_toggle, drawer.evidence_chevron
-    down = arrow.pixmap().toImage()
-    assert arrow.isVisible() and not arrow.expanded and not drawer.evidence_content.isVisible()
-    for expected in (True, False, True, False):
-        toggle.click()
-        app.processEvents()
-        assert arrow.isVisible() and arrow.expanded is expected
-        assert drawer.evidence_content.isVisible() is expected
-        assert (arrow.pixmap().toImage() != down) is expected
-        assert arrow.size() == svg_size("c9be0.svg")
-        assert all(child.text() not in {"펼치기", "접기"} for child in toggle.findChildren(QLabel))
-        assert toggle.accessibleName().endswith("접기" if expected else "펼치기")
+    card = next(card for card in drawer.software_cards if card.observation.current == "v99")
+    labels = {label.text(): label for label in card.findChildren(QLabel) if label.isVisibleTo(card)}
+    current, target = labels["현재 버전"], labels["목표 버전"]
+    assert current.mapTo(card, QPoint()).y() < target.mapTo(card, QPoint()).y()
+    assert labels["v99"].mapTo(card, QPoint()).y() < labels["v2"].mapTo(card, QPoint()).y()
+    assert current.font().pixelSize() == target.font().pixelSize() == 14
+    assert labels["v99"].font().pixelSize() == labels["v2"].font().pixelSize() == 16
+    assert "목표 기준" not in labels
+    assert not any(text.startswith(("N-1", "N-2")) or "근거" in text for text in labels)
+    captions = [label.text() for label in drawer.body_widget.findChildren(QLabel)
+                if label.isVisibleTo(drawer.body_widget)]
+    assert not any(text.startswith(("판정 요약", "관측된 SW (", "관측 SW ")) or "원본 근거" in text for text in captions)
 
 
 @pytest.mark.parametrize("eid,goal,cards", [(1, GoalState.BELOW, 3), (2, GoalState.MET, 1),
@@ -181,28 +142,39 @@ def test_evidence_uses_arrow_instead_of_visible_expand_collapse_text(window, app
                                          (5, GoalState.UNKNOWN, 0)])
 def test_representative_states_are_real_data_not_figma_demo(window, eid, goal, cards):
     drawer = open_tile(window, eid)
-    assert drawer.summary_title.text() == goal.value
+    assert drawer.goal_badge.text() == goal.value
     assert len(drawer.software_cards) == cards
     if eid == 2:
         assert "위험 후보" in drawer.risk_badge.text()  # 목표 달성 ≠ 위험 해제
-        assert drawer.software_cards[0].observation.state == "met"
-    if eid == 3:
         observation = drawer.software_cards[0].observation
-        assert observation.state == "unknown" and observation.current == "미입력"
-        assert "버전 값이 비어" in observation.reason
+        assert observation.current == observation.target == "v2"
+    if eid == 3:
+        assert drawer.software_cards[0].observation.current == "미입력"
     if eid == 4:
         assert "위험 분석 제외" in drawer.risk_badge.text()
-    assert "DM-067" not in drawer.title.text()
+    assert drawer.info_values["설비명"].text() == f"TEST-{eid}"
     assert not drawer.edit_button.isEnabled()  # 합성 공급자는 실제 DB 행을 편집할 수 없다.
 
 
-def test_evidence_uses_actual_observation_and_does_not_invent_source_links(window):
+def test_panel_shows_actual_equipment_information_in_one_card(window):
     drawer = open_tile(window)
-    values = {title: value for _, title, value in drawer.evidence_values}
-    assert str(DAY) in values["실제 관측일"] and "일반 분석 기준일" in values["실제 관측일"]
-    assert values["관측 출처"] == "합성 예시 · 테스트 전용"
-    assert values["판정 규칙"] == values["필수 아이템명"] == values["릴리즈 문서 · 아이템 위치"] == "미연결"
-    assert values["비교 목표 N"] == "v2"
+    assert drawer.title.text() == "설비 정보"
+    assert drawer.goal_badge.parentWidget() is drawer.risk_badge.parentWidget()
+    assert all(drawer.info_card.isAncestorOf(value) for value in drawer.info_values.values())
+    expected = {
+        "Site": "테스트 A", "Line": "Line A", "모델": "TEST", "설비명": "TEST-1", "기준일": str(DAY),
+    }
+    assert {name: value.text() for name, value in drawer.info_values.items()} == expected
+    labels = {label.text(): label for label in drawer.info_card.findChildren(QLabel)}
+    positions = []
+    for name in expected:
+        caption, value = labels[name], drawer.info_values[name]
+        caption_pos = caption.mapTo(drawer.info_card, QPoint())
+        value_pos = value.mapTo(drawer.info_card, QPoint())
+        assert caption_pos.x() < value_pos.x() and caption_pos.y() == value_pos.y()
+        assert caption.font().pixelSize() == 14 and value.font().pixelSize() == 15
+        positions.append(caption_pos.y())
+    assert positions == sorted(set(positions))
 
 
 def test_selected_group_keeps_all_sw_in_detail_without_widening_scope(window):
@@ -211,6 +183,7 @@ def test_selected_group_keeps_all_sw_in_detail_without_widening_scope(window):
     drawer = open_tile(window)
     assert window.pages["heatmap"].snapshot.query.selection.group_key == "o3"
     assert drawer.detail.selected.goal is GoalState.MET and drawer.detail.whole.goal is GoalState.BELOW
+    assert drawer.goal_badge.text() == GoalState.BELOW.value
     assert len(drawer.software_cards) == 3
     assert {c.observation.model.split(" · ")[0] for c in drawer.software_cards} == {"O2", "O3"}
 
@@ -227,7 +200,9 @@ def test_same_sw_grouping_keeps_every_pm_and_separates_different_versions(window
     rows = [(p.pm_name, "O2 · 계열 O2", "v2", "v2", "N 이상", "확인된 릴리즈 순서로 비교") for p in pms]
     grouped = observed_software(same, rows)
     assert len(grouped) == 1 and grouped[0].pms == ("PM1", "PM2")
-    assert grouped[0].state == "met" and grouped[0].current == "v2"
+    assert grouped[0].current == grouped[0].target == "v2"
+    distinct_rows = (rows[0], ("PM2", "O2 · 계열 O2", "v99", "v2", "N-1", "확인된 릴리즈 순서로 비교"))
+    assert [(row.current, row.pms) for row in observed_software(same, distinct_rows)] == [("v2", ("PM1",)), ("v99", ("PM2",))]
 
 
 def test_draft_keeps_applied_detail_but_apply_navigation_and_catalog_close_it(window):
@@ -259,7 +234,6 @@ def test_stale_query_or_wrong_observation_does_not_open_panel(window):
 def test_resize_and_long_text_stay_inside_panel_without_horizontal_scroll(window, app):
     drawer = open_tile(window)
     wait_for(app, lambda: drawer.panel.geometry().right() == drawer.rect().right())
-    drawer.evidence_toggle.click()
     for width, height in ((960, 600), (1920, 1080), (1440, 960)):
         window.resize(width, height)
         app.processEvents()
@@ -268,12 +242,7 @@ def test_resize_and_long_text_stay_inside_panel_without_horizontal_scroll(window
         assert drawer.scroll.horizontalScrollBar().maximum() == 0
         assert drawer.body_widget.width() == drawer.scroll.viewport().width()
     assert drawer.close_button.iconSize() == svg_size("529be.svg")
-    for card in drawer.software_cards:
-        assert card.toggle.height() >= 54  # 전역 QPushButton min-height가 카드 제목/상태를 가리지 않는다.
-        assert all(w.height() > 0 for w in card.toggle.findChildren(QWidget))
-    for asset in ("529be.svg", "96d37.svg", "1512d.svg", "c9be0.svg", "b5c69.svg", "08019.svg", "ed395.svg",
-                  "98d75.svg", "02a44.svg", "6110f.svg"):
-        assert svg_size(asset).width() > 0
+    assert not drawer.close_button.text()
 
 
 def test_long_raw_version_is_plain_text_and_remains_inside_drawer(window, source, monkeypatch, app):
@@ -283,6 +252,8 @@ def test_long_raw_version_is_plain_text_and_remains_inside_drawer(window, source
     window.query_panel.apply_draft()
     drawer = open_tile(window)
     assert drawer.software_cards[0].observation.current == raw
+    rendered = next(label for label in drawer.software_cards[0].findChildren(QLabel) if label.text() == raw)
+    assert rendered.textFormat() == Qt.TextFormat.PlainText
     window.resize(960, 600)
     app.processEvents()
     assert drawer.scroll.horizontalScrollBar().maximum() == 0
@@ -298,11 +269,11 @@ def test_hpa_uses_its_actual_observation_date_and_no_comparison(window, source, 
     drawer = open_tile(window, 4)
     assert drawer.request.base_date == DAY and drawer.request.observation_date == observed
     observation = drawer.software_cards[0].observation
-    assert observation.state == "excluded" and observation.current == "HPA 원문"
-    assert observation.target == "—"
-    values = {title: value for _, title, value in drawer.evidence_values}
-    assert str(observed) in values["실제 관측일"] and str(DAY) in values["실제 관측일"]
-    assert values["비교 목표 N"] == "HPA 비교 제외"
+    assert drawer.goal_badge.text() == GoalState.EXCLUDED.value and observation.current == "HPA 원문"
+    assert observation.target == "해당 없음"
+    assert not observation.pms
+    assert drawer.info_values["기준일"].text() == str(observed)
+    assert "해당 없음" in {label.text() for label in drawer.software_cards[0].findChildren(QLabel)}
 
 
 def test_query_failure_removes_old_panel_and_edit_context(window, source, monkeypatch):

@@ -101,7 +101,7 @@ class ReplayPage(QWidget):
         tools_row.addWidget(self.apply_button)
         fields.append(tools)
         self.filters.body.addWidget(_WrapRow(fields, 106, fields=True))
-        self.version_button = button("버전(N) 기준 입력")
+        self.version_button = button("조회 버전 설정")
         self.version_button.setStyleSheet("QPushButton {padding:0;min-height:38px;max-height:38px;}"
                                          "QPushButton:focus {min-height:36px;max-height:36px;}")
         self.version_button.setFixedSize(170, 40)
@@ -185,7 +185,7 @@ class ReplayPage(QWidget):
         self.content.body.addWidget(description)
         # 타일 채움색과 같은 5단계 범례 + 위험 후보 빨간 테두리 (버전 히트맵과 같음, QA R-02).
         self.legend_items = []
-        for color, caption in [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보 (빨간 테두리)")]:
+        for color, caption in [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보")]:
             item = QWidget()
             row = QHBoxLayout(item)
             row.setContentsMargins(0, 0, 0, 0)
@@ -511,13 +511,13 @@ class ReplayPage(QWidget):
             return False
         self.pause()
         try:
-            detail, rows, evidence = replay_detail(self.data, self.frame, equipment_id)
+            detail, rows, _ = replay_detail(self.data, self.frame, equipment_id)
         except (ValueError, StopIteration):
             return False
         if self.drawer is None:
             self.drawer = EquipmentDrawer(self.window())
         request = EquipmentSelection(self.frame.snapshot.query, self.frame.day, equipment_id, self.frame.day)
-        self.drawer.open_detail(request, detail, rows, evidence, self.data.source.source_label,
+        self.drawer.open_detail(request, detail, rows,
                                 return_focus=self.heatmap.tile_buttons.get(equipment_id), edit_available=False)
         return True
 
