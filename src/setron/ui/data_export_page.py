@@ -10,8 +10,6 @@ from setron.ui.theme import SECONDARY
 EXPORT_OPTIONS = (
     ("sql", "DB 전체 SQL", "데이터베이스 전체를 복원 가능한 SQL 파일로 저장합니다."),
     ("summary", "관리값 요약 Excel", "현재 관리값을 요약한 Excel 통합문서를 저장합니다."),
-    ("management", "관리 자료 XLSX", "현재 관리값과 보관 원본을 Excel 통합문서로 저장합니다."),
-    ("status", "현재 조회 현황 XLSX", "대시보드에 마지막으로 적용한 조회 조건으로 설비 현황을 저장합니다."),
 )
 
 

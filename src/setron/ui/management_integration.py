@@ -1,14 +1,49 @@
-"""적용된 화면 조건을 관리 현황 출력의 명시적 범위로 전달한다."""
+"""관리 데이터 내보내기의 파일명과 조회 범위를 처리한다."""
+
+import re
+from itertools import count
+from pathlib import Path
 
 from setron.features.management import ReportFilter
 from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.ui.query_state import selection_keys
-from pathlib import Path
 
 
 def export_failure(path, message):
     """공통 앱 구성 코드에 DB·출력 구현을 노출하지 않는 실패 결과."""
     return ExportResult(ExportStatus.FAILED, Path(path), message)
+
+
+def save_numbered_export(exporter, path, suffix, *, confirm_duplicate=None):
+    """동명 파일을 보존하고, 저장할 이름은 파일을 배타적으로 생성해 확보한다."""
+    requested = Path(path)
+    if requested.suffix.lower() != suffix:
+        return export_failure(requested, f"파일 이름은 {suffix}로 끝나야 합니다.")
+    # 이전에 중복으로 붙은 번호가 있더라도 첫 번호부터 같은 파일명 계열을 이어 간다.
+    numbered = re.fullmatch(r"(.+?) \(([1-9][0-9]*)\)(?: \([1-9][0-9]*\))*", requested.stem)
+    stem, first_number = (numbered[1], int(numbered[2]) + 1) if numbered else (requested.stem, 1)
+    path = requested
+    for number in count(first_number):
+        try:
+            with path.open("xb"):
+                pass
+        except FileExistsError:
+            if path == requested and confirm_duplicate is not None and not confirm_duplicate(requested):
+                return None
+            path = requested.with_name(f"{stem} ({number}){requested.suffix}")
+            continue
+        except OSError:
+            return export_failure(path, "파일을 저장할 수 없습니다. 폴더 쓰기 권한을 확인해 주세요.")
+        break
+
+    saved = False
+    try:
+        result = exporter(path)
+        saved = result.saved
+        return result
+    finally:
+        if not saved:
+            path.unlink(missing_ok=True)
 
 
 def report_filter(snapshot, source):

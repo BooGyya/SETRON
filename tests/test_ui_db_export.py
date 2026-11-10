@@ -4,12 +4,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.infrastructure.database import Database, DatabaseConnectionError
 from setron.ui.app import create_window
 from setron.ui.database_source import data_exporter_from_env, sql_exporter_from_env
+from setron.ui.import_dialogs import ImportConfirmDialog
 
 
 @pytest.fixture(scope="module")
@@ -27,40 +29,98 @@ def test_export_action_is_disabled_without_db(qapp):
     window.close()
 
 
-def test_sidebar_export_actions_use_existing_save_workflows(qapp, tmp_path, monkeypatch):
-    from test_ui_management import FakeGateway, wait_for
+def test_sidebar_export_confirms_and_numbers_duplicate_names(qapp, tmp_path, monkeypatch):
+    from test_ui_management import FakeGateway
 
-    calls = []
+    calls, messages, prompts = [], [], []
+    confirmed = False
 
     def exporter(key):
-        def save(path, *_):
+        def save(path):
             calls.append((key, Path(path)))
+            Path(path).write_text(key, encoding="utf-8")
             return ExportResult(ExportStatus.SAVED, Path(path), "저장 완료")
         return save
 
-    gateway = FakeGateway()
-    gateway.export_management = exporter("management")
-    gateway.export_status = exporter("status")
     window = create_window(db_exporter=exporter("sql"), data_exporter=exporter("summary"),
-                           management_gateway=gateway)
+                           management_gateway=FakeGateway())
     page = window.pages["export"]
-    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    original_exec = ImportConfirmDialog.exec
+
+    def confirm(dialog):
+        prompts.append(dialog.message.text())
+        assert dialog.save_button.text() == "확인"
+        assert dialog.cancel_button.text() == "취소"
+        action = dialog.save_button if confirmed else dialog.cancel_button
+        QTimer.singleShot(0, action.click)
+        return original_exec(dialog)
+
+    monkeypatch.setattr(ImportConfirmDialog, "exec", confirm)
+    monkeypatch.setattr(QMessageBox, "information", lambda _, title, text: messages.append(text))
     monkeypatch.setattr(QMessageBox, "warning", lambda _, title, text: pytest.fail(f"{title}: {text}"))
     try:
         window.nav["export"].click()
-        assert window.route == "export" and not page.buttons["status"].isEnabled()
-        assert "조회 조건을 먼저 적용" in page.details["status"].text()
-        window.navigate("dashboard")
-        window.query_panel.apply_draft()
-        window.nav["export"].click()
+        assert window.route == "export" and list(page.buttons) == ["sql", "summary"]
         assert all(action.isEnabled() for action in page.buttons.values())
-        for key in page.buttons:
-            path = tmp_path / (key + (".sql" if key == "sql" else ".xlsx"))
-            monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(path), ""))
+        for key, suffix in (("sql", ".sql"), ("summary", ".xlsx")):
+            path = tmp_path / f"setron_db_20261110_2158{suffix}"
+
+            def select(*_, options):
+                assert options & QFileDialog.Option.DontConfirmOverwrite
+                return str(path), ""
+
+            monkeypatch.setattr(QFileDialog, "getSaveFileName", select)
+            prompt_count = len(prompts)
             page.buttons[key].click()
-            wait_for(qapp, lambda: not window.export_request.busy)
-            assert calls[-1] == (key, path)
-            assert page.buttons[key].isEnabled()
+            assert calls[-1] == (key, path) and len(prompts) == prompt_count
+            path.write_text("기존 파일", encoding="utf-8")
+            call_count = len(calls)
+            confirmed = False
+            page.buttons[key].click()
+            assert len(prompts) == prompt_count + 1 and path.name in prompts[-1]
+            assert len(calls) == call_count
+            assert not path.with_name(f"{path.stem} (1){suffix}").exists()
+
+            confirmed = True
+            original = path
+            for number in (1, 2, 3):
+                page.buttons[key].click()
+                saved = original.with_name(f"{original.stem} ({number}){suffix}")
+                assert calls[-1] == (key, saved)
+                assert saved.read_text(encoding="utf-8") == key
+                assert path.name in prompts[-1]
+                assert str(saved) in messages[-1]
+                path = saved
+
+            path = original.with_name(f"{original.stem} (2) (1){suffix}")
+            path.write_text("이전 사본", encoding="utf-8")
+            page.buttons[key].click()
+            assert calls[-1] == (key, original.with_name(f"{original.stem} (4){suffix}"))
+            assert path.read_text(encoding="utf-8") == "이전 사본"
+            assert len(prompts) == prompt_count + 5
+            assert original.read_text(encoding="utf-8") == "기존 파일"
+
+        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_, **__: ("", ""))
+        page.buttons["sql"].click()
+        assert len(calls) == 10 and len(prompts) == 10
+    finally:
+        window.close()
+
+
+def test_numbered_export_failure_removes_only_new_partial_file(qapp, tmp_path):
+    requested = tmp_path / "요약.xlsx"
+    requested.write_bytes(b"original")
+
+    def save(path):
+        path.write_bytes(b"partial")
+        return ExportResult(ExportStatus.FAILED, path, "저장 실패")
+
+    window = create_window(data_exporter=save)
+    try:
+        result = window.export_data(requested)
+        assert not result.saved and result.path == tmp_path / "요약 (1).xlsx"
+        assert requested.read_bytes() == b"original"
+        assert not result.path.exists()
     finally:
         window.close()
 
