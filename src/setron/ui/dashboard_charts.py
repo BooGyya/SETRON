@@ -4,7 +4,7 @@ from collections.abc import Iterable, Mapping
 from functools import partial
 from html import escape
 
-from PySide6.QtCharts import QAbstractBarSeries, QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
+from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
@@ -175,9 +175,7 @@ class DashboardChart(QChartView):
             shown[group_set] = label, cohorts
         if not shown:
             return
-        series.setLabelsVisible(True)
-        series.setLabelsFormat("@value")
-        series.setLabelsPosition(QAbstractBarSeries.LabelsPosition.LabelsOutsideEnd)
+        series.setLabelsVisible(False)
         chart.addSeries(series)
         x = QBarCategoryAxis()
         x.append(list(areas))

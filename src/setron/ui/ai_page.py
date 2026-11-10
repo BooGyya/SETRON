@@ -360,7 +360,7 @@ class AIPage(QWidget):
         facts = self.facts_provider()
         self.facts_label.setText("분석에 보낼 자료 · 대시보드와 같은 적용 조건의 계산값\n"
                                  + " · ".join(f"{key}: {'계산 불가' if value is None else value}" for key, value in facts.items())
-                                 if facts else "조회 적용으로 대시보드 결과를 계산한 뒤 분석할 수 있습니다.")
+                                 if facts else "대시보드에서 날짜나 필터를 선택한 뒤 분석할 수 있습니다.")
         self.parse_button.setEnabled(self.busy is None)
         available = facts is not None or (self.fresh_loader is not None and self.state.applied_is_current)
         self.analyze_button.setEnabled(self.busy is None and available and self.analysis_allowed())

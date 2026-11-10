@@ -12,7 +12,7 @@ from setron.features.risk.schemas import EquipmentRisk, RiskStatus, RiskSummary
 from setron.features.targets.groups import with_saved_groups
 from setron.features.version.groups import SLOT_LABELS
 from setron.ui.dashboard_data import family_name, missing_sw_count
-from setron.ui.query_state import UNASSIGNED, AppliedQuery
+from setron.ui.query_state import UNASSIGNED, AppliedQuery, selection_keys
 from setron.ui.replay_data import ReplayRequest, load_replay
 
 
@@ -91,10 +91,10 @@ class GeneratedReport:
         return f"{self.request.filename}.{self.request.format}"
 
 
-def _caption(options, key, all_text):
-    if key is UNASSIGNED:
-        return "미지정"
-    return next((o.label for o in options if o.key == key), all_text)
+def _caption(options, value, all_text):
+    names = {option.key: option.label for option in options}
+    return ", ".join("미지정" if key is UNASSIGNED else names.get(key, str(key))
+                     for key in selection_keys(value)) or all_text
 
 
 def scope_caption(catalog, selection):

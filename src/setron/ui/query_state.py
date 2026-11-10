@@ -10,7 +10,30 @@ class SpecialSelection(Enum):
 
 
 UNASSIGNED = SpecialSelection.UNASSIGNED
-SelectionKey = str | SpecialSelection | None  # None: 전체, UNASSIGNED: 미지정
+SelectionAtom = str | SpecialSelection
+SelectionKey = SelectionAtom | tuple[SelectionAtom, ...] | None  # None: 전체, UNASSIGNED: 미지정
+
+
+def selection_keys(value: SelectionKey) -> tuple[SelectionAtom, ...]:
+    """선택된 키를 튜플로 읽는다. 전체는 빈 튜플이다."""
+    if value is None:
+        return ()
+    return value if isinstance(value, tuple) else (value,)
+
+
+def matches_selection(value: SelectionKey, actual: str | None) -> bool:
+    """전체는 모든 값을 포함하고, 미지정은 원본 값이 없을 때 일치한다."""
+    return value is None or (UNASSIGNED if actual is None else actual) in selection_keys(value)
+
+
+def single_selection(value: SelectionKey) -> SelectionAtom | None:
+    """단일 선택을 요구하는 화면에는 실제로 하나를 고른 경우만 넘긴다."""
+    keys = selection_keys(value)
+    return keys[0] if len(keys) == 1 else None
+
+
+def _retain_keys(value: SelectionKey, allowed: set[SelectionAtom]) -> tuple[SelectionAtom, ...] | None:
+    return tuple(key for key in selection_keys(value) if key in allowed) or None
 
 
 @dataclass(frozen=True)
@@ -62,18 +85,29 @@ class VersionFilter:
 
 
 def version_filter_caption(value: VersionFilter | None) -> str:
-    return "조회 버전 · 전체" if value is None else f"조회 버전 · {len(value.versions) + value.include_missing}개 선택"
+    return "조회 버전 설정" if value is None else f"조회 버전 설정 · {len(value.versions) + value.include_missing}개 선택"
 
 
 @dataclass(frozen=True)
 class QuerySelection:
-    site_key: str | None = None
+    site_key: str | tuple[str, ...] | None = None
     fab_key: SelectionKey = None
     line_key: SelectionKey = None
-    group_key: str | None = None  # UI 설비군 키이며 version_family.family_id가 아님
+    group_key: str | tuple[str, ...] | None = None  # UI 설비군 키이며 version_family.family_id가 아님
     as_of: date | None = None  # 기준일. None은 최신 관측(오늘 기준), 날짜는 그날 이전 최신 관측
     versions: VersionFilter | None = None  # None: 모든 버전. 빈 선택을 전체로 취급하지 않는다.
     item_family_id: int | None = None  # Item 답변에서 이동한 명시적 SW 계열 범위. 전체 조건으로 초기화하면 해제.
+
+    def __post_init__(self):
+        for field in ("site_key", "fab_key", "line_key", "group_key"):
+            value = getattr(self, field)
+            # 잘못된 값의 오류는 기존과 같이 QueryState.validate에서 보고한다.
+            if not isinstance(value, tuple) or not value or any(
+                not isinstance(key, str) and key is not UNASSIGNED for key in value
+            ):
+                continue
+            keys = tuple(sorted(set(value), key=lambda key: (key is UNASSIGNED, str(key))))
+            object.__setattr__(self, field, keys[0] if len(keys) == 1 else keys)
 
 
 @dataclass(frozen=True)
@@ -85,7 +119,7 @@ class QueryCatalog:
     source_label: str = "등록된 조회 선택지"
 
     def is_view_of(self, catalog: "QueryCatalog") -> bool:
-        """개인 설정으로 Line·설비군을 숨겨도 남은 선택지는 같은 매핑이어야 한다."""
+        """현재 선택지의 위치와 설비군 매핑을 공급자 카탈로그와 비교한다."""
         return (
             self.sites == catalog.sites
             and self.fabs == catalog.fabs
@@ -180,15 +214,19 @@ class QueryState:
     def available_fabs(self, selection: QuerySelection | None = None) -> tuple[FabOption, ...]:
         selection = selection or self.draft
         return tuple(o for o in self.catalog.fabs
-                     if selection.site_key is None or o.site_key == selection.site_key)
+                     if matches_selection(selection.site_key, o.site_key))
 
     def available_lines(self, selection: QuerySelection | None = None) -> tuple[LineOption, ...]:
         selection = selection or self.draft
         return tuple(o for o in self.catalog.lines
-                     if (selection.site_key is None or o.site_key == selection.site_key)
-                     and (selection.fab_key is None
-                          or (selection.fab_key is UNASSIGNED and o.fab_key is None)
-                          or o.fab_key == selection.fab_key))
+                     if matches_selection(selection.site_key, o.site_key) and matches_selection(selection.fab_key, o.fab_key))
+
+    @staticmethod
+    def _valid_keys(value: SelectionKey, allowed: set[SelectionAtom]) -> bool:
+        if value is None:
+            return True
+        keys = selection_keys(value)
+        return bool(keys) and all((isinstance(key, str) or key is UNASSIGNED) and key in allowed for key in keys)
 
     def validate(self, selection: QuerySelection) -> None:
         if not isinstance(selection, QuerySelection):
@@ -201,15 +239,13 @@ class QueryState:
             (selection.site_key, self.catalog.sites, "Site"),
             (selection.group_key, self.catalog.groups, "설비군"),
         ):
-            if value is not None and (not isinstance(value, str) or value not in {o.key for o in options}):
+            if not self._valid_keys(value, {o.key for o in options}):
                 raise ValueError(f"등록되지 않은 {field}입니다: {value}")
         for value, options, field in (
             (selection.fab_key, self.available_fabs(selection), "Fab"),
             (selection.line_key, self.available_lines(selection), "Line"),
         ):
-            if value is not None and value is not UNASSIGNED and (
-                not isinstance(value, str) or value not in {o.key for o in options}
-            ):
+            if not self._valid_keys(value, {UNASSIGNED, *(o.key for o in options)}):
                 raise ValueError(f"등록되지 않았거나 상위 조건과 다른 {field}입니다: {value}")
 
     def set_as_of(self, value: date | None) -> None:
@@ -221,16 +257,24 @@ class QueryState:
     def select(self, field: str, value: SelectionKey) -> None:
         if field not in QuerySelection.__dataclass_fields__:
             raise ValueError(f"알 수 없는 조회 항목입니다: {field}")
-        if getattr(self.draft, field) == value and not (field == "group_key" and self.draft.item_family_id is not None):
+        selection = replace(self.draft, **{field: value})
+        if selection == self.draft and not (field == "group_key" and self.draft.item_family_id is not None):
             return
-        changes = {field: value}
         if field == "site_key":
-            changes.update(fab_key=None, line_key=None)
+            selection = self._retain_fabs_and_lines(selection)
         elif field == "fab_key":
-            changes.update(line_key=None)
+            selection = self._retain_lines(selection)
         elif field == "group_key":
-            changes.update(item_family_id=None)
-        self.set_draft(replace(self.draft, **changes))
+            selection = replace(selection, item_family_id=None)
+        self.set_draft(selection)
+
+    def _retain_fabs_and_lines(self, selection: QuerySelection) -> QuerySelection:
+        fabs = {UNASSIGNED, *(option.key for option in self.available_fabs(selection))}
+        return self._retain_lines(replace(selection, fab_key=_retain_keys(selection.fab_key, fabs)))
+
+    def _retain_lines(self, selection: QuerySelection) -> QuerySelection:
+        lines = {UNASSIGNED, *(option.key for option in self.available_lines(selection))}
+        return replace(selection, line_key=_retain_keys(selection.line_key, lines))
 
     def set_draft(self, selection: QuerySelection) -> None:
         if selection.as_of is not None and type(selection.as_of) is not date:
@@ -258,16 +302,12 @@ class QueryState:
             raise ValueError("QueryCatalog가 필요합니다.")
         self.catalog = catalog
         self._catalog_revision += 1
-        draft = self.draft
-        if draft.site_key is not None and draft.site_key not in {o.key for o in catalog.sites}:
-            draft = replace(draft, site_key=None, fab_key=None, line_key=None)
-        if isinstance(draft.fab_key, str) and draft.fab_key not in {o.key for o in self.available_fabs(draft)}:
-            draft = replace(draft, fab_key=None, line_key=None)
-        if isinstance(draft.line_key, str) and draft.line_key not in {o.key for o in self.available_lines(draft)}:
-            draft = replace(draft, line_key=None)
-        if draft.group_key is not None and draft.group_key not in {o.key for o in catalog.groups}:
-            draft = replace(draft, group_key=None)
-        self.set_draft(draft)
+        draft = replace(self.draft,
+                        site_key=_retain_keys(self.draft.site_key, {o.key for o in catalog.sites}),
+                        group_key=_retain_keys(self.draft.group_key, {o.key for o in catalog.groups}))
+        if draft.group_key != self.draft.group_key:
+            draft = replace(draft, item_family_id=None)
+        self.set_draft(self._retain_fabs_and_lines(draft))
         # 적용 스냅샷은 보존한다. 정규화된 초안을 자동으로 적용하면 조회 범위가 달라진다.
 
     def describe(self, selection: QuerySelection) -> str:
@@ -278,8 +318,10 @@ class QueryState:
             ("Line", selection.line_key, self.catalog.lines),
             ("설비군", selection.group_key, self.catalog.groups),
         ):
-            title = "전체" if value is None else "미지정" if value is UNASSIGNED else next(
-                o.label for o in options if o.key == value)
+            labels = {o.key: o.label for o in options}
+            title = "전체" if value is None else ", ".join(
+                "미지정" if key is UNASSIGNED else labels[key] for key in selection_keys(value)
+            )
             captions.append(f"{name} {title}")
         captions.append("기준일 최신" if selection.as_of is None else f"기준일 {selection.as_of.isoformat()}")
         if selection.versions is not None:

@@ -150,7 +150,8 @@ def install_theme(app: QApplication) -> None:
         QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
         QScrollBar::handle:horizontal { background: #cbd3e1; border-radius: 5px; min-width: 32px; }
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-        QToolTip { background: #142033; color: white; border: none; padding: 8px; font-size: 14px; }
+        QToolTip { background-color: palette(tooltip-base); color: palette(tooltip-text);
+                   border: 1px solid #d5d7da; padding: 8px; font-size: 14px; }
         QMessageBox { background: #f5f6f8; }
     """)
     from setron.ui.appearance import install_appearance

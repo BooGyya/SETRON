@@ -1,13 +1,14 @@
 """모든 업무 화면에서 공유하는 연도 → 월 선택 달력. 날짜 확정은 Qt 기본 동작을 유지한다."""
 
 from PySide6.QtCore import QAbstractListModel, QDate, QEvent, QLocale, QModelIndex, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QFont, QMouseEvent, QTextCharFormat
 from PySide6.QtWidgets import (
     QCalendarWidget, QComboBox, QDateEdit, QHBoxLayout, QStyle, QStyleOptionComboBox, QToolButton, QWidget,
 )
 
+from setron.ui.appearance import manager, ui_color
 from setron.ui.combo_box import ComboBox
-from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, SOFT
 
 
 class _Years(QAbstractListModel):
@@ -51,7 +52,7 @@ class CalendarWidget(QCalendarWidget):
         self.header = QWidget(self)
         self.header.setObjectName("calendarHeader")
         row = QHBoxLayout(self.header)
-        row.setContentsMargins(8, 8, 8, 8)
+        row.setContentsMargins(10, 8, 10, 8)
         row.setSpacing(8)
         self.previous_button, self.next_button = QToolButton(), QToolButton()
         for control, arrow, caption in ((self.previous_button, Qt.ArrowType.LeftArrow, "이전 달"),
@@ -85,24 +86,41 @@ class CalendarWidget(QCalendarWidget):
         self.layout().insertWidget(0, self.header)
         arrow = (ASSETS / "import-ver5/ba8e3.svg").as_posix()
         self.setStyleSheet(
-            f"QCalendarWidget {{background:white;color:{INK};}}"
-            f"QWidget#calendarHeader {{background:#f9fafb;}}"
-            f"QWidget#calendarHeader QComboBox {{background:white;color:{INK};border:1px solid {LINE};"
-            "border-radius:6px;padding:0 24px 0 8px;}"
+            f"QCalendarWidget {{background:white;color:{INK};border:1px solid {LINE};border-radius:10px;}}"
+            "QWidget#calendarHeader {background:transparent;}"
+            f"QWidget#calendarHeader QComboBox {{background:{SOFT};color:{INK};border:1px solid {LINE};"
+            "border-radius:8px;padding:0 24px 0 8px;}"
+            f"QWidget#calendarHeader QComboBox:hover {{border-color:{PRIMARY};}}"
             f"QWidget#calendarHeader QComboBox:focus {{border:2px solid {PRIMARY};}}"
             "QWidget#calendarHeader QComboBox::drop-down {border:0;width:22px;}"
             f"QWidget#calendarHeader QComboBox::down-arrow {{image:url({arrow});width:16px;height:16px;}}"
             f"QComboBox QAbstractItemView {{background:white;color:{INK};}}"
-            f"QWidget#calendarHeader QToolButton {{background:white;color:{SECONDARY};border:1px solid {LINE};border-radius:6px;}}"
-            f"QWidget#calendarHeader QToolButton:hover, QWidget#calendarHeader QToolButton:focus {{border:1px solid {PRIMARY};}}"
-            f"QCalendarWidget QAbstractItemView {{selection-background-color:{ACCENT_SOFT};selection-color:{INK};}}"
+            f"QWidget#calendarHeader QToolButton {{background:{SOFT};color:{SECONDARY};border:1px solid {LINE};border-radius:8px;}}"
+            f"QWidget#calendarHeader QToolButton:hover, QWidget#calendarHeader QToolButton:focus "
+            f"{{background:{ACCENT_SOFT};border-color:{PRIMARY};}}"
+            f"QWidget#calendarHeader QToolButton:disabled {{background:transparent;border-color:transparent;color:{SECONDARY};}}"
+            f"QCalendarWidget QAbstractItemView {{selection-background-color:{ACCENT_SOFT};selection-color:{PRIMARY};}}"
         )
+        appearance = manager()
+        if appearance is not None:
+            appearance.changed.connect(self._sync_day_colors)
+        self._sync_day_colors()
         self.previous_button.clicked.connect(self.showPreviousMonth)
         self.next_button.clicked.connect(self.showNextMonth)
         self.year_combo.currentIndexChanged.connect(self._choose_page)
         self.month_combo.currentIndexChanged.connect(self._choose_page)
         self.currentPageChanged.connect(self._sync_header)
         self._sync_header()
+
+    def _sync_day_colors(self):
+        weekdays = QTextCharFormat()
+        weekdays.setForeground(ui_color(SECONDARY))
+        weekdays.setFontWeight(QFont.Weight.Medium)
+        self.setHeaderTextFormat(weekdays)
+        weekend = QTextCharFormat()
+        weekend.setForeground(ui_color(PRIMARY))
+        for day in (Qt.DayOfWeek.Saturday, Qt.DayOfWeek.Sunday):
+            self.setWeekdayTextFormat(day, weekend)
 
     def minimumSizeHint(self):
         # Qt 기본 크기는 숨긴 네이티브 탐색 막대만 계산한다. 추가한 연/월 헤더 높이도 반영한다.

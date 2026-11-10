@@ -3,7 +3,6 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
 
-from setron.ui.components import back_button
 from setron.ui.equipment_drawer import EquipmentDrawer
 
 
@@ -11,11 +10,11 @@ class EquipmentListDrawer(EquipmentDrawer):
     back_requested = Signal()
 
     def __init__(self, parent):
-        super().__init__(parent, allow_expand=True, object_name="equipmentListDrawer", accessible_name="설비 목록 패널")
+        super().__init__(parent, object_name="equipmentListDrawer", accessible_name="설비 목록 패널")
         self.list_equipment = None
-        self.back_button = back_button("패널의 설비 목록으로 돌아가기", size=32)
+        self.back_button = self._header_button("arrow-left.svg", "패널의 설비 목록으로 돌아가기")
         self.back_button.clicked.connect(self.back_requested)
-        self.header.insertWidget(0, self.back_button)
+        self.header.insertWidget(self.header.indexOf(self.close_button) + 1, self.back_button)
         self.list_scroll = QScrollArea()
         self.list_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.list_scroll.setWidgetResizable(True)
@@ -38,13 +37,13 @@ class EquipmentListDrawer(EquipmentDrawer):
         self.show_panel()
         self.list_scroll.verticalScrollBar().setValue(0)
 
-    def show_detail(self, request, detail, rows, evidence, source, *, edit_available=False):
+    def show_detail(self, request, detail, rows, *, edit_available=False):
         if not self.is_open or self.list_equipment is None:
             return
         self.list_scroll.hide()
         self.scroll.show()
         self.back_button.show()
-        super().open_detail(request, detail, rows, evidence, source, return_focus=self.return_focus,
+        super().open_detail(request, detail, rows, return_focus=self.return_focus,
                             edit_available=edit_available)
 
     def show_list(self):

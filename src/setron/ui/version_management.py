@@ -524,7 +524,7 @@ class VersionManagementPage(VersionsPage):
                          "\n".join(versions) or "미입력", str(record.base_date), "버전 정정"))
         set_rows(self.installed_model, self.installed_table, rows, tuple(r.equipment_id for r in records))
         self.correct_button.setEnabled(bool(records) and not self.locked)
-        self.installed_notice.setText(f"관측 기준일 {self.installed_day} · {len(records)}대" if records else
+        self.installed_notice.setText(f"관측 기준일 {self.installed_day} / {len(records)}대" if records else
                                       f"{self.installed_day}에 저장된 관측 스냅샷이 없습니다. 다른 날짜로 자동 대체하지 않습니다.")
 
     def _installed_click(self, index):

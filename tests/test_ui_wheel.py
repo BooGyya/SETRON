@@ -1,4 +1,4 @@
-"""마우스 휠로 조회 조건 콤보나 대시보드 보기 탭이 바뀌지 않고, 휠은 화면 스크롤로 넘어간다."""
+"""마우스 휠로 공통 조회 조건이나 대시보드 보기 탭이 바뀌지 않는다."""
 
 import os
 
@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
 from setron.ui.app import create_window
@@ -36,13 +36,17 @@ def wheel(widget, delta=-120):
     QApplication.sendEvent(widget, event)
 
 
-def test_wheel_does_not_change_query_combo(window):
-    for combo in window.query_panel.combos.values():
-        if combo.count() > 1 and combo.isEnabled():
-            before = combo.currentIndex()
-            wheel(combo)
-            wheel(combo, 120)
-            assert combo.currentIndex() == before
+def test_wheel_does_not_change_date_or_open_query_filters(window):
+    panel = window.query_panel
+    previous = panel.state.draft
+    date = panel.date_edit.date()
+    applied = QSignalSpy(window.query_applied)
+    for control in (panel.date_edit, *panel.combos.values()):
+        control.setFocus()
+        wheel(control)
+        wheel(control, 120)
+    assert panel.state.draft == previous and panel.date_edit.date() == date
+    assert panel.filter_popup is None and applied.count() == 0
 
 
 def test_wheel_does_not_change_dashboard_tab_and_scrolls_page(window):

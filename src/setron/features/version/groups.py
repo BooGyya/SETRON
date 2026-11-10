@@ -152,7 +152,7 @@ def check_groups(family, groups: VersionGroups) -> tuple[GroupIssue, ...]:
     """
     issues: list[GroupIssue] = []
     if not groups.has_target:
-        issues.append(GroupIssue(GroupIssueCode.N_EMPTY, "N 칸에 버전이 없어 목표 미지정입니다.", blocks=True))
+        issues.append(GroupIssue(GroupIssueCode.N_EMPTY, "기준 N에 넣을 버전을 하나 이상 선택해 주세요.", blocks=True))
     duplicated = set(family.sorted.duplicated_orders)
     known: list[tuple[int, Slot, ReleaseVersion]] = []
     for slot in sorted(groups.slots):
@@ -161,15 +161,18 @@ def check_groups(family, groups: VersionGroups) -> tuple[GroupIssue, ...]:
             label = SLOT_LABELS[slot]
             if release is None:
                 issues.append(GroupIssue(GroupIssueCode.MISSING_RELEASE,
-                                         f"{label} 칸의 릴리즈 {member}가 이 계열에 없습니다(삭제·교체됨). 판정에서 뺍니다.",
+                                         f"{label}에 지정한 버전(ID {member})이 이 계열에 없어 판정에서 제외됩니다. "
+                                         "필요하면 목록에서 대신 사용할 버전을 지정해 주세요.",
                                          (member,)))
             elif release.version_order is None:
                 issues.append(GroupIssue(GroupIssueCode.ORDER_UNKNOWN,
-                                         f"{label} 칸의 {release.version_raw}는 버전 순서가 없어 다른 버전 판정의 기준으로 쓰지 않습니다.",
+                                         f"{release.version_raw}({label})의 순서를 알 수 없어 다른 버전의 단계 계산에서 건너뜁니다. "
+                                         "버전 관리에서 순서를 확인해 주세요.",
                                          (member,)))
             elif release.version_order in duplicated:
                 issues.append(GroupIssue(GroupIssueCode.ORDER_CONFLICT,
-                                         f"{label} 칸의 {release.version_raw}는 버전 순서가 다른 릴리즈와 겹쳐 기준으로 쓰지 않습니다.",
+                                         f"{release.version_raw}({label})의 순서가 겹쳐 다른 버전의 단계 계산에서 건너뜁니다. "
+                                         "버전 관리에서 겹친 순서를 확인해 주세요.",
                                          (member,)))
             else:
                 known.append((release.version_order, slot, release))
@@ -181,11 +184,11 @@ def check_groups(family, groups: VersionGroups) -> tuple[GroupIssue, ...]:
                 crossed.append((release_a, slot_a, release_b, slot_b))
     if crossed:
         a, slot_a, b, slot_b = crossed[0]
-        more = f" 외 {len(crossed) - 1}건" if len(crossed) > 1 else ""
+        more = f" 같은 문제가 {len(crossed) - 1}건 더 있습니다." if len(crossed) > 1 else ""
         issues.append(GroupIssue(
             GroupIssueCode.ORDER_CROSSED,
-            f"버전 순서와 그룹 순서가 어긋납니다: 더 오래된 {a.version_raw}({SLOT_LABELS[slot_a]})가 "
-            f"{b.version_raw}({SLOT_LABELS[slot_b]})보다 높은 칸에 있습니다{more}.",
+            f"{a.version_raw}({SLOT_LABELS[slot_a]})가 {b.version_raw}({SLOT_LABELS[slot_b]})보다 오래됐지만 "
+            f"더 높은 단계로 지정돼 있습니다.{more} 수동 설정에서 버전별 단계를 확인해 주세요.",
             tuple(sorted({x.release_version_id for pair in crossed for x in (pair[0], pair[2])}))))
     return tuple(issues)
 

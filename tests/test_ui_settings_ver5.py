@@ -15,6 +15,7 @@ from setron.ui.appearance_data import ACCENTS, Appearance, PersonalSettings
 from setron.ui.components import label
 from setron.ui.app import create_window
 from setron.ui.dashboard_demo import demo_dashboard_source
+from setron.ui.query_state import LineOption, QuerySelection
 from setron.ui.settings_location import AddReferenceDialog, LocationPanel
 from setron.ui.settings_page import SettingsPage
 from test_ui_import_ver5 import own, until  # noqa: F401
@@ -125,6 +126,13 @@ def test_location_stale_confirm_blocked_and_addition_validation(own):
 def test_retired_personal_preferences_do_not_reorder_or_hide_choices(own, theme):
     _, store = theme
     source = demo_dashboard_source()
+    line = LineOption("test-line", "테스트 Line", source.catalog.sites[0].key, None)
+    source.catalog = replace(source.catalog, lines=(line,))
+    group = source.catalog.groups[1]
+    equipment_id = next(record.equipment_id for record in source.records
+                        if source.locations[record.equipment_id].site_key == line.site_key
+                        and any(pm.group_id in source.bindings[group.key] for pm in record.pms))
+    source.locations[equipment_id] = replace(source.locations[equipment_id], line_key=line.key)
     store.save("personal", {"order": ["replay", "import", "ai", "items", "heatmap", "dashboard"],
                             "home": "heatmap", "lines": [], "groups": []})
     window = own(create_window(source))
@@ -132,14 +140,19 @@ def test_retired_personal_preferences_do_not_reorder_or_hide_choices(own, theme)
     assert window.query_state.catalog == source.catalog
     dashboard = window.pages["dashboard"]
     assert dashboard.layout().indexOf(dashboard.kpi_grid) < dashboard.layout().indexOf(dashboard.overview)
-    window.navigate("settings")
-    assert window.header.title.text() == "설정"
-
-    window.query_panel.apply_button.click()
+    window.query_panel.set_draft(QuerySelection(line_key=line.key, group_key=group.key))
+    query = window.query_panel.apply_draft()
     snapshot = window.pages["dashboard"].snapshot
-    assert snapshot is not None and snapshot.equipment_ids
+    assert snapshot.equipment_ids == (equipment_id,)
     assert window.pages["heatmap"].snapshot is snapshot
     assert window.pages["equipment"].snapshot is snapshot
+    window.navigate("settings")
+    assert window.header.title.text() == "설정"
+    settings = window.pages["settings"]
+    settings.font_size_buttons["small"].click()
+    assert settings.save_appearance()
+    until(lambda: not settings.operation.busy)
+    assert window.query_state.applied is query and window.pages["dashboard"].snapshot is snapshot
 
 
 def test_whole_app_dark_existing_new_widgets_charts_and_light_restore(own, theme):
@@ -304,7 +317,7 @@ def test_font_size_preview_save_reload_and_reset(own, theme):
 def test_global_fonts_cover_existing_and_new_widgets_and_charts(own, theme):
     current, _ = theme
     w = own(create_window())
-    w.query_panel.apply_button.click()
+    w.query_panel.apply_draft()
     dashboard = w.pages["dashboard"]
     dashboard.chart.composition(dashboard.snapshot)
     chart = dashboard.chart.chart()

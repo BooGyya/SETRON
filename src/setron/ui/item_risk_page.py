@@ -293,7 +293,7 @@ class ItemRiskPage(QWidget):
             records.append((record, relevant, result))
         rank = {RiskStatus.RISK: 0, RiskStatus.UNKNOWN: 1, RiskStatus.NO_RISK: 2}
         records.sort(key=lambda value: (rank[value[2].status], value[0].equipment_code, value[0].equipment_id))
-        self.count.setText(f"관측일 {data.base_date} · 대상 {len(records)}대" if data and data.observations_connected else "설비 관측 자료 미연결")
+        self.count.setText(f"관측일 {data.base_date} / 대상 {len(records)}대" if data and data.observations_connected else "설비 관측 자료 미연결")
         selected_rule = rules[0] if rules else None
         if selected_rule:
             self.source_button.setVisible(selected_rule.item_id is not None)

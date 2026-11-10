@@ -13,7 +13,7 @@ from setron.features.targets.groups import with_saved_groups
 from setron.features.version.groups import VersionGroups
 from setron.features.version.schemas import CompareReason, CompareStatus
 from setron.features.version.service import FamilyReleases
-from setron.ui.query_state import UNASSIGNED, AppliedQuery, QueryCatalog, TargetN
+from setron.ui.query_state import AppliedQuery, QueryCatalog, TargetN, matches_selection, selection_keys
 from setron.ui.version_filter import matches_versions
 
 
@@ -54,6 +54,12 @@ class EquipmentLocation:
     raw_area: str | None = None
     fab_key: str | None = None
     line_key: str | None = None
+
+
+def _matches_location(selection, location: EquipmentLocation) -> bool:
+    return (matches_selection(selection.site_key, location.site_key)
+            and matches_selection(selection.fab_key, location.fab_key)
+            and matches_selection(selection.line_key, location.line_key))
 
 
 @dataclass(frozen=True)
@@ -332,10 +338,7 @@ class DashboardSource:
             location = EquipmentLocation(site_key, record.line,
                                          None if stale_mapping else previous.fab_key,
                                          None if stale_mapping else previous.line_key)
-            if selection.site_key is not None and selection.site_key != location.site_key:
-                continue
-            if any(value is not None and (actual is not None if value is UNASSIGNED else actual != value)
-                   for value, actual in ((selection.fab_key, location.fab_key), (selection.line_key, location.line_key))):
+            if not _matches_location(selection, location):
                 continue
             if not matches_versions(record, selection.versions):
                 continue
@@ -360,7 +363,7 @@ class DashboardSource:
 
     def _scope_records(self, records, query, group_keys=None, position=None):
         selection = query.selection
-        active = {selection.group_key} if selection.group_key is not None else set(self.bindings)
+        active = self._selected_groups(selection)
         # 버전은 조회 설비군 범위의 SW 중 하나가 일치하면 설비 전체를 포함한다.
         # 표의 개별 셀로 나눌 때 다시 다른 버전 코호트를 만들지 않는다.
         scope_models = {model for key in active for model in self.bindings[key]}
@@ -377,12 +380,9 @@ class DashboardSource:
                     continue
                 record = replace(record, pms=pms)
             loc = self.locations[record.equipment_id]
-            if selection.site_key is not None and loc.site_key != selection.site_key:
+            if not _matches_location(selection, loc):
                 continue
             if position is not None and (loc.site_key, loc.raw_area) != position:
-                continue
-            if any(value is not None and (actual is not None if value is UNASSIGNED else actual != value)
-                   for value, actual in ((selection.fab_key, loc.fab_key), (selection.line_key, loc.line_key))):
                 continue
             if selection.versions is not None:
                 version_record = replace(record, pms=tuple(pm for pm in record.pms if pm.group_id in scope_models))
@@ -395,6 +395,9 @@ class DashboardSource:
             elif pms or (not record.pms and selection.group_key is None and group_keys is None):
                 result.append(replace(record, pms=pms))
         return tuple(result)
+
+    def _selected_groups(self, selection):
+        return set(selection_keys(selection.group_key) or self.bindings)
 
     def _summary(self, records):
         return summarize(records, self.families, with_saved_groups(self.targets, self.saved_groups))
@@ -472,7 +475,7 @@ class DashboardSource:
                                     self._scope_records(current, query, keys, position)) for name, keys in columns)
             rows.append(DashboardRow(title, position, cells))
         trends = tuple(GroupTrend(o.key, o.label, self._observations(query, selected, (o.key,)))
-                       for o in self.catalog.groups if query.selection.group_key in (None, o.key))
+                       for o in self.catalog.groups if matches_selection(query.selection.group_key, o.key))
         return DashboardSnapshot(query, day, total.equipment_ids, total.risky_ids,
                                  sum(not r.is_hpa and self.risk_status(r)
                                      is RiskStatus.UNKNOWN for r in selected),
@@ -482,7 +485,7 @@ class DashboardSource:
                                  hpa_lookup, hpa_locations, tuple(deepcopy(self.saved_groups).items()), self.risk_rule_state)
 
     def _observations(self, query, baseline, group_keys=None):
-        active = {query.selection.group_key} if query.selection.group_key else set(self.bindings)
+        active = self._selected_groups(query.selection)
         if group_keys is not None:
             active &= set(group_keys)
         model_ids = {mid for key in active for mid in self.bindings[key]}

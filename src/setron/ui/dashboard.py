@@ -7,16 +7,17 @@ from PySide6.QtWidgets import (
     QSizePolicy, QTabBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from setron.features.aggregation.service import summarize
 from setron.features.version.schemas import CompareStatus
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import (
-    DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, equipment_tooltip, series_color, trend_point_rate,
+    DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, series_color, trend_point_rate,
 )
 from setron.ui.dashboard_data import (
-    DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, count_value, missing_sw_count,
-    undetermined_breakdown, upgrade_caption,
+    DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, RiskRuleState, count_value, missing_sw_count,
 )
-from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size, set_widget_font
+from setron.ui.query_state import matches_selection
+from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, set_widget_font, svg_size
 
 # Figma VER4 대시보드 셀 색 (--met / --below / --soft / --v4-red). 이 화면에서만 쓴다.
 MET = "#ddf4e5"
@@ -128,10 +129,10 @@ class SplitRow(QWidget):
 class DashboardKpi(Card):
     """VER4 대시보드 상단의 간결한 지표 카드. 첫 카드(달성률)는 강조색으로 채운다."""
 
-    def __init__(self, title, asset, *, accent=False, action=None):
+    def __init__(self, title, asset, *, accent=False, show_caption=True):
         super().__init__(padding=18)
         self.body.setSpacing(3)
-        self.body.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.body.setAlignment(Qt.AlignmentFlag.AlignTop if show_caption else Qt.AlignmentFlag.AlignVCenter)
         ink, muted = ("white", "white") if accent else (INK, SECONDARY)
         if accent:
             self.setProperty("appearanceRate", "background")
@@ -150,31 +151,19 @@ class DashboardKpi(Card):
         self.value.setProperty("rateValue", True)
         self.value.setMinimumHeight(40)
         self.body.addWidget(self.value)
-        self.caption = label("조회 적용 전", 11, color=muted, wrap=True)
-        self.body.addWidget(self.caption)
-
-        self.action = None
-        if action is not None:
-            self.action = QPushButton(self)
-            self.action.setAccessibleName("목표 미달 설비를 히트맵에서 보기")
-            self.action.setToolTip(self.action.accessibleName())
-            self.action.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.action.setStyleSheet("QPushButton{background:transparent;border:0;border-radius:12px;}"
-                                      "QPushButton:focus{border:2px solid #4258d5;}")
-            self.action.clicked.connect(action)
-            self.action.setEnabled(False)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.action is not None:
-            self.action.setGeometry(self.rect())
+        self.caption = None
+        if show_caption:
+            self.caption = label("조회 적용 전", 11, color=muted, wrap=True)
+            self.body.addWidget(self.caption)
+        else:
+            self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
 
 class DashboardPage(QWidget):
-    below_requested = Signal()
     drilldown_requested = Signal(object)
 
-    def __init__(self, state, source: DashboardSource, *, drilldown_connected=False):
+    def __init__(self, state, source: DashboardSource):
         super().__init__()
         self.setObjectName("canvas")
         self.state, self.source, self.snapshot = state, source, None
@@ -196,37 +185,26 @@ class DashboardPage(QWidget):
             ("check", "버전 확인 필요", "7880d.svg", False),
             ("risk", "안전·결함 위험 후보", "60dbd.svg", False),
         ):
-            card = DashboardKpi(title, asset, accent=accent,
-                                action=self.below_requested.emit if key == "upgrade" and drilldown_connected else None)
+            card = DashboardKpi(title, asset, accent=accent, show_caption=False)
             self.metrics[key] = card
             cards.append(card)
         self.kpi_grid = DashboardGrid(cards, minimum_width=200, maximum_columns=5, spacing=12)
         body.addWidget(self.kpi_grid)
 
-        # 왼쪽: 원본 구역별 목표 달성(보기 전환) 카드
+        # 대시보드의 집계 보기 전환 카드
         self.content = Card(padding=20)
         self.content.body.setSpacing(12)
-        heading = QWidget()
-        heading_body = QHBoxLayout(heading)
-        heading_body.setContentsMargins(0, 0, 0, 0)
-        heading_body.setSpacing(8)
-        self.title = label("원본 구역별 목표 달성", 16, medium=True, wrap=True)
-        heading_body.addWidget(self.title, 1)
-        self.list_button = _outline_button("설비 목록 →")
-        self.list_button.setEnabled(False)
-        self.list_button.setToolTip("현재 적용 범위 전체를 설비 목록으로 엽니다.")
-        self.list_button.clicked.connect(self._all_selection)
-        heading_body.addWidget(self.list_button, alignment=Qt.AlignmentFlag.AlignTop)
-        self.content.body.addWidget(heading)
         self.tabs = QTabBar()
         self.tabs.setAccessibleName("대시보드 보기 방식")
         self.tabs.setExpanding(False)
         self.tabs.setDrawBase(False)
+        self.tabs.setUsesScrollButtons(False)
+        self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
         set_widget_font(self.tabs, font(14, medium=True))
         self.tabs.setStyleSheet(TAB_STYLE)
-        for title in ("표", "구성비", "막대", "적용 추이"):
+        for title in ("구역별 달성률", "판정 구성비", "설비 대수", "달성률 추이"):
             self.tabs.addTab(title)
-        self.content.body.addWidget(self.tabs)
+        self.content.body.addWidget(self.tabs, alignment=Qt.AlignmentFlag.AlignLeft)
         self.matrix_legend = QWidget()
         legend_body = QHBoxLayout(self.matrix_legend)
         legend_body.setContentsMargins(0, 0, 0, 0)
@@ -241,8 +219,7 @@ class DashboardPage(QWidget):
             item.addWidget(dot)
             item.addWidget(label(text, 12, color=SECONDARY))
             legend_body.addLayout(item)
-        legend_body.addStretch(1)
-        self.content.body.addWidget(self.matrix_legend)
+        self.content.body.addWidget(self.matrix_legend, alignment=Qt.AlignmentFlag.AlignLeft)
         self.description = label("", 12, color=SECONDARY, wrap=True)
         self.risk_note = QWidget()
         risk_body = QHBoxLayout(self.risk_note)
@@ -290,7 +267,7 @@ class DashboardPage(QWidget):
         self.data_table.setAccessibleName("대시보드 차트 원본 수치표")
         self.data_table.setMinimumHeight(260)
         self.content.body.addWidget(self.data_table)
-        self.message = label("조회 적용 전입니다. 위의 공통 조건에서 조회 적용을 눌러 주세요.", 13, color=SECONDARY, wrap=True)
+        self.message = label("위에서 조회 조건을 선택하면 결과를 표시합니다.", 13, color=SECONDARY, wrap=True)
         self.content.body.addWidget(self.message)
         self.legend = label("초록 목표 달성 · 노랑 미달·확인 필요 · 회색 정보 부족 · 빨간 점은 위험 후보(목표 달성과 별도)",
                             11, color=SECONDARY, wrap=True)
@@ -363,14 +340,11 @@ class DashboardPage(QWidget):
         self.result_status.setText("선택지 변경 · 재조회 필요")
         self.result_status.set_tone("warning")
         self._clear_values()
-        self.message.setText("선택지가 변경되었습니다. 조회 적용으로 결과를 다시 확인해 주세요.")
+        self.message.setText("선택지가 변경되었습니다. 위에서 조회 조건을 다시 선택해 주세요.")
 
     def _clear_values(self):
-        if self.metrics["upgrade"].action is not None:
-            self.metrics["upgrade"].action.setEnabled(False)
         for card in self.metrics.values():
             card.value.setText("—")
-            card.caption.setText("결과 없음")
         self.candidate_button.setEnabled(False)
         self.candidate_button.setText("전체 0대")
         self.observations.setText("표시할 결과가 없습니다.")
@@ -404,9 +378,9 @@ class DashboardPage(QWidget):
             self.failure_reason = str(error)
             return False
         except (ValueError, RuntimeError):
-            self.result_status.setText("결과 표시 실패 · 다시 적용해 주세요")
+            self.result_status.setText("결과 표시 실패")
             self.result_status.set_tone("danger")
-            self.message.setText("선택지·관측 자료 연결을 확인할 수 없습니다. 조건과 데이터 연결을 확인하고 다시 적용해 주세요.")
+            self.message.setText("선택지·관측 자료 연결을 확인할 수 없습니다. 데이터 연결과 조회 조건을 확인해 주세요.")
             return False
         return self.accept_result(query, result)
 
@@ -415,33 +389,18 @@ class DashboardPage(QWidget):
             return False
         self.snapshot = result
         summary = result.summary
-        no_sw = missing_sw_count(summary)
         unresolved = sum(1 for status in summary.equipment if _equipment_state(status)[0] in ("미확인", "확인 필요"))
         self.result_status.setText(f"{self._result_label()} · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))
         self.result_status.set_tone("info")
         values = {
-            "total": (f"{summary.equipment_count}대", f"HPA 제외 {summary.hpa_excluded}대"),
-            "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
-                     f"{summary.compliant}/{summary.compliant + summary.below}건 · 판단 불가 {summary.undetermined}건"
-                     + f" · SW 미등록 {no_sw}대"
-                     + (" · 확인 필요" if summary.rate == 1 and (not summary.complete or no_sw) else "")),
-            "risk": (count_value(len(result.risky_ids), result.risk_unknown, "미확인"),
-                     f"목표 달성과 별도 · 위험 미확인 {result.risk_unknown}대"),
-            "upgrade": (count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
-                        upgrade_caption("한 계열이라도 N 미만인 물리 설비 · 중복 제거", summary.undetermined)),
-            # 판단 불가 이유를 함께 보인다. 목표 N 미지정을 버전 문제로 오해하지 않게 한다 (QA Q-07).
-            "check": (f"{unresolved}대", f"판단 불가 {summary.undetermined}건"
-                      + (f" ({reasons})" if (reasons := undetermined_breakdown(summary)) else "")
-                      + f" · SW 미등록 {no_sw}대"),
+            "total": f"{summary.equipment_count}대",
+            "rate": "계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
+            "risk": count_value(len(result.risky_ids), result.risk_unknown, "미확인"),
+            "upgrade": count_value(summary.upgrade_needed, summary.undetermined, "판단 불가"),
+            "check": f"{unresolved}대",
         }
-        for key, (value, caption) in values.items():
+        for key, value in values.items():
             self.metrics[key].value.setText(value)
-            self.metrics[key].caption.setText(caption)
-        upgrade = self.metrics["upgrade"]
-        if upgrade.action is not None:
-            upgrade.action.setEnabled(bool(summary.upgrade_needed))
-            if summary.upgrade_needed:
-                upgrade.caption.setText("미달 설비 히트맵 보기 →")
         self.candidate_button.setText(f"전체 {len(result.risky_ids)}대")
         self.candidate_button.setEnabled(bool(result.risky_ids))
         self.observations.setText("같은 기준일 설비 집합·목표 N 고정 · 관측 없는 자료는 이전 값으로 채우지 않음\n" + "\n".join(
@@ -484,7 +443,7 @@ class DashboardPage(QWidget):
         self.chart.setVisible(has_analysis and mode != 0)
         self.series_grid.setVisible(has_analysis and mode in (2, 3))
         for group, check in zip(self.source.catalog.groups, self.series_widgets):
-            check.setVisible(data is None or data.query.selection.group_key in (None, group.key))
+            check.setVisible(data is None or matches_selection(data.query.selection.group_key, group.key))
         # Figma: 수치표 보기·정의 설명·위험 후보 목록·관측 변화·Site 요약 없이 보기 카드 하나만 넓게 쓴다.
         self.data_toggle.hide()
         self.candidate_button.hide()
@@ -497,12 +456,9 @@ class DashboardPage(QWidget):
         # 구성비는 도넛 옆에 상태 칩을 붙여 둔다(Figma). 다른 차트는 카드 너비를 다 쓴다.
         self.chart.setMaximumWidth(560 if mode == 1 else 16777215)
         self.chart_row.layout().setStretch(2, 1 if mode == 1 else 0)
-        self.list_button.setEnabled(has_data)
         self.site_button.setEnabled(has_data)
         self.message.setVisible(not has_data or (not has_analysis and mode != 0))
         self.data_table.setVisible(has_analysis and mode != 0 and self.data_toggle.isChecked())
-        titles = ("원본 구역별 목표 달성", "목표 도달 상태 구성비", "라인 · 설비군별 설비 대수", "설비군별 목표 적용 추이")
-        self.title.setText(titles[mode])
         self.description.setText(self._subtitle(mode))
         self.risk_note.setVisible(has_analysis and mode != 0 and bool(self.description.text()))
         self.risk_note.layout().itemAt(0).widget().setVisible(mode == 1)
@@ -512,7 +468,7 @@ class DashboardPage(QWidget):
         self._render_sites()
         if not has_data:
             if data is not None:
-                self.message.setText("조건에 맞는 설비가 없습니다. 선택 조건을 변경한 뒤 조회 적용을 눌러 주세요.")
+                self.message.setText("조건에 맞는 설비가 없습니다. 조회 조건을 변경하거나 초기화해 주세요.")
             self.chart.clear()
             return
         if not has_analysis and mode != 0:
@@ -717,17 +673,33 @@ class DashboardPage(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
-        columns = ("Site / 원본 구역", *(cell.label for cell in data.rows[-1].cells))
-        for column, title in enumerate(columns):
-            heading = label(title, 13, medium=True, color=INK)
+        total_row = data.rows[-1]
+        columns = (("Site / 원본 구역", total_row.cells[-1]), *((cell.label, cell) for cell in total_row.cells))
+        for column, (title, cell) in enumerate(columns):
+            heading = label(title, 13, medium=True)
+            heading.setObjectName("dashboardMatrixHeading")
             heading.setMinimumHeight(40)
             heading.setContentsMargins(8, 0, 8, 0)
-            heading.setStyleSheet(f"background:{ACCENT_SOFT if column == 0 else CANVAS};border-radius:4px;")
+            heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            heading.setToolTip(self._matrix_totals_tooltip("전체" if column == 0 else title, cell.summary,
+                                                           cell.equipment_ids, len(cell.risky_ids)))
+            heading.setStyleSheet(f"QLabel#dashboardMatrixHeading {{background:{ACCENT_SOFT if column == 0 else CANVAS};border-radius:4px;}}")
             grid.addWidget(heading, 0, column)
             grid.setColumnMinimumWidth(column, 110 if column == 0 else 84)
             grid.setColumnStretch(column, 114 if column == 0 else 160)
         sites = {site.key: site.label for site in self.source.catalog.sites}
-        equipment_names = {record.equipment_id: record.equipment_code for record in data.selected_records}
+        site_ids = {}
+        for row in data.rows:
+            if row.position is not None:
+                site_ids.setdefault(row.position[0], []).extend(row.cells[-1].equipment_ids)
+        records = {record.equipment_id: record for record in data.selected_records}
+        targets = data.effective_targets
+        risky_ids = set(data.risky_ids)
+        site_tooltips = {}
+        for site, ids in site_ids.items():
+            summary = summarize(tuple(records[eid] for eid in ids), self.source.families, targets)
+            site_tooltips[site] = self._matrix_totals_tooltip(f"{sites[site]} 전체", summary, ids,
+                                                            len(risky_ids.intersection(ids)))
         previous_site, grid_row = None, 1
         for row_index, row in enumerate(data.rows, 1):
             site, area = row.position if row.position is not None else (None, None)
@@ -743,19 +715,30 @@ class DashboardPage(QWidget):
             location_body = QVBoxLayout(location)
             location_body.setContentsMargins(8, 4, 8, 4)
             location_body.setSpacing(2)
+            cell = row.cells[-1]
+            row_tooltip = self._matrix_totals_tooltip(row.label, cell.summary, cell.equipment_ids, len(cell.risky_ids))
+            location.setToolTip(row_tooltip)
             if site is None:
-                location_body.addWidget(label(row.label, 13, medium=True, color=INK, wrap=True))
+                total_label = label(row.label, 13, medium=True, wrap=True)
+                total_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                total_label.setToolTip(row_tooltip)
+                location_body.addWidget(total_label)
             else:
-                if new_site:
-                    location_body.addWidget(label(sites[site], 13, medium=True, color=INK, wrap=True))
+                site_label = label(sites[site], 13, medium=True, wrap=True)
+                site_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                site_label.setToolTip(site_tooltips[site])
+                location_body.addWidget(site_label)
                 area_text = area or "구역 미확인"
-                area_label = label(area_text, 12, color=SECONDARY, wrap=True)
-                area_label.setContentsMargins(8, 0, 0, 0)
+                area_label = label(area_text, 12, wrap=True)
+                area_label.setObjectName("dashboardMatrixArea")
+                area_label.setStyleSheet(f"QLabel#dashboardMatrixArea {{color:{SECONDARY};}}")
+                area_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 area_label.setAccessibleName(f"Site {sites[site]} · 원본 구역 {area or '미확인'}")
+                area_label.setToolTip(row_tooltip)
                 location_body.addWidget(area_label)
             grid.addWidget(location, grid_row, 0)
             for column, cell in enumerate(row.cells, 1):
-                grid.addWidget(self._matrix_cell(row, row_index, column, cell, equipment_names), grid_row, column)
+                grid.addWidget(self._matrix_cell(row, row_index, column, cell), grid_row, column)
             previous_site = site
             grid_row += 1
         old = self.matrix_scroll.takeWidget()
@@ -764,7 +747,18 @@ class DashboardPage(QWidget):
         self.matrix_scroll.setWidget(content)
         self.matrix_scroll.setFixedHeight(content.sizeHint().height() + 12)
 
-    def _matrix_cell(self, row, row_index, column, cell, equipment_names):
+    def _matrix_totals_tooltip(self, title, summary, ids, candidate_count):
+        rate = f"{summary.rate:.1%}" if summary.rate is not None else "계산 불가"
+        risk = self.snapshot.risk_rule_state
+        risk_text = (risk.value if risk in (RiskRuleState.UNREGISTERED, RiskRuleState.ALL_DISABLED)
+                     else f"확인된 위험 후보 {candidate_count}대")
+        return equipment_count_tooltip(
+            f"{title}\n총 적용률 {rate}\n"
+            f"N 이상 {summary.compliant}건 · N 미만 {summary.below}건 · 판단 불가 {summary.undetermined}건\n"
+            f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대 · SW 미등록 {missing_sw_count(summary)}대\n"
+            f"{risk_text}", ids)
+
+    def _matrix_cell(self, row, row_index, column, cell):
         """Figma 셀: 큰 달성률, 아래에 'N 이상/판단 가능 건' + 위험 후보·판단 불가 표시."""
         summary = cell.summary
         complete = summary.rate is not None and summary.complete and not missing_sw_count(summary)
@@ -792,7 +786,7 @@ class DashboardPage(QWidget):
         tooltip = (
             f"{title}\n{rate}N 이상 {summary.compliant}건 / N 미만 {summary.below}건 / 판단 불가 {summary.undetermined}건\n"
             f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대")
-        main.setToolTip(equipment_tooltip(tooltip, cell.equipment_ids, equipment_names))
+        main.setToolTip(equipment_count_tooltip(tooltip, cell.equipment_ids))
         main.clicked.connect(lambda checked=False: self._select(title, cell.equipment_ids))
         body = QVBoxLayout(main)
         body.setContentsMargins(4, 4, 4, 4)
@@ -814,7 +808,7 @@ class DashboardPage(QWidget):
                                    "border-radius:4px;padding:0 5px;min-height:16px;max-height:16px;}"
                                    f"QPushButton:focus {{border:1px solid {PRIMARY};}}")
                 risk.setAccessibleName(f"{row.label} {cell.label} 위험 후보만 {len(cell.risky_ids)}대")
-                risk.setToolTip(equipment_tooltip(f"위험 후보 · {title}", cell.risky_ids, equipment_names))
+                risk.setToolTip(equipment_count_tooltip(f"위험 후보 · {title}", cell.risky_ids))
                 risk.clicked.connect(lambda checked=False: self._select(title, cell.risky_ids, risk_only=True))
                 detail.addWidget(risk)
                 self.risk_buttons[row_index, column] = risk

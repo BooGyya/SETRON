@@ -6,7 +6,7 @@ import re
 
 from PySide6.QtCore import QEvent, QObject, QStandardPaths, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QToolTip, QWidget
 
 from setron.ui.appearance_data import Appearance, PersonalSettings
 
@@ -175,6 +175,8 @@ class ThemeManager(QObject):
 
     def _asset_path(self, source):
         source = source.strip("\"'")
+        if Path(source).name == "checkbox-tick.svg":
+            return source
         key = source, self.tokens["ink"]
         if key not in self._asset_cache:
             from PySide6.QtSvg import QSvgRenderer
@@ -319,12 +321,14 @@ class ThemeManager(QObject):
                             (QPalette.ColorRole.AlternateBase, t["soft"]), (QPalette.ColorRole.Button, t["soft"]),
                             (QPalette.ColorRole.WindowText, t["ink"]), (QPalette.ColorRole.Text, t["ink"]),
                             (QPalette.ColorRole.ButtonText, t["ink"]), (QPalette.ColorRole.Highlight, t["selected"]),
-                            (QPalette.ColorRole.HighlightedText, t["accent"]), (QPalette.ColorRole.PlaceholderText, t["muted"])):
+                            (QPalette.ColorRole.HighlightedText, t["accent"]), (QPalette.ColorRole.PlaceholderText, t["muted"]),
+                            (QPalette.ColorRole.ToolTipBase, t["soft"]), (QPalette.ColorRole.ToolTipText, t["ink"])):
             palette.setColor(role, QColor(color))
         if self.dark:
             for role in (QPalette.ColorRole.Light, QPalette.ColorRole.Midlight, QPalette.ColorRole.Mid, QPalette.ColorRole.Dark):
                 palette.setColor(role, QColor(t["line"]))
         self.app.setPalette(palette)
+        QToolTip.setPalette(palette)
         extra = ("QLineEdit,QTextEdit,QPlainTextEdit,QComboBox,QSpinBox,QDateEdit {background:#f9fafb;}"
                  "QTableView,QTableWidget,QAbstractItemView {background:white;alternate-background-color:#f9fafb;"
                  "selection-background-color:#edf0fd;selection-color:#142033;}"

@@ -9,10 +9,9 @@ from setron.ui.theme import CANVAS
 
 
 class SideDrawer(QWidget):
-    expand_requested = Signal()
     panel_hidden = Signal()
 
-    def __init__(self, parent, *, object_name, accessible_name, panel_width=560, allow_expand=True):
+    def __init__(self, parent, *, object_name, accessible_name, panel_width=560):
         super().__init__(parent)
         self.setObjectName(object_name + "Overlay")
         self.setAccessibleName(accessible_name)
@@ -42,11 +41,10 @@ class SideDrawer(QWidget):
 
         self.header = QHBoxLayout()
         self.header.setSpacing(8)
-        self.close_button = self._header_button("529be.svg", accessible_name + " 닫기", "닫기 (Esc)")
+        self.close_button = self._header_button("529be.svg", accessible_name + " 접기", "접기 (Esc)")
         self.close_button.clicked.connect(self.close_panel)
-        self.expand_button = self._header_button("drawer-expand.svg", "전체 화면으로 열기", "전체 화면으로 열기")
-        self.expand_button.clicked.connect(self.expand_requested)
-        self.expand_button.setVisible(allow_expand)
+        self.header.addWidget(self.close_button)
+        self.header.addStretch()
 
         self.escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self.escape.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -59,15 +57,15 @@ class SideDrawer(QWidget):
         parent.installEventFilter(self)
         self.hide()
 
-    def _header_button(self, asset, name, tooltip):
+    def _header_button(self, asset, name, tooltip=None):
         control = button("", asset=asset)
+        control.setText("")
         control.setAccessibleName(name)
-        control.setToolTip(tooltip)
+        control.setToolTip(tooltip or name)
         control.setFixedSize(32, 32)
         control.setStyleSheet("QPushButton {padding:0;border:2px solid transparent;background:transparent;}"
                               "QPushButton:hover {background:#e9edf4;}"
                               "QPushButton:focus {border-color:#3c5ce9;}")
-        self.header.addWidget(control)
         return control
 
     @property

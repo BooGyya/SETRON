@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
@@ -148,7 +148,10 @@ def test_header_opens_applied_cohort_without_new_query_or_menu(window, monkeypat
 
 
 @pytest.mark.parametrize("risk_only,ids", [(False, (1, 2, 3, 4, 5, 6, 7, 8, 9)), (True, (1, 2))])
-def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, risk_only, ids):
+def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, source, risk_only, ids):
+    source.model_names = {101: "M-O2", 102: "M-O3"}
+    source.family_names = {1001: "O2 구UI", 1002: "O3 통합UI"}
+    window.resize(960, 600)
     window.query_panel.apply_draft()
     dashboard = window.pages["dashboard"]
     row = next(index for index, row in enumerate(dashboard.snapshot.rows, 1) if row.position == ("s1", None))
@@ -160,22 +163,51 @@ def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, ri
     assert window.route == "dashboard" and drawer.is_open and page.scope_ids == ids
     assert drawer.panel.isAncestorOf(page.table)
     assert drawer.panel.width() == window.equipment_drawer.panel_width
-    assert drawer.header.indexOf(drawer.close_button) < drawer.header.indexOf(drawer.expand_button) < drawer.header.indexOf(drawer.title)
+    assert not hasattr(drawer, "expand_button") and drawer.close_button.isVisible()
     QTest.qWait(20)
+    assert drawer.title.y() > drawer.close_button.geometry().bottom()
+    assert page.goal_filter.itemText(0) == "전체"
     search_top = page.search.mapTo(page.list_card, QPoint()).y()
     table_top = page.table.mapTo(page.list_card, QPoint()).y()
     assert 0 <= table_top - search_top - page.search.height() <= 16
-    assert page.table.horizontalScrollBar().maximum() == 0
+    viewport = drawer.list_scroll.viewport()
+    table_x = page.table.mapTo(viewport, QPoint()).x()
+    assert 0 <= table_x and table_x + page.table.width() <= viewport.width()
+    assert page.table.horizontalScrollBar().maximum() == drawer.list_scroll.horizontalScrollBar().maximum() == 0
+    model = page.table.model()
+    assert model is page.model
+    columns = range(model.columnCount())
+    assert tuple(model.headerData(column, Qt.Orientation.Horizontal) for column in columns) == (
+        "설비명", "모델", "계열", "적용현황",
+    )
+    assert all(not page.table.isColumnHidden(column) for column in columns)
+    assert sum(page.table.columnWidth(column) for column in columns) <= page.table.viewport().width()
+    assert page.table.horizontalHeader().defaultAlignment() == Qt.AlignmentFlag.AlignCenter
+    assert all(model.index(row, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+               for row in range(model.rowCount()) for column in columns)
+    assert model.rows[:2] == (
+        ("TEST-001", "M-O2\nM-O3", "O2 구UI\nO3 통합UI", "목표 미달\n복수 SW\nPM 불일치"),
+        ("TEST-002", "M-O2", "O2 구UI", "목표 달성"),
+    )
+    if not risk_only:
+        assert model.rows[3] == ("TEST-004", "TEST", "—", "정보 부족")
+        assert model.rows[4] == ("TEST-005", "TEST", "—", "HPA · 분석 제외")
     assert tuple(t.equipment_id for t in page.visible_tiles) == ids
     assert page.metrics["total"].value.text() == f"{len(ids)}대"
-    assert page.risk_button.isChecked() is risk_only
+    assert page.goal_filter.size() == page.sort.size()
+    assert page.search.width() > page.goal_filter.width()
     page.search.setText(f"TEST-{ids[-1]:03}")
-    drawer.expand_button.click()
-    assert window.route == "equipment" and drawer.isHidden()
+    hidden = QSignalSpy(drawer.panel_hidden)
+    drawer.close_button.click()
+    assert hidden.count() or hidden.wait(600)
+    assert window.route == "dashboard" and drawer.isHidden()
     assert page.isAncestorOf(page.table)
     assert page.model.ids == (ids[-1],) and page.snapshot is dashboard.snapshot
-    window.header.back.click()
-    assert window.route == "dashboard" and not drawer.is_open
+    assert page.table.model().headings == (
+        "설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거",
+    )
+    assert page.table.model().index(0, 0).data(Qt.ItemDataRole.TextAlignmentRole) != Qt.AlignmentFlag.AlignCenter
+    assert not drawer.is_open and not window.header.back.isEnabled()
     assert row > 0
 
 
@@ -186,11 +218,11 @@ def test_actual_dashboard_general_cell_is_not_replaced_by_risk_only(window):
     column = len(dashboard.snapshot.rows[row - 1].cells)
     dashboard.matrix_buttons[row, column].click()
     page = window.pages["equipment"]
-    assert page.scope_ids == (1, 2) and not page.risk_button.isChecked()
+    assert page.scope_ids == (1, 2)
     window.header.back.click()
     assert window.route == "dashboard"
     dashboard.risk_buttons[row, column].click()
-    assert page.scope_ids == (1, 2) and page.risk_button.isChecked()
+    assert page.scope_ids == (1, 2)
 
 
 def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(window):
@@ -201,10 +233,13 @@ def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(win
     drawer = window.equipment_list_drawer
     page = window.pages["equipment"]
     page.search.setText("TEST-002")
-    page.open_row(0)
+    table = page.table
+    table.setCurrentIndex(table.model().index(0, 0))
+    table.setFocus()
+    QTest.keyClick(table, Qt.Key.Key_Return)
     assert window.route == "dashboard" and drawer.is_open and drawer.request.equipment_id == 2
     assert page.mode == "detail" and page.selected_id == 2
-    assert drawer.panel.isAncestorOf(drawer.summary_title)
+    assert drawer.panel.isAncestorOf(drawer.info_card)
     assert drawer.list_scroll.isHidden() and not drawer.scroll.isHidden()
     assert not drawer.back_button.text() and not drawer.back_button.icon().isNull()
 
@@ -215,10 +250,6 @@ def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(win
     assert drawer.panel.isAncestorOf(page.table)
 
     page.open_row(0)
-    drawer.expand_button.click()
-    assert window.route == "equipment" and drawer.isHidden()
-    assert page.mode == "detail" and page.selected_id == 2
-    assert page.back_button.mapTo(page.detail_card, QPoint()).y() < page.meta_strip.mapTo(page.detail_card, QPoint()).y()
     window.header.back.click()
     assert window.route == "dashboard" and drawer.is_open
     assert page.mode == "list" and page.model.ids == (2,) and page.search.text() == "TEST-002"
@@ -226,7 +257,7 @@ def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(win
     assert not drawer.is_open and not window.header.back.isEnabled()
 
 
-def test_pagination_search_goal_sort_and_candidate_filters_only_change_display(window):
+def test_pagination_search_goal_and_sort_only_change_display(window):
     page, query = open_list(window)
     snapshot = page.snapshot
     assert page.model.ids == tuple(range(1, 13))
@@ -241,23 +272,19 @@ def test_pagination_search_goal_sort_and_candidate_filters_only_change_display(w
     page.goal_filter.setCurrentIndex(0)
     page.sort.setCurrentIndex(1)
     assert page.model.ids[0] == 18
-    page.risk_button.click()
-    assert page.model.ids == (2, 1)
-    page.all_button.click()
     assert len(page.visible_tiles) == 18
     assert page.snapshot is snapshot and window.query_state.applied is query
     assert page.metrics["total"].value.text() == "18대"
 
 
-def test_scope_cannot_be_silently_widened_by_search_or_tabs(window):
+def test_scope_cannot_be_silently_widened_by_search(window):
     page, query = open_list(window)
     request = DashboardDrilldown(query, DAY, "한 호기 범위", (2,), True)
     assert page.open_scope(request)
-    page.all_button.click()
     page.search.setText("TEST-001")
     assert page.model.ids == () and page.scope_ids == (2,)
-    page.global_button.click()
-    assert page.scope_ids == tuple(range(1, 19)) and page.search.text() == ""
+    page.search.clear()
+    assert page.model.ids == (2,) and page.scope_ids == (2,)
 
 
 def test_keyboard_row_opens_detail_and_back_keeps_filters_page_and_ids(window):
@@ -271,6 +298,7 @@ def test_keyboard_row_opens_detail_and_back_keeps_filters_page_and_ids(window):
     QTest.keyClick(page.table, Qt.Key.Key_Return)
     assert page.mode == "detail" and page.selected_id == previous[2]
     assert window.query_panel.isHidden() and window.header.title.text() == "설비 상세"
+    assert page.back_button.mapTo(page.detail_card, QPoint()).y() < page.sw_title.mapTo(page.detail_card, QPoint()).y()
     page.back_button.click()
     assert page.mode == "list" and not window.query_panel.isHidden()
     assert page.page_index == 1 and page.model.ids == previous and page.sort.currentIndex() == 1
@@ -280,16 +308,16 @@ def test_heatmap_direct_detail_and_back_preserve_view_and_selection(window):
     window.query_panel.apply_draft()
     window.navigate("heatmap")
     heatmap = window.pages["heatmap"]
-    heatmap.view_buttons.button(1).click()
+    heatmap.view_toggle.setChecked(True)
     heatmap.tile_buttons[1].click()
     page = window.pages["equipment"]
     drawer = window.equipment_drawer
     assert window.route == "heatmap" and page.mode == "detail" and page.selected_id == 1
     assert drawer.isVisible()
     assert page.detail_model.rowCount() == 3
-    assert drawer.summary_title.text() == GoalState.BELOW.value and "위험 후보" in drawer.risk_badge.text()
+    assert drawer.goal_badge.text() == GoalState.BELOW.value and "위험 후보" in drawer.risk_badge.text()
     drawer.close_button.click()
-    assert window.route == "heatmap" and heatmap.view_buttons.checkedId() == 1
+    assert window.route == "heatmap" and heatmap.view_toggle.isChecked()
     assert heatmap.selected_id == 1 and heatmap.tile_buttons[1].isChecked()
 
 
@@ -301,7 +329,7 @@ def test_detail_does_not_call_subset_goal_whole_equipment_success(window):
     assert detail.selected.goal is GoalState.MET and detail.whole.goal is GoalState.BELOW
     assert GoalState.BELOW.value in page.detail_goal_badge.text()
     assert page.detail_model.rowCount() == 3 and page.detail_table.isVisibleTo(page.detail_card)
-    assert page.meta_values["date"].text() == str(DAY) and page.back_button.isVisibleTo(page.detail_card)
+    assert page.observation_date.text() == f"관측일 {DAY}" and page.back_button.isVisibleTo(page.detail_card)
     assert window.notice.isHidden() and page.result_status.isHidden() and page.context.isHidden()
     assert page.detail_location.isHidden() and page.scope_note.isHidden() and page.evidence.isHidden()
     assert not page.detail_summary.isVisibleTo(page.detail_card)
@@ -394,13 +422,12 @@ def test_provider_failure_clears_and_retry_rebuilds_list(window, monkeypatch):
 
 
 def test_search_empty_and_candidate_empty_do_not_change_shared_totals(window):
-    page, _ = open_list(window)
+    page, query = open_list(window)
     page.search.setText("없는 호기")
     assert page.model.rowCount() == 0 and "맞는 설비가 없습니다" in page.message.text()
     assert page.metrics["total"].value.text() == "18대"
-    page.search.clear()
+    assert page.open_scope(DashboardDrilldown(query, DAY, "후보", (1, 2), True))
     page.goal_filter.setCurrentIndex(page.goal_filter.findData(GoalState.EXCLUDED))
-    page.risk_button.click()
     assert page.model.rowCount() == 0 and not page.next.isEnabled()
 
 
@@ -435,7 +462,7 @@ def test_return_to_heatmap_restores_origin_scroll_after_layout(window):
     window.query_panel.apply_draft()
     window.navigate("heatmap")
     heatmap = window.pages["heatmap"]
-    heatmap.view_buttons.button(1).click()
+    heatmap.view_toggle.setChecked(True)
     QTest.qWait(100)
     window.scroll.verticalScrollBar().setValue(350)
     before = window.scroll.verticalScrollBar().value()
@@ -472,14 +499,13 @@ def test_responsive_layout_scrolls_tables_not_main_content(window, size, mode):
     if size[0] == 960:
         assert table.horizontalScrollBar().maximum() > 0
     if mode == "list":
-        controls = (page.all_button, page.risk_button, page.search, page.goal_filter, page.sort, page.global_button)
+        controls = (page.search, page.goal_filter, page.sort)
         bounds = tuple(QRect(control.mapTo(page.list_card, QPoint()), control.size()) for control in controls)
         assert all(control.isVisibleTo(page.list_card) and page.list_card.rect().contains(rect)
                    for control, rect in zip(controls, bounds))
-        same_row = bounds if size[0] == 1600 else bounds[2:5]
-        assert max(rect.top() for rect in same_row) <= min(rect.bottom() for rect in same_row)
-        assert all(left.right() < right.left() for left, right in zip(same_row, same_row[1:]))
-        assert page.all_button.size() == page.risk_button.size()
+        assert len({rect.top() for rect in bounds}) == len({rect.height() for rect in bounds}) == 1
+        assert all(left.right() < right.left() for left, right in zip(bounds, bounds[1:]))
+        assert page.goal_filter.size() == page.sort.size()
         for combo in (page.goal_filter, page.sort):
             style = combo.property("setronOriginalStyle") or combo.styleSheet()
             assert "caret-down.svg" in style

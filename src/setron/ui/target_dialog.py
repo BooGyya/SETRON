@@ -60,8 +60,8 @@ class TargetDialog(QDialog):
         body.addWidget(label("목표 기준 N 편집", 24, medium=True, wrap=True))
         self.notice = StatusBadge("앱 실행 중 임시 선택 · DB 저장 없음", "info")
         body.addWidget(self.notice)
-        body.addWidget(label("확인된 릴리즈를 모델·계열별로 선택합니다. ‘선택 완료’ 후에도 기존 결과는 유지됩니다.\n"
-                             "새 기준으로 계산하려면 공통 패널에서 ‘조회 적용’을 눌러 주세요.", 13, color=SECONDARY, wrap=True))
+        body.addWidget(label("확인된 릴리즈를 모델·계열별로 선택합니다. 다음 조회에 선택한 기준을 반영합니다.",
+                             13, color=SECONDARY, wrap=True))
         self.pair_combo = ComboBox()
         self.pair_combo.setProperty("queryField", True)
         self.pair_combo.setAccessibleName("목표를 편집할 설비군·모델·계열")

@@ -17,12 +17,17 @@ from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import ReleaseVersion
 from setron.features.version.service import FamilyReleases
+from setron.ui import dashboard
 from setron.ui.app import create_window
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, missing_sw_count
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.main_window import MainWindow
-from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
+from setron.ui.management_integration import report_filter
+from setron.ui.query_state import (
+    UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption, VersionFilter,
+)
+from setron.ui.report_data import scope_caption
 from setron.ui.theme import ASSETS, install_theme, svg_size
 
 
@@ -119,6 +124,44 @@ def test_filters_use_explicit_mapping_and_distinct_group_keys(source, selection,
         assert data.risky_ids == (1,)  # 목표 달성과 위험은 독립적
 
 
+def test_multi_location_filters_union_within_fields_and_intersect_across_them(source):
+    selection = QuerySelection(site_key=("s1", "s2"), fab_key=("f1", UNASSIGNED), line_key=("l1", UNASSIGNED))
+    query = applied(source, selection)
+    data = source.snapshot(query)
+    assert data.equipment_ids == (1, 3, 4, 5)  # Line L2는 같은 Site여도 범위 밖이다.
+    assert data.summary.equipment_count == 3 and data.summary.hpa_excluded == 1
+    assert tuple(record.equipment_id for record in data.hpa_lookup_records) == (4,)
+    assert {record.equipment_id for record in source.scoped_records(query)} == {1, 3, 4, 5}
+    assert report_filter(data, source).site_names == ("테스트 A", "테스트 B")
+    assert scope_caption(source.catalog, query.selection) == (
+        "테스트 A, 테스트 B · 테스트 Fab A, 미지정 · 테스트 Line A, 미지정 · 설비군 전체"
+    )
+
+    filtered = source.snapshot(applied(source, replace(selection, fab_key=("f1", "f2"))))
+    assert filtered.equipment_ids == (1,) and not filtered.hpa_lookup_records
+
+
+def test_multi_group_filters_union_pm_scope_without_duplicate_equipment(source):
+    selection = QuerySelection(group_key=("o2", "o3"))
+    data = source.snapshot(applied(source, selection))
+    assert data.equipment_ids == (1, 2, 3) and not data.hpa_lookup_records
+    assert [pm.group_id for pm in data.selected_records[0].pms] == [101, 101, 102]
+    assert (data.summary.equipment_count, data.summary.compliant, data.summary.below, data.summary.undetermined) == (3, 2, 1, 1)
+    assert [cell.equipment_ids for cell in data.groups] == [(1, 2, 3), (1,), ()]
+    assert [group.group_key for group in data.trends] == ["o2", "o3"]
+    assert [group.points[-1].denominator_equipment_ids for group in data.trends] == [(1, 2), (1,)]
+    assert data.observations[-1].denominator_equipment_ids == (1, 2)
+    assert report_filter(data, source).model_ids == (101, 102)
+    assert scope_caption(source.catalog, data.query.selection).endswith("O2, O3")
+
+    query = applied(source, replace(selection, versions=VersionFilter(("v1",))))
+    filtered = source.snapshot(query)
+    # O2의 v1로 포함된 같은 설비의 O3 SW도 유지한다.
+    assert filtered.equipment_ids == (1,)
+    assert [cell.equipment_ids for cell in filtered.groups] == [(1,), (1,), ()]
+    assert {(record.equipment_id, record.base_date) for record in source.scoped_records(query)} == {(1, DAY1), (1, DAY2)}
+
+
 def test_matrix_groups_by_site_and_raw_area_not_guessed_fab_or_line(source):
     data = source.snapshot(applied(source))
     positions = [row.position for row in data.rows]
@@ -208,29 +251,51 @@ def test_kpi_and_matrix_use_the_same_snapshot_and_do_not_treat_risk_as_below(win
     page = window.pages["dashboard"]
     window.query_panel.apply_draft()
     assert page.metrics["total"].value.text() == "4대"
-    assert page.metrics["total"].caption.text() == "HPA 제외 1대"
+    assert page.snapshot.summary.hpa_excluded == 1
     assert page.metrics["rate"].value.text() == "75.0%"
-    assert "3/4건" in page.metrics["rate"].caption.text()
-    assert "판단 불가 1건" in page.metrics["rate"].caption.text()
+    assert all(card.caption is None and card.title.alignment() == Qt.AlignmentFlag.AlignCenter
+               and card.value.alignment() == Qt.AlignmentFlag.AlignCenter for card in page.metrics.values())
     assert page.metrics["risk"].value.text() == "2대"
     assert page.metrics["upgrade"].value.text() == "1대"
     # Figma 셀은 달성률을 크게, 'N 이상/판단 가능' 건수는 아래 줄에, 대수는 툴팁과 접근성 이름에 둔다.
     assert page.matrix_buttons[len(page.snapshot.rows), 4].layout().itemAt(0).widget().text() == "75%"
     assert "N 이상 3건 / N 미만 1건" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
     assert "분석 4대" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
+    assert "TEST-" not in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
     assert page.matrix_buttons[len(page.snapshot.rows), 4].accessibleName() == "전체 전체 전체 설비 4대"
 
 
-def test_matrix_distinguishes_site_from_area_and_divides_only_at_site_changes(window):
+def test_matrix_distinguishes_site_from_area_and_divides_only_at_site_changes(window, monkeypatch):
     page = window.pages["dashboard"]
+    summarized_ids = []
+    summarize = dashboard.summarize
+
+    def track_site_summary(records, *args):
+        records = tuple(records)
+        summarized_ids.append(tuple(sorted(record.equipment_id for record in records)))
+        return summarize(records, *args)
+
+    monkeypatch.setattr(dashboard, "summarize", track_site_summary)
     window.query_panel.apply_draft()
     content = page.matrix_scroll.widget()
     grid = content.layout()
-    locations = content.findChildren(QWidget, "dashboardMatrixLocation")
-    assert [[label.text() for label in location.findChildren(QLabel)] for location in locations] == [
-        ["테스트 A", "P1"], ["구역 미확인"], ["테스트 B", "P1"], ["전체"],
+    locations = [location.findChildren(QLabel) for location in content.findChildren(QWidget, "dashboardMatrixLocation")]
+    assert [[label.text() for label in location] for location in locations] == [
+        ["테스트 A", "P1"], ["테스트 A", "구역 미확인"], ["테스트 B", "P1"], ["전체"],
     ]
-    assert locations[1].findChild(QLabel).accessibleName() == "Site 테스트 A · 원본 구역 미확인"
+    (site, area), (same_site, unknown_area), (other_site, _), (total,) = locations
+    assert unknown_area.accessibleName() == "Site 테스트 A · 원본 구역 미확인"
+    group = grid.itemAtPosition(0, 1).widget()
+    assert summarized_ids == [(1, 2, 3, 4), (5,)]
+    assert "테스트 A 전체" in site.toolTip() and "설비 4대" in site.toolTip()
+    assert same_site.toolTip() == site.toolTip()
+    assert "테스트 A · P1" in area.toolTip() and "설비 3대" in area.toolTip()
+    assert "테스트 A · 구역 미확인" in unknown_area.toolTip() and "설비 1대" in unknown_area.toolTip()
+    assert "테스트 B 전체" in other_site.toolTip() and "설비 1대" in other_site.toolTip()
+    assert "설비 5대" in total.toolTip()
+    assert "O2" in group.toolTip() and "설비 3대" in group.toolTip()
+    assert "총 적용률" in group.toolTip() and "TEST" not in group.toolTip()
+    assert all(widget.alignment() == Qt.AlignmentFlag.AlignCenter for widget in (site, area, group))
     dividers = content.findChildren(QWidget, "dashboardMatrixSiteDivider")
     assert len(dividers) == 1 and grid.getItemPosition(grid.indexOf(dividers[0])) == (3, 0, 1, 5)
 
@@ -249,8 +314,8 @@ def test_general_cell_and_risk_badge_emit_distinct_exact_cohorts(window):
     main = page.matrix_buttons[row, 4]
     count = next(widget for widget in main.findChildren(QLabel) if widget.text() == "3/4건")
     button = page.risk_buttons[row, 4]
-    assert all(f"TEST-{eid}" in main.toolTip() for eid in (1, 2, 3, 4, 5))
-    assert all(f"TEST-{eid}" in button.toolTip() for eid in (1, 5)) and "TEST-2" not in button.toolTip()
+    assert "설비 5대" in main.toolTip() and "TEST-" not in main.toolTip()
+    assert "설비 2대" in button.toolTip() and "TEST-" not in button.toolTip()
     page.matrix_scroll.ensureWidgetVisible(main)
     window.scroll.ensureWidgetVisible(main)
     QTest.qWait(20)
@@ -372,6 +437,18 @@ def test_series_legend_disables_missing_groups_without_losing_site_preferences(w
     assert o2.isEnabled() and o2.isChecked() and not o3.isChecked()
 
 
+def test_multi_group_selection_shows_both_series_and_only_their_controls(window):
+    page = window.pages["dashboard"]
+    window.query_state.set_draft(QuerySelection(group_key=("o2", "o3")))
+    assert page.apply_query(window.query_state.apply())
+    page.tabs.setCurrentIndex(2)
+    assert [control.isVisible() for control in page.series_widgets] == [True, True, False]
+    assert {bar.label() for bar in page.chart.chart().series()[0].barSets()} == {"O2", "O3"}
+    page.tabs.setCurrentIndex(3)
+    assert [control.isVisible() for control in page.series_widgets] == [True, True, False]
+    assert {series.name() for series in page.chart.chart().series()} == {"O2", "O3"}
+
+
 @pytest.mark.parametrize("mode", (2, 3))
 def test_series_legend_uses_the_whole_painted_button_as_hit_area(window, mode):
     page, panel = window.pages["dashboard"], window.query_panel
@@ -490,8 +567,8 @@ def test_unregistered_sw_is_separate_and_prevents_complete_claim(app, source):
     page = DashboardPage(state, source)
     query = state.apply()
     page.apply_query(query)
-    assert "SW 미등록 1대" in page.metrics["rate"].caption.text()
-    assert "확인 필요" in page.metrics["rate"].caption.text()
+    matrix = page.matrix_scroll.widget().layout()
+    assert "SW 미등록 1대" in matrix.itemAtPosition(0, 0).widget().toolTip()
     page.deleteLater()
 
 
@@ -507,7 +584,7 @@ def test_hpa_only_scope_is_excluded_from_counts_but_remains_available_for_lookup
     page = DashboardPage(state, source)
     page.apply_query(state.apply())
     assert page.metrics["total"].value.text() == "0대"
-    assert page.metrics["total"].caption.text() == "HPA 제외 1대"
+    assert page.snapshot.summary.hpa_excluded == 1
     assert page.metrics["rate"].value.text() == "계산 불가"
     assert page.snapshot.equipment_ids == (4,)
     cell = page.matrix_buttons[len(page.snapshot.rows), 4]
@@ -562,6 +639,20 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
     QTest.qWait(70)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()
+    assert [page.tabs.tabText(i) for i in range(page.tabs.count())] == [
+        "구역별 달성률", "판정 구성비", "설비 대수", "달성률 추이",
+    ]
+    assert page.content.body.itemAt(0).widget() is page.tabs
+    removed_titles = {"목표 도달 상태 구성비", "원본 구역 · 설비군별 설비 대수", "설비군별 목표 적용 추이"}
+    assert not any(label.text() in removed_titles for label in page.content.findChildren(QLabel)
+                   if label.isVisibleTo(page.content))
+    assert all(page.tabs.rect().contains(page.tabs.tabRect(i)) for i in range(page.tabs.count()))
+    assert page.matrix_legend.isVisible() == (mode == 0)
+    if mode == 0:
+        tabs, legend = page.tabs.geometry(), page.matrix_legend.geometry()
+        card_body = page.content.contentsRect().marginsRemoved(page.content.body.contentsMargins())
+        assert tabs.left() == legend.left() == card_body.left()
+        assert tabs.bottom() < legend.top() and legend.right() <= card_body.right()
     for metric in page.metrics.values():
         point = metric.mapTo(page, QPoint(0, 0))
         assert point.x() >= 0 and point.x() + metric.width() <= page.width()
