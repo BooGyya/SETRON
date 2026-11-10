@@ -10,7 +10,7 @@ from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.calendar_widgets import DateEdit
 from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState, version_filter_caption
-from setron.ui.theme import INK, SECONDARY
+from setron.ui.theme import ASSETS, INK, SECONDARY
 
 
 class _WrapRow(QWidget):
@@ -130,6 +130,8 @@ class QueryPanel(QWidget):
         self.apply_button.setToolTip("선택한 조건을 확정합니다.")
         # 조건 초기화는 아이콘 버튼. Site~설비군은 전체로, 기준 날짜는 오늘로 되돌린다.
         self.reset_button = button("", asset="ver5/reset.svg")
+        self.reset_button.setText("")  # 공통 버튼이 아이콘 옆에 넣는 텍스트 여백을 없앤다.
+        self.reset_button.setStyleSheet("padding: 8px 0;")
         self.reset_button.setAccessibleName("조건 초기화")
         self.reset_button.setProperty("soft", True)
         self.reset_button.setFixedSize(38, 38)
@@ -147,14 +149,15 @@ class QueryPanel(QWidget):
         self.quick_rows = []
         self._rebuild_quick_rows()
         self.goal_button = button("버전(N) 기준 입력")
-        self.goal_button.setFixedSize(170, 38)
         self.goal_button.setEnabled(False)
         self.goal_button.setToolTip("목표 N 편집은 별도 작업입니다.")
         self.version_button = button("조회 버전 · 전체")
-        self.version_button.setMinimumSize(190, 38)
         self.version_button.setEnabled(False)
         self.version_button.setToolTip("버전 다중 선택 조회 · 목표 N과 별개 · 선택 후 조회 적용")
-        self.actions_row = _WrapRow([self.goal_button, self.version_button], 190)
+        for control in (self.goal_button, self.version_button):
+            control.setFixedHeight(38)
+            control.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.actions_row = _WrapRow([self.goal_button, self.version_button], 150)
         self.card.body.addWidget(self.actions_row)
         self.version_pending = label("버전 선택 변경 · 조회 적용 필요", 12, color=SECONDARY)
         self.card.body.addWidget(self.version_pending)
@@ -222,15 +225,15 @@ class QueryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         title = label("기준 날짜", medium=True, color=INK)
-        self.date_edit = DateEdit()
+        self.date_edit = DateEdit(open_on_click=True)
         self.date_edit.setObjectName("query_as_of")
         self.date_edit.setProperty("queryField", True)
         self.date_edit.setAccessibleName("기준 날짜")
-        self.date_edit.setCalendarPopup(True)
-        self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        calendar_icon = (ASSETS / "import-ver5/fdb91.svg").as_posix()
+        self.date_edit.setStyleSheet(f"QDateEdit::down-arrow {{image:url({calendar_icon});width:16px;height:16px;}}")
         self.date_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.date_edit.setFixedHeight(38)
-        self.date_edit.setToolTip("선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
+        self.date_edit.setToolTip("클릭하여 날짜를 선택합니다. 선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
         self.date_edit.dateChanged.connect(self._choose_date)
         title.setBuddy(self.date_edit)
         layout.addWidget(title)

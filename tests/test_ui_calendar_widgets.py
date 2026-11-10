@@ -6,10 +6,12 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QDate, QPoint, QPointF, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtGui import QPalette, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLineEdit
 
+from setron.ui.appearance import manager
+from setron.ui.appearance_data import Appearance
 from setron.ui.calendar_widgets import CalendarWidget, DateEdit
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.import_delete import ImportDeletePage
@@ -56,6 +58,28 @@ def test_year_dropdown_scrolls_without_committing_another_date(own):
     assert bar.value() > before
     assert calendar.selectedDate() == QDate(2026, 10, 5)
     calendar.year_combo.hidePopup()
+
+
+def test_year_and_month_popups_use_readable_colors_after_theme_changes(own):
+    calendar = own(CalendarWidget())
+    theme = manager()
+    original = theme.appearance
+    roles = QPalette.ColorRole
+    try:
+        for mode in ("light", "dark", "light"):
+            theme.apply(Appearance(mode=mode))
+            for combo in (calendar.year_combo, calendar.month_combo):
+                combo.showPopup()
+                QTest.qWait(20)
+                view = combo.view()
+                assert view.isVisible()
+                assert view.palette().color(roles.Base).name() == theme.tokens["surface"]
+                assert view.palette().color(roles.Text).name() == theme.tokens["ink"]
+                assert view.palette().color(roles.Highlight).name() == theme.tokens["selected"]
+                assert view.palette().color(roles.HighlightedText).name() == theme.tokens["ink"]
+                combo.hidePopup()
+    finally:
+        theme.apply(original)
 
 
 def test_year_and_month_keyboard_selection_only_change_the_view_page(own):
@@ -170,6 +194,24 @@ def test_common_query_and_management_release_date_use_same_calendar(own):
     assert editor.editor.minimumDate() == QDate(1000, 1, 1)
     editor.empty.setChecked(True)
     assert editor.value() is None and not editor.editor.isEnabled()
+
+
+def test_clicking_the_query_date_text_opens_calendar_without_applying(own):
+    panel = own(QueryPanel(QueryState(preview_catalog())))
+    panel.set_as_of(date(2026, 10, 5))
+    applied = panel.apply_draft()
+    edit = panel.date_edit
+    text = edit.findChild(QLineEdit)
+    QTest.mouseClick(text, Qt.MouseButton.LeftButton, pos=text.rect().center())
+    calendar = edit.calendarWidget()
+    assert calendar.isVisible()
+
+    chosen = QDate(2026, 10, 21)
+    calendar.setSelectedDate(chosen)
+    calendar.activated.emit(chosen)
+    assert panel.state.draft.as_of == chosen.toPython()
+    assert panel.state.applied is applied
+    assert not calendar.isVisible()
 
 
 @pytest.mark.parametrize("screen", ["replay", "import", "delete"])

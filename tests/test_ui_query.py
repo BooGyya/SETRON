@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from setron.ui.main_window import MainWindow
 from setron.ui.query_state import (
     UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection,
-    QueryState, SiteOption, preview_catalog,
+    QueryState, SiteOption, VersionFilter, preview_catalog,
 )
 from setron.ui.theme import install_theme
 
@@ -320,6 +320,8 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
     assert panel.reset_button.accessibleName() == "조건 초기화" and panel.apply_button.text() == "조회 적용"
     assert [w.text().strip() for w in panel.actions_row.widgets] == ["버전(N) 기준 입력", "조회 버전 · 전체"]
     QTest.qWait(60)
+    assert panel.goal_button.width() < 170 and panel.version_button.width() < 190
+    assert all(w.height() == 38 and w.width() >= w.sizeHint().width() for w in panel.actions_row.widgets)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()
     for widget in [panel.date_edit, *panel.combos.values(), panel.reset_button, panel.apply_button,
@@ -333,3 +335,10 @@ def test_responsive_query_controls_stay_in_card(window, size, preview):
     for item in panel.quick_buttons.values():
         assert item.height() == (36 if item.property("compactChoice") else 40)
     assert panel.fields_row.columns == (6 if panel.fields_row.width() >= 960 else 2)
+    default_width = panel.version_button.width()
+    panel.set_version_filter(VersionFilter(tuple(f"v{i}" for i in range(123))))
+    QTest.qWait(20)
+    assert panel.version_button.text() == "조회 버전 · 123개 선택"
+    assert panel.version_button.width() > default_width
+    assert panel.version_button.width() >= panel.version_button.sizeHint().width()
+    assert panel.version_button.geometry().right() < panel.actions_row.width()
