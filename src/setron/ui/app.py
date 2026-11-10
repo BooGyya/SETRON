@@ -513,7 +513,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.data_warning.setVisible(bool(warning) and not (window.route == "import" and warning.startswith("DB 접속 설정이 없어")))
         # 데이터 가져오기 화면도 머리 줄 '설비 목록' 버튼을 숨긴다 (11-10 2차 3-1).
         window.header.toolbar.setVisible(window.route not in {"import", "items", "replay", "versions", "data", "reports", "settings"})
-        list_action.setVisible(window.route not in ("dashboard", "heatmap"))
+        list_action.setVisible(window.route not in ("dashboard", "heatmap", "ai"))
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)

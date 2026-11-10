@@ -274,6 +274,7 @@ def test_small_app_keeps_input_and_send_button_in_view_and_reports_route(ui, tmp
     window = ui(create_window(chat_enabled=True))
     window.resize(1000, 740)
     window.navigate("ai")
+    assert window.header.actions["equipment_list"].isHidden()
     chat = window.pages["ai"]
     chat.send("목표 N 달성률이 가장 낮은 원본 구역을 분석해줘")
     wait(chat, 10)
