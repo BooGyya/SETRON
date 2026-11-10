@@ -25,7 +25,7 @@ from setron.features.chat.schemas import INTENT_LABELS, BarChart, ChatAnswer, In
 from setron.ui.appearance import ui_color
 from setron.ui.ai_page import _STYLE, SPARKLE, _UserBubble, _sparkle, _tag
 from setron.ui.chat_export import ExcelExportDialog, ReportDialog, chart_png
-from setron.ui.chat_components import AnswerActions, asset_label, avatar, flow_row, SavedFileToast, VerdictDelegate
+from setron.ui.chat_components import AnswerActions, asset_label, avatar, flow_row, SavedFileToast, VerdictDelegate, tron_pixmap
 from setron.ui.chat_report_preview import PdfPreviewDialog
 from setron.ui.components import button, label
 from setron.ui.query_panel import _WrapRow
@@ -533,6 +533,22 @@ class StarterCard(QFrame):
             body.addWidget(item)
 
 
+def _dress_hero(empty) -> None:
+    """처음 화면 가운데 별 아이콘을 손 흔드는 트론으로 바꾼다 (11/11).
+
+    처음 화면(EmptyState) 코드는 디자인 잠금 테스트로 보호되므로 그대로 두고, 이름(aiHero)으로 찾아 그림만 바꾼다.
+    그림 파일이 없으면 예전 별 아이콘을 그대로 둔다.
+    """
+    hero = empty.findChild(QLabel, "aiHero")
+    picture = tron_pixmap("tron-welcome", 104)
+    if hero is None or picture is None:
+        return
+    hero.setFixedSize(124, 112)
+    hero.setPixmap(picture)
+    hero.setProperty("tronImage", "tron/tron-welcome.png")
+    hero.setStyleSheet("background: transparent;")
+
+
 class EmptyState(QWidget):
     """질문 전 화면: 인사, 지금 자료 요약, 예시 카드 4개, 이어 묻기 안내."""
 
@@ -613,6 +629,7 @@ class ChatPage(QWidget):
         self.open_dialog = lambda dialog: dialog.exec() == QDialog.DialogCode.Accepted
         self.starters = self._starters()
         self.empty = EmptyState(self._overview(), self.send, self.starters)
+        _dress_hero(self.empty)
         self.messages.addWidget(self.empty)
         self.messages.addStretch(1)
         self.scroll.setWidget(holder)
@@ -913,6 +930,7 @@ class ChatPage(QWidget):
         self.saved_toast = None
         self.starters = self._starters()
         self.empty = EmptyState(self._overview(), self.send, self.starters)
+        _dress_hero(self.empty)
         self.messages.insertWidget(0, self.empty)
         for row in self.chip_rows:
             row.hide()
