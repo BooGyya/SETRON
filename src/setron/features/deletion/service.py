@@ -22,6 +22,8 @@ from threading import Lock
 
 from sqlalchemy import func, select
 
+from setron.features.data_admin.service import sheet_names
+
 from setron.features.storage.service import StorageService
 from setron.infrastructure.database import Database, DatabaseCommitUnknownError
 
@@ -78,8 +80,8 @@ def _raw_object(raw) -> Mapping:
 
 
 def _sheet(raw) -> str:
-    """import_batch.raw_data({시트: {셀: 값}})의 시트 이름. 없으면 '시트 미확인'."""
-    return ", ".join(str(name) for name in _raw_object(raw)) or "시트 미확인"
+    """import_batch.raw_data({시트: {셀: 값}})의 시트 이름. 없으면 '시트 미확인'. 파일 이름 키는 시트가 아니다."""
+    return ", ".join(sheet_names(_raw_object(raw))) or "시트 미확인"
 
 
 class SnapshotDeletionService:

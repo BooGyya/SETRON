@@ -36,8 +36,10 @@ MENUS = (
     Menu("ai", "AI 분석", *_ver5("ai")),
     Menu("import", "데이터 가져오기", *_ver5("import")),
     Menu("replay", "Version Replay", *_ver5("replay")),
+    # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 기존 버전 관리·관리 데이터 메뉴를 대신한다.
+    Menu("data", "데이터 관리", *_ver5("versions")),
     Menu("versions", "버전 관리", *_ver5("versions")),
-    # VER5 사이드바에 없는 기존 메뉴. 기능을 유지하고 데이터 관리 묶음에 둔다.
+    # VER5 사이드바에 없는 기존 메뉴. 다른 화면의 내부 이동(레코드 열기 등)용으로 남기고 사이드바에는 숨긴다.
     Menu("management", "관리 데이터", *_ver5("management", "settings")),
     Menu("reports", "보고서", *_ver5("reports")),
     Menu("settings", "설정", *_ver5("settings")),
@@ -45,9 +47,11 @@ MENUS = (
 # 첫 묶음(현황 분석)은 제목 없이 표시한다.
 MENU_GROUPS = (
     (None, ("dashboard", "heatmap", "items", "ai", "import", "replay")),
-    ("데이터 관리", ("versions", "management")),
+    ("데이터 관리", ("data",)),
     ("운영 설정", ("reports", "settings")),
 )
+# 사이드바에 보이지 않지만 등록·내부 이동은 되는 메뉴 (11-10 데이터 관리 개편 전 화면).
+HIDDEN_MENUS = ("versions", "management")
 
 
 class BrandLogo(QLabel):
@@ -298,6 +302,13 @@ class MainWindow(QMainWindow):
                 self.nav[menu.key] = nav
                 group.addWidget(nav)
             side.addLayout(group)
+        for key in HIDDEN_MENUS:
+            nav = NavButton(self._menus[key])
+            nav.setParent(content)
+            nav.setEnabled(False)
+            nav.hide()
+            nav.clicked.connect(lambda checked=False, key=key: self.navigate(key))
+            self.nav[key] = nav
         side.addStretch()
         self.sidebar_scroll.setWidget(content)
         outer.addWidget(self.sidebar_scroll)

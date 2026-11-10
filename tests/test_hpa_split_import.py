@@ -9,6 +9,7 @@ from setron.features.equipment.service import EquipmentService
 from setron.features.excel_import.service import ImportValidationService
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.storage.validation import StorageValidationError
+from setron.features.data_admin import WORKBOOK_KEY  # 11-10: 가져오기 원본에 파일 이름도 보관
 
 from test_hpa_history_safety import NEW_DAY, OLD_DAY, _input
 from test_hpa_merge_safety import HPA, NORMAL, _counts, hpa_storage  # noqa: F401
@@ -56,7 +57,8 @@ def test_full_pm_correction_is_independent_of_sheet_partition_and_order(hpa_stor
         assert any(cell.field == "pm_name" and cell.value == name and cell.batch_id == receipt.batch_id for cell in cells)
         assert any(cell.field == "version_raw" and cell.value == versions[name] and cell.batch_id == receipt.batch_id
                    and cell.sheet == source.sheet.sheet_name for cell in cells)
-        assert original(storage, receipt.batch_id) == {source.sheet.sheet_name: source.sheet.cells}
+        assert original(storage, receipt.batch_id) == {source.sheet.sheet_name: source.sheet.cells,
+                                                       WORKBOOK_KEY: source.workbook_name}
     metadata_source, metadata_receipt = by_name["PM1"]
     assert saved.batch_id == metadata_receipt.batch_id
     assert any(cell.field == "line" and cell.value == "보완 라인" and cell.batch_id == metadata_receipt.batch_id

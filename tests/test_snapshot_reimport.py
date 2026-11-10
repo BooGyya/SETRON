@@ -17,6 +17,7 @@ from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.storage.service import StorageService
 from setron.features.storage.validation import TABLE_NAMES, StorageValidationError
 from setron.infrastructure.database import Database, DatabaseSaveError
+from setron.features.data_admin import WORKBOOK_KEY  # 11-10: 가져오기 원본에 파일 이름도 보관
 
 from test_import_validation import draft, row
 
@@ -147,9 +148,9 @@ def test_initial_save_registers_equipment_and_keeps_raw_values_separate_from_edi
     assert stored.software[0].release_version_id == 2
     with storage.transaction() as tx:
         raw = tx.get("import_batch", {"batch_id": receipt.batch_id})["raw_data"]
-    assert raw == {"원본 현황": source.sheet.cells}
+    assert raw == {"원본 현황": source.sheet.cells, WORKBOOK_KEY: source.workbook_name}
     assert raw["원본 현황"][source.row(1).sources["version_raw"]] == "v1"
-    assert "합성.xlsx" not in str(raw)
+    assert "합성.xlsx" not in str(raw["원본 현황"])  # 11-10: 파일 이름은 시트 셀과 섞지 않고 WORKBOOK_KEY에만 둔다
 
 
 def test_same_values_reuse_snapshot_software_and_fixed_pm_ids(storage):

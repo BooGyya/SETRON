@@ -57,7 +57,7 @@ class ReviewRow:
 class ExtractionReview:
     """한 파일·한 시트의 검토 자료. DB 저장이나 저장 가능 판정은 수행하지 않는다.
 
-    workbook_name은 확인창 표시 전용이다. raw_data에는 파일명을 넣지 않는다.
+    workbook_name은 확인창 표시용이다. raw_data에는 파일명을 넣지 않는다 (DB 입력 작업에는 [파일] 키로 따로 보관, 11-10).
     BE-008 검증·BE-009 저장 단계는 전체 묶음의 검토 결과를 별도로 확인해야 한다.
     """
 

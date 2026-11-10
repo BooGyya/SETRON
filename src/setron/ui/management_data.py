@@ -136,6 +136,14 @@ class ManagementGateway:
                                                               filters={"family_id": family_id})
         return records, suggest_version_orders(family_id, [record.current for record in records])
 
+    # --- 데이터 관리 화면 (설비현황·릴리즈노트·변경 이력, 11-10 개편) ---
+    def data_admin(self, method, *args, **kwargs):
+        """DataAdminService의 읽기·설비군 등록을 같은 연결 정리 규칙으로 부른다 (워커에서 호출)."""
+        from setron.features.data_admin import DataAdminService
+
+        with self._storage() as storage:
+            return getattr(DataAdminService(storage), method)(*args, **kwargs)
+
     def export_management(self, path):
         from setron.features.export.management_tables import save_management_data
         from setron.features.export.schemas import ExportResult, ExportStatus

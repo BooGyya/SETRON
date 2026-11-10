@@ -5,6 +5,7 @@ from collections import defaultdict
 
 from sqlalchemy import select
 
+from setron.features.data_admin.service import sheet_names
 from setron.features.excel_import.reference import ReferenceData, resolve_family
 from setron.features.excel_import.service import parse_date
 from setron.features.excel_import.schemas import ImportComparison, ImportDraft
@@ -57,7 +58,9 @@ def compare_import(storage: StorageService, draft: ImportDraft, reference: Refer
             if batch_id not in matching_sheet:
                 raw = tx.session.scalar(select(batch.c.raw_data).where(batch.c.batch_id == batch_id))
                 raw = json.loads(raw) if isinstance(raw, str) else raw
-                matching_sheet[batch_id] = isinstance(raw, dict) and len(raw) == 1 and isinstance(raw.get(sheet), dict)
+                # 파일 이름 키(WORKBOOK_KEY)는 시트가 아니므로 세지 않는다.
+                matching_sheet[batch_id] = (isinstance(raw, dict) and len(sheet_names(raw)) == 1
+                                            and isinstance(raw.get(sheet), dict))
             if matching_sheet[batch_id]:
                 matching_ids.append(batch_id)
                 previous_date = candidate_day

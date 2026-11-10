@@ -16,6 +16,7 @@ from setron.features.release.service import ReleaseService
 from setron.features.release.schemas import ReleaseInput
 from setron.features.storage.validation import StorageValidationError
 from setron.ui.import_delete_gateway import ImportDeleteGateway
+from setron.features.data_admin import WORKBOOK_KEY  # 11-10: 가져오기 원본에 파일 이름도 보관
 
 from test_release_revision import all_rows, observation, revision_storage
 from test_release_replacement import original
@@ -214,7 +215,7 @@ def test_same_family_multi_sheet_import_is_one_reviewed_cumulative_note(revision
     receipts = saver.save_many(tuple(replace(r, release_reviews=reviews) for r in requests))
     assert receipts[0].batch_id == receipts[1].batch_id
     batch = next(row for row in all_rows(storage, "import_batch") if row["batch_id"] == receipts[0].batch_id)
-    assert set(batch["raw_data"]) == {"앞부분", "뒷부분"}
+    assert set(batch["raw_data"]) == {"앞부분", "뒷부분", WORKBOOK_KEY}  # 시트 두 개 + 파일 이름
     assert {r["version_raw"] for r in all_rows(storage, "release_version")} == {"v1", "v2"}
 
 

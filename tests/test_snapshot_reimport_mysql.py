@@ -15,6 +15,7 @@ from setron.features.excel_import.service import ImportValidationService, edit_v
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import DatabaseSaveError
+from setron.features.data_admin import WORKBOOK_KEY  # 11-10: 가져오기 원본에 파일 이름도 보관
 
 from test_import_save_mysql import count, storage  # noqa: F401  실제 스키마·시연 기준 자료 fixture
 from test_import_validation import draft, row
@@ -62,7 +63,7 @@ def test_same_values_keep_ids_and_link_the_latest_original_cells(storage):
     assert after.source_reference["equipment_code"]["sheet"] == "최신 원본"
     assert positions(after)["PM1"][1].source_reference["version_raw"]["sheet"] == "최신 원본"
     assert raw_batch(storage, first.batch_id) == original
-    assert set(raw_batch(storage, second.batch_id)) == {"최신 원본"}
+    assert set(raw_batch(storage, second.batch_id)) == {"최신 원본", WORKBOOK_KEY}
     assert count(storage, "equipment_snapshot", equipment_id=after.equipment_id) == 1
     assert count(storage, "equipment_version", snapshot_id=after.snapshot_id) == 1
 
@@ -194,7 +195,8 @@ def test_new_equipment_keeps_unregistered_edited_version_and_raw_cell_separately
     assert saved.software[0].version_raw == "v2_검토값(H)" and saved.software[0].release_version_id is None
     raw = raw_batch(storage, receipt.batch_id)
     assert raw["원문 보관"][source.row(1).sources["version_raw"]] == "v1_원본(H)"
-    assert source.workbook_name not in str(raw)
+    # 11-10 변경: 파일 이름은 시트 셀과 섞지 않고 WORKBOOK_KEY에만 보관한다 (데이터 관리 변경 이력용).
+    assert raw[WORKBOOK_KEY] == source.workbook_name and source.workbook_name not in str(raw["원문 보관"])
 
 
 def test_release_registered_in_the_same_batch_links_to_the_following_status(storage):
