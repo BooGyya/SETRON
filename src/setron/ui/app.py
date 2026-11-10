@@ -173,7 +173,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         remembered_pair = last_group_pair or settings.store.version_group_pair()
         dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=single_selection(state.draft.group_key),
                                     pair_key=remembered_pair, parent=window)
-        dialog.criteria_confirmed.connect(window.query_panel.apply_draft)
+        def apply_criteria():
+            window.query_panel.apply_draft()
+            if window.route == "replay":
+                replay.apply_query()
+
+        dialog.criteria_confirmed.connect(apply_criteria)
         window.group_dialog = dialog
         initial_pair = dialog.pair.key if dialog.pair is not None else None
 
@@ -248,6 +253,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         return (applied.targets if applied is not None and applied.targets is not None else
                 initial_targets(source))
     replay = ReplayPage(source, targets_provider=replay_targets)
+    replay.query_panel.goal_button.setEnabled(True)
+    replay.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
+    replay.query_panel.goal_button.clicked.connect(open_groups)
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
     versions.configure(management_gateway, release_refresh_context, edit_allowed=lambda: (
         not management.busy and not management.locked and management.state not in {"review", "saving"}
@@ -952,8 +960,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             items.show_save_feedback(text, tone)
             item_risk_save_pending = False
     management.saved.connect(lambda *_: item_save_notice("저장 완료 · 현재 자료로 다시 조회합니다.", "success"))
-    management.save_failed.connect(lambda: item_save_notice("저장 실패 · 기존 자료 유지 · 관리 데이터에서 오류를 확인해 주세요.", "danger"))
-    management.save_uncertain.connect(lambda: item_save_notice("저장 결과 미확인 · 중복 등록하지 말고 관리 데이터와 DB 기록을 확인해 주세요.", "warning"))
+    management.save_failed.connect(lambda: item_save_notice("저장 실패 · 기존 자료 유지 · 데이터 관리에서 오류를 확인해 주세요.", "danger"))
+    management.save_uncertain.connect(lambda: item_save_notice("저장 결과 미확인 · 중복 등록하지 말고 데이터 관리와 DB 기록을 확인해 주세요.", "warning"))
     management.request.completed.connect(lambda *_: ai.refresh())
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save

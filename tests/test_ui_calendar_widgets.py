@@ -239,34 +239,39 @@ def test_each_screen_date_popup_uses_shared_calendar(own, screen):
         page = own(ImportDeletePage())
         fields = (page.start, page.end)
     for field in fields:
-        field.open_calendar()
-        calendar = field.calendar_menu.actions()[0].defaultWidget()
+        if screen == "replay":
+            QTest.mouseClick(field.lineEdit(), Qt.MouseButton.LeftButton)
+            calendar = field.calendarWidget()
+        else:
+            field.open_calendar()
+            calendar = field.calendar_menu.actions()[0].defaultWidget()
         assert isinstance(calendar, CalendarWidget)
         assert calendar.year_combo.currentText().endswith("년")
         assert calendar.month_combo.currentText().endswith("월")
-        field.calendar_menu.close()
+        if screen == "replay":
+            assert calendar.isVisible()
+            QTest.keyClick(calendar, Qt.Key.Key_Escape)
+        else:
+            field.calendar_menu.close()
 
 
 @pytest.mark.parametrize("width", [1320, 746, 620])
-def test_replay_reset_and_apply_align_with_adjacent_input_fields(own, width):
+def test_replay_reset_aligns_with_adjacent_input_fields(own, width):
     page = own(ReplayPage(demo_dashboard_source()))
     page.resize(width, 1200)
     QTest.qWait(50)
-    y = lambda control: control.mapTo(page.filters, QPoint()).y()  # noqa: E731
-    # 설비군 드롭다운을 뺀 뒤(리플레이 요청 1-1) 좁은 폭에서는 버튼이 다음 줄로 갈 수 있다.
-    # 같은 줄에 입력칸이 있으면 그 입력칸과 높이가 맞아야 한다.
-    fields = (page.start, page.end, *page.combos.values())
+    panel = page.query_panel
+    y = lambda control: control.mapTo(panel.card, QPoint()).y()  # noqa: E731
+    fields = (page.start, page.end, *panel.combos.values())
     same_row = [field for field in fields if abs(y(field) - y(page.reset_button)) < 30]
-    assert y(page.reset_button) == y(page.apply_button)
     assert all(y(field) == y(page.reset_button) for field in same_row)
     if width == 1320:
         assert len(same_row) == len(fields)  # 넓은 화면에서는 한 줄
-    assert page.reset_button.height() == page.apply_button.height() == 38
-    assert page.reset_button.x() < page.apply_button.x()
-    assert page.apply_button.mapTo(page.filters, page.apply_button.rect().bottomRight()).x() <= page.filters.width()
-    page.apply_button.setFocus()
+    assert page.reset_button.height() == 38
+    assert page.reset_button.mapTo(panel.card, page.reset_button.rect().bottomRight()).x() <= panel.card.width()
+    page.reset_button.setFocus()
     QTest.qWait(10)
-    assert page.reset_button.height() == page.apply_button.height() == 38
+    assert page.reset_button.height() == 38
 
 
 def test_no_screen_constructs_an_unshared_native_calendar():
