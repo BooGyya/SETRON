@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QFontDatabase, QRegion
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
@@ -68,9 +68,9 @@ def test_original_assets_and_fonts_are_usable(window):
         renderer = QSvgRenderer(str(asset))
         assert renderer.isValid(), asset.name
         assert not renderer.defaultSize().isEmpty(), asset.name
-    logo = window.findChild(QLabel, "semesLogo")
+    logo = window.findChild(QLabel, "setronLogo")
     assert not logo.pixmap().isNull()
-    assert (logo.width(), logo.height()) == (80, 19)
+    assert (logo.width(), logo.height()) == (128, 36)
     for menu in MENUS:
         nav = window.nav[menu.key]
         assert nav.height() == 46
@@ -82,25 +82,97 @@ def test_original_assets_and_fonts_are_usable(window):
         assert (ASSETS / menu.active_icon).is_file()
 
 
-def test_sidebar_uses_supplied_logo_without_transparent_padding_or_theme_tint(window):
+def test_sidebar_uses_latest_logo_with_matching_white_dark_render_and_no_backplate(window, app):
     from setron.ui.appearance import manager
     from setron.ui.appearance_data import Appearance
-    logo = window.findChild(QLabel, "semesLogo")
-    assert logo.property("brandAsset") == "semes-logo.png"
-    # 첨부한 원본을 재인코딩·변색하지 않고 패키지 자산으로 보관한다.
-    assert hashlib.sha256((ASSETS / "semes-logo.png").read_bytes()).hexdigest() == (
-        "b5d9714733795918eff210ac6e74be456e5460f37fcfe05b109566ac1b74b7d5")
-    size = logo.pixmap().deviceIndependentSize()
-    assert 76 <= size.width() <= 80 and 16 <= size.height() <= 19
-    original = logo.pixmap().toImage()
+    logo = window.findChild(QLabel, "setronLogo")
+    assert logo.property("brandAsset") == "setron-logo.png"
+    assert logo.accessibleName() == "SETRON 로고 · SEMES Tracking Monitoring"
+    # 승인한 자간 v2 PNG를 재인코딩하지 않고 패키지 자산으로 보관한다.
+    assert hashlib.sha256((ASSETS / "setron-logo.png").read_bytes()).hexdigest() == (
+        "02e1541111ebe082ff268427c03671b7307d327c2406ec5872967d746ae4451a")
     current, previous = manager(), manager().appearance
     try:
+        current.apply(Appearance(mode="light"))
+        app.processEvents()
+        geometry = logo.geometry()
+        description_y = window.findChild(QLabel, "serviceDescription").y()
+        menu_y = window.nav["dashboard"].y()
+        original = logo.pixmap().toImage()
+        painted_width = QRegion(logo.pixmap().mask()).boundingRect().width()
+        assert logo.property("displayedBrandAsset") == "setron-logo.png"
+        assert logo.property("brandMode") == "light"
+        assert logo.pixmap().deviceIndependentSize().toSize() == logo.size()
+        assert original.hasAlphaChannel()
+        assert original.pixelColor(0, 0).alpha() == 0
         current.apply(Appearance(mode="dark"))
+        app.processEvents()
+        assert logo.property("displayedBrandAsset") == "setron-logo.png"
+        assert logo.property("brandMode") == "dark"
+        assert not logo.pixmap().isNull()
+        assert logo.pixmap().toImage() != original
+        white = logo.pixmap().toImage()
+        for y in range(white.height()):
+            for x in range(white.width()):
+                pixel = white.pixelColor(x, y)
+                assert pixel.alpha() == original.pixelColor(x, y).alpha()
+                if pixel.alpha():
+                    assert (pixel.red(), pixel.green(), pixel.blue()) == (255, 255, 255)
+        assert logo.pixmap().deviceIndependentSize().toSize() == logo.size()
+        assert abs(QRegion(logo.pixmap().mask()).boundingRect().width() - painted_width) <= 2 * logo.devicePixelRatioF()
+        assert logo.pixmap().toImage().pixelColor(0, 0).alpha() == 0
+        assert logo.geometry() == geometry
+        assert window.findChild(QLabel, "serviceDescription").y() == description_y
+        assert window.nav["dashboard"].y() == menu_y
+        assert "background" not in logo.styleSheet()
+        current.apply(Appearance(mode="light"))
+        assert logo.property("displayedBrandAsset") == "setron-logo.png"
         assert logo.pixmap().toImage() == original
-        current.apply(Appearance())
-        assert logo.pixmap().toImage() == original
+        assert "background" not in logo.styleSheet()
     finally:
         current.apply(previous)
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_sidebar_brand_respects_theme_at_startup(app, mode):
+    from setron.ui.appearance import manager
+    from setron.ui.appearance_data import Appearance
+    current, previous = manager(), manager().appearance
+    result = None
+    try:
+        current.apply(Appearance(mode=mode))
+        result = MainWindow()
+        result.show()
+        app.processEvents()
+        logo = result.findChild(QLabel, "setronLogo")
+        assert logo.property("displayedBrandAsset") == "setron-logo.png"
+        assert logo.property("brandMode") == mode
+        assert (logo.width(), logo.height()) == (128, 36)
+        assert abs(2 * logo.x() + logo.width() - logo.parentWidget().width()) <= 1
+        painted = QRegion(logo.pixmap().mask()).boundingRect()
+        assert abs(2 * painted.x() + painted.width() - logo.pixmap().width()) <= 2 * logo.devicePixelRatioF()
+        assert logo.pixmap().deviceIndependentSize().toSize() == logo.size()
+        assert "background" not in logo.styleSheet()
+    finally:
+        if result is not None:
+            result.close()
+            result.deleteLater()
+        current.apply(previous)
+        app.processEvents()
+
+
+def test_sidebar_brand_header_is_setron_only_and_keeps_description(window):
+    sidebar = window.findChild(QWidget, "sidebarContent")
+    logos = [widget for widget in sidebar.findChildren(QLabel) if widget.property("brandAsset")]
+    assert len(logos) == 1 and logos[0].objectName() == "setronLogo"
+    assert window.findChild(QLabel, "semesLogo") is None
+    assert not any(widget.text() in {"SETRON", "SEMES"} for widget in sidebar.findChildren(QLabel))
+    description = window.findChild(QLabel, "serviceDescription")
+    assert description.text() == "SW 버전 현황 관리"
+    assert description.x() == 20
+    assert abs(2 * logos[0].x() + logos[0].width() - sidebar.width()) <= 1
+    assert logos[0].geometry().bottom() < description.geometry().top()
+    assert description.geometry().bottom() < window.nav["dashboard"].geometry().top()
 
 
 def test_registration_enables_menu_and_updates_header(window, app):
@@ -190,6 +262,10 @@ def test_responsive_header_and_scroll_boundaries(window, app, size):
     assert right <= header.width()
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.sidebar_scroll.parentWidget().width() == 224
+    logo = window.findChild(QLabel, "setronLogo")
+    logo_right = logo.mapTo(window.sidebar_scroll.viewport(), QPoint(logo.width(), 0)).x()
+    assert logo_right <= window.sidebar_scroll.viewport().width()
+    assert abs(2 * logo.x() + logo.width() - logo.parentWidget().width()) <= 1
     assert header._compact is (header.width() < 1100)
     if size[1] == 600:
         assert window.sidebar_scroll.verticalScrollBar().maximum() > 0
