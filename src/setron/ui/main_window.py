@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QFont, QKeySequence, QPainter, QPixmap, QRegion
+from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLayout, QMainWindow, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -197,6 +197,27 @@ class PageStack(QWidget):
         self.current_changed.emit()
 
 
+class _ContentCanvas(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("canvas")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self._preview_background = QColor()
+
+    def set_preview_background(self, value):
+        color = QColor(value) if value else QColor()
+        if color != self._preview_background:
+            self._preview_background = color
+            self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._preview_background.isValid():
+            painter = QPainter(self)
+            painter.fillRect(event.rect(), self._preview_background)
+            painter.end()
+
+
 class MainWindow(QMainWindow):
     page_changed = Signal(str)
     query_applied = Signal(object)
@@ -228,8 +249,7 @@ class MainWindow(QMainWindow):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        content = QWidget()
-        content.setObjectName("canvas")
+        self.canvas = content = _ContentCanvas()
         self.body = QVBoxLayout(content)
         self.body.setContentsMargins(28, 28, 28, 28)
         self.body.setSpacing(20)
