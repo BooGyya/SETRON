@@ -23,6 +23,7 @@ def dialog(app, data):
 @pytest.mark.parametrize("size", [(640, 700), (640, 500), (460, 500)])
 @pytest.mark.parametrize("criterion", ["SAFETY_REQUIRED", "DIRECT_VERSION", "DEFECT_ITEM"])
 def test_scroll_form_keeps_footer_visible_for_all_criteria(dialog, size, criterion):
+    dialog.advanced_toggle.setChecked(True)  # 상세 설정까지 펼친 가장 긴 형태에서 레이아웃을 확인한다.
     dialog.criterion.setCurrentIndex(dialog.criterion.findData(criterion))
     before = dialog.values()
     dialog.resize(*size)
@@ -42,22 +43,16 @@ def test_scroll_form_keeps_footer_visible_for_all_criteria(dialog, size, criteri
     assert dialog.values() == before and not dialog.save_button.isEnabled()
     if size[1] == 500:
         assert dialog.scroll.verticalScrollBar().maximum() > 0
-    verified = dialog.verified.rect().translated(dialog.verified.mapTo(dialog, QPoint()))
-    assert dialog.rect().contains(verified) and dialog.footer.isAncestorOf(dialog.verified)
+    assert dialog.footer.isAncestorOf(dialog.save_button) and dialog.save_button.text() == "등록"
 
 
-def test_tab_focus_reaches_fixed_confirmation_and_cancel_stays_accessible(dialog):
+def test_advanced_settings_are_collapsed_and_cancel_stays_accessible(dialog):
     dialog.resize(460, 500)
     dialog.show()
-    dialog.name.setFocus()
     QTest.qWait(30)
-    dialog.scroll.verticalScrollBar().setValue(0)
-    for _ in range(40):
-        if dialog.verified.hasFocus():
-            break
-        QTest.keyClick(dialog.focusWidget(), Qt.Key.Key_Tab)
-    assert dialog.verified.hasFocus()
-    assert dialog.verified.isVisible()
+    assert dialog.advanced.isHidden() and dialog.memo.isVisible()
+    dialog.advanced_toggle.click()
+    assert dialog.advanced.isVisible() and dialog.name.isVisible()
     assert not dialog.save_button.isEnabled()
     dialog.cancel_button.click()
     assert not dialog.isVisible()

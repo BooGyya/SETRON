@@ -57,18 +57,18 @@ def test_family_title_is_outside_wrapping_choice_group(window, width):
 
 
 @pytest.mark.parametrize("width", [960, 1100, 1920])
-def test_registration_visible_before_choosing_rule(window, width):
+def test_search_box_sits_small_on_the_result_title_row(window, width):
     page = window.pages["items"]
-    page.tabs.setCurrentIndex(1)
-    manager = page.manager
     window.resize(width, 900)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    assert manager.filters.isHidden()
-    assert manager.detail_card.isHidden()
-    assert manager.add_button.isVisible()
-    assert manager.add_button.text() == "+ 위험 기준 등록"
-    assert manager.rect().contains(manager.add_button.mapTo(manager, QPoint()))
+    bar = page.search.parentWidget()
+    assert bar.width() == 280 and page.ai_search.isVisible()
+    count_row = page.count.mapTo(page.results_card, QPoint()).y()
+    assert abs(bar.mapTo(page.results_card, QPoint()).y() + bar.height() // 2 - count_row - page.count.height() // 2) <= 4
+    assert bar.mapTo(page.results_card, QPoint()).x() > page.registered_only.mapTo(page.results_card, QPoint()).x()
+    assert page.registered_only.text() == "위험 기준 등록된 Item만 보기"
+    assert page.manager.isHidden()
 
 
 def test_empty_and_reloaded_family_group_keep_heading_and_single_message(window):

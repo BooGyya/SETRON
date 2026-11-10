@@ -70,3 +70,12 @@ def test_switching_to_other_original_form_does_not_reuse_c4_styles(original):
     assert original.model.index(0, 2).data(Qt.ItemDataRole.ForegroundRole) is None
     assert original.model.index(0, 3).data(Qt.ItemDataRole.ForegroundRole) is None
     assert original.model.index(0, 0).data(Qt.ItemDataRole.TextAlignmentRole) == (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+
+def test_single_input_job_is_plain_text_and_locations_are_labelled(original):
+    from setron.ui.item_original_table import source_locations
+    from setron.ui.version_data import SourceReference
+    assert original.documents.isHidden() and "입력 작업 2 · Release List · 11개 원본 열" in original.position.text()
+    refs = (SourceReference("내용", None, None, "Release List", "B3"), SourceReference("변경", None, None, "Release List", "D3"))
+    assert source_locations(refs) == "원본 위치: Release List B3 · D3"
+    assert source_locations(()) == ""
