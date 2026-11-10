@@ -1,4 +1,4 @@
-"""AI 답변의 로컬 PDF 렌더링·미리보기. AI/Word 백엔드에는 관여하지 않는다."""
+"""AI 답변과 생성된 보고서의 로컬 미리보기·인쇄."""
 from __future__ import annotations
 
 import os
@@ -11,13 +11,15 @@ from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPdfWriter, QTextDocum
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
-from PySide6.QtWidgets import QDialog, QFileDialog, QHBoxLayout, QListWidget, QListWidgetItem, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QHBoxLayout, QListWidget, QListWidgetItem, QVBoxLayout
 
 from setron.features.chat.export import conditions_of
 from setron.features.chat.schemas import INTENT_LABELS
 from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.ui.chat_components import asset_label, close_button
 from setron.ui.components import button, label
+from setron.ui.import_dialogs import confirm_numbered_save
+from setron.ui.management_integration import save_numbered_export
 
 
 def report_document(report) -> QTextDocument:
@@ -105,12 +107,18 @@ def save_report_pdf(report, path) -> ExportResult:
 
 
 class PdfPreviewDialog(QDialog):
-    def __init__(self, report, *, filename="SETRON_보고서.pdf", parent=None):
+    def __init__(self, report, *, filename="SETRON_보고서.pdf", parent=None,
+                 preview_writer=None, document_factory=report_document, download_writer=None):
         super().__init__(parent)
         self.report = report
         self.filename = filename
+        self.document_factory = document_factory
+        self.download_writer = download_writer
+        self.suffix = Path(filename).suffix.lower()
+        self.format_name = "Word" if self.suffix == ".docx" else "PDF"
         self.result = None
-        self.setWindowTitle("SETRON · PDF 미리보기")
+        title = "보고서 미리보기" if download_writer else "PDF 미리보기"
+        self.setWindowTitle(f"SETRON · {title}")
         self.resize(880, 825)
         self.setMinimumSize(560, 420)
         self.setStyleSheet("QDialog { background: white; }")
@@ -120,7 +128,7 @@ class PdfPreviewDialog(QDialog):
         body.setContentsMargins(22, 18, 22, 18)
         header = QHBoxLayout()
         header.addWidget(asset_label("87080.svg", slot=40))
-        header.addWidget(label("PDF 미리보기", 18, medium=True), 1)
+        header.addWidget(label(title, 18, medium=True), 1)
         header.addWidget(close_button(self.reject))
         body.addLayout(header)
         self.metadata = label(filename, 12, wrap=True)
@@ -146,7 +154,8 @@ class PdfPreviewDialog(QDialog):
         body.addWidget(self.position)
         footer = QHBoxLayout()
         footer.addStretch(1)
-        cancel, self.print_button, self.download_button = button("닫기"), button("인쇄"), button("PDF 다운로드", primary=True)
+        cancel, self.print_button = button("닫기"), button("인쇄")
+        self.download_button = button(f"{self.format_name} 다운로드", primary=True)
         cancel.clicked.connect(self.reject)
         self.print_button.clicked.connect(self.print_report)
         self.download_button.clicked.connect(self.download)
@@ -155,7 +164,7 @@ class PdfPreviewDialog(QDialog):
         body.addLayout(footer)
         self.pages.currentRowChanged.connect(self._jump)
         self.view.pageNavigator().currentPageChanged.connect(self._current)
-        generated = save_report_pdf(report, self._path)
+        generated = (preview_writer or save_report_pdf)(report, self._path)
         # PDF 뷰의 비동기 렌더러가 Windows 임시 파일을 잡아 두지 않도록 메모리에서 읽는다.
         self._buffer = QBuffer(self)
         if generated.saved:
@@ -189,10 +198,26 @@ class PdfPreviewDialog(QDialog):
         self.position.setText(f"{index + 1} / {self.pdf.pageCount()}페이지")
 
     def download(self):
-        path, _ = QFileDialog.getSaveFileName(self, "PDF 저장", self.filename, "PDF (*.pdf)")
+        if self.download_writer:
+            path, _ = QFileDialog.getSaveFileName(self, f"{self.format_name} 저장", self.filename,
+                f"{self.format_name} (*{self.suffix})", options=QFileDialog.Option.DontConfirmOverwrite)
+        else:
+            path, _ = QFileDialog.getSaveFileName(self, "PDF 저장", self.filename, "PDF (*.pdf)")
         if not path:
             return
-        self.result = save_report_pdf(self.report, path)
+        if self.download_writer:
+            def write(destination):
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                try:
+                    return self.download_writer(destination)
+                finally:
+                    QApplication.restoreOverrideCursor()
+            self.result = save_numbered_export(write, path, self.suffix,
+                                               confirm_duplicate=lambda requested: confirm_numbered_save(self, requested))
+        else:
+            self.result = save_report_pdf(self.report, path)
+        if self.result is None:
+            return
         if self.result.saved:
             self.accept()
         else:
@@ -201,9 +226,10 @@ class PdfPreviewDialog(QDialog):
     def print_report(self):
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        printer.setPageMargins(QMarginsF(16, 16, 16, 16), QPageLayout.Unit.Millimeter)
         dialog = QPrintDialog(printer, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            report_document(self.report).print_(printer)
+            self.document_factory(self.report).print_(printer)
 
     def _cleanup(self, *_):
         self.view.setDocument(None)

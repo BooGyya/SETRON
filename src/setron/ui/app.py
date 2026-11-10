@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMenu, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
@@ -56,7 +56,7 @@ from setron.ui.data_export_page import DataExportPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter, save_numbered_export
 from setron.ui.settings_page import SettingsPage
-from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
+from setron.ui.import_dialogs import ImportProgressDialog, confirm_numbered_save
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
@@ -365,7 +365,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                      if not card.is_stale and not card.answer.issues and card.answer.request.understood), None)
     reports = ReportsPage(source, targets_provider=replay_targets, version_loader=version_loader,
                           ai_provider=latest_report_answer, generation_allowed=analysis_allowed)
-    reports.title_changed.connect(lambda title: window.header.title.setText(title) if window.route == "reports" else None)
     if chat_enabled:
         ai.report_saved.connect(reports.add)
     window.register_page("reports", reports, uses_query=False)
@@ -598,16 +597,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         export_action.setToolTip("DB 전체 SQL · 관리 자료 XLSX · 현재 조회 현황 XLSX 내보내기")
 
     def run_numbered_export(exporter, path, suffix, *, interactive):
-        def confirm_duplicate(requested):
-            dialog = ImportConfirmDialog(
-                f"같은 이름의 파일이 있습니다.\n{requested.name}\n\n계속 저장할까요?",
-                window, title="파일 덮어쓰기 확인", action_text="확인",
-            )
-            try:
-                return dialog.exec() == QDialog.DialogCode.Accepted
-            finally:
-                dialog.deleteLater()
-
         def write(destination):
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
@@ -615,7 +604,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             finally:
                 QApplication.restoreOverrideCursor()
 
-        return save_numbered_export(write, path, suffix, confirm_duplicate=confirm_duplicate if interactive else None)
+        confirm = (lambda requested: confirm_numbered_save(window, requested)) if interactive else None
+        return save_numbered_export(write, path, suffix, confirm_duplicate=confirm)
 
     def export_sql(path=None):
         """DB 전체를 .sql로 내보낸다. ``path``가 없으면 저장 위치를 묻고 결과를 알림창으로 알린다."""

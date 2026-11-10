@@ -3,13 +3,12 @@
 from dataclasses import replace
 from datetime import date
 from threading import Event
-from time import monotonic
 from zipfile import ZipFile
 
 import pytest
 from docx import Document
 from openpyxl import load_workbook
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QDate, QSettings
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
@@ -21,7 +20,6 @@ from setron.ui.query_state import AppliedQuery, QuerySelection
 from setron.ui.report_data import GeneratedReport, ReportRequest, ReportSection, generate_report
 from setron.ui.report_export import pdf_document, report_html, save_generated_report
 from setron.ui.reports_page import ReportsPage
-from setron.ui.report_widgets import ReportSaveDialog
 from setron.ui.target_data import initial_targets
 from setron.ui.theme import ASSETS, svg_size
 from setron.ui.version_demo import demo_version_catalog
@@ -48,67 +46,46 @@ def page(own, tmp_path, **kwargs):
 def generated(page):
     page.generate()
     until(lambda: not page.request.busy)
-    assert page.result is not None, page.result_status.text()
+    assert page.result is not None, page.generation_status.text()
     return page.result
 
 
-def test_landing_all_five_cards_and_two_fixed_steps_without_back(own, tmp_path):
+def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
+    from setron.ui.replay_page import ReplayPage
+
     p = page(own, tmp_path)
-    assert p.stack.currentIndex() == 0 and len(p.create_buttons) == 5
+    replay = own(ReplayPage(p.source))
+    assert list(p.type_buttons) == ["status", "upgrade", "item", "change", "ai"]
+    assert p.kind == "status" and p.result_card.isHidden()
     assert p.library_model.rowCount() == 0
-    for kind, b in p.create_buttons.items():
-        b.click()
-        assert p.kind.value() == kind and p.stack.currentIndex() == 1
-        assert p.tabs.count() == 2 and not p.tabs.usesScrollButtons()
-        p.enter()
-        assert p.stack.currentIndex() == 0
+    assert type(p.start) is type(replay.start) and type(p.end) is type(replay.end)
+    assert list(p.query_panel.combos) == list(replay.query_panel.combos) == ["site_key", "fab_key", "line_key"]
     assert not any("뒤로" in b.text() for b in p.findChildren(QPushButton))
+    p.type_buttons["item"].click()
     until(lambda: not p.item_request.busy)
-
-
-def test_landing_transfers_scope_period_format_and_date_calendar(own, tmp_path):
-    p = page(own, tmp_path)
-    p.landing_site.setCurrentIndex(1)
-    p.landing_group.setCurrentIndex(1)
-    p.landing_format.setCurrentIndex(1)
-    p.start_flow("upgrade")
-    assert p.site.currentData() == p.landing_site.currentData()
-    assert p.group.currentData() == p.landing_group.currentData()
-    assert p.format.value() == "docx"
-    assert p._applied[1] == date(2026, 9, 21)
-    p.base_date.open_calendar()
-    assert p.base_date.calendar_menu.actions()[0].defaultWidget().year_combo is not None
-    p.base_date.calendar_menu.close()
-    until(lambda: not p.item_request.busy)
-
-
-def test_generate_has_four_document_tabs_and_options_really_exclude_sections(own, tmp_path):
-    p = page(own, tmp_path)
-    p.start_flow("status")
-    p.options["heatmap"].setChecked(False)
-    p.options["distribution"].setChecked(False)
+    assert p.item.isVisibleTo(p) and p.item.count() > 1
+    p.type_buttons["status"].click()
+    assert p.item.isHidden()
+    p.query_panel.select("site_key", p.source.catalog.sites[0].key)
+    p.start.setDate(QDate(2026, 10, 1))
+    p.end.setDate(QDate(2026, 10, 22))
     r = generated(p)
-    assert p.tabs.currentIndex() == 1 and p.save_button.isEnabled()
-    assert p.document.stack.count() == 4
-    assert not any(s.chart == "distribution" or s.title == "버전 히트맵 발췌" for s in r.sections)
-    for index in range(4):
-        p.document.tabs.buttons[str(index)].click()
-        assert p.document.stack.currentIndex() == index
-    assert p.result_filename.text().endswith(".xlsx")
+    assert r.request.start == date(2026, 10, 1)
+    assert r.request.end == date(2026, 10, 22)
+    assert r.request.base_date == date(2026, 10, 21)
+    assert r.request.query.selection.site_key == p.source.catalog.sites[0].key
+    assert replay.state.draft.site_key is None
+    p.query_panel.reset_button.click()
+    assert p.state.draft.site_key is None
+    assert p.start.date().toPython() == min(p.source.analysis_dates)
 
 
-def test_conditions_require_apply_and_invalid_dates_do_not_generate(own, tmp_path):
+def test_reversed_dates_do_not_generate(own, tmp_path):
     p = page(own, tmp_path)
-    p.start_flow("status")
-    p.base_date.setText("2026-22-40")
-    assert not p._apply_conditions()
-    p.generate()
-    assert not p.request.busy and p.result is None
-    p.reset_conditions()
-    p.site.setCurrentIndex(1)
-    p.generate()
-    assert "먼저 적용" in p.generation_status.text() and p.result is None
-    until(lambda: not p.item_request.busy)
+    p.start.setDate(QDate(2026, 11, 10))
+    p.end.setDate(QDate(2026, 11, 9))
+    assert not p.generate()
+    assert "시작 날짜" in p.generation_status.text() and p.result is None
 
 
 def test_report_counts_exact_denominator_dates_and_no_fake_lines():
@@ -153,22 +130,16 @@ def test_hpa_only_source_has_no_analysis_but_preserves_excluded_count(own, tmp_p
     assert next(s.table.rows[0] for s in r.sections if s.title == "조회 조건과 집계 기준") == (0, 0, 0, 0, 0)
 
 
-def test_frozen_result_unchanged_when_source_or_ui_changes_and_recent_two(own, tmp_path):
+def test_generated_report_keeps_original_scope_after_filters_change(own, tmp_path):
     p = page(own, tmp_path)
-    p.start_flow("status")
     first = generated(p)
     html = report_html(first)
     p.source.targets.clear()
-    p.filename.setText("다른 파일")
-    p.options["heatmap"].setChecked(False)
-    assert report_html(first) == html and first.filename != "다른 파일.xlsx"
-    p.start_flow("upgrade")
-    second = generated(p)
-    p.start_flow("change")
-    third = generated(p)
-    assert p.recent == [third, second]
-    p.open_recent(1)
-    assert p.result is second and p.result_filename.text() == second.filename
+    p.query_panel.select("site_key", p.source.catalog.sites[0].key)
+    p.type_buttons["change"].click()
+    assert p.result is first and report_html(first) == html
+    new = generated(p)
+    assert new.request.kind == "change" and new.scope != first.scope
 
 
 def test_item_selection_and_existing_cumulative_service_used():
@@ -196,38 +167,32 @@ def test_change_and_upgrade_use_real_observations_and_missing_risk_stays_unknown
     assert any(row[0] == "확인 필요" for row in upgrades.rows)
 
 
-def test_ai_only_uses_explicitly_loaded_answer_or_numeric_mode(own, tmp_path):
-    calls = []
+def test_ai_report_uses_completed_answer_or_numeric_fallback(own, tmp_path):
     answer = ChatAnswer(ChatRequest("질문 <원문>", (Intent.SEARCH,)), "Site = 화성", "요약", date(2026, 10, 21))
-    p = page(own, tmp_path, ai_provider=lambda: calls.append(1) or answer)
-    p.start_flow("ai")
-    p.generate()
-    assert p.result is None and calls == []
-    p.load_ai()
-    assert len(calls) == 1
+    current = [answer]
+    p = page(own, tmp_path, ai_provider=lambda: current[0])
+    p.type_buttons["ai"].click()
     r = generated(p)
     assert "질문 &lt;원문&gt;" in report_html(r)
-    assert len(calls) == 1 and "일치하는지 확인 필요" in report_html(r)
-    p.example_ai()
-    r = generated(p)
-    assert "회사 AI 결과가 아닙니다" in report_html(r)
-    p.numeric_only.setChecked(True)
+    current[0] = None
     r = generated(p)
     assert not any(s.title.startswith("AI 분석 ·") for s in r.sections)
+    assert "수치표만 생성" in report_html(r)
 
 
-def test_cancel_discards_late_worker_result_and_failure_retry(own, tmp_path, monkeypatch):
+def test_cancel_discards_late_worker_result_and_generation_can_retry(own, tmp_path, monkeypatch):
     started, release, finished = Event(), Event(), Event()
     real = generate_report
+
     def delayed(*args):
         started.set()
         release.wait(5)
         result = real(*args)
         finished.set()
         return result
+
     monkeypatch.setattr("setron.ui.reports_page.generate_report", delayed)
     p = page(own, tmp_path)
-    p.start_flow("status")
     p.generate()
     until(started.is_set)
     assert p.generation_dialog.isVisible()
@@ -236,14 +201,16 @@ def test_cancel_discards_late_worker_result_and_failure_retry(own, tmp_path, mon
     until(finished.is_set)
     QTest.qWait(30)
     assert p.result is None and not p.request.busy
-    monkeypatch.setattr("setron.ui.reports_page.generate_report", real)
-    p.demo.setCurrentIndex(p.demo.findData("generation_failure"))
+
+    def fail(*_):
+        raise ValueError("검증용 오류")
+
+    monkeypatch.setattr("setron.ui.reports_page.generate_report", fail)
     p.generate()
     until(lambda: not p.request.busy)
-    assert p.retry_button.isVisibleTo(p) and not p.save_button.isEnabled()
-    p.retry_button.click()
-    until(lambda: not p.request.busy)
-    assert p.result is not None and p.save_button.isEnabled()
+    assert "검증용 오류" in p.generation_status.text() and p.result_card.isHidden()
+    monkeypatch.setattr("setron.ui.reports_page.generate_report", real)
+    assert generated(p)
 
 
 @pytest.mark.parametrize("fmt", ["xlsx", "docx", "pdf"])
@@ -274,46 +241,57 @@ def test_local_files_contain_same_frozen_conditions_counts_and_valid_format(own,
 
 
 @pytest.mark.parametrize("fmt", ["docx", "pdf"])
-def test_word_and_pdf_save_in_worker_with_preview_chart_images(own, tmp_path, fmt):
+def test_report_download_opens_preview_and_preserves_duplicate_names(own, tmp_path, monkeypatch, fmt):
+    from setron.ui import chat_report_preview as preview
+
     p = page(own, tmp_path)
-    p.start_flow("status")
-    p.format.set_value(fmt)
-    generated(p)
-    p.open_save()
-    dialog = p.save_dialog
-    assert dialog.pictures
-    dialog.folder.setText(str(tmp_path))
-    dialog.save()
-    deadline = monotonic() + 20  # Word의 긴 표·그림 직렬화는 기존 5초 UI 조회 제한과 구분한다.
-    while dialog.busy and monotonic() < deadline:
-        QTest.qWait(20)
-    assert not dialog.busy
-    path = tmp_path / p.result.filename
-    assert path.is_file(), dialog.status.text()
+    r = generated(p)
+    path = tmp_path / f"{r.request.filename} (1).{fmt}"
+    path.write_bytes(b"existing")
+    monkeypatch.setattr(preview.QFileDialog, "getSaveFileName", lambda *_, **__: (str(path), ""))
+    accepted = [False]
+    prompts = []
+    monkeypatch.setattr(preview, "confirm_numbered_save", lambda _, requested: prompts.append(requested) or accepted[0])
+    p.download_buttons[fmt].click()
+    dialog = p.preview_dialog
+    assert dialog.isVisible() and dialog.pdf.pageCount() > 0
+    assert dialog.print_button.isEnabled() and dialog.download_button.isEnabled()
+    if fmt == "pdf":
+        printed = tmp_path / "print-preview.pdf"
+
+        class PrintToFile:
+            def __init__(self, printer, _):
+                printer.setOutputFormat(preview.QPrinter.OutputFormat.PdfFormat)
+                printer.setOutputFileName(str(printed))
+
+            def exec(self):
+                return preview.QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(preview, "QPrintDialog", PrintToFile)
+        dialog.print_button.click()
+        assert printed.read_bytes().startswith(b"%PDF-")
+    dialog.download_button.click()
+    assert dialog.isVisible() and path.read_bytes() == b"existing"
+    assert not (tmp_path / f"{r.request.filename} (2).{fmt}").exists()
+    accepted[0] = True
+    dialog.download_button.click()
+    saved = tmp_path / f"{r.request.filename} (2).{fmt}"
+    assert prompts == [path, path] and path.read_bytes() == b"existing" and saved.is_file()
+    assert p.preview_dialog is None and p.library_model.rowCount() == 1
     if fmt == "docx":
-        with ZipFile(path) as zipped:
+        with ZipFile(saved) as zipped:
             assert any(name.startswith("word/media/") for name in zipped.namelist())
     else:
-        assert path.read_bytes().startswith(b"%PDF-")
-
-
-def test_unsaved_recent_report_is_available_from_landing(own, tmp_path):
-    p = page(own, tmp_path)
-    p.start_flow("status")
-    first = generated(p)
-    p.enter()
-    assert p.library_model.rowCount() == 1
-    assert p.library_model.rows[0][6] == "미리보기·저장"
-    assert p.open_saved(0) and p.result is first
-    assert p.tabs.currentIndex() == 1
+        assert saved.read_bytes().startswith(b"%PDF-")
 
 
 def test_pdf_retains_every_distinct_chart_in_same_section(own, tmp_path):
+    from setron.ui.report_widgets import report_pictures
+
     p = page(own, tmp_path)
-    p.start_flow("status")
     r = generated(p)
-    pictures = p.document.pictures()
-    assert len(pictures) == 4  # 추이 + 구성비·막대·트리맵
+    pictures = report_pictures(r)
+    assert len(pictures) == 4
     document = pdf_document(r, pictures)
     html = document.toHtml()
     for number, (index, _) in enumerate(pictures):
@@ -334,23 +312,13 @@ def test_excel_literal_formula_and_long_text_are_preserved(own, tmp_path):
     book.close()
 
 
-def test_save_failure_preserves_old_file_and_dialog_preview_can_retry(own, tmp_path):
+def test_failed_export_preserves_previous_file(own, tmp_path):
     source = demo_dashboard_source()
     r = generate_report(source, request(source, demo="save_failure"))
     path = tmp_path / r.filename
     path.write_bytes(b"previous")
     result = save_generated_report(r, path)
     assert not result.saved and path.read_bytes() == b"previous"
-    path.unlink()
-    dialog = own(ReportSaveDialog(r))
-    dialog.folder.setText(str(tmp_path))
-    dialog.save()
-    until(lambda: not dialog.busy)
-    assert dialog.retry_button.isVisibleTo(dialog) and not path.exists()
-    dialog.report = replace(r, request=replace(r.request, demo=""))
-    dialog.save()
-    until(lambda: not dialog.busy)
-    assert path.is_file()
 
 
 def test_library_persists_actual_files_keeps_ai_entries_and_restores(own, tmp_path):
@@ -370,22 +338,18 @@ def test_library_persists_actual_files_keeps_ai_entries_and_restores(own, tmp_pa
     assert any("파일 없음" in row for row in another.library_model.rows)
 
 
-def test_app_reports_enabled_landing_on_menu_and_no_common_query_or_toolbar(own):
+def test_app_reports_uses_own_query_and_keeps_header_title(own):
     window = own(create_window(chat_enabled=True))
     window.resize(1600, 1000)
     before = window.query_state.applied
     window.navigate("reports")
     p = window.pages["reports"]
-    assert p.stack.currentIndex() == 0 and not window.query_panel.isVisibleTo(window)
-    p.start_flow("status")
+    assert p.query_panel.isVisibleTo(window) and not window.query_panel.isVisibleTo(window)
     assert window.header.title.text() == "보고서"
-    p.tabs.setCurrentIndex(1)
-    assert window.header.title.text() == "보고서 미리보기"
     window.navigate("dashboard")
     window.navigate("reports")
-    assert p.stack.currentIndex() == 0 and window.query_state.applied == before
+    assert window.query_state.applied == before
     assert not window.header.toolbar.isVisibleTo(window)
-    until(lambda: not p.item_request.busy)
 
 
 @pytest.mark.parametrize("value", ["../이름", "CON", "nul", "a:b", "a\\b", "", "a."])
@@ -399,8 +363,6 @@ def test_assets_have_original_size_and_ui_has_no_horizontal_overflow(own, tmp_pa
     for path in (ASSETS / "reports-ver5").glob("*.svg"):
         assert svg_size(f"reports-ver5/{path.name}").isValid()
     p.resize(1000, 1000)
-    p.start_flow("status")
     QApplication.processEvents()
-    assert p.tabs.minimumSizeHint().width() < 1000
     assert p.minimumSizeHint().width() <= 1000
     until(lambda: not p.item_request.busy)

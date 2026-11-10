@@ -87,6 +87,17 @@ class ImportConfirmDialog(ImportDialog):
         self.finish_layout()
 
 
+def confirm_numbered_save(parent, path):
+    dialog = ImportConfirmDialog(
+        f"같은 이름의 파일이 있습니다.\n{path.name}\n\n계속 저장할까요?",
+        parent, title="파일 덮어쓰기 확인", action_text="확인",
+    )
+    try:
+        return dialog.exec() == QDialog.DialogCode.Accepted
+    finally:
+        dialog.deleteLater()
+
+
 class ImportChoiceDialog(ImportDialog):
     def __init__(self, title, text, options, parent=None):
         super().__init__(title, parent)
