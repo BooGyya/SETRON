@@ -1,5 +1,7 @@
 """작업 단위 4: 조회 적용과 연결되는 대시보드 한 페이지, 표/구성비/막대/추이 보기."""
 
+from html import escape
+
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QBoxLayout, QPushButton, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QScrollArea,
@@ -13,7 +15,8 @@ from setron.ui.dashboard_charts import (
     DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, series_button_style, series_color, trend_point_rate,
 )
 from setron.ui.dashboard_data import (
-    DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, RiskRuleState, count_value, missing_sw_count,
+    DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, RiskRuleState, count_value,
+    information_gap_reasons, missing_sw_count,
 )
 from setron.ui.query_state import matches_selection
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, set_widget_font, svg_size
@@ -712,6 +715,7 @@ class DashboardPage(QWidget):
             row_tooltip = self._matrix_totals_tooltip(row.label, cell.summary, cell.equipment_ids, len(cell.risky_ids))
             location.setToolTip(row_tooltip)
             if site is None:
+                location_title = "전체 / 전체"
                 total_label = label(row.label, 13, medium=True, wrap=True)
                 total_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 total_label.setToolTip(row_tooltip)
@@ -722,6 +726,7 @@ class DashboardPage(QWidget):
                 site_label.setToolTip(site_tooltips[site])
                 location_body.addWidget(site_label)
                 area_text = area or "구역 미확인"
+                location_title = f"{sites[site]} / {area_text}"
                 area_label = label(area_text, 12, wrap=True)
                 area_label.setObjectName("dashboardMatrixArea")
                 area_label.setStyleSheet(f"QLabel#dashboardMatrixArea {{color:{SECONDARY};}}")
@@ -731,7 +736,7 @@ class DashboardPage(QWidget):
                 location_body.addWidget(area_label)
             grid.addWidget(location, grid_row, 0)
             for column, cell in enumerate(row.cells, 1):
-                grid.addWidget(self._matrix_cell(row, row_index, column, cell), grid_row, column)
+                grid.addWidget(self._matrix_cell(row, row_index, column, cell, location_title), grid_row, column)
             previous_site = site
             grid_row += 1
         old = self.matrix_scroll.takeWidget()
@@ -751,7 +756,7 @@ class DashboardPage(QWidget):
             f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대 · SW 미등록 {missing_sw_count(summary)}대\n"
             f"{risk_text}", ids)
 
-    def _matrix_cell(self, row, row_index, column, cell):
+    def _matrix_cell(self, row, row_index, column, cell, location_title):
         """Figma 셀: 큰 달성률, 아래에 'N 이상/판단 가능 건' + 위험 후보·판단 불가 표시."""
         summary = cell.summary
         complete = summary.rate is not None and summary.complete and not missing_sw_count(summary)
@@ -775,11 +780,17 @@ class DashboardPage(QWidget):
         main.setEnabled(bool(cell.equipment_ids))
         main.setAccessibleName(f"{row.label} {cell.label} 전체 설비 {summary.equipment_count}대")
         title = f"{row.label} / {cell.label}"
-        rate = f"달성률 {summary.rate:.1%} · " if summary.rate is not None else ""
-        tooltip = (
-            f"{title}\n{rate}N 이상 {summary.compliant}건 / N 미만 {summary.below}건 / 판단 불가 {summary.undetermined}건\n"
-            f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대")
-        main.setToolTip(equipment_count_tooltip(tooltip, cell.equipment_ids))
+        if summary.rate is not None:
+            lines = (f"{location_title} / {cell.label}", f"N이상 {summary.compliant}건",
+                     f"N미만 {summary.below}건", f"정보 부족 {summary.undetermined}건")
+            tooltip = "<qt>" + "<br>".join(map(escape, lines)) + "</qt>"
+        elif summary.equipment_count:
+            tooltip = information_gap_reasons(summary)
+        else:
+            tooltip = equipment_count_tooltip(
+                f"{title}\nN 이상 {summary.compliant}건 / N 미만 {summary.below}건 / 판단 불가 {summary.undetermined}건\n"
+                f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대", cell.equipment_ids)
+        main.setToolTip(tooltip)
         main.clicked.connect(lambda checked=False: self._select(title, cell.equipment_ids))
         body = QVBoxLayout(main)
         body.setContentsMargins(4, 4, 4, 4)

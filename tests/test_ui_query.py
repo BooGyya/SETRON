@@ -226,7 +226,7 @@ def choose(panel, field, *keys):
     assert panel.filter_popup is None
 
 
-def test_filter_confirm_applies_once_escape_cancels_and_reset_applies(window):
+def test_filter_change_applies_before_close_and_reset_applies(window):
     panel = window.query_panel
     spy = QSignalSpy(window.query_applied)
     draft_spy = QSignalSpy(panel.draft_changed)
@@ -234,17 +234,14 @@ def test_filter_confirm_applies_once_escape_cancels_and_reset_applies(window):
     popup = open_filter(panel, "site_key")
     assert all(check.isChecked() for check in popup.checks.values())
     check_only(popup, "s1")
-    assert spy.count() == draft_spy.count() == 0 and panel.state.draft == QuerySelection()
-    QTest.keyClick(popup.search, Qt.Key.Key_Escape)
-    assert panel.filter_popup is None and spy.count() == draft_spy.count() == 0
-    assert panel.state.applied is None and panel.combos["site_key"].caption == "전체"
-
-    choose(panel, "site_key", "s1")
     applied = window.query_state.applied
     assert spy.count() == draft_spy.count() == 1 and spy.at(0)[0] is applied
-    assert applied.selection.site_key == "s1"
+    assert popup.isVisible() and applied.selection.site_key == "s1"
     assert panel.status.text() == "조건 적용됨"
     assert "테스트 Site A" in panel.applied_summary.text()
+    QTest.keyClick(popup.search, Qt.Key.Key_Escape)
+    assert panel.filter_popup is None and spy.count() == draft_spy.count() == 1
+    assert panel.state.applied is applied and panel.combos["site_key"].caption == "테스트 Site A"
     panel.select("group_key", "g1")
     panel.reset_draft()
     assert panel.state.draft == QuerySelection() and panel.state.applied is applied and spy.count() == 1
@@ -275,7 +272,7 @@ def test_cascading_controls_and_unassigned_line(window):
     choose(panel, "line_key", "l3")
     assert panel.combos["fab_key"].caption == "미지정"
     assert panel.state.applied.selection == QuerySelection("s1", UNASSIGNED, "l3", ("g1", "g2"))
-    assert spy.count() == 5
+    assert spy.count() == 6
 
 
 def test_line_popup_has_no_site_headers_and_distinguishes_duplicate_names(window, catalog):
@@ -348,8 +345,8 @@ def test_keyboard_filter_labels_and_unavailable_features(window):
     other_site = popup.checks["s2"]
     other_site.setFocus()
     QTest.keyClick(other_site, Qt.Key.Key_Space)
-    assert not other_site.isChecked() and panel.state.draft.site_key is None
-    assert panel.state.applied is None
+    assert not other_site.isChecked() and panel.state.draft.site_key == "s1"
+    assert panel.state.applied.revision == 1 and panel.state.applied.selection.site_key == "s1"
     popup.confirm_button.setFocus()
     QTest.keyClick(popup.confirm_button, Qt.Key.Key_Space)
     assert panel.state.applied.revision == 1 and panel.state.applied.selection.site_key == "s1"

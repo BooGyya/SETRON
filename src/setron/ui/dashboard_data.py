@@ -155,13 +155,13 @@ UNDETERMINED_GROUPS = (
     ("목표 N 미지정", (CompareReason.TARGET_NOT_SET, CompareReason.TARGET_INVALID)),
     ("릴리즈 노트 없음", (CompareReason.NO_RELEASE_DATA,)),
     ("버전 미입력", (CompareReason.MISSING_VERSION,)),
-    ("노트에 없는 버전", (CompareReason.NOT_REGISTERED, CompareReason.OTHER_FAMILY)),
+    ("릴리즈 노트에 없는 버전", (CompareReason.NOT_REGISTERED, CompareReason.OTHER_FAMILY)),
     ("순서 미확인", (CompareReason.ORDER_UNKNOWN, CompareReason.ORDER_CONFLICT)),
 )
 
 
 def undetermined_breakdown(summary: Summary) -> str:
-    """판단 불가 건(설비×계열)을 이유별로 센 짧은 문구. 예: '목표 N 미지정 240 · 노트에 없는 버전 5'. 없으면 빈 문구."""
+    """판단 불가 건(설비×계열)의 사유와 개수를 한 줄씩 표시한다."""
     counts = dict.fromkeys((name for name, _ in UNDETERMINED_GROUPS), 0)
     names = {reason: name for name, reasons in UNDETERMINED_GROUPS for reason in reasons}
     for equipment in summary.equipment:
@@ -172,7 +172,19 @@ def undetermined_breakdown(summary: Summary) -> str:
                            if p.comparison.status is CompareStatus.UNDETERMINED and p.comparison.reason), None)
             if reason in names:
                 counts[names[reason]] += 1
-    return " · ".join(f"{name} {count}" for name, count in counts.items() if count)
+    return "\n".join(f"{name} {count}개" for name, count in counts.items() if count)
+
+
+def information_gap_reasons(summary: Summary) -> str:
+    """달성률에 포함되지 않은 SW 미등록 설비와 판단 불가 건의 사유를 표시한다."""
+    reasons = []
+    missing = missing_sw_count(summary)
+    if missing:
+        reasons.append(f"SW 미등록 {missing}대")
+    breakdown = undetermined_breakdown(summary)
+    if breakdown:
+        reasons.append(breakdown)
+    return "\n".join(reasons)
 
 
 def count_value(count: int, unknown: int, unknown_label: str) -> str:

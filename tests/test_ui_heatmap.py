@@ -378,6 +378,9 @@ def test_view_toggle_precedes_layout_buttons_at_wide_and_narrow_sizes(window):
     assert model.rows[model.ids.index(1)][2:5] == ("O2\nO3", "v99\nv2", "목표 미달")
     assert model.rows[model.ids.index(2)][3] == "v2"
     assert model.rows[model.ids.index(4)][3] == "분석 제외"
+    unknown = model.index(model.ids.index(3), 4)
+    assert unknown.data(Qt.ItemDataRole.DisplayRole) == "정보 부족"
+    assert "버전 값이 비어 있습니다." in unknown.data(Qt.ItemDataRole.ToolTipRole)
     for column in range(model.columnCount()):
         assert model.index(0, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
 

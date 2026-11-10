@@ -19,6 +19,7 @@ from setron.ui.group_data import SLOT_LABELS, TIER_LABELS, Slot, Tier, VersionGr
 from setron.ui.group_dialog import BLOCK_INK, SLOT_CHOICES, VersionGroupDialog
 from setron.ui.query_state import QuerySelection
 from setron.ui.theme import install_theme
+from test_ui_import_ver5 import until
 
 PAIR = (101, 1001)  # 예시 자료 C3 · 계열 1001: v1.0.1(10011) · v1.0.2(10012, 기본 목표) · v1.0.3(10013)
 
@@ -118,7 +119,7 @@ def test_reopen_prefers_last_selected_pair_and_only_saved_n(window, monkeypatch)
     group_store_for(source).save((102, 1002), VersionGroups.single(10021), source.families[1002])
     initial = open_editor(window, pair_key=None)
     assert initial.pair.key == (102, 1002) and initial.version_checks[10021].isChecked()
-    initial.close_button.click()
+    initial.cancel_button.click()
 
     preferences.remember_version_group_pair((999, 999))
     window.query_panel.set_draft(QuerySelection(group_key="c4"))
@@ -128,13 +129,14 @@ def test_reopen_prefers_last_selected_pair_and_only_saved_n(window, monkeypatch)
     choose_pair(dialog, PAIR)
     dialog.version_checks[10011].click()
     assert dialog.save()
+    dialog = open_editor(window, pair_key=None)
     dialog.version_checks[10013].click()
-    dialog.close_button.click()
+    dialog.cancel_button.click()
 
     reopened = open_editor(window, pair_key=None)
     assert reopened.pair.key == PAIR
     assert {rid for rid, check in reopened.version_checks.items() if check.isChecked()} == {10011, 10012}
-    reopened.close_button.click()
+    reopened.cancel_button.click()
 
     fresh = PersonalSettings(QSettings(preferences.settings.fileName(), QSettings.Format.IniFormat))
     assert fresh.version_group_pair() == PAIR
@@ -146,7 +148,7 @@ def test_reopen_prefers_last_selected_pair_and_only_saved_n(window, monkeypatch)
         dialog = open_editor(other_window, pair_key=None)
         assert dialog.pair.key == PAIR
         assert {rid for rid, check in dialog.version_checks.items() if check.isChecked()} == {10011, 10012}
-        dialog.close_button.click()
+        dialog.cancel_button.click()
     finally:
         other_window.close()
         other_window.deleteLater()
@@ -181,12 +183,11 @@ def test_click_multiple_n_versions_and_keep_each_pair_draft_until_save(window):
     assert dialog.groups().members(Slot.N) == {10022}
     choose_pair(dialog, PAIR)
     assert {rid for rid, button in dialog.version_checks.items() if button.isChecked()} == {10011, 10012}
-    assert dialog.store.load(PAIR) is None
+    store = dialog.store
+    assert store.load(PAIR) is None
     dialog.save_button.click()
-    assert dialog.store.load(PAIR).groups.members(Slot.N) == {10011, 10012}
-    frame, caption, restore = dialog.history_rows[dialog.store.load_current(PAIR).sequence]
-    assert frame.property("activeHistory") and caption.text() == "v1.0.2, v1.0.1"
-    assert restore is None
+    assert window.group_dialog is None and not dialog.isVisible()
+    assert store.load(PAIR).groups.members(Slot.N) == {10011, 10012}
     assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot is not before
     assert dashboard.snapshot.query.selection == before.query.selection
     assert dashboard.snapshot.summary.compliant > before.summary.compliant
@@ -194,10 +195,28 @@ def test_click_multiple_n_versions_and_keep_each_pair_draft_until_save(window):
     detail = next(item for item in window.pages["equipment"].data.details if item.record.equipment_id == below.equipment_id)
     assert detail.whole.tier is Tier.AT
 
-    dialog.close_button.click()
     reopened = open_editor(window)
     assert {rid for rid, button in reopened.version_checks.items() if button.isChecked()} == {10011, 10012}
-    reopened.close_button.click()
+    frame, caption, restore = reopened.history_rows[store.load_current(PAIR).sequence]
+    assert frame.property("activeHistory") and caption.text() == "v1.0.2, v1.0.1"
+    assert restore is None
+    reopened.cancel_button.click()
+
+
+@pytest.mark.parametrize("first,last", [(10011, 10013), (10013, 10011)])
+def test_two_n_checkboxes_also_select_versions_between_them(window, first, last):
+    dialog = open_editor(window)
+    dialog.version_checks[10012].click()
+    dialog.version_checks[first].click()
+    assert dialog.groups().members(Slot.N) == {first}
+
+    dialog.version_checks[last].click()
+    assert dialog.version_checks[10012].isChecked()
+    assert dialog.slot_combos[10012].currentData() is Slot.N
+    assert dialog.groups().members(Slot.N) == {first, 10012, last}
+
+    dialog.version_checks[10012].click()
+    assert dialog.groups().members(Slot.N) == {first, last}
 
 
 def test_empty_n_blocks_save_with_manual_settings_off(window):
@@ -255,7 +274,6 @@ def test_manual_settings_keep_steps_when_hidden_and_reopened(window):
     assert dialog.slot_combos[10013].currentText() == SLOT_LABELS[Slot.N_PLUS_1]
     manual.click()
     assert dialog.save()
-    dialog.close_button.click()
 
     dialog = open_editor(window)
     assert not dialog.details_button.isChecked() and not dialog.slot_heading.isVisibleTo(dialog)
@@ -265,18 +283,27 @@ def test_manual_settings_keep_steps_when_hidden_and_reopened(window):
     assert dialog.slot_combos[10013].currentText() == SLOT_LABELS[Slot.N_PLUS_1]
 
 
-def test_save_and_restore_automatically_apply_groups(window):
+def test_save_applies_after_close_and_cancel_discards_restored_draft(window):
     window.query_panel.apply_draft()
     dashboard, heatmap = window.pages["dashboard"], window.pages["heatmap"]
-    before = dashboard.snapshot.summary.compliant
+    before = dashboard.snapshot
     dialog = open_editor(window)
+    store = dialog.store
     choose(dialog, 10012, Slot.N_MINUS_1)
     choose(dialog, 10013, Slot.N)  # 목표를 한 단계 올린다
     assert tiers(dialog)[10012] == TIER_LABELS[Tier.ONE_BELOW]
-    assert dialog.save() and dialog.status.text().startswith("저장했습니다")
-    assert dialog.isVisible() and dashboard.snapshot is heatmap.snapshot
+    assert dashboard.snapshot is heatmap.snapshot is before
+    visible_at_apply = []
+
+    def record_visibility(_):
+        visible_at_apply.append(dialog.isVisible())
+
+    window.query_applied.connect(record_visibility)
+    assert dialog.save()
+    window.query_applied.disconnect(record_visibility)
+    assert window.group_dialog is None and visible_at_apply == [False]
     first_snapshot = dashboard.snapshot
-    assert first_snapshot.summary.compliant < before
+    assert first_snapshot is heatmap.snapshot and first_snapshot.summary.compliant < before.summary.compliant
     window.navigate("heatmap")
     heatmap.below_filter.click()
     assert window.route == "heatmap" and len(heatmap.visible_ids) == dashboard.snapshot.summary.upgrade_needed
@@ -288,34 +315,76 @@ def test_save_and_restore_automatically_apply_groups(window):
     drawer.close_panel()
     heatmap.below_filter.click()
     assert len(heatmap.visible_ids) >= dashboard.snapshot.summary.upgrade_needed
-    first = dialog.store.load(PAIR).history[0]
+    first = store.load_current(PAIR)
+    dialog = open_editor(window)
     choose(dialog, 10012, Slot.N)
     assert dialog.save()
-    history = dialog.store.load(PAIR).history
+    history = store.load(PAIR).history
     assert len(history) == 2
     latest = dashboard.snapshot
     assert latest.summary.compliant > first_snapshot.summary.compliant
-    assert dialog.revert(first) and dialog.status.text().startswith("기준을 되돌렸습니다")
-    assert dialog.store.load_current(PAIR) == first
-    assert dialog.store.load(PAIR).history == history
+    dialog = open_editor(window)
+    assert dialog.revert(first)
+    assert store.load_current(PAIR) == history[-1]
+    assert dialog.cancel_button.text() == "취소"
+    dialog.cancel_button.click()
+    assert dashboard.snapshot is heatmap.snapshot is latest
+    assert store.load_current(PAIR) == history[-1]
+
+    dialog = open_editor(window)
+    assert dialog.revert(first) and dialog.save()
+    assert store.load_current(PAIR) == first
+    assert store.load(PAIR).history == history
     restored = dashboard.snapshot
     assert restored is heatmap.snapshot and restored.query.revision == latest.query.revision + 1
     assert restored.summary.compliant == first_snapshot.summary.compliant
-    assert dialog.save() and "같아 저장하지 않았습니다" in dialog.status.text()
-    assert dialog.store.load(PAIR).history == history
-    assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot.query.revision == restored.query.revision + 1
+
+
+def test_replay_baseline_uses_saved_groups_and_discards_cancelled_changes(window):
+    replay = window.pages["replay"]
+    window.navigate("replay")
+    until(lambda: not replay.busy)
+    before = replay.data
+    replay.query_panel.goal_button.click()
+    dialog = window.group_dialog
+    choose_pair(dialog, PAIR)
+    choose(dialog, 10012, Slot.N_MINUS_1)
+    choose(dialog, 10013, Slot.N)
+    dialog.cancel_button.click()
+    assert replay.data is before and not replay.busy
+
+    replay.query_panel.goal_button.click()
+    dialog = window.group_dialog
+    choose_pair(dialog, PAIR)
+    choose(dialog, 10012, Slot.N_MINUS_1)
+    choose(dialog, 10013, Slot.N)
+    assert replay.data is before
+    dialog.save_button.click()
+    assert window.group_dialog is None and replay.busy
+    until(lambda: not replay.busy)
+    assert replay.data.source.saved_groups[PAIR].members(Slot.N) == {10013}
+
+    window.navigate("dashboard")
+    dialog = open_editor(window)
+    choose(dialog, 10012, Slot.N)
+    dialog.save_button.click()
+    window.navigate("replay")
+    until(lambda: not replay.busy)
+    assert replay.data.source.saved_groups[PAIR].members(Slot.N) == {10012, 10013}
 
 
 def test_repeated_save_and_revert_to_current_do_not_pile_up(window):
     """같은 기준을 다시 저장하거나 현재 적용 중인 기록을 선택해도 이력이 늘지 않는다."""
     dialog = open_editor(window)
     choose(dialog, 10013, Slot.N)
+    store = dialog.store
     assert dialog.save()
-    count = len(dialog.store.load(PAIR).history)
-    assert dialog.save() and "같아 저장하지 않았습니다" in dialog.status.text()
-    assert len(dialog.store.load(PAIR).history) == count
-    current = dialog.store.load_current(PAIR)
-    assert dialog.revert(current) and len(dialog.store.load(PAIR).history) == count
+    count = len(store.load(PAIR).history)
+    dialog = open_editor(window)
+    assert dialog.save() and len(store.load(PAIR).history) == count
+    current = store.load_current(PAIR)
+    dialog = open_editor(window)
+    assert dialog.revert(current) and dialog.save() and len(store.load(PAIR).history) == count
 
 
 def test_history_highlights_active_and_can_revert_from_an_older_page(window, monkeypatch):
@@ -378,10 +447,10 @@ def test_history_highlights_active_and_can_revert_from_an_older_page(window, mon
 
     restored_row = rows()[-1]
     restore_button(restored_row).click()
-    assert store.load_current(PAIR) == history[4]
+    assert dialog.groups() == history[4].groups
+    assert store.load_current(PAIR) == history[-1]
     assert captions() == expanded and requests == [(PAIR, None, 10), (PAIR, 15, 10)]
-    assert active_rows() == [restored_row] and restore_button(restored_row) is None
-    assert restore_button(rows()[0]).isEnabled()
+    assert active_rows() == [rows()[0]] and restore_button(restored_row).isEnabled()
 
     dialog.history_more.click()
     assert len(captions()) == 24 and captions()[:20] == expanded
@@ -389,7 +458,8 @@ def test_history_highlights_active_and_can_revert_from_an_older_page(window, mon
     assert requests[-1] == (PAIR, 5, 10) and not dialog.history_more.isVisible()
     assert store.load(PAIR).history == history
 
-    dialog.close_button.click()
+    assert dialog.save()
+    assert store.load_current(PAIR) == history[4]
     dialog = open_editor(window)
     assert captions() == [expanded[-1], *initial] and active_rows() == [rows()[0]]
     assert len(dialog.history_pages[PAIR].entries) == 10 and requests[-1] == (PAIR, None, 10)

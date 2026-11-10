@@ -304,7 +304,7 @@ def test_version_popup_all_clear_cancel_confirm_and_reapply_without_changing_n(o
     assert page.source.targets == n and page.data.request.query.selection.versions == VersionFilter(("v1.0.1",))
 
 
-def test_confirming_site_choices_and_reset_apply_without_erasing_targets(own):
+def test_site_choices_apply_while_popup_stays_open_and_reset_preserves_targets(own):
     page = replay_page(own)
     data, n = page.data, dict(page.source.targets)
     page.play()
@@ -312,13 +312,15 @@ def test_confirming_site_choices_and_reset_apply_without_erasing_targets(own):
     panel.combos["site_key"].click()
     popup = panel.filter_popup
     popup.all_button.click()
-    for key in ("hwaseong", "pyeongtaek"):
-        popup.checks[key].click()
     assert page.data is data and page.timer.isActive()
-    popup.confirm_button.click()
+    popup.checks["hwaseong"].click()
     assert not page.timer.isActive() and page.busy
+    assert popup.isVisible() and popup.checks["pyeongtaek"].isEnabled()
+    popup.checks["pyeongtaek"].click()
     until(lambda: not page.busy)
     assert page.data.request.query.selection.site_key == ("hwaseong", "pyeongtaek")
+    assert popup.isVisible()
+    popup.confirm_button.click()
     page.reset_button.click()
     until(lambda: not page.busy)
     assert page.state.draft == page.data.request.query.selection == QuerySelection() and page.source.targets == n
