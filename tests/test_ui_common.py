@@ -12,7 +12,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QFontDatabase, QRegion
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from setron.ui.app import main
 from setron.ui.components import Card, StatusBadge, button, label
@@ -61,7 +61,8 @@ def test_sidebar_removes_standalone_history_menu(window):
         window.navigate("history")
 
 
-@pytest.mark.parametrize("route,title", [("replay", "버전 리플레이"), ("data", "데이터 관리")])
+@pytest.mark.parametrize("route,title", [("replay", "버전 리플레이"), ("export", "데이터 내보내기"),
+                                         ("data", "데이터 관리")])
 def test_sidebar_route_uses_same_label_in_header(window, route, title):
     window.register_page(route, QWidget())
     nav = window.nav[route]
@@ -105,7 +106,6 @@ def test_sidebar_uses_latest_logo_with_matching_white_dark_render_and_no_backpla
         current.apply(Appearance(mode="light"))
         app.processEvents()
         geometry = logo.geometry()
-        description_y = window.findChild(QLabel, "serviceDescription").y()
         menu_y = window.nav["dashboard"].y()
         original = logo.pixmap().toImage()
         painted_width = QRegion(logo.pixmap().mask()).boundingRect().width()
@@ -131,7 +131,6 @@ def test_sidebar_uses_latest_logo_with_matching_white_dark_render_and_no_backpla
         assert abs(QRegion(logo.pixmap().mask()).boundingRect().width() - painted_width) <= 2 * logo.devicePixelRatioF()
         assert logo.pixmap().toImage().pixelColor(0, 0).alpha() == 0
         assert logo.geometry() == geometry
-        assert window.findChild(QLabel, "serviceDescription").y() == description_y
         assert window.nav["dashboard"].y() == menu_y
         assert "background" not in logo.styleSheet()
         current.apply(Appearance(mode="light"))
@@ -170,18 +169,25 @@ def test_sidebar_brand_respects_theme_at_startup(app, mode):
         app.processEvents()
 
 
-def test_sidebar_brand_header_is_setron_only_and_keeps_description(window):
+def test_sidebar_brand_header_and_menu_group_order(window):
     sidebar = window.findChild(QWidget, "sidebarContent")
     logos = [widget for widget in sidebar.findChildren(QLabel) if widget.property("brandAsset")]
     assert len(logos) == 1 and logos[0].objectName() == "setronLogo"
     assert window.findChild(QLabel, "semesLogo") is None
     assert not any(widget.text() in {"SETRON", "SEMES"} for widget in sidebar.findChildren(QLabel))
-    description = window.findChild(QLabel, "serviceDescription")
-    assert description.text() == "SW 버전 현황 관리"
-    assert description.x() == 20
     assert abs(2 * logos[0].x() + logos[0].width() - sidebar.width()) <= 1
-    assert logos[0].geometry().bottom() < description.geometry().top()
-    assert description.geometry().bottom() < window.nav["dashboard"].geometry().top()
+    assert logos[0].geometry().bottom() < window.nav["dashboard"].geometry().top()
+    assert window.findChild(QLabel, "serviceDescription") is None
+    assert not sidebar.findChildren(QLabel, "navGroup")
+    menus = sorted((nav for nav in window.nav.values() if not nav.isHidden()), key=lambda nav: nav.y())
+    assert [nav.caption.text() for nav in menus] == [
+        "대시보드", "버전 히트맵", "버전 리플레이", "아이템 매니저", "AI분석",
+        "데이터 가져오기", "데이터 내보내기", "데이터 관리", "보고서", "설정",
+    ]
+    dividers = sidebar.findChildren(QFrame, "sidebarDivider")
+    assert len(dividers) == 2
+    for divider, left, right in zip(dividers, ("ai", "data"), ("import", "reports")):
+        assert window.nav[left].geometry().bottom() < divider.y() < window.nav[right].y()
 
 
 def test_registration_enables_menu_and_updates_header(window, app):

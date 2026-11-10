@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from setron.ui.components import EmptyState, PageHeader, StatusBadge, label
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryCatalog, QueryState, preview_catalog
-from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, icon, svg_size
+from setron.ui.theme import ASSETS, INK, LINE, PRIMARY, SECONDARY, icon, svg_size
 
 
 @dataclass(frozen=True)
@@ -32,10 +32,11 @@ def _ver5(key: str, owner: str | None = None) -> tuple[str, str]:
 MENUS = (
     Menu("dashboard", "대시보드", *_ver5("dashboard")),
     Menu("heatmap", "버전 히트맵", *_ver5("heatmap")),
-    Menu("items", "아이템 매니저", *_ver5("items")),
-    Menu("ai", "AI 분석", *_ver5("ai")),
-    Menu("import", "데이터 가져오기", *_ver5("import")),
     Menu("replay", "버전 리플레이", *_ver5("replay")),
+    Menu("items", "아이템 매니저", *_ver5("items")),
+    Menu("ai", "AI분석", *_ver5("ai")),
+    Menu("import", "데이터 가져오기", *_ver5("import")),
+    Menu("export", "데이터 내보내기", "ef2c5.svg", "ef2c5.svg"),
     # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 기존 버전 관리·관리 데이터 메뉴를 대신한다.
     Menu("data", "데이터 관리", *_ver5("versions")),
     Menu("versions", "버전 관리", *_ver5("versions")),
@@ -44,11 +45,10 @@ MENUS = (
     Menu("reports", "보고서", *_ver5("reports")),
     Menu("settings", "설정", *_ver5("settings")),
 )
-# 첫 묶음(현황 분석)은 제목 없이 표시한다.
 MENU_GROUPS = (
-    (None, ("dashboard", "heatmap", "items", "ai", "import", "replay")),
-    ("데이터 관리", ("data",)),
-    ("운영 설정", ("reports", "settings")),
+    ("dashboard", "heatmap", "replay", "items", "ai"),
+    ("import", "export", "data"),
+    ("reports", "settings"),
 )
 # 사이드바에 보이지 않지만 등록·내부 이동은 되는 메뉴 (11-10 데이터 관리 개편 전 화면).
 HIDDEN_MENUS = ("versions", "management")
@@ -307,16 +307,15 @@ class MainWindow(QMainWindow):
         side.setContentsMargins(20, 20, 20, 20)
         side.setSpacing(10)
         side.addWidget(BrandLogo(), alignment=Qt.AlignmentFlag.AlignHCenter)
-        description = label("SW 버전 현황 관리", 13, color=INK)
-        description.setObjectName("serviceDescription")
-        side.addWidget(description)
-        for title, keys in MENU_GROUPS:
+        for index, keys in enumerate(MENU_GROUPS):
+            if index:
+                divider = QFrame()
+                divider.setObjectName("sidebarDivider")
+                divider.setFixedHeight(1)
+                divider.setStyleSheet(f"QFrame#sidebarDivider {{background:{LINE};border:0;}}")
+                side.addWidget(divider)
             group = QVBoxLayout()
             group.setSpacing(4)
-            if title is not None:
-                caption = label(title, 11, color=INK)
-                caption.setObjectName("navGroup")
-                side.addWidget(caption)
             for key in keys:
                 menu = self._menus[key]
                 nav = NavButton(menu)
