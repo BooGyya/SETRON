@@ -5,9 +5,10 @@ from datetime import date
 from threading import Event
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QPointF
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QToolTip
 
 from setron.features.version.groups import Slot, VersionGroups
 from setron.ui.app import create_window
@@ -17,7 +18,7 @@ from setron.ui.heatmap import tile_style
 from setron.ui.heatmap_data import GoalState, Tier
 from setron.ui.query_state import QuerySelection, VersionFilter
 from setron.ui.replay_data import load_replay
-from setron.ui.replay_widgets import CURRENT_MARKER, CURRENT_SUFFIX, FUTURE_SUFFIX, ReplayChart
+from setron.ui.replay_widgets import CURRENT_MARKER, CURRENT_SUFFIX, FUTURE_SUFFIX, POINT_SUFFIX, ReplayChart
 from setron.ui.replay_page import ReplayPage
 from setron.ui.theme import ASSETS, svg_size
 from setron.ui.version_filter_dialog import choice_caption
@@ -35,10 +36,22 @@ def replay_page(own, **kwargs):
 
 def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     page = replay_page(own)
-    assert len(page.data.frames) == len(page.date_buttons) == 6
+    assert len(page.data.frames) == len(page.frames) == 6 and page.step is None
     assert page.index == 5 and page.snapshot_title.text().startswith("2026-10-21")
     assert page.play_button.isEnabled() and not page.pause_button.isEnabled()
     assert len(page.legend_buttons) == 9 and len(page.chart.values) == 9
+    # 요청 1-1: 설비군은 조회 조건 드롭다운이 아니라 그래프 위 설비군 버튼으로 고른다.
+    assert set(page.combos) == {"site_key", "fab_key", "line_key"}
+    assert [b.text() for b in page.legend_tools] == ["전체 선택", "전체 해제"]
+    # 요청 2-1: 날짜 칩 대신 재생 간격
+    assert [b.text() for b in page.interval_buttons.values()] == ["저장일마다", "1주", "1개월", "3개월"]
+    assert page.interval_buttons[None].isChecked()
+    # 요청 3-3: 재생 버튼은 기호, 이름은 그대로
+    assert [(b.text(), b.accessibleName()) for b in (page.play_button, page.pause_button, page.restart_button)] == [
+        ("▶", "재생"), ("‖", "일시정지"), ("↺", "처음부터")]
+    # 기호가 앱 글꼴에 있어야 네모로 깨지지 않는다.
+    metrics = QFontMetrics(page.play_button.font())
+    assert all(metrics.inFontUcs4(ord(b.text())) for b in (page.play_button, page.pause_button, page.restart_button))
     assert "2026-05-21" in page.context.text() and "목표 N" in page.context.text()
     assert "기준일 최신" not in page.context.text()
     assert page.heatmap.visible_ids and len(page.heatmap.group_cards) == 9
@@ -51,7 +64,7 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert page.heatmap_title.text() == "선택 시점(2026-10-21)의 설비 Heatmap"
 
 
-def test_date_click_and_keyboard_update_same_screen_not_common_conditions(own):
+def test_chart_point_selects_date_without_touching_common_conditions(own):
     window = own(create_window())
     window.resize(1600, 960)
     before = window.query_state.draft, window.query_state.applied, window.query_state.target_draft
@@ -60,9 +73,7 @@ def test_date_click_and_keyboard_update_same_screen_not_common_conditions(own):
     until(lambda: not page.busy)
     assert page.data is not None and not window.query_panel.isVisibleTo(window)
     assert not window.header.toolbar.isVisibleTo(window)
-    target = page.date_buttons[0]
-    target.setFocus()
-    QTest.keyClick(target, Qt.Key.Key_Space)
+    page.chart.date_selected.emit(0)  # 그래프 점 누르기 (날짜 칩은 없앴다, 요청 2-1)
     assert page.index == 0 and page.frame.day == date(2026, 5, 21)
     assert window.route == "replay" and not page.timer.isActive()
     assert (window.query_state.draft, window.query_state.applied, window.query_state.target_draft) == before
@@ -106,14 +117,98 @@ def test_real_timer_advances_and_hiding_page_stops_it(own):
     assert page.index == index
 
 
-def test_legend_only_changes_lines_not_scope_totals_or_heatmap(own):
+def test_group_buttons_filter_lines_achievement_and_heatmap_with_select_all_and_clear(own):
+    """요청 2-2: 설비군 버튼에서 고른 설비군으로 그래프 선·달성률·히트맵을 함께 좁힌다."""
     page = replay_page(own)
-    original = page.frame, page.achievement.text(), page.heatmap.visible_ids
+    full = page.achievement.text(), page.heatmap.visible_ids
+    page.legend_tools[1].click()  # 전체 해제
+    assert page.chart.values == {} and page.heatmap.group_cards == [] and page.heatmap.visible_ids == ()
+    assert "하나 이상" in page.achievement.text() and page.progress.value() == 0
     page.legend_buttons["c3"].click()
-    assert "c3" not in page.chart.values
-    assert (page.frame, page.achievement.text(), page.heatmap.visible_ids) == original
-    page.legend_buttons["c3"].click()
-    assert "c3" in page.chart.values
+    cell = next(g for g in page.frame.snapshot.groups if g.group_keys == ("c3",))
+    assert set(page.chart.values) == {"c3"} and len(page.heatmap.group_cards) == 1
+    assert set(page.heatmap.visible_ids) == set(cell.equipment_ids)
+    assert page.achievement.text().startswith(f"등록 SW 목표 달성 {cell.summary.compliant} / "
+                                              f"{cell.summary.compliant + cell.summary.below}건")
+    assert "1 / 9개 선택" in page.chart_context.text() and "HPA" not in page.achievement.toolTip()
+    page.legend_tools[0].click()  # 전체 선택
+    assert (page.achievement.text(), page.heatmap.visible_ids) == full and len(page.chart.values) == 9
+    assert "설비군 전체" in page.chart_context.text()
+
+
+def test_group_buttons_show_only_groups_present_in_selected_site(own):
+    """요청 2-2: Site를 고르고 조회하면 그 Site에 설비가 있는 설비군 버튼만 나온다."""
+    page = replay_page(own)
+    page.combos["site_key"].setCurrentIndex(page.combos["site_key"].findData("hwaseong"))
+    assert page.apply_query()
+    until(lambda: not page.busy)
+    present = {cell.group_keys[0] for frame in page.data.frames for cell in frame.snapshot.groups
+               if len(cell.group_keys) == 1 and cell.equipment_ids}
+    assert set(page.legend_buttons) == present and present
+    assert all(t.site_key == "hwaseong" for f in page.data.frames for t in f.tiles)
+
+
+def test_interval_buttons_rebuild_frames_without_reading_again(own):
+    """요청 2-1: 재생 간격을 바꾸면 다시 조회하지 않고 시점만 다시 만든다."""
+    calls = []
+    source = demo_dashboard_source()
+    page = replay_page(own, loader=lambda request: calls.append(request) or load_replay(source, request))
+    saved = {f.snapshot.base_date: f for f in page.data.frames}
+    page.interval_buttons["week"].click()
+    days = [f.day for f in page.frames]
+    assert page.step == "week" and days[0] == date(2026, 5, 21) and days[-1] == date(2026, 10, 21)
+    assert all((b - a).days == 7 for a, b in zip(days, days[1:-1]))
+    # 각 시점은 그 날짜 전 마지막 저장일의 상태(대시보드와 같은 규칙)
+    assert all(f.snapshot is saved[max(d for d in saved if d <= f.day)].snapshot for f in page.frames)
+    assert page.index == len(page.frames) - 1 and page.chart.days == tuple(days)
+    assert page.play() and page.index == 0
+    page.advance()
+    assert page.index == 1 and page.snapshot_title.text().startswith("2026-05-28")
+    assert "마지막 저장일 2026-05-21 기준" in page.observation_note.text()
+    page.interval_buttons["quarter"].click()
+    assert [f.day for f in page.frames] == [date(2026, 5, 21), date(2026, 8, 21), date(2026, 10, 21)]
+    assert not page.timer.isActive()
+    page.interval_buttons[None].click()
+    assert page.frames == page.data.frames and len(calls) == 1
+
+
+def test_interval_too_long_for_period_is_disabled(own):
+    page = replay_page(own)
+    page.start.setText("2026-05-21")
+    page.end.setText("2026-06-21")
+    assert page.apply_query()
+    until(lambda: not page.busy)
+    assert page.interval_buttons["month"].isEnabled() and page.interval_buttons["week"].isEnabled()
+    page.end.setText("2026-05-21")
+    assert page.apply_query()
+    until(lambda: not page.busy)
+    assert not any(page.interval_buttons[s].isEnabled() for s in ("week", "month", "quarter"))
+    assert not page.set_interval("week") and page.step is None
+
+
+def test_chart_is_step_shaped_and_hover_shows_completed_equipment(own):
+    """요청 3-1·3-2: 계단형 선, 점에 마우스를 올리면 'n / m대 완료'."""
+    page = replay_page(own)
+    line = next(s for s in page.chart.chart().series() if s.name() == "C3")
+    points = [(p.x(), p.y()) for p in line.points()]
+    # 날짜마다 (앞 값 유지 → 그 날짜에서 수직 변화): x가 같은 점이 연달아 나온다.
+    assert points[0][0] == 0 and points[1][0] == 1 and points[1][1] == points[0][1] and points[2][0] == 1
+    done, judged = page.chart.completion["c3"][2]
+    cell = next(g for g in page.data.frames[2].snapshot.groups if g.group_keys == ("c3",))
+    assert judged <= len(cell.equipment_ids) and 0 <= done <= judged
+    page.chart._hover("c3", QPointF(2, 50), True)
+    assert QToolTip.text() == f"C3 · 07-21 · {done} / {judged}대 완료"
+    page.chart._hover("c3", QPointF(2, 50), False)
+
+
+def test_playback_buttons_sit_between_chart_and_playback_status(own):
+    """요청 2-3·3-3: 재생 버튼은 그래프 아래, '일시정지 · n / n' 글자 위."""
+    page = replay_page(own)
+    page.show()
+    QTest.qWait(50)
+    y = lambda w: w.mapTo(page, QPoint()).y()  # noqa: E731
+    assert y(page.chart_card) + page.chart_card.height() <= y(page.play_button) < y(page.playback_status)
+    assert y(page.play_button) == y(page.pause_button) == y(page.restart_button)
 
 
 def test_version_popup_all_clear_cancel_confirm_and_reapply_without_changing_n(own):
@@ -166,13 +261,13 @@ def test_empty_single_date_and_zero_match_are_not_playable_or_fake_zero_percent(
     page.end.setText("2025-12-31")
     page.apply_query()
     until(lambda: not page.busy)
-    assert page.data.frames == () and not page.play_button.isEnabled() and not page.date_buttons
+    assert page.data.frames == () and not page.play_button.isEnabled() and page.frames == ()
     assert not page.heatmap.visible_ids and "저장된 관측일이 없습니다" in page.message.text()
     page.start.setText("2026-05-21")
     page.end.setText("2026-05-21")
     page.apply_query()
     until(lambda: not page.busy)
-    assert len(page.date_buttons) == 1 and not page.play_button.isEnabled()
+    assert len(page.frames) == 1 and not page.play_button.isEnabled()
     page.state.set_draft(replace(page.state.draft, versions=VersionFilter(("not-stored",))))
     page.apply_query()
     until(lambda: not page.busy)
@@ -279,13 +374,13 @@ def test_initial_layout_has_no_expanded_chart_blank_and_buttons_keep_figma_heigh
     assert page.chart_card.height() < 600
     assert page.chart.y() < 250
     assert page.chart.mapTo(window, QPoint()).y() < 750
-    assert all(b.height() == 40 for b in page.date_buttons)
-    assert all(b.height() == 36 for b in page.legend_buttons.values())
-    page.date_buttons[0].setFocus()
+    assert all(b.height() == 34 for b in page.interval_buttons.values())
+    assert all(b.height() == 36 for b in (*page.legend_buttons.values(), *page.legend_tools))
+    assert all(b.height() == 40 for b in (page.play_button, page.pause_button, page.restart_button))
     page.select_date(0)
     page.legend_buttons["c3"].click()
     QTest.qWait(20)
-    assert page.date_buttons[0].height() == 40
+    assert page.interval_buttons[None].height() == 34
     assert page.legend_buttons["c3"].height() == 36
 
 
@@ -319,8 +414,9 @@ def test_chart_breaks_lines_at_unknown_dates_and_clear_removes_previous_values(o
     chart = own(ReplayChart())
     chart.show_data(data, {"c3"})
     assert chart.values["c3"][2] is None
-    lines = [s for s in chart.chart().series() if s.name() == "C3"]
-    assert [[p.x() for p in series.points()] for series in lines] == [[0, 1], [3, 4, 5]]
+    dots = [s for s in chart.chart().series() if s.name() == "C3" + POINT_SUFFIX]
+    assert [[p.x() for p in series.points()] for series in dots] == [[0, 1], [3, 4, 5]]
+    assert chart.completion["c3"][2] is None  # 판단 불가 날짜는 완료 대수도 없다
     assert not any(s.name().endswith(FUTURE_SUFFIX) for s in chart.chart().series())  # 기본은 마지막 날짜가 현재
     # 판단 불가인 날짜가 현재면 현재 점을 0%로 찍지 않는다.
     chart.show_data(data, {"c3"}, current=2)
@@ -332,8 +428,8 @@ def test_chart_breaks_lines_at_unknown_dates_and_clear_removes_previous_values(o
 def chart_parts(page, label):
     series = page.chart.chart().series()
     marker = next(s for s in series if s.name() == CURRENT_MARKER)
-    past = [p.x() for s in series if s.name() == label for p in s.points()]
-    future = [p.x() for s in series if s.name() == label + FUTURE_SUFFIX for p in s.points()]
+    past = [p.x() for s in series if s.name() == label + POINT_SUFFIX for p in s.points()]
+    future = [p.x() for s in series if s.name() == label + FUTURE_SUFFIX + POINT_SUFFIX for p in s.points()]
     dot = [p.x() for s in series if s.name() == label + CURRENT_SUFFIX for p in s.points()]
     return {p.x() for p in marker.points()}, past, future, dot
 
@@ -353,9 +449,9 @@ def test_chart_moves_with_playback_solid_until_current_and_faded_after(own):
     assert page.chart.current == 2 and page.chart.accessibleDescription().startswith(f"현재 {page.frame.day}")
 
 
-def test_date_chip_and_legend_keep_chart_at_selected_date(own):
+def test_selected_date_and_group_buttons_keep_chart_at_selected_date(own):
     page = replay_page(own)
-    page.date_buttons[1].click()
+    page.select_date(1)
     assert chart_parts(page, "C3")[0] == {1}
     page.legend_buttons["c4"].click()  # 범례를 바꿔도 현재 날짜 위치는 그대로
     assert page.chart.current == 1 and chart_parts(page, "C3")[0] == {1}

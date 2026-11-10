@@ -9,7 +9,9 @@ from setron.features.risk.schemas import RiskStatus
 from setron.ui.dashboard_data import DashboardSource, GroupBinding
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.query_state import QuerySelection, QueryState, TargetN, VersionFilter
-from setron.ui.replay_data import ReplayRequest, load_replay, replay_detail
+from setron.ui.replay_data import (
+    ReplayRequest, group_completion, group_view, interval_days, load_replay, replay_detail,
+)
 from setron.ui.target_data import initial_targets
 
 
@@ -74,6 +76,46 @@ def test_version_options_sort_ignoring_case_but_keep_raw_spaces_separate():
     assert plain == sorted(plain, key=lambda v: (v.strip().casefold(), v))  # 대문자가 맨 위로 몰리지 않는다
     assert {"V1.0.1", "v1.0.1", "v1.0.1 "} <= set(plain)  # 원문은 합치지 않는다
     assert plain.index("v1.0.1") < plain.index("v1.0.1 ") and abs(plain.index("V1.0.1") - plain.index("v1.0.1")) <= 2
+
+
+def test_interval_days_keep_month_end_and_always_end_on_period_end():
+    assert interval_days(date(2026, 1, 31), date(2026, 4, 30), "month") == (
+        date(2026, 1, 31), date(2026, 2, 28), date(2026, 3, 31), date(2026, 4, 30))
+    assert interval_days(date(2026, 11, 30), date(2027, 3, 1), "quarter") == (
+        date(2026, 11, 30), date(2027, 2, 28), date(2027, 3, 1))
+    assert interval_days(date(2026, 5, 1), date(2026, 5, 20), "week")[-1] == date(2026, 5, 20)
+    assert interval_days(date(2026, 5, 1), date(2026, 5, 1), "week") == (date(2026, 5, 1),)
+
+
+def test_interval_frames_reuse_last_saved_state_and_seed_covers_start_between_saved_dates():
+    """요청 2-1: 간격 시점은 그 날짜 전 마지막 저장일의 상태. 시작 날짜가 저장일 사이면 그 전 저장일 상태로 시작한다."""
+    source = demo_dashboard_source()
+    value = load_replay(source, request(source, start=date(2026, 6, 1), end=date(2026, 8, 31)))
+    assert value.seed is not None and value.seed.snapshot.base_date == date(2026, 5, 21)
+    weekly = value.frames_for("week")
+    assert weekly[0].day == date(2026, 6, 1) and weekly[0].snapshot is value.seed.snapshot
+    assert weekly[-1].day == date(2026, 8, 31) and weekly[-1].snapshot is value.frames[-1].snapshot
+    assert value.frames_for(None) == value.frames
+    # 첫 저장일 전 날짜는 보여 줄 상태가 없으므로 뺀다.
+    early = load_replay(source, request(source, start=date(2026, 5, 1), end=date(2026, 6, 30)))
+    assert early.seed is None and early.frames_for("week")[0].day == date(2026, 5, 22)
+
+
+def test_group_view_and_completion_count_selected_groups_only():
+    """요청 2-2·3-2: 고른 설비군만의 집계와 설비군별 완료 설비 수."""
+    source = demo_dashboard_source()
+    value = load_replay(source, request(source))
+    frame = value.frames[-1]
+    whole, observed, carried = group_view(value, frame, None)
+    assert whole is frame.snapshot.summary and (observed, carried) == (frame.observed, frame.carried)
+    assert group_view(value, frame, set()) == (None, 0, 0)
+    c3 = next(g for g in frame.snapshot.groups if g.group_keys == ("c3",))
+    only, *_ = group_view(value, frame, {"c3"})
+    assert (only.compliant, only.below, only.undetermined) == (c3.summary.compliant, c3.summary.below, c3.summary.undetermined)
+    both, *_ = group_view(value, frame, {"c3", "c4"})
+    assert both.compliant >= only.compliant
+    done, judged = group_completion(c3)
+    assert 0 <= done <= judged <= len(c3.equipment_ids)
 
 
 def test_single_actual_date_can_be_viewed_but_cannot_play():
