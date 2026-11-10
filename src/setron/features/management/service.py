@@ -29,6 +29,7 @@ from setron.features.risk.impact import DRAFT_RULE_ID, RuleImpact, preview_rule_
 from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
 from setron.features.storage.inputs import identifier, require, required_text
 from setron.features.storage.validation import StorageValidationError, decode_record
+from setron.features.targets.groups import GroupStore, history_key_bounds
 from setron.features.targets.service import TargetService, _key as target_key
 
 from .schemas import ApplicabilityEdit, ApplicabilityView, ManagedRecord, ManagementResult, RecordEdit
@@ -323,8 +324,6 @@ class ManagementService:
 
         AI와 수정 이력은 생성하지 않는다. 릴리즈 대응의 재판정만 기존 refresh 경로로 수행한다.
         """
-        from setron.features.targets.groups import GroupStore
-
         from .report import build_status_report_from_refresh
 
         with self.storage.transaction() as tx:
@@ -339,7 +338,7 @@ class ManagementService:
             saved = {}
             for target in refresh.targets:
                 pair = (target.model_id, target.family_id)
-                stored = store.load_in(tx, pair)
+                stored = store.load_current_in(tx, pair)
                 if stored is not None:
                     saved[pair] = stored.groups
             return build_status_report_from_refresh(refresh, thresholds, base_date,
@@ -376,8 +375,13 @@ class ManagementService:
         """릴리즈 수정과 같은 계열→릴리즈 순서로 잠근 뒤 현재 관리 자료를 고정한다."""
         for name in ("version_family", "release_version", "equipment_group", "item", "risk_rule",
                      "release_version_item", "equipment", "equipment_snapshot", "equipment_version",
-                     "equipment_pm", "app_setting"):
+                     "equipment_pm"):
             self.rows.rows(tx, name, lock=True)
+        # 이전 N 기준 이력은 추가만 하는 기록이라 관리값 저장과 보고서 조회에서 잠글 필요가 없다.
+        setting_key = tx.repository.table("app_setting").c.setting_key
+        first, last = history_key_bounds()
+        tx.session.execute(select(setting_key).where((setting_key < first) | (setting_key >= last))
+                           .with_for_update()).all()
 
     def _view(self, tx, table, row):
         definition = tx.repository.table(table)

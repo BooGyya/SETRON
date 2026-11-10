@@ -2,8 +2,9 @@
 
 from datetime import datetime
 
+from setron.features.storage.inputs import require
 from setron.features.targets.groups import (
-    GroupHistoryEntry, GroupSaveBlocked, SavedGroups, SaveResult, with_saved_groups,
+    HISTORY_LIMIT, GroupHistoryEntry, GroupHistoryPage, GroupSaveBlocked, SavedGroups, SaveResult, with_saved_groups,
 )
 from setron.features.version.groups import (
     SLOT_LABELS, TIER_LABELS, Slot, Tier, VersionGroups, check_groups, compare_with_groups, suggest_ladder,
@@ -26,24 +27,56 @@ class MemoryGroupStore:
     def __init__(self, source, *, clock=datetime.now):
         self.source, self.clock = source, clock
         self._history: dict[tuple[int, int], list[GroupHistoryEntry]] = {}
+        self._active: dict[tuple[int, int], GroupHistoryEntry] = {}
 
     def save(self, pair, groups: VersionGroups, family, *, memo: str = "") -> SaveResult:
+        warnings = self._warnings(pair, groups, family)
+        current = self.load_current(pair)
+        if current is not None and current.groups == groups:
+            return SaveResult(current, warnings, changed=False)
+        history = self._history.setdefault(pair, [])
+        entry = GroupHistoryEntry(self.clock().replace(microsecond=0), memo.strip(), groups, len(history) + 1)
+        history.append(entry)
+        self._set_active(pair, entry)
+        return SaveResult(entry, warnings)
+
+    def restore(self, pair, sequence: int, family) -> SaveResult:
+        require(type(sequence) is int and sequence > 0, "되돌릴 이력 순번이 올바르지 않습니다.")
+        history = self._history.get(pair, ())
+        require(sequence <= len(history), "되돌릴 저장 이력이 없습니다.")
+        entry = history[sequence - 1]
+        warnings = self._warnings(pair, entry.groups, family)
+        if entry == self.load_current(pair):
+            return SaveResult(entry, warnings, changed=False)
+        self._set_active(pair, entry)
+        return SaveResult(entry, warnings)
+
+    @staticmethod
+    def _warnings(pair, groups, family):
+        require(family is not None and family.family_id == pair[1], "같은 계열의 릴리즈 목록으로 검사해야 합니다.")
         issues = check_groups(family, groups)
         if any(issue.blocks for issue in issues):
             raise GroupSaveBlocked(issues)
-        history = self._history.setdefault(pair, [])
-        if history and history[-1].groups.to_dict() == groups.to_dict():
-            return SaveResult(SavedGroups(pair[0], pair[1], tuple(history)),
-                              tuple(issue for issue in issues if not issue.blocks), changed=False)
-        entry = GroupHistoryEntry(self.clock().replace(microsecond=0), memo.strip(), groups)
-        history.append(entry)
-        saved = SavedGroups(pair[0], pair[1], tuple(self._history[pair]))
-        self.source.saved_groups = {**getattr(self.source, "saved_groups", {}), pair: groups}
-        return SaveResult(saved, tuple(issue for issue in issues if not issue.blocks))
+        return issues
+
+    def _set_active(self, pair, entry):
+        self._active[pair] = entry
+        self.source.saved_groups = {**getattr(self.source, "saved_groups", {}), pair: entry.groups}
+
+    def load_current(self, pair) -> GroupHistoryEntry | None:
+        return self._active.get(pair)
+
+    def history_page(self, pair, *, cursor=None, limit=10) -> GroupHistoryPage:
+        require(type(limit) is int and 1 <= limit <= HISTORY_LIMIT, "이력 조회 건수가 올바르지 않습니다.")
+        require(cursor is None or (type(cursor) is int and cursor > 0), "이력 조회 위치가 올바르지 않습니다.")
+        history = self._history.get(pair, ())
+        end = min(cursor - 1, len(history)) if cursor is not None else len(history)
+        start = max(0, end - limit)
+        return GroupHistoryPage(self.load_current(pair), tuple(reversed(history[start:end])), start + 1 if start else None)
 
     def load(self, pair) -> SavedGroups | None:
         history = self._history.get(pair)
-        return SavedGroups(pair[0], pair[1], tuple(history)) if history else None
+        return SavedGroups(*pair, tuple(history), self.load_current(pair)) if history else None
 
 
 def group_store_for(source):

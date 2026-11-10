@@ -157,6 +157,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     window.open_single_targets = open_targets  # 목표 N 하나 임시 선택(기존 편집). N 그룹 저장 전 기본 목표에 쓴다.
     window.group_dialog = None
+    last_group_pair = None
 
     def open_groups():
         if window.group_dialog is not None and window.group_dialog.isVisible():
@@ -170,12 +171,23 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             except RuntimeError as error:
                 window.notice.setText(str(error))
                 return
-        dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=state.draft.group_key, parent=window)
+        remembered_pair = last_group_pair or settings.store.version_group_pair()
+        dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=state.draft.group_key,
+                                    pair_key=remembered_pair, parent=window)
         window.group_dialog = dialog
+        initial_pair = dialog.pair.key if dialog.pair is not None else None
 
         def finish(*_):
+            nonlocal last_group_pair
             if window.group_dialog is dialog:
                 window.group_dialog = None
+                selected = dialog.pair.key if dialog.pair is not None else None
+                if selected is not None and selected != remembered_pair and (selected != initial_pair or dialog.saved_any):
+                    last_group_pair = selected
+                    try:
+                        settings.store.remember_version_group_pair(selected)
+                    except OSError:
+                        pass  # 개인 설정을 저장하지 못해도 열린 창에서는 선택을 유지한다.
             dialog.deleteLater()
 
         dialog.finished.connect(finish)

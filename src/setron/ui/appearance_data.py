@@ -92,6 +92,15 @@ class PersonalSettings:
                 "lines": data.get("lines") if isinstance(data.get("lines"), list) else None,
                 "groups": data.get("groups") if isinstance(data.get("groups"), list) else None}
 
+    def version_group_pair(self) -> tuple[int, int] | None:
+        value = self._read("version_group_pair", None)
+        if isinstance(value, list) and len(value) == 2 and all(type(key) is int and key > 0 for key in value):
+            return value[0], value[1]
+        return None
+
+    def remember_version_group_pair(self, pair: tuple[int, int]):
+        self.save("version_group_pair", pair)
+
     def save(self, key, value):
         previous = self.settings.value(key)
         self.settings.setValue(key, json.dumps(asdict(value) if isinstance(value, Appearance) else value, ensure_ascii=False))

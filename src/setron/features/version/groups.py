@@ -299,18 +299,18 @@ def target_label(family, target) -> str:
     return "N 그룹 · " + " · ".join(parts)
 
 
-def suggest_ladder(family, groups: VersionGroups) -> VersionGroups:
+def suggest_ladder(family, groups: VersionGroups, *, replace_surrounding: bool = False) -> VersionGroups:
     """비어 있는 칸을 버전 순서상 바로 옆 버전 하나씩으로 채운 기본 후보 (사용자가 확인 후 저장).
 
     N 칸만 정한 경우 N-1·N-2·N+1·N+2 칸에 인접 버전을 하나씩 넣어, 기존 '한 단계 아래' 표시와 같은 모양을 만든다.
-    이미 채운 칸과 다른 칸에 들어 있는 버전은 건드리지 않는다.
+    기본적으로 이미 채운 칸은 유지한다. replace_surrounding이면 선택한 N은 모두 유지하고 앞뒤 칸을 다시 채운다.
     """
     if not groups.has_target:
         return groups
     duplicated = set(family.sorted.duplicated_orders)
     ordered = [r for r in family.sorted.ordered if r.version_order not in duplicated]
-    used = {member for members in groups.slots.values() for member in members}
-    slots = {slot: set(members) for slot, members in groups.slots.items()}
+    slots = {slot: set(members) for slot, members in groups.slots.items() if not replace_surrounding or slot is Slot.N}
+    used = {member for members in slots.values() for member in members}
 
     def orders(slot):
         found = [family.get(m) for m in slots.get(slot, ())]

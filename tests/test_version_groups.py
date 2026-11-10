@@ -124,6 +124,22 @@ def test_ladder_suggestion_fills_empty_slots_next_to_each_other():
     assert kept.members(Slot.N_MINUS_1) == {ID["v2296.9_e"]} and kept.members(Slot.N_MINUS_2) == {ID["v2296.9_d"]}
 
 
+def test_ladder_suggestion_refreshes_outside_multiple_n_versions():
+    fam = family()
+    selected = ["v2296.9_e", "v2296.9_j"]
+    previous = groups(n=selected, n1=["v2296.9_g"], n2=["v2296.9_k"])
+    filled = suggest_ladder(fam, previous, replace_surrounding=True)
+    assert filled == groups(n_2=["v2296.9_c"], n_1=["v2296.9_d"], n=selected, n1=["v2296.9_k"])
+    assert tier(fam, filled, "v2296.9_g") is Tier.AT
+    assert not check_groups(fam, filled)
+
+
+def test_ladder_refresh_keeps_existing_slots_when_no_n_order_can_be_used():
+    unordered = ReleaseVersion(50, FAMILY, "미확정 버전", None)
+    previous = VersionGroups({Slot.N: {50, 404}, Slot.N_PLUS_1: {ID["v2296.9_k"]}})
+    assert suggest_ladder(family(unordered), previous, replace_surrounding=True) == previous
+
+
 def test_single_target_tiers_keep_existing_judgement():
     """그룹이 없는 계열은 기존 compare_version 그대로이고, 색만 같은 단계로 읽는다."""
     newer = ReleaseVersion(99, FAMILY, "v2296.10", 180)
