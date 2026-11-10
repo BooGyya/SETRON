@@ -21,7 +21,7 @@ from setron.ui.theme import LINE, SECONDARY
 CURRENT_MARKER = "현재 시점"
 FUTURE_SUFFIX = " · 이후"
 CURRENT_SUFFIX = " · 현재"
-POINT_SUFFIX = " · 시점"  # 실제 시점마다 찍는 점(계단 모서리와 구분). 누르기·마우스 올리기는 이 점에서 받는다.
+POINT_SUFFIX = " · 시점"  # 실제 시점마다 찍는 점. 누르기·마우스 올리기는 이 점에서 받는다.
 
 
 class ReplayChart(DashboardChart):
@@ -51,10 +51,10 @@ class ReplayChart(DashboardChart):
         if not 0 <= index < len(counts) or counts[index] is None:
             return
         done, judged = counts[index]
-        QToolTip.showText(QCursor.pos(), f"{self.labels[key]} · {self.days[index]:%m-%d} · {done} / {judged}대 완료", self)
+        QToolTip.showText(QCursor.pos(), f"{done}/{judged}대 완료", self)
 
     def show_data(self, data, visible_groups, current=None, frames=None):
-        """계단형으로 그린다 (요청 3-1). 다음 날짜까지 값을 유지하다가 그 날짜에서 바뀐다.
+        """설비군별 꺾은선 (계단형은 11-10 요청으로 되돌림).
 
         current(재생 중인 날짜 번호)까지는 진한 실선, 이후는 흐린 점선, 현재 날짜에는 세로선과 큰 점을 둔다.
         실제 시점마다 점을 찍고, 점을 누르면 그 날짜로 가고 마우스를 올리면 완료 설비 수가 나온다.
@@ -134,10 +134,7 @@ class ReplayChart(DashboardChart):
                         line = QLineSeries()
                         line.setName(name)
                         line.setPen(QPen(pen_color, width, style))
-                        # 계단형: 앞 값을 다음 날짜까지 수평으로 끌고 가서 그 날짜에서 수직으로 바꾼다.
-                        for k, (px, py) in enumerate(part):
-                            if k:
-                                line.append(px, part[k - 1][1])
+                        for px, py in part:
                             line.append(px, py)
                         add(line)
                         line.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
