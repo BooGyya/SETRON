@@ -2,17 +2,17 @@
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QPixmap, QRegion
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLayout, QMainWindow, QPushButton, QScrollArea,
+    QFrame, QHBoxLayout, QLabel, QLayout, QMainWindow, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from setron.ui.components import EmptyState, PageHeader, StatusBadge, label
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryCatalog, QueryState, preview_catalog
-from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, font, icon, svg_size
+from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, icon, svg_size
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,59 @@ MENU_GROUPS = (
     ("데이터 관리", ("versions", "management")),
     ("운영 설정", ("reports", "settings")),
 )
+
+
+class BrandLogo(QLabel):
+    """밝게/어둡게 모두 같은 크기로 원본 로고를 표시한다."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("setronLogo")
+        self.setAccessibleName("SETRON 로고 · SEMES Tracking Monitoring")
+        self.setProperty("brandAsset", "setron-logo.png")
+        self.setFixedSize(128, 36)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._source = QPixmap(str(ASSETS / self.property("brandAsset")))
+        visible = QRegion(self._source.mask()).boundingRect()
+        self._viewbox = (visible.adjusted(-1, -1, 1, 1).intersected(self._source.rect())
+                         if not visible.isEmpty() else self._source.rect())
+        from setron.ui.appearance import manager
+        if controller := manager():
+            controller.changed.connect(self._sync_brand)
+        self._sync_brand()
+
+    def _sync_brand(self):
+        from setron.ui.appearance import manager
+        controller = manager()
+        dark = bool(controller and controller.dark)
+        # PNG 자체는 바꾸지 않고 표시할 때만 투명 여백을 제외한다.
+        ratio = self.devicePixelRatioF()
+        picture = self._source.copy(self._viewbox).scaled(self.size() * ratio, Qt.AspectRatioMode.KeepAspectRatio,
+                                                         Qt.TransformationMode.SmoothTransformation)
+        if dark:
+            # 같은 PNG의 알파를 유지해 자간·글자 형태를 바꾸지 않고 흰색으로 표시한다.
+            tint = QPainter(picture)
+            tint.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            tint.fillRect(picture.rect(), Qt.GlobalColor.white)
+            tint.end()
+        picture.setDevicePixelRatio(ratio)
+        # 모드 전환 시에도 투명 슬롯 크기와 메뉴 위치를 고정한다.
+        canvas = QPixmap(self.size() * ratio)
+        canvas.setDevicePixelRatio(ratio)
+        canvas.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(canvas)
+        painter.drawPixmap(round((self.width() - picture.deviceIndependentSize().width()) / 2),
+                           round((self.height() - picture.deviceIndependentSize().height()) / 2), picture)
+        painter.end()
+        self.setPixmap(canvas)
+        self.setProperty("displayedBrandAsset", self.property("brandAsset"))
+        self.setProperty("brandMode", "dark" if dark else "light")
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QEvent.Type.Show, QEvent.Type.DevicePixelRatioChange) and hasattr(self, "_source"):
+            self._sync_brand()
+        return result
 
 
 class NavButton(QPushButton):
@@ -213,39 +266,10 @@ class MainWindow(QMainWindow):
         side = QVBoxLayout(content)
         side.setContentsMargins(20, 20, 20, 20)
         side.setSpacing(10)
-        brand = QHBoxLayout()
-        brand.setSpacing(10)
-        logo = label("")
-        logo.setObjectName("semesLogo")
-        logo.setAccessibleName("SEMES 로고")
-        logo.setProperty("brandAsset", "semes-logo.png")
-        logo.setFixedSize(80, 19)
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        source = QPixmap(str(ASSETS / "semes-logo.png"))
-        # 원본 PNG는 보존하고, 표시할 때만 투명 여백을 제외한다.
-        visible = QRegion(source.mask()).boundingRect().adjusted(-1, -1, 1, 1).intersected(source.rect())
-        ratio = self.devicePixelRatioF()
-        picture = source.copy(visible).scaled(logo.size() * ratio, Qt.AspectRatioMode.KeepAspectRatio,
-                                              Qt.TransformationMode.SmoothTransformation)
-        picture.setDevicePixelRatio(ratio)
-        logo.setPixmap(picture)
-        brand.addWidget(logo)
-        divider = QFrame()
-        divider.setFixedSize(1, 18)
-        divider.setStyleSheet("background:#d5d7da;")
-        brand.addWidget(divider)
-        brand_name = label("SETRON", 18, numeric=True)
-        brand_font = font(18, numeric=True)
-        brand_font.setWeight(QFont.Weight.DemiBold)
-        brand_name.setFont(brand_font)
-        brand.addWidget(brand_name)
-        brand.addStretch()
-        signature = QWidget()
-        signature.setFixedHeight(28)
-        brand.setContentsMargins(0, 0, 0, 0)
-        signature.setLayout(brand)
-        side.addWidget(signature)
-        side.addWidget(label("SW 버전 현황 관리", 13, color=INK))
+        side.addWidget(BrandLogo(), alignment=Qt.AlignmentFlag.AlignHCenter)
+        description = label("SW 버전 현황 관리", 13, color=INK)
+        description.setObjectName("serviceDescription")
+        side.addWidget(description)
         self.personal_menu_layout = None
         for title, keys in MENU_GROUPS:
             group = QVBoxLayout()

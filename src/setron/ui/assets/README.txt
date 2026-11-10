@@ -8,6 +8,19 @@ Original icon states are reused from the V3/Sidebar component instances:
 Files preserve original asset filenames and artwork. No temporary asset URLs
 are used at runtime.
 
+Sidebar brand update (approved option B, 2026-11-09):
+setron-logo.png is the approved spacing-v2 transparent SETRON wordmark in SEMES blue,
+including the SEMES TRACKING MONITORING subtitle. The sidebar uses this
+wordmark alone, with no standalone SEMES logo, divider, or mascot. The supplied
+PNG is preserved; only transparent margins are excluded at display time.
+Source: output/branding/setron-logo-wider-spacing-20261109-v2.png (workspace).
+Dark mode renders that same artwork in white
+using its original alpha, so letter spacing and geometry exactly match light mode.
+No backing plate is added. Both use the same reduced 128 x 36 logical-pixel slot,
+centered horizontally in the sidebar, including centering the rendered artwork
+inside the transparent slot, and preserving the aspect ratio.
+The original semes-logo.png remains available but is not shown in the sidebar.
+
 Task 4 dashboard additions (original artwork and root geometry preserved):
 KPI row 781:12122: 32ac4.svg, bbc12.svg, 60dbd.svg, e53b6.svg.
 Panel heading 357:5496: 7880d.svg.
