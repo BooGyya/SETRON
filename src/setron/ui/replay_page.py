@@ -426,14 +426,14 @@ class ReplayPage(QWidget):
         known = self.data.frames + ((self.data.seed,) if self.data.seed else ())
         present = {cell.group_keys[0] for frame in known for cell in frame.snapshot.groups
                    if len(cell.group_keys) == 1 and cell.equipment_ids}
-        select_all, clear_all = button("전체 선택"), button("전체 해제")
-        for control, checked in ((select_all, True), (clear_all, False)):
-            control.setFixedHeight(36)
-            control.setMinimumWidth(96)
-            control.setStyleSheet("QPushButton {padding:0 12px;min-height:34px;max-height:34px;}"
-                                  "QPushButton:focus {min-height:32px;max-height:32px;}")
-            control.clicked.connect(lambda _=False, value=checked: self.set_all_groups(value))
-        self.legend_tools = (select_all, clear_all)
+        # 전체 선택·해제는 버튼 하나: 모두 골라져 있으면 '전체 해제', 아니면 '전체 선택' (11-10 요청).
+        self.toggle_all_button = button("전체 해제")
+        self.toggle_all_button.setFixedHeight(36)
+        self.toggle_all_button.setMinimumWidth(96)
+        self.toggle_all_button.setStyleSheet("QPushButton {padding:0 12px;min-height:34px;max-height:34px;}"
+                                             "QPushButton:focus {min-height:32px;max-height:32px;}")
+        self.toggle_all_button.clicked.connect(self.toggle_all_groups)
+        self.legend_tools = (self.toggle_all_button,)
         for group in self.data.source.catalog.groups:
             if group.key not in present:
                 continue
@@ -462,6 +462,10 @@ class ReplayPage(QWidget):
             control.blockSignals(blocked)
         self._groups_changed()
 
+    def toggle_all_groups(self):
+        """한 번 누르면 전체 선택, 모두 골라져 있을 때 누르면 전체 해제."""
+        self.set_all_groups(not all(control.isChecked() for control in self.legend_buttons.values()))
+
     def _groups_changed(self, *_):
         """고른 설비군이 바뀌면 그래프 선·달성률·히트맵을 같은 설비군으로 다시 그린다 (요청 2-2)."""
         self._update_chart_context()
@@ -471,6 +475,9 @@ class ReplayPage(QWidget):
     def _update_chart_context(self):
         total = len(self.legend_buttons)
         chosen = sum(control.isChecked() for control in self.legend_buttons.values())
+        if self.legend_tools:
+            self.toggle_all_button.setText("전체 해제" if chosen == total else "전체 선택")
+            self.toggle_all_button.setAccessibleName("설비군 " + self.toggle_all_button.text())
         self.chart_context.setText(("설비군 전체" if chosen == total else f"설비군 {chosen} / {total}개 선택")
                                    + " · 달성률과 히트맵도 고른 설비군 기준 · 조회 적용 시 목표 N 고정")
 

@@ -42,7 +42,7 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert len(page.legend_buttons) == 9 and len(page.chart.values) == 9
     # 요청 1-1: 설비군은 조회 조건 드롭다운이 아니라 그래프 위 설비군 버튼으로 고른다.
     assert set(page.combos) == {"site_key", "fab_key", "line_key"}
-    assert [b.text() for b in page.legend_tools] == ["전체 선택", "전체 해제"]
+    assert [b.text() for b in page.legend_tools] == ["전체 해제"]  # 버튼 하나로 선택·해제 전환
     # 요청 2-1: 날짜 칩 대신 재생 간격
     assert [b.text() for b in page.interval_buttons.values()] == ["저장일마다", "1주", "1개월", "3개월"]
     assert page.interval_buttons[None].isChecked()
@@ -117,11 +117,17 @@ def test_real_timer_advances_and_hiding_page_stops_it(own):
     assert page.index == index
 
 
-def test_group_buttons_filter_lines_achievement_and_heatmap_with_select_all_and_clear(own):
-    """요청 2-2: 설비군 버튼에서 고른 설비군으로 그래프 선·달성률·히트맵을 함께 좁힌다."""
+def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_button(own):
+    """요청 2-2: 설비군 버튼에서 고른 설비군으로 그래프 선·달성률·히트맵을 함께 좁힌다.
+
+    전체 선택·해제는 버튼 하나: 모두 골라져 있으면 누를 때 전체 해제, 아니면 전체 선택 (11-10 요청).
+    """
     page = replay_page(own)
     full = page.achievement.text(), page.heatmap.visible_ids
-    page.legend_tools[1].click()  # 전체 해제
+    toggle = page.toggle_all_button
+    assert toggle.text() == "전체 해제"
+    toggle.click()
+    assert toggle.text() == "전체 선택" and not any(b.isChecked() for b in page.legend_buttons.values())
     assert page.chart.values == {} and page.heatmap.group_cards == [] and page.heatmap.visible_ids == ()
     assert "하나 이상" in page.achievement.text() and page.progress.value() == 0
     page.legend_buttons["c3"].click()
@@ -131,7 +137,9 @@ def test_group_buttons_filter_lines_achievement_and_heatmap_with_select_all_and_
     assert page.achievement.text().startswith(f"등록 SW 목표 달성 {cell.summary.compliant} / "
                                               f"{cell.summary.compliant + cell.summary.below}건")
     assert "1 / 9개 선택" in page.chart_context.text() and "HPA" not in page.achievement.toolTip()
-    page.legend_tools[0].click()  # 전체 선택
+    assert toggle.text() == "전체 선택"  # 일부만 골라져 있으면 누를 때 전체 선택
+    toggle.click()
+    assert toggle.text() == "전체 해제" and all(b.isChecked() for b in page.legend_buttons.values())
     assert (page.achievement.text(), page.heatmap.visible_ids) == full and len(page.chart.values) == 9
     assert "설비군 전체" in page.chart_context.text()
 
@@ -186,18 +194,16 @@ def test_interval_too_long_for_period_is_disabled(own):
     assert not page.set_interval("week") and page.step is None
 
 
-def test_chart_is_step_shaped_and_hover_shows_completed_equipment(own):
-    """요청 3-1·3-2: 계단형 선, 점에 마우스를 올리면 'n / m대 완료'."""
+def test_chart_is_line_and_hover_shows_only_completed_equipment_count(own):
+    """꺾은선(계단형은 11-10 요청으로 되돌림), 점에 마우스를 올리면 'n/m대 완료'만."""
     page = replay_page(own)
     line = next(s for s in page.chart.chart().series() if s.name() == "C3")
-    points = [(p.x(), p.y()) for p in line.points()]
-    # 날짜마다 (앞 값 유지 → 그 날짜에서 수직 변화): x가 같은 점이 연달아 나온다.
-    assert points[0][0] == 0 and points[1][0] == 1 and points[1][1] == points[0][1] and points[2][0] == 1
+    assert [p.x() for p in line.points()] == [0, 1, 2, 3, 4, 5]  # 시점마다 점 하나, 계단 모서리 없음
     done, judged = page.chart.completion["c3"][2]
     cell = next(g for g in page.data.frames[2].snapshot.groups if g.group_keys == ("c3",))
     assert judged <= len(cell.equipment_ids) and 0 <= done <= judged
     page.chart._hover("c3", QPointF(2, 50), True)
-    assert QToolTip.text() == f"C3 · 07-21 · {done} / {judged}대 완료"
+    assert QToolTip.text() == f"{done}/{judged}대 완료"
     page.chart._hover("c3", QPointF(2, 50), False)
 
 
