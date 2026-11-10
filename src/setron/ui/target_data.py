@@ -8,6 +8,9 @@ from setron.ui.dashboard_data import family_name, model_name
 from setron.ui.query_state import TargetN
 
 
+MODEL_APPLICABILITY_UNCONFIRMED = "모델 적용 근거 미확인 · 재확인 필요"
+
+
 @dataclass(frozen=True)
 class TargetOption:
     release: ReleaseVersion
@@ -46,7 +49,7 @@ def target_pairs(source) -> tuple[TargetPair, ...]:
                       "순서 중복" if orders[release.version_order] > 1 else None)
             if (reason is None and hasattr(source, "applicability")
                     and release.release_version_id not in source.applicability.get((model_id, family_id), ())):
-                reason = "모델 적용 근거 미확인 · 재확인 필요"
+                reason = MODEL_APPLICABILITY_UNCONFIRMED
             options.append(TargetOption(release, reason))
         options.sort(key=lambda o: (o.unavailable_reason is not None,
                                    o.release.version_order is None, o.release.version_order or 0, o.release.release_version_id))
