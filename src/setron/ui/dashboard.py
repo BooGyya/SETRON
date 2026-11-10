@@ -1,20 +1,21 @@
 """작업 단위 4: 조회 적용과 연결되는 대시보드 한 페이지, 표/구성비/막대/추이 보기."""
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QBoxLayout, QPushButton, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout, QScrollArea,
+    QBoxLayout, QPushButton, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QScrollArea,
     QSizePolicy, QTabBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from setron.features.version.schemas import CompareStatus
 from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.dashboard_charts import DashboardChart, series_color
+from setron.ui.dashboard_charts import (
+    DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, equipment_tooltip, series_color, trend_point_rate,
+)
 from setron.ui.dashboard_data import (
     DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, count_value, missing_sw_count,
     undetermined_breakdown, upgrade_caption,
 )
-from setron.ui.query_state import UNASSIGNED, version_filter_caption
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, svg_size
 
 # Figma VER4 대시보드 셀 색 (--met / --below / --soft / --v4-red). 이 화면에서만 쓴다.
@@ -122,37 +123,6 @@ class SplitRow(QWidget):
         super().resizeEvent(event)
 
 
-class MetricCard(Card):
-    """히트맵·설비 목록 화면이 함께 쓰는 지표 카드(아이콘 포함)."""
-
-    def __init__(self, title, asset, *, tone="neutral"):
-        super().__init__(padding=16 if tone == "neutral" else 20)
-        self.setProperty("metricTone", tone)
-        self.setMinimumHeight(176)
-        self.body.setSpacing(6)
-        self.body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        row = QHBoxLayout()
-        row.addWidget(label(title, 14, medium=True, color=SECONDARY, wrap=True), 1)
-        self.picture = label("")
-        self.picture.setProperty("assetFile", asset)
-        self.picture.setPixmap(icon(asset).pixmap(svg_size(asset)))
-        self.picture.setFixedSize(28 if tone != "neutral" else 24, 28 if tone != "neutral" else 24)
-        self.picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.picture.setStyleSheet(f"background:{'#e7b83d' if asset == 'e53b6.svg' else '#fce2e7' if tone == 'risk' else '#edf0fd'};border-radius:8px;")
-        row.addWidget(self.picture)
-        self.body.addLayout(row)
-        self.value = label("—", 46 if tone != "neutral" else 34, medium=True,
-                           color=PRIMARY if tone == "achievement" else "#ad344d" if tone == "risk" else INK, numeric=True)
-        if tone == "achievement":
-            self.value.setProperty("appearanceRate", "foreground")
-        number_font = self.value.font()
-        number_font.setWeight(QFont.Weight.DemiBold)
-        self.value.setFont(number_font)
-        self.body.addWidget(self.value)
-        self.caption = label("조회 적용 전", 13, color=SECONDARY, wrap=True)
-        self.body.addWidget(self.caption)
-
-
 class DashboardKpi(Card):
     """VER4 대시보드 상단의 간결한 지표 카드. 첫 카드(달성률)는 강조색으로 채운다."""
 
@@ -206,7 +176,6 @@ class DashboardPage(QWidget):
         super().__init__()
         self.setObjectName("canvas")
         self.state, self.source, self.snapshot = state, source, None
-        self.drilldown_connected = drilldown_connected
         self.visible_groups = {o.key for o in source.catalog.groups}
         self.metrics = {}
         self.matrix_buttons, self.risk_buttons = {}, {}
@@ -217,16 +186,6 @@ class DashboardPage(QWidget):
         self.result_status = StatusBadge("조회 적용 전 · 예시 데이터", "info")
         body.addWidget(self.result_status)
         self.result_status.hide()  # 상태 문구는 본문 안내(self.message)로 대신 전달한다.
-        # Figma: 조회 패널 아래 '적용됨' 배지 + 실제 계산에 쓴 조건 한 줄. 결과가 있을 때만 보인다.
-        self.applied_row = QWidget()
-        applied_body = QHBoxLayout(self.applied_row)
-        applied_body.setContentsMargins(0, 0, 0, 0)
-        applied_body.setSpacing(10)
-        applied_body.addWidget(StatusBadge("적용됨", "info"))
-        self.applied_text = label("", 13, color=INK, wrap=True)
-        applied_body.addWidget(self.applied_text, 1)
-        self.applied_row.hide()
-        body.addWidget(self.applied_row)
         cards = []
         for key, title, asset, accent in (
             ("rate", "목표 N 이상 달성률", "bbc12.svg", True),
@@ -291,18 +250,14 @@ class DashboardPage(QWidget):
         risk_body.addWidget(self.description, 1)
         self.content.body.addWidget(self.risk_note)
         self.series_widgets = []
-        for index, group in enumerate(source.catalog.groups):
-            color = series_color(group.key, index)
-            check = QCheckBox(group.label)
+        for group in source.catalog.groups:
+            check = button(group.label)
+            check.setCheckable(True)
             check.setChecked(True)
             check.setFont(font(13, medium=True))
-            check.setAccessibleName(group.label + " 추이 표시")
-            check.setStyleSheet(
-                f"QCheckBox {{color:{INK};background:white;border:1px solid {color};border-radius:8px;padding:6px 12px;}}"
-                f"QCheckBox:!checked {{color:#8b95a8;background:{SOFT};border-color:{LINE};}}"
-                f"QCheckBox:focus {{border:2px solid {PRIMARY};}}"
-                "QCheckBox::indicator {width:0;height:0;border:none;background:transparent;image:none;margin:0;}")
-            check.toggled.connect(lambda checked, key=group.key: self._toggle_group(key, checked))
+            check.setAccessibleName(group.label + " 차트 표시")
+            check.toggled.connect(lambda checked, key=group.key, control=check:
+                                  self._toggle_group(key, checked) if control.isEnabled() else None)
             self.series_widgets.append(check)
         self.series_grid = DashboardGrid(self.series_widgets, minimum_width=96, maximum_columns=9, spacing=8)
         self.content.body.addWidget(self.series_grid)
@@ -324,8 +279,6 @@ class DashboardPage(QWidget):
         chart_body.addWidget(self.composition_legend, 0, Qt.AlignmentFlag.AlignVCenter)
         chart_body.addStretch(0)
         self.content.body.addWidget(self.chart_row)
-        self.chart_note = label("설비 대수 · 복수 SW는 설비군별 집계", 12, color=SECONDARY)
-        self.content.body.addWidget(self.chart_note)
         self.data_toggle = _outline_button("수치표 보기")
         self.data_toggle.setCheckable(True)
         self.data_toggle.toggled.connect(self._show_data_table)
@@ -367,9 +320,6 @@ class DashboardPage(QWidget):
         self.attention_card.body.addStretch(1)
         self.overview = SplitRow(self.content, self.attention_card)
         body.addWidget(self.overview)
-        self.selection_notice = label("", 13, color=SECONDARY, wrap=True)
-        self.selection_notice.hide()
-        body.addWidget(self.selection_notice)
 
         # 아래: 최근 관측 변화 / Site별 현황
         self.observation_card = Card(padding=20)
@@ -402,8 +352,6 @@ class DashboardPage(QWidget):
         self.site_card.body.addStretch(1)
         self.bottom = SplitRow(self.observation_card, self.site_card)
         body.addWidget(self.bottom)
-        self.context = label("", 11, color=SECONDARY, wrap=True)
-        body.addWidget(self.context)
         body.addStretch(1)
         self.tabs.currentChanged.connect(self._render_view)
         self._render_view()
@@ -423,8 +371,6 @@ class DashboardPage(QWidget):
             card.caption.setText("결과 없음")
         self.candidate_button.setEnabled(False)
         self.candidate_button.setText("전체 0대")
-        self.selection_notice.clear()
-        self.selection_notice.hide()
         self.observations.setText("표시할 결과가 없습니다.")
         self._render_view()
 
@@ -438,8 +384,6 @@ class DashboardPage(QWidget):
         self._clear_values()
         self.failure_reason = None
         self.result_status.setText(f"{self._result_label()} 계산 중")
-        self.context.clear()
-        self.applied_row.hide()
         try:
             if not self.state.catalog.is_view_of(self.source.catalog):
                 raise ValueError("조회 선택지와 데이터 공급자의 매핑이 다릅니다.")
@@ -473,9 +417,6 @@ class DashboardPage(QWidget):
         unresolved = sum(1 for status in summary.equipment if _equipment_state(status)[0] in ("미확인", "확인 필요"))
         self.result_status.setText(f"{self._result_label()} · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))
         self.result_status.set_tone("info")
-        self.context.setText(f"{result.base_date:%Y.%m.%d} 기준 · 목표 N {len(result.effective_targets)}계열")
-        self.applied_text.setText(self._applied_caption(result))
-        self.applied_row.show()
         values = {
             "total": (f"{summary.equipment_count}대", f"HPA 제외 {summary.hpa_excluded}대"),
             "rate": ("계산 불가" if summary.rate is None else f"{summary.rate:.1%}",
@@ -509,30 +450,10 @@ class DashboardPage(QWidget):
         self._render_view()
         return True
 
-    def _applied_caption(self, result):
-        """실제 계산에 쓴 기준일·위치·설비군·목표 N 개수. 없는 정보는 만들지 않는다."""
-        selection, catalog = result.query.selection, self.source.catalog
-        def name(value, options):
-            return "미지정" if value is UNASSIGNED else next((o.label for o in options if o.key == value), str(value))
-        places = [f"{title} {name(value, options)}" for title, value, options in (
-            ("Site", selection.site_key, catalog.sites), ("Fab", selection.fab_key, catalog.fabs),
-            ("Line", selection.line_key, catalog.lines)) if value is not None]
-        parts = [f"기준일 {result.base_date}", " · ".join(places) if places else "전체 Site/Fab/Line"]
-        if selection.group_key is not None:
-            parts.append(f"설비군 {name(selection.group_key, catalog.groups)}")
-        parts.append(f"계열별 N {len(result.effective_targets)}개")
-        if selection.versions is not None:
-            parts.append(version_filter_caption(selection.versions))
-        return " · ".join(parts)
-
     def _select(self, title, ids, *, risk_only=False):
         if self.snapshot is None or not self.state.is_current(self.snapshot.query) or not ids:
             return
         request = DashboardDrilldown(self.snapshot.query, self.snapshot.base_date, title, tuple(ids), risk_only)
-        self.selection_notice.setText(f"선택: {title} · {'위험 후보만' if risk_only else '해당 범위 전체'} {len(ids)}대\n"
-                                      + ("선택 범위의 설비 목록으로 이동합니다." if self.drilldown_connected else
-                                         "설비 목록 화면은 6번 작업에서 연결합니다. 현재는 조회 범위 전달까지만 구현했습니다."))
-        self.selection_notice.show()
         self.drilldown_requested.emit(request)
 
     def _risk_selection(self):
@@ -556,6 +477,7 @@ class DashboardPage(QWidget):
         data = self.snapshot
         has_data = data is not None and bool(data.equipment_ids)
         has_analysis = has_data and bool(data.summary.equipment_count)
+        bars = bar_plot(data) if has_analysis and mode == 2 else ((), {})
         self.matrix_scroll.setVisible(has_data and mode == 0)
         self.chart.setVisible(has_analysis and mode != 0)
         self.series_grid.setVisible(has_analysis and mode in (2, 3))
@@ -573,7 +495,6 @@ class DashboardPage(QWidget):
         # 구성비는 도넛 옆에 상태 칩을 붙여 둔다(Figma). 다른 차트는 카드 너비를 다 쓴다.
         self.chart.setMaximumWidth(560 if mode == 1 else 16777215)
         self.chart_row.layout().setStretch(2, 1 if mode == 1 else 0)
-        self.chart_note.setVisible(has_analysis and mode == 2)
         self.list_button.setEnabled(has_data)
         self.site_button.setEnabled(has_data)
         self.message.setVisible(not has_data or (not has_analysis and mode != 0))
@@ -583,7 +504,7 @@ class DashboardPage(QWidget):
         self.description.setText(self._subtitle(mode))
         self.risk_note.setVisible(has_analysis and mode != 0 and bool(self.description.text()))
         self.risk_note.layout().itemAt(0).widget().setVisible(mode == 1)
-        self._style_series(mode)
+        self._style_series(mode, bars[1])
         self._render_attention()
         self._render_observations()
         self._render_sites()
@@ -602,45 +523,36 @@ class DashboardPage(QWidget):
             self.chart.composition(data)
             self._render_composition_legend(data)
         elif mode == 2:
-            self.chart.bars(data, self._select, self.visible_groups)
+            self.chart.bars(bars, self._select, self.visible_groups)
         else:
             self.chart.trend(data, self.visible_groups)
         self._show_data_table()
 
     def _subtitle(self, mode):
         data = self.snapshot
-        if data is None or mode == 0:
+        if mode != 1 or data is None or not data.risky_ids:
             return ""
-        if mode == 1:
-            if not data.risky_ids:
-                return ""
-            statuses = {s.record.equipment_id: s for s in data.summary.equipment}
-            met = sum(_equipment_state(statuses.get(i))[0] == "달성" for i in data.risky_ids)
-            return f"안전·결함 위험 후보 {len(data.risky_ids)}대 · 목표 달성 {met}대와 중복"
-        if mode == 2:
-            return "라인 미지정 · 현재 원본 구역 기준"
-        selection = data.query.selection
-        scope = "전체 설비" if selection == type(selection)(as_of=selection.as_of) else "선택 범위 설비"
-        if data.saved_groups:
-            return f"{scope} · 저장한 N 그룹 반영"
-        defaults = getattr(self.source, "targets", None)
-        basic = data.query.targets is None or (defaults is not None and data.effective_targets == defaults)
-        return f"{scope} · " + ("기본 목표 N" if basic else "선택한 목표 N")
+        statuses = {s.record.equipment_id: s for s in data.summary.equipment}
+        met = sum(_equipment_state(statuses.get(i))[0] == "달성" for i in data.risky_ids)
+        return f"안전·결함 위험 후보 {len(data.risky_ids)}대 · 목표 달성 {met}대와 중복"
 
-    def _style_series(self, mode):
-        """막대는 점 범례, 적용 추이는 테두리 버튼 범례(Figma). 클릭하면 해당 설비군 표시를 켜고 끈다."""
+    def _style_series(self, mode, bar_groups):
+        """현재 차트에 그릴 값이 있는 설비군만 표시 여부를 선택할 수 있다."""
+        trends = self.snapshot.trends if mode == 3 and self.snapshot is not None else ()
+        available = bar_groups if mode == 2 else {group.group_key for group in trends
+                                                 if any(trend_point_rate(point) is not None for point in group.points)}
         for index, (group, check) in enumerate(zip(self.source.catalog.groups, self.series_widgets)):
             color = series_color(group.key, index)
-            if mode == 2:
-                style = (f"QCheckBox {{color:{INK};background:transparent;border:none;padding:2px 4px;spacing:6px;}}"
-                         f"QCheckBox:!checked {{color:#8b95a8;}}"
-                         f"QCheckBox::indicator {{width:8px;height:8px;border-radius:4px;background:{color};border:none;}}"
-                         f"QCheckBox::indicator:unchecked {{background:{LINE};}}")
-            else:
-                style = (f"QCheckBox {{color:{INK};background:white;border:1px solid {color};border-radius:8px;padding:6px 12px;}}"
-                         f"QCheckBox:!checked {{color:#8b95a8;background:{SOFT};border-color:{LINE};}}"
-                         f"QCheckBox:focus {{border:2px solid {PRIMARY};}}"
-                         "QCheckBox::indicator {width:0;height:0;border:none;background:transparent;image:none;margin:0;}")
+            enabled = mode not in (2, 3) or group.key in available
+            check.setEnabled(enabled)
+            with QSignalBlocker(check):
+                check.setChecked(enabled and group.key in self.visible_groups)
+            fill = QColor.fromRgbF(*(0.4 + 0.6 * channel for channel in QColor(color).getRgbF()[:3])).name()
+            style = (f"QPushButton {{color:{INK};background:white;border:1px solid {color};border-radius:8px;"
+                     "padding:6px 12px;min-height:0;}"
+                     f"QPushButton:checked:enabled {{background:{fill};border-color:{color};}}"
+                     f"QPushButton:disabled {{color:#8b95a8;background:{SOFT};border-color:{LINE};}}"
+                     f"QPushButton:focus {{border-color:{PRIMARY};}}")
             if check.styleSheet() != style:
                 check.setStyleSheet(style)
 
@@ -648,17 +560,23 @@ class DashboardPage(QWidget):
         _clear_layout(self.composition_rows)
         counts = (data.summary.compliant, data.summary.below, data.summary.undetermined)
         total = sum(counts)
-        for (name, background, ink), count in zip((("달성", ACCENT_SOFT, PRIMARY), ("미달", BELOW, INK),
-                                                   ("확인 필요", "#f3f4f6", INK)), counts):
+        styles = (("달성", ACCENT_SOFT, PRIMARY), ("미달", BELOW, INK), ("확인 필요", "#f3f4f6", INK))
+        for (name, background, ink), count, ids in zip(styles, counts, composition_cohorts(data.summary)):
             row = QHBoxLayout()
             row.setSpacing(16)
-            chip = label(name, 12, medium=True, color=ink)
+            chip = label(name, 16, medium=True, color=ink)
             chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            chip.setFixedSize(72, 22)
+            chip.setFixedSize(90, 30)
             chip.setStyleSheet(f"background:{background};border-radius:4px;")
             row.addWidget(chip)
-            row.addWidget(label(f"{count}건", 12, color=INK), 0, Qt.AlignmentFlag.AlignRight)
-            row.addWidget(label(f"{count / total:.1%}" if total else "—", 12, color=INK), 0, Qt.AlignmentFlag.AlignRight)
+            share = f"{count / total:.1%}" if total else "—"
+            count_label = label(f"{count}건", 12, color=INK)
+            share_label = label(share, 12, color=INK)
+            tooltip = equipment_count_tooltip(f"{name} · {count}건 ({share})", ids)
+            for widget in (chip, count_label, share_label):
+                widget.setToolTip(tooltip)
+            row.addWidget(count_label, 0, Qt.AlignmentFlag.AlignRight)
+            row.addWidget(share_label, 0, Qt.AlignmentFlag.AlignRight)
             row.addStretch(1)
             self.composition_rows.addLayout(row)
 
@@ -802,36 +720,54 @@ class DashboardPage(QWidget):
             heading = label(title, 13, medium=True, color=INK)
             heading.setMinimumHeight(40)
             heading.setContentsMargins(8, 0, 8, 0)
-            heading.setStyleSheet(f"background:{CANVAS};border-radius:4px;")
+            heading.setStyleSheet(f"background:{ACCENT_SOFT if column == 0 else CANVAS};border-radius:4px;")
             grid.addWidget(heading, 0, column)
             grid.setColumnMinimumWidth(column, 110 if column == 0 else 84)
             grid.setColumnStretch(column, 114 if column == 0 else 160)
+        sites = {site.key: site.label for site in self.source.catalog.sites}
+        equipment_names = {record.equipment_id: record.equipment_code for record in data.selected_records}
+        previous_site, grid_row = None, 1
         for row_index, row in enumerate(data.rows, 1):
-            name = label(row.label, 13, medium=row.position is None, color=INK, wrap=True)
-            name.setContentsMargins(8, 0, 0, 0)
-            grid.addWidget(name, row_index, 0)
+            site, area = row.position if row.position is not None else (None, None)
+            new_site = site is not None and site != previous_site
+            if new_site and previous_site is not None:
+                divider = _divider()
+                divider.setObjectName("dashboardMatrixSiteDivider")
+                grid.addWidget(divider, grid_row, 0, 1, len(columns))
+                grid_row += 1
+            location = QFrame()
+            location.setObjectName("dashboardMatrixLocation")
+            location.setStyleSheet(f"QFrame#dashboardMatrixLocation {{background:{CANVAS};border-radius:4px;}}")
+            location_body = QVBoxLayout(location)
+            location_body.setContentsMargins(8, 4, 8, 4)
+            location_body.setSpacing(2)
+            if site is None:
+                location_body.addWidget(label(row.label, 13, medium=True, color=INK, wrap=True))
+            else:
+                if new_site:
+                    location_body.addWidget(label(sites[site], 13, medium=True, color=INK, wrap=True))
+                area_text = area or "구역 미확인"
+                area_label = label(area_text, 12, color=SECONDARY, wrap=True)
+                area_label.setContentsMargins(8, 0, 0, 0)
+                area_label.setAccessibleName(f"Site {sites[site]} · 원본 구역 {area or '미확인'}")
+                location_body.addWidget(area_label)
+            grid.addWidget(location, grid_row, 0)
             for column, cell in enumerate(row.cells, 1):
-                grid.addWidget(self._matrix_cell(row, row_index, column, cell), row_index, column)
+                grid.addWidget(self._matrix_cell(row, row_index, column, cell, equipment_names), grid_row, column)
+            previous_site = site
+            grid_row += 1
         old = self.matrix_scroll.takeWidget()
         if old:
             old.deleteLater()
         self.matrix_scroll.setWidget(content)
         self.matrix_scroll.setFixedHeight(content.sizeHint().height() + 12)
 
-    def _matrix_cell(self, row, row_index, column, cell):
+    def _matrix_cell(self, row, row_index, column, cell, equipment_names):
         """Figma 셀: 큰 달성률, 아래에 'N 이상/판단 가능 건' + 위험 후보·판단 불가 표시."""
         summary = cell.summary
         complete = summary.rate is not None and summary.complete and not missing_sw_count(summary)
         background = SOFT if summary.rate is None else MET if complete else BELOW
         ink = "#246b4a" if background == MET else "#8a6400" if background == BELOW else SECONDARY
-        frame = QFrame()
-        frame.setObjectName("dashboardCell")
-        frame.setMinimumHeight(56)
-        frame.setStyleSheet(f"QFrame#dashboardCell {{background:{background};border:none;border-radius:6px;}}")
-        frame.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        body = QVBoxLayout(frame)
-        body.setContentsMargins(4, 4, 4, 4)
-        body.setSpacing(0)
         if not cell.equipment_ids:
             text = "—"
         elif summary.hpa_excluded and not summary.equipment_count:
@@ -840,24 +776,28 @@ class DashboardPage(QWidget):
             text = "정보 부족"
         else:
             text = f"{summary.rate * 100:.1f}".removesuffix(".0") + "%"
-        main = button(text)
-        main.setFont(font(15 if summary.rate is not None else 12, medium=True))
-        main.setProperty("dashboardCellButton", True)
-        main.setStyleSheet(f"QPushButton {{color:{ink};background:transparent;border:1px solid transparent;"
-                           "border-radius:6px;padding:0 4px;min-height:24px;}"
-                           f"QPushButton:hover {{border-color:{PRIMARY};}}"
-                           f"QPushButton:focus {{border:2px solid {PRIMARY};}}"
-                           f"QPushButton:disabled {{color:{SECONDARY};}}")
-        main.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        main = button("")
+        main.setObjectName("dashboardCell")
+        main.setStyleSheet(f"QPushButton#dashboardCell {{background:{background};border:1px solid transparent;"
+                           "border-radius:6px;padding:0;min-height:54px;}"
+                           f"QPushButton#dashboardCell:hover:enabled {{border-color:{PRIMARY};}}"
+                           f"QPushButton#dashboardCell:focus {{border:2px solid {PRIMARY};}}")
+        main.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         main.setEnabled(bool(cell.equipment_ids))
         main.setAccessibleName(f"{row.label} {cell.label} 전체 설비 {summary.equipment_count}대")
-        main.setToolTip(
-            (f"달성률 {summary.rate:.1%} · " if summary.rate is not None else "")
-            + f"N 이상 {summary.compliant}건 / N 미만 {summary.below}건 / 판단 불가 {summary.undetermined}건\n"
-            f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대 · 해당 범위 전체 선택")
-        main.clicked.connect(lambda checked=False, title=f"{row.label} / {cell.label}", ids=cell.equipment_ids:
-                             self._select(title, ids))
-        body.addWidget(main)
+        title = f"{row.label} / {cell.label}"
+        rate = f"달성률 {summary.rate:.1%} · " if summary.rate is not None else ""
+        tooltip = (
+            f"{title}\n{rate}N 이상 {summary.compliant}건 / N 미만 {summary.below}건 / 판단 불가 {summary.undetermined}건\n"
+            f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대")
+        main.setToolTip(equipment_tooltip(tooltip, cell.equipment_ids, equipment_names))
+        main.clicked.connect(lambda checked=False: self._select(title, cell.equipment_ids))
+        body = QVBoxLayout(main)
+        body.setContentsMargins(4, 4, 4, 4)
+        body.setSpacing(0)
+        value = label(text, 15 if summary.rate is not None else 12, medium=True, color=ink)
+        value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body.addWidget(value, 1)
         self.matrix_buttons[row_index, column] = main
         if summary.rate is not None:
             detail = QHBoxLayout()
@@ -872,16 +812,17 @@ class DashboardPage(QWidget):
                                    "border-radius:4px;padding:0 5px;min-height:16px;max-height:16px;}"
                                    f"QPushButton:focus {{border:1px solid {PRIMARY};}}")
                 risk.setAccessibleName(f"{row.label} {cell.label} 위험 후보만 {len(cell.risky_ids)}대")
-                risk.setToolTip(f"위험 후보 {len(cell.risky_ids)}대만 선택")
-                risk.clicked.connect(lambda checked=False, title=f"{row.label} / {cell.label}", ids=cell.risky_ids:
-                                     self._select(title, ids, risk_only=True))
+                risk.setToolTip(equipment_tooltip(f"위험 후보 · {title}", cell.risky_ids, equipment_names))
+                risk.clicked.connect(lambda checked=False: self._select(title, cell.risky_ids, risk_only=True))
                 detail.addWidget(risk)
                 self.risk_buttons[row_index, column] = risk
             elif summary.undetermined:
                 detail.addWidget(label(f"미확인{summary.undetermined}", 11, color=ink))
             detail.addStretch(1)
             body.addLayout(detail)
-        return frame
+        for caption in main.findChildren(QLabel):
+            caption.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        return main
 
     def _show_data_table(self, *_):
         data, mode = self.snapshot, self.tabs.currentIndex()
@@ -896,9 +837,9 @@ class DashboardPage(QWidget):
             rows = [(name, str(value), f"{value / total:.1%}" if total else "—") for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)]
         elif mode == 2:
             headers = ("Site / 원본 구역", "설비군", "물리 대수")
-            rows = [(row.label, group.label, str(len(set(group.equipment_ids).intersection(row.cells[-1].equipment_ids))))
-                    for row in data.rows if row.position is not None and row.cells[-1].summary.equipment_count
-                    for group in data.groups if group.group_keys[0] in self.visible_groups]
+            areas, groups = bar_plot(data)
+            rows = [(area, label, str(len(cohorts[index]))) for index, area in enumerate(areas)
+                    for key, (label, cohorts) in groups.items() if key in self.visible_groups]
         else:
             headers = ("관측일", "설비군", "N 이상/판단 가능", "달성률", "판단 불가", "미관측 대수")
             rows = [(str(p.day), group.label, f"{p.summary.compliant}/{p.summary.compliant + p.summary.below}",

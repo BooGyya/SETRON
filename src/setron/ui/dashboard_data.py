@@ -78,6 +78,13 @@ class TrendPoint:
     summary: Summary
     missing_equipment: int
 
+    @property
+    def denominator_equipment_ids(self) -> tuple[int, ...]:
+        """이 날짜 적용률 분모에 비교 가능한 계열이 하나 이상 포함된 물리 설비."""
+        determined = (CompareStatus.AT_OR_ABOVE, CompareStatus.BELOW)
+        return tuple(equipment.record.equipment_id for equipment in self.summary.equipment
+                     if any(family.status in determined for family in equipment.families))
+
 
 @dataclass(frozen=True)
 class GroupTrend:

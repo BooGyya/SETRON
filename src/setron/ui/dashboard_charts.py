@@ -1,10 +1,16 @@
 """데이터로 그리는 QtCharts. Figma의 예시 SVG 그래프를 고정 이미지로 사용하지 않는다."""
 
+from collections.abc import Iterable, Mapping
+from functools import partial
+from html import escape
+
 from PySide6.QtCharts import QAbstractBarSeries, QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QPainter, QPen
-from PySide6.QtWidgets import QGraphicsSimpleTextItem
+from PySide6.QtGui import QBrush, QCursor, QPainter, QPen
+from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
 
+from setron.features.aggregation.schemas import Summary
+from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import ui_color
 from setron.ui.theme import INK, PRIMARY, SECONDARY, font
 
@@ -20,6 +26,48 @@ def series_color(key, index=0):
     return SERIES_COLORS.get(key, tuple(SERIES_COLORS.values())[sum(map(ord, key)) % len(SERIES_COLORS)])
 
 
+def trend_point_rate(point):
+    """관측이 부족하거나 비교 분모가 없으면 차트에 찍을 값이 없다."""
+    return None if point.missing_equipment else point.summary.rate
+
+
+def bar_plot(snapshot):
+    """원본 구역과 설비군별 막대가 실제로 세는 설비를 돌려준다."""
+    areas = [(row.label, set(row.cells[-1].equipment_ids)) for row in snapshot.rows
+             if row.position is not None and row.cells[-1].summary.equipment_count]
+    groups = {}
+    for group in snapshot.groups:
+        cohorts = tuple(tuple(eid for eid in group.equipment_ids if eid in ids) for _, ids in areas)
+        if any(cohorts):
+            groups[group.group_keys[0]] = group.label, cohorts
+    return tuple(label for label, _ in areas), groups
+
+
+def equipment_tooltip(title: str, equipment_ids: Iterable[int], equipment_names: Mapping[int, str]) -> str:
+    """한눈에 읽을 수 있도록 실제 대수와 앞의 12개 호기명을 표시한다."""
+    ids = tuple(dict.fromkeys(equipment_ids))
+    lines = [*title.splitlines(), f"설비 {len(ids)}대"]
+    lines.extend(equipment_names.get(eid, f"설비 {eid}") for eid in ids[:12])
+    if len(ids) > 12:
+        lines.append(f"외 {len(ids) - 12}대")
+    return "<qt>" + "<br>".join(map(escape, lines)) + "</qt>"
+
+
+def equipment_count_tooltip(title: str, equipment_ids: Iterable[int]) -> str:
+    """차트에 표시된 집계와 실제 설비 대수를 함께 표시한다."""
+    lines = [*title.splitlines(), f"설비 {len(set(equipment_ids))}대"]
+    return "<qt>" + "<br>".join(map(escape, lines)) + "</qt>"
+
+
+def composition_cohorts(summary: Summary) -> tuple[tuple[int, ...], ...]:
+    """N 이상, N 미만, 판단 불가에 각각 포함된 물리 설비."""
+    cohorts = {status: [] for status in (CompareStatus.AT_OR_ABOVE, CompareStatus.BELOW, CompareStatus.UNDETERMINED)}
+    for equipment in summary.equipment:
+        for status in {family.status for family in equipment.families}:
+            cohorts[status].append(equipment.record.equipment_id)
+    return tuple(tuple(ids) for ids in cohorts.values())
+
+
 class DashboardChart(QChartView):
     def __init__(self):
         super().__init__()
@@ -29,9 +77,11 @@ class DashboardChart(QChartView):
         self.setMinimumWidth(0)
         self.setBackgroundBrush(QBrush(ui_color("white")))
         self._donut_mode = False
+        self._active_tooltip = None
         self.setAccessibleName("대시보드 차트 · 같은 수치는 수치표 보기에서 확인할 수 있습니다")
 
     def _chart(self):
+        self._hide_hover_tooltip()
         chart = QChart()
         chart.setBackgroundBrush(QBrush(ui_color("white")))
         chart.setBackgroundRoundness(0)
@@ -47,6 +97,23 @@ class DashboardChart(QChartView):
     def clear(self):
         self._chart()
 
+    def _hide_hover_tooltip(self):
+        if self._active_tooltip is None:
+            return
+        _, text = self._active_tooltip
+        self._active_tooltip = None
+        if QToolTip.text() == text:
+            QToolTip.hideText()
+
+    def _hover_tooltip(self, chart, target, text):
+        if chart is not self.chart():
+            return
+        if text:
+            self._active_tooltip = target, text
+            QToolTip.showText(QCursor.pos(), text, self)
+        elif self._active_tooltip is not None and self._active_tooltip[0] == target:
+            self._hide_hover_tooltip()
+
     @staticmethod
     def _axis(axis):
         axis.setLabelsFont(font(11))
@@ -61,11 +128,14 @@ class DashboardChart(QChartView):
         series = QPieSeries()
         series.setPieSize(0.90)
         series.setHoleSize(0.65)
-        for title, count, color in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#fdf0b8", "#e5e7eb")):
+        for title, count, color, ids in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#fdf0b8", "#e5e7eb"),
+                                            composition_cohorts(snapshot.summary)):
             if count:
                 part = series.append(f"{title} {count}건 ({count / total:.1%})", count)
                 part.setColor(ui_color(color))
                 part.setBorderColor(ui_color(color))
+                tooltip = equipment_count_tooltip(part.label(), ids)
+                part.hovered.connect(lambda hovered, target=part, text=tooltip: self._hover_tooltip(chart, target, text if hovered else ""))
         chart.addSeries(series)
         self._donut_mode = True
         chart.legend().hide()  # 범례는 화면 오른쪽 상태 칩으로 표시한다.
@@ -83,33 +153,32 @@ class DashboardChart(QChartView):
             center.setPos(rect.center().x() - size.width() / 2, top)
             caption.setPos(rect.center().x() - below.width() / 2, top + size.height() + 6)
         chart.plotAreaChanged.connect(place_center)
+        # 조회를 다시 적용하면 차트 영역이 이미 배치되어 변경 신호가 추가로 오지 않을 수 있다.
+        place_center(chart.plotArea())
         self.setAccessibleDescription(" · ".join(f"{name} {value}건" for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)))
 
-    def bars(self, snapshot, on_click, visible_groups):
+    def bars(self, plot, on_click, visible_groups):
         chart = self._chart()
-        rows = [row for row in snapshot.rows if row.position is not None and row.cells[-1].summary.equipment_count]
+        areas, groups = plot
         series = QBarSeries()
-        shown = []
-        for index, group in enumerate(snapshot.groups):
-            if group.group_keys[0] not in visible_groups:
+        shown = {}
+        for key, (label, cohorts) in groups.items():
+            if key not in visible_groups:
                 continue
-            shown.append(group)
-            group_set = QBarSet(group.label)
-            group_set.setColor(ui_color(series_color(group.group_keys[0], index)))
+            group_set = QBarSet(label)
+            group_set.setColor(ui_color(series_color(key)))
             group_set.setLabelFont(font(10))
-            values = []
-            for row in rows:
-                # KCTC도 하위 4종을 분리한다. 셀 합산으로 물리 설비 수를 만들지 않는다.
-                ids = set(group.equipment_ids)
-                values.append(len(ids.intersection(row.cells[-1].equipment_ids)))
-            group_set.append(values)
+            group_set.append([len(ids) for ids in cohorts])
             series.append(group_set)
+            shown[group_set] = label, cohorts
+        if not shown:
+            return
         series.setLabelsVisible(True)
         series.setLabelsFormat("@value")
         series.setLabelsPosition(QAbstractBarSeries.LabelsPosition.LabelsOutsideEnd)
         chart.addSeries(series)
         x = QBarCategoryAxis()
-        x.append([row.label for row in rows])
+        x.append(list(areas))
         x.setGridLineVisible(False)
         y = QValueAxis()
         maximum = max((group.at(i) for group in series.barSets() for i in range(group.count())), default=0)
@@ -123,11 +192,34 @@ class DashboardChart(QChartView):
             chart.addAxis(axis, alignment)
             series.attachAxis(axis)
         def clicked(index, bar_set):
-            group = shown[series.barSets().index(bar_set)]
-            row = rows[index]
-            ids = tuple(eid for eid in group.equipment_ids if eid in row.cells[-1].equipment_ids)
-            on_click(f"{row.label} / {group.label}", ids)
+            if bar_set in shown and 0 <= index < len(areas):
+                label, cohorts = shown[bar_set]
+                if ids := cohorts[index]:
+                    on_click(f"{areas[index]} / {label}", ids)
         series.clicked.connect(clicked)
+
+        def hovered(entering, index, bar_set):
+            target = bar_set, index
+            if not entering:
+                self._hover_tooltip(chart, target, "")
+            elif bar_set in shown and 0 <= index < len(areas):
+                label, cohorts = shown[bar_set]
+                if ids := cohorts[index]:
+                    title = f"{areas[index]} / {label}"
+                    self._hover_tooltip(chart, target, equipment_count_tooltip(title, ids))
+        series.hovered.connect(hovered)
+
+    def _trend_hover(self, chart, series, group, segment, position, hovered):
+        if not hovered:
+            self._hover_tooltip(chart, series, "")
+            return
+        # 선분 위에서는 그 선분을 실제로 구성하는 관측일 중 가장 가까운 값을 보여준다.
+        index, percent = min(segment, key=lambda item: abs(item[0] - position.x()))
+        point = group.points[index]
+        summary = point.summary
+        decided = summary.compliant + summary.below
+        title = f"{point.day:%Y.%m.%d} · {group.label}\n목표 달성 {summary.compliant} / {decided}건 ({percent:.1f}%)"
+        self._hover_tooltip(chart, series, equipment_count_tooltip(title, point.denominator_equipment_ids))
 
     def trend(self, snapshot, visible_groups):
         chart = self._chart()
@@ -147,9 +239,9 @@ class DashboardChart(QChartView):
                 continue
             segments, current = [], []
             for i, point in enumerate(group.points):
-                rate = point.summary.rate
+                rate = trend_point_rate(point)
                 # 관측 부족/분모 없음은 선을 끊는다. 이전 값이나 0%로 채우지 않는다.
-                if rate is None or point.missing_equipment:
+                if rate is None:
                     if current:
                         segments.append(current)
                     current = []
@@ -171,6 +263,11 @@ class DashboardChart(QChartView):
                 chart.addSeries(series)
                 series.attachAxis(x)
                 series.attachAxis(y)
+                series.hovered.connect(partial(self._trend_hover, chart, series, group, segment))
+
+    def leaveEvent(self, event):
+        self._hide_hover_tooltip()
+        super().leaveEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

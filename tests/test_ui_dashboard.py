@@ -11,7 +11,7 @@ from PySide6.QtCharts import QBarSeries, QLineSeries, QPieSeries
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QGraphicsSimpleTextItem, QLabel, QWidget
 
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.risk.schemas import RiskStatus
@@ -134,12 +134,32 @@ def test_fixed_cohort_history_keeps_gaps_and_does_not_copy_old_values(source):
     earlier, current = data.observations
     assert earlier.day == DAY1 and earlier.missing_equipment == 1
     assert earlier.summary.equipment_count == 3
+    assert earlier.denominator_equipment_ids == (1, 5)
     assert current.day == DAY2 and current.missing_equipment == 0
+    assert current.denominator_equipment_ids == (1, 2, 5)
+    o2 = next(group for group in data.trends if group.group_key == "o2")
+    assert o2.points[-1].denominator_equipment_ids == (1, 2)
+    assert (o2.points[-1].summary.compliant, o2.points[-1].summary.below) == (1, 1)
     assert (current.summary.equipment_count, current.summary.compliant, current.summary.below, current.summary.undetermined) == (
         data.summary.equipment_count, data.summary.compliant, data.summary.below, data.summary.undetermined)
     assert [point.day for point in data.observations] == [DAY1, DAY2]
     o3 = source.snapshot(applied(source, QuerySelection(group_key="o3")))
     assert all(p.summary.equipment_count == 1 for p in o3.observations)
+
+
+def test_trend_cohort_uses_point_records_even_when_snapshot_carries_forward(source):
+    records = tuple(replace(record, base_date=DAY1) if record.equipment_id == 2 else record
+                    for record in source.records)
+    source = test_source(records=records)
+    data = source.snapshot(applied(source, QuerySelection(as_of=DAY2, group_key="o2")))
+    assert {record.equipment_id: record.base_date for record in data.selected_records}[2] == DAY1
+    earlier, latest = data.trends[0].points
+    assert earlier.denominator_equipment_ids == (1, 2)
+    assert latest.denominator_equipment_ids == (1,)
+    assert latest.missing_equipment == 1
+
+    earlier_data = source.snapshot(applied(source, QuerySelection(as_of=DAY1, group_key="o2")))
+    assert earlier_data.trends[0].points == (earlier,)
 
 
 @pytest.mark.parametrize("change", ["duplicate_record", "missing_location", "model_collision", "unknown_model", "wrong_parent"])
@@ -195,26 +215,62 @@ def test_kpi_and_matrix_use_the_same_snapshot_and_do_not_treat_risk_as_below(win
     assert page.metrics["risk"].value.text() == "2대"
     assert page.metrics["upgrade"].value.text() == "1대"
     # Figma 셀은 달성률을 크게, 'N 이상/판단 가능' 건수는 아래 줄에, 대수는 툴팁과 접근성 이름에 둔다.
-    assert page.matrix_buttons[len(page.snapshot.rows), 4].text() == "75%"
+    assert page.matrix_buttons[len(page.snapshot.rows), 4].layout().itemAt(0).widget().text() == "75%"
     assert "N 이상 3건 / N 미만 1건" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
     assert "분석 4대" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
     assert page.matrix_buttons[len(page.snapshot.rows), 4].accessibleName() == "전체 전체 전체 설비 4대"
 
 
-def test_general_cell_and_risk_badge_emit_distinct_exact_cohorts(window):
+def test_matrix_distinguishes_site_from_area_and_divides_only_at_site_changes(window):
     page = window.pages["dashboard"]
     window.query_panel.apply_draft()
+    content = page.matrix_scroll.widget()
+    grid = content.layout()
+    locations = content.findChildren(QWidget, "dashboardMatrixLocation")
+    assert [[label.text() for label in location.findChildren(QLabel)] for location in locations] == [
+        ["테스트 A", "P1"], ["구역 미확인"], ["테스트 B", "P1"], ["전체"],
+    ]
+    assert locations[1].findChild(QLabel).accessibleName() == "Site 테스트 A · 원본 구역 미확인"
+    dividers = content.findChildren(QWidget, "dashboardMatrixSiteDivider")
+    assert len(dividers) == 1 and grid.getItemPosition(grid.indexOf(dividers[0])) == (3, 0, 1, 5)
+
+    selected = QSignalSpy(page.drilldown_requested)
+    page.matrix_buttons[3, 4].click()
+    assert selected.count() == 1 and selected.at(0)[0].equipment_ids == (5,)
+
+
+def test_general_cell_and_risk_badge_emit_distinct_exact_cohorts(window):
+    page = window.pages["dashboard"]
+    window.resize(1600, 1080)
+    window.query_panel.apply_draft()
+    QTest.qWait(20)
     spy = QSignalSpy(page.drilldown_requested)
     row = len(page.snapshot.rows)
-    QTest.mouseClick(page.matrix_buttons[row, 4], Qt.MouseButton.LeftButton)
-    normal = spy.at(0)[0]
-    QTest.mouseClick(page.risk_buttons[row, 4], Qt.MouseButton.LeftButton)
-    risk = spy.at(1)[0]
-    assert normal.equipment_ids == (1, 2, 3, 4, 5) and not normal.risk_only
+    main = page.matrix_buttons[row, 4]
+    count = next(widget for widget in main.findChildren(QLabel) if widget.text() == "3/4건")
+    button = page.risk_buttons[row, 4]
+    assert all(f"TEST-{eid}" in main.toolTip() for eid in (1, 2, 3, 4, 5))
+    assert all(f"TEST-{eid}" in button.toolTip() for eid in (1, 5)) and "TEST-2" not in button.toolTip()
+    page.matrix_scroll.ensureWidgetVisible(main)
+    window.scroll.ensureWidgetVisible(main)
+    QTest.qWait(20)
+    for widget, point in ((count, count.rect().center()), (main, QPoint(3, main.height() - 3)),
+                          (button, button.rect().center())):
+        QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=widget.mapTo(window, point))
+    assert spy.count() == 3
+    for index in (0, 1):
+        normal = spy.at(index)[0]
+        assert normal.equipment_ids == (1, 2, 3, 4, 5) and not normal.risk_only
+    risk = spy.at(2)[0]
     assert risk.equipment_ids == (1, 5) and risk.risk_only
     assert risk.query is normal.query is page.snapshot.query
-    assert "6번 작업" in page.selection_notice.text()
     assert window.pages.keys() == {"dashboard"}
+    removed = ("선택:", "설비 목록으로 이동합니다.", "기준 · 목표 N", "라인 미지정 · 현재 원본 구역 기준",
+               "기본 목표 N", "선택한 목표 N", "저장한 N 그룹 반영")
+    for tab in range(page.tabs.count()):
+        page.tabs.setCurrentIndex(tab)
+        visible_labels = [widget.text() for widget in page.findChildren(QLabel) if widget.isVisibleTo(page)]
+        assert not any(fragment in caption for fragment in removed for caption in visible_labels)
 
 
 def test_all_four_views_and_numeric_table_are_driven_by_same_result(window):
@@ -225,14 +281,43 @@ def test_all_four_views_and_numeric_table_are_driven_by_same_result(window):
     assert isinstance(page.chart.chart().series()[0], QPieSeries)
     assert page.chart.chart().series()[0].holeSize() < page.chart.chart().series()[0].pieSize()
     assert [part.value() for part in page.chart.chart().series()[0].slices()] == [3, 1, 1]
+    chips = {widget.text(): widget for widget in page.composition_legend.findChildren(QLabel)
+             if widget.text() in ("달성", "미달", "확인 필요")}
+    assert {name: widget.font().pixelSize() for name, widget in chips.items()} == {"달성": 16, "미달": 16, "확인 필요": 16}
+    assert "달성 · 3건 (60.0%)<br>설비 3대" in chips["달성"].toolTip()
+    assert "미달 · 1건 (20.0%)<br>설비 1대" in chips["미달"].toolTip()
+    assert "확인 필요 · 1건 (20.0%)<br>설비 1대" in chips["확인 필요"].toolTip()
+    assert all("TEST-" not in widget.toolTip() for widget in chips.values())
     page.data_toggle.setChecked(True)
     assert page.data_table.item(0, 2).text() == "60.0%"  # 구성비는 판단 불가 포함 5건이 분모
     page.tabs.setCurrentIndex(2)
     assert isinstance(page.chart.chart().series()[0], QBarSeries)
     assert page.data_table.columnCount() == 3
+    assert not any(widget.text() == "설비 대수 · 복수 SW는 설비군별 집계" and widget.isVisibleTo(page)
+                   for widget in page.findChildren(QLabel))
     page.tabs.setCurrentIndex(3)
     assert page.data_table.columnCount() == 6
     assert page.snapshot is before
+
+
+def test_composition_labels_stay_centered_after_applying_another_site(window):
+    page = window.pages["dashboard"]
+    page.tabs.setCurrentIndex(1)
+    for site, expected in (("s1", ("66.7%", "2 / 3건 목표 달성")),
+                           ("s2", ("100.0%", "1 / 1건 목표 달성"))):
+        window.query_panel.select("site_key", site)
+        window.query_panel.apply_draft()
+        QTest.qWait(20)
+
+        chart = page.chart.chart()
+        labels = {item.text(): item.mapRectToParent(item.boundingRect()) for item in chart.childItems()
+                  if isinstance(item, QGraphicsSimpleTextItem)}
+        rate, caption = (labels[text] for text in expected)
+        center = chart.plotArea().center()
+        assert rate.center().x() == pytest.approx(center.x())
+        assert caption.center().x() == pytest.approx(center.x())
+        assert (rate.top() + caption.bottom()) / 2 == pytest.approx(center.y())
+        assert rate.bottom() < caption.top()
 
 
 def test_chart_legend_only_changes_visibility_not_applied_scope_or_kpis(window):
@@ -250,6 +335,85 @@ def test_chart_legend_only_changes_visibility_not_applied_scope_or_kpis(window):
     assert page.metrics["total"].value.text() == "4대"
 
 
+def test_series_legend_disables_missing_groups_without_losing_site_preferences(window):
+    page, panel = window.pages["dashboard"], window.query_panel
+    o2, o3, inline = page.series_widgets
+    page.tabs.setCurrentIndex(3)
+    panel.select("site_key", "s1")
+    panel.apply_draft()
+    assert o2.isEnabled() and o2.isChecked()
+    assert o3.isEnabled() and o3.isChecked()
+    assert not inline.isEnabled() and not inline.isChecked()
+    inline.click()
+    assert not inline.isChecked() and "inline-o2" in page.visible_groups
+    o3.click()
+    assert o3.isEnabled() and not o3.isChecked()
+
+    panel.select("site_key", "s2")
+    panel.apply_draft()
+    assert not o2.isEnabled() and not o2.isChecked()
+    assert not o3.isEnabled() and not o3.isChecked()
+    assert inline.isEnabled() and inline.isChecked()
+    assert {series.name() for series in page.chart.chart().series()} == {"Inline O2"}
+    trend_style = inline.styleSheet()
+    page.tabs.setCurrentIndex(2)
+    assert not o2.isEnabled() and not o2.isChecked()
+    assert not o3.isEnabled() and not o3.isChecked()
+    assert inline.isEnabled() and inline.isChecked() and inline.styleSheet() == trend_style
+    assert [bar.label() for bar in page.chart.chart().series()[0].barSets()] == ["Inline O2"]
+
+    panel.select("site_key", "s1")
+    panel.apply_draft()
+    assert o2.isEnabled() and o2.isChecked()
+    assert o3.isEnabled() and not o3.isChecked()
+    assert not inline.isEnabled() and not inline.isChecked()
+    assert [bar.label() for bar in page.chart.chart().series()[0].barSets()] == ["O2"]
+    page.tabs.setCurrentIndex(3)
+    assert o2.isEnabled() and o2.isChecked() and not o3.isChecked()
+
+
+@pytest.mark.parametrize("mode", (2, 3))
+def test_series_legend_uses_the_whole_painted_button_as_hit_area(window, mode):
+    page, panel = window.pages["dashboard"], window.query_panel
+    window.resize(1320, 900)
+    panel.select("site_key", "s1")
+    panel.apply_draft()
+    page.tabs.setCurrentIndex(mode)
+    QTest.qWait(30)
+    active, _, disabled = page.series_widgets
+    assert active.isChecked() and not disabled.isEnabled()
+
+    for control in (disabled, active):
+        edge = QPoint(control.width() - 5, control.height() // 2)
+        QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=control.mapTo(window, edge))
+    assert not active.isChecked() and "o2" not in page.visible_groups
+    assert not disabled.isChecked() and "inline-o2" in page.visible_groups
+
+
+def test_trend_legend_requires_a_plottable_point_on_any_observation_day(window, source):
+    page = window.pages["dashboard"]
+    source.records = tuple(
+        replace(record, base_date=DAY1) if record.equipment_id == 2 and record.base_date == DAY2 else
+        replace(record, pms=(replace(record.pms[0], version_raw=None if record.base_date == DAY2 else "v1"),))
+        if record.equipment_id == 5 else
+        record
+        for record in source.records if not (record.equipment_id == 1 and record.base_date == DAY1)
+    )
+    page.tabs.setCurrentIndex(3)
+    window.query_panel.apply_draft()
+
+    o2, _, inline = page.series_widgets
+    o2_trend, _, inline_trend = page.snapshot.trends
+    assert all(point.summary.rate is not None and point.missing_equipment for point in o2_trend.points)
+    assert not o2.isEnabled()  # 분모가 있어도 선택 설비의 관측이 빠진 날짜는 차트에 점이 없다.
+    assert inline_trend.points[0].summary.rate == 0
+    assert inline_trend.points[-1].summary.rate is None
+    assert inline.isEnabled()  # 마지막 날짜의 분모가 없어도 이전의 유효한 점은 표시한다.
+    assert {series.name() for series in page.chart.chart().series()} == {"O3", "Inline O2"}
+    page.tabs.setCurrentIndex(2)
+    assert o2.isEnabled() and o2.isChecked()  # 추이에서 표시할 점이 없어도 막대의 물리 대수는 있다.
+
+
 def test_bar_click_does_not_inherit_global_or_risk_only_scope(window):
     page = window.pages["dashboard"]
     window.query_panel.apply_draft()
@@ -261,6 +425,9 @@ def test_bar_click_does_not_inherit_global_or_risk_only_scope(window):
     series.clicked.emit(index, series.barSets()[0])
     request = spy.at(0)[0]
     assert request.equipment_ids == (1, 2) and not request.risk_only
+    zero_index = next(i for i in range(len(rows)) if series.barSets()[0].at(i) == 0)
+    series.clicked.emit(zero_index, series.barSets()[0])
+    assert spy.count() == 1
 
 
 def test_missing_observation_breaks_trend_line_instead_of_zero_or_forward_fill(window):
@@ -344,7 +511,7 @@ def test_hpa_only_scope_is_excluded_from_counts_but_remains_available_for_lookup
     assert page.metrics["rate"].value.text() == "계산 불가"
     assert page.snapshot.equipment_ids == (4,)
     cell = page.matrix_buttons[len(page.snapshot.rows), 4]
-    assert cell.text() == "분석 제외"
+    assert cell.layout().itemAt(0).widget().text() == "분석 제외"
     assert "N 이상 0건 / N 미만 0건" in cell.toolTip() and "분석 0대 · HPA 제외 1대" in cell.toolTip()
     assert cell.accessibleName() == "전체 전체 전체 설비 0대"
     assert cell.isEnabled()

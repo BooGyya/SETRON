@@ -373,7 +373,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         layout = dashboard.layout()
         layout.removeWidget(dashboard.kpi_grid)
         layout.removeWidget(dashboard.overview)
-        position = layout.indexOf(dashboard.applied_row) + 1
+        position = layout.indexOf(dashboard.result_status) + 1
         first, second = ((dashboard.overview, dashboard.kpi_grid) if value["home"] == "heatmap"
                          else (dashboard.kpi_grid, dashboard.overview))
         layout.insertWidget(position, first)
