@@ -496,11 +496,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             action = drawer.close_panel
         elif window.route == "equipment" and equipment.mode == "detail":
             action = equipment.back_button.click
-        elif window.route == "items" and items.mode == "detail" and items.tabs.currentIndex() == 0:
+        elif window.route == "items" and items.mode == "detail":
             action = items.back_to_list
         elif window.route == "versions" and versions.active_tab == 1 and versions.mode == "detail":
             action = versions.back_to_list
-        window.set_page_back(action, subpage=action is not None and window.route not in ("dashboard", "heatmap"))
+        # 아이템 매니저는 헤더의 ← 버튼을 쓰지 않는다(상세는 같은 행을 다시 눌러 닫는다). 뒤로가기 단축키는 유지한다.
+        window.set_page_back(action, subpage=action is not None and window.route not in ("dashboard", "heatmap", "items"))
 
     def sync_mode(*_):
         sync_back()
@@ -820,7 +821,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     equipment.mode_changed.connect(sync_mode)
     versions.mode_changed.connect(sync_mode)
     items.mode_changed.connect(sync_mode)
-    items.tabs.currentChanged.connect(lambda _: sync_back())
     window.page_changed.connect(sync_mode)
     sync_mode()  # 첫 화면(대시보드)에도 안내 배지 표시 규칙을 바로 적용한다.
     def ensure_loaded(key):
@@ -1006,8 +1006,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         versions.refresh_after_save()
         if preserve_detail and result:
             items.last_saved_rule_id = next((r.key["risk_rule_id"] for r in result.records if r.table == "risk_rule"), None)
-            if items.tabs.currentIndex() == 1:
-                items.manager.pending_rule_id = items.last_saved_rule_id
         items.refresh_after_save(preserve_detail=preserve_detail)
         if preserve_detail and result:
             item_save_notice("저장 완료 · 현재 자료로 다시 조회합니다.", "success")
@@ -1054,7 +1052,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def item_save_notice(text, tone):
         nonlocal item_risk_save_pending
         if item_risk_save_pending:
-            items.show_save_feedback(text, tone)
+            if tone != "success":  # 성공 칩·안내는 띄우지 않고, 실패·결과 미확인만 알린다.
+                items.show_save_feedback(text, tone)
             item_risk_save_pending = False
     management.save_failed.connect(lambda: item_save_notice("저장 실패 · 기존 자료 유지 · 관리 데이터에서 오류를 확인해 주세요.", "danger"))
     management.save_uncertain.connect(lambda: item_save_notice("저장 결과 미확인 · 중복 등록하지 말고 관리 데이터와 DB 기록을 확인해 주세요.", "warning"))

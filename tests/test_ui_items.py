@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
 from setron.features.item.schemas import Application, Item, ItemState, TargetScope, VersionItem
 from setron.features.version.schemas import ReleaseVersion
+from setron.ui.components import StatusBadge
 from setron.ui.app import create_window
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.item_data import ItemManagerData, item_data_from_source
@@ -122,13 +123,17 @@ def test_mixed_pm_missing_sw_and_unregistered_remain_explicit(window, data):
     assert 22 not in page.equipment_model.ids  # 선택 계열의 PM이 없는 설비
 
 
+def chips(page):
+    """적용 현황 요약 칩의 문구."""
+    return [badge.text() for badge in page.summary.findChildren(StatusBadge)]
+
+
 def test_connected_empty_observations_are_zero_not_disconnected(window, data):
     page = window.pages["items"]
     page.loader = lambda: replace(data, records=())
     page.reload()
     page.open_row(0)
-    assert "적용 0대" in page.summary.text()
-    assert "자료가 필요" not in page.summary.text()
+    assert "적용 0대" in chips(page) and page.no_data_notice.isHidden()
     assert page.state_filter.isEnabled()
     assert not page.equipment_model.rows
 
@@ -147,7 +152,7 @@ def test_detail_keyboard_sources_four_states_and_return(window):
     assert {row[3] for row in page.equipment_model.rows} == {"미적용"}
     page.state_filter.setCurrentIndex(0)
     assert {row[3] for row in page.equipment_model.rows} == {"적용", "미적용", "미확인", "대상 외"}
-    assert "HPA 제외 1대" in page.summary.text()
+    assert "HPA 제외 1대" in chips(page)
     assert "2026-01-02" in page.observation_note.text()
     page.state_filter.setCurrentIndex(page.state_filter.findData(Application.UNKNOWN))
     assert len(page.equipment_model.rows) == 2
@@ -201,7 +206,7 @@ def test_unlinked_item_does_not_claim_all_equipment_not_target(window):
     assert not page.open_row(2) and 3 not in page.result_buttons
     assert page.open_item_id(3)
     assert not page.equipment_model.rows
-    assert "미확인" in page.summary.text()
+    assert page.summary.isHidden() and not page.no_data_notice.isHidden() and "연결된 릴리즈가 없어" in page.no_data_reason.text()
     assert not page.state_filter.isEnabled()
     assert "연결된 릴리즈가 없습니다" in page.release_note.text()
 
@@ -212,7 +217,7 @@ def test_custom_version_catalog_does_not_use_demo_observations(app, data):
     page.open_row(0)
     assert not page.data.observations_connected
     assert not page.equipment_model.rows
-    assert "미연결" in page.observation_note.text()
+    assert not page.no_data_notice.isHidden() and "설비 관측 자료가 없어" in page.no_data_reason.text()
     window.close()
 
 
@@ -277,20 +282,19 @@ def test_narrow_window_and_long_original_content(window, data, size):
     assert page.title.text() == "<원문>&" * 250
 
 
-def test_release_note_groups_stored_rows_only_and_opens_detail(window):
+def test_default_family_is_selected_and_search_enabled(window):
     page = window.pages["items"]
     assert page.family_id == 10 and page.family_group.button(10).isChecked()
-    rows = page.release_note_model.rows
-    assert [r[0] for r in rows] == ["v99", "v99", "v2", "v3", "v1000"]
-    assert page.release_note_model.ids == (1, 2, 1, 1, None)
-    assert page.release_note_model.group_starts == {0, 2, 3, 4}
-    assert [r[3] for r in rows[:4]] == ["포함", "포함", "미포함", "포함"]
-    # 순서 미확인 버전은 저장 행이 없으므로 이전 버전 Item을 상속하지 않고 미확인으로 남긴다.
-    assert "저장된 Item 행 없음" in rows[4][2] and "순서 미확인" in page.release_note_model.dates[4]
-    assert "원본 행 미연결" in page.release_subtitle.text() and "관리값" in page.release_subtitle.text()
     assert page.ai_search.isEnabled()
-    assert not page.open_release_row(4)
-    assert page.open_release_row(1) and page.mode == "detail" and page.selected_id == 2
+
+
+def test_items_route_hides_header_back_button_and_keeps_shortcut(window):
+    window.navigate("items")
+    page = window.pages["items"]
+    QTest.qWait(50)
+    page.open_row(0)
+    QTest.qWait(50)
+    assert page.mode == "detail"
+    assert window.header.back.isHidden() and window.back_shortcut.isEnabled()
     page.back_to_list()
-    page.search.setText("다른")
-    assert page.release_note_model.ids == (2,)
+    assert page.mode == "list"

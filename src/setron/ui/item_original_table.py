@@ -2,35 +2,59 @@
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
 
 from setron.ui.appearance import readable_ink, ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
-from setron.ui.theme import INK, SECONDARY, paint_font
+from setron.ui.theme import INK, SECONDARY, font, paint_font, set_widget_font
+
+
+def source_locations(refs):
+    """출처 위치를 '문서 시트 셀 · 셀' 한 문장으로 묶는다. 같은 문서·시트의 셀은 한 줄에 모은다."""
+    groups = {}
+    for ref in refs:
+        cells = groups.setdefault(" ".join(v for v in (ref.document, ref.sheet) if v), [])
+        if ref.cells and ref.cells not in cells:
+            cells.append(ref.cells)
+    parts = [" ".join(v for v in (name, " · ".join(cells)) if v) for name, cells in groups.items()]
+    parts = [p for p in parts if p]
+    return "원본 위치: " + " / ".join(parts) if parts else ""
 
 
 def show_item_source(parent, data, item_id):
+    # PopupDialog는 item_risk_dialog에 있고 그쪽이 이 모듈을 가져오므로 순환을 피하려고 여기서 가져온다.
+    from setron.ui.components import button
+    from setron.ui.item_risk_dialog import PopupDialog, _ClampLabel
     entry = next((e for e in data.versions.items if e.item.item_id == item_id), None)
     if entry is None:
         return
-    dialog = QDialog(parent)
-    dialog.setWindowTitle("아이템 원본 근거")
-    layout = QVBoxLayout(dialog)
-    layout.addWidget(label(entry.item.content, 15, medium=True, wrap=True))
+    dialog = PopupDialog(parent, "아이템 원본 근거")
+    body = dialog.body
+    body.setSpacing(10)
+    content = _ClampLabel(2)
+    set_widget_font(content, font(15, medium=True))
+    content.set_full_text(entry.item.content)
+    body.addWidget(content)
     table = ItemOriginalTable()
-    layout.addWidget(table)
     rows = tuple(r for r in data.versions.original_rows if r.item_id == item_id)
     table.set_rows(rows, (item_id,))
-    for ref in entry.sources:
-        layout.addWidget(label(" · ".join(str(v) for v in (ref.document, ref.sheet, ref.cells) if v), wrap=True))
+    body.addWidget(table)
+    location = source_locations(entry.sources)
+    if location:
+        where = label(location, 12, color=SECONDARY, wrap=True)
+        where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        body.addWidget(where)
     if not rows:
-        layout.addWidget(label("보관된 원본 행이 없습니다. 위 내용은 저장된 관리값입니다.", wrap=True))
-    close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-    close.rejected.connect(dialog.reject)
-    layout.addWidget(close)
-    dialog.resize(720, 360)
+        body.addWidget(label("보관된 원본 행이 없습니다. 위 내용은 저장된 관리값입니다.", 12, color=SECONDARY, wrap=True))
+    footer = QHBoxLayout()
+    footer.addStretch()
+    close = button("닫기", primary=True)
+    close.clicked.connect(dialog.accept)
+    footer.addWidget(close)
+    body.addLayout(footer)
+    dialog.resize(900, 350 if rows else 240)
     dialog.exec()
 
 
@@ -113,6 +137,7 @@ class ItemOriginalTable(QWidget):
         self.documents.setProperty("queryField", True)
         self.documents.setFixedHeight(40)
         self.documents.currentIndexChanged.connect(self.render)
+        self.documents.hide()
         layout.addWidget(self.documents)
         self.position = label("", 12, color=SECONDARY, wrap=True)
         layout.addWidget(self.position)
@@ -135,6 +160,8 @@ class ItemOriginalTable(QWidget):
             self.documents.addItem(f"입력 작업 {key[0]} · {key[1]} · {len(key[2])}개 원본 열", key)
         self.documents.setCurrentIndex(max(0, self.documents.findData(previous)))
         self.documents.blockSignals(False)
+        # 입력 작업이 하나뿐이면 선택할 것이 없으니 콤보 대신 보조 텍스트 한 줄로 낮춘다.
+        self.documents.setVisible(len(keys) > 1)
         self.render()
         self.setVisible(bool(keys))
 
@@ -147,15 +174,32 @@ class ItemOriginalTable(QWidget):
         self.model.ids = tuple(r.item_id for r in rows)
         self.model.highlighted = self.highlighted
         self.model.endResetModel()
-        self.table.base_widths = tuple(330 if any(w in h.casefold() for w in ("내용", "update")) else 135
-                                       for h in self.model.headings)
+        self.table.base_widths = tuple(self._column_width(h) for h in self.model.headings)
         self.table.resizeColumnsToContents()
         for i, width in enumerate(self.table.base_widths):
             self.table.setColumnWidth(i, width)
         self.table.resizeRowsToContents()
-        self.table.setFixedHeight(max(100, min(620, 44 + sum(self.table.rowHeight(i) for i in range(len(rows))))))
-        self.position.setText("원본 행 " + ", ".join(str(r.row) for r in rows)
-                              + " · 저장된 원문 그대로 표시 · 노란색: 검색 근거" if rows else "")
+        self.table.setFixedHeight(max(100, min(620, 44 + self.table.horizontalScrollBar().sizeHint().height() + sum(self.table.rowHeight(i) for i in range(len(rows))))))
+        info = []
+        if key and self.documents.isHidden():
+            info.append(f"입력 작업 {key[0]} · {key[1]} · {len(key[2])}개 원본 열")
+        if rows:
+            info.append("원본 행 " + ", ".join(str(r.row) for r in rows))
+            info.append("저장된 원문 그대로 · 노란색: 검색 근거")
+        self.position.setText(" · ".join(info))
+        self.table.horizontalScrollBar().setValue(0)
+
+    @staticmethod
+    def _column_width(heading):
+        """핵심 열(버전명·No·항목·Update내용)이 가로 스크롤 없이 먼저 보이도록 앞쪽 열은 좁게, 내용 열은 넓게 잡는다."""
+        key = _column_key(heading)
+        if any(w in key for w in ("내용", "update")):
+            return 330
+        if key == "no":
+            return 56
+        if "버전" in key or key in ("항목", "version"):
+            return 100
+        return 110
 
     def activate(self, index):
         if index.isValid() and 0 <= index.row() < len(self.model.ids):

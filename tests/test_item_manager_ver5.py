@@ -3,10 +3,12 @@
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QLabel
 
 from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.management.service import ManagementService
@@ -18,6 +20,7 @@ from setron.ui.app import create_window
 from setron.ui.item_analysis import answer_items
 from setron.ui.item_original import OriginalItemRow, original_item_rows
 from setron.ui.item_risk_dialog import ItemRiskDialog
+from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog
 
 from test_ui_items import app, data
 from test_release_revision import revision_storage, all_rows
@@ -57,23 +60,17 @@ def test_async_search_tab_original_and_stale_answer(app, data):
     window.show()
     window.navigate("items")
     page = window.pages["items"]
-    assert page.tabs.tabText(0) == "아이템 조회" and page.tabs.tabText(1) == "위험 기준 관리"
-    assert page.original.model.headings == ("No", "항목", "REMARK")
-    assert page.original.model.rows == (("7", "다른 Item", "원본 비고"),)
+    assert not hasattr(page, "tabs") and page.manager.isHidden()  # 위험 기준 관리 탭은 없고 필터로 대체됐다.
     original_query = window.query_state.applied
     page.search.setText("다른")
     assert page.search_answer()
     wait_until(lambda: not page.answer_request.busy)
     assert page.answer.item_ids == (2,)
     assert window.query_state.applied == original_query  # 검색만으로 전역 조건은 바뀌지 않는다.
-    assert page.original.model.highlighted == {2}
     assert window.navigate_item_answer("ai", page.answer)
     assert window.route == "ai" and "관련 Item: 2" in window.pages["ai"].input.text()
     assert not window.pages["ai"].busy  # 초안만 전달, 자동 전송 금지
     window.navigate("items")
-    page.tabs.setCurrentIndex(1)
-    assert not page.manager.isHidden() and page.list_view.isHidden()
-    page.tabs.setCurrentIndex(0)
     assert page.manager.isHidden() and not page.list_view.isHidden()
     page.search.setText("없는 질문")
     assert page.answer is None and page.answer_card.isHidden()
@@ -107,18 +104,27 @@ def test_query_candidates_and_rule_drilldown(app, data):
     page.refresh_after_save(preserve_detail=True)
     assert page.selected_id == 1 and page.site_filter.currentData() == "Site A"
     assert page.answer.item_ids == (1, 2) and page.equipment_model.ids == (2,)
-    page.tabs.setCurrentIndex(1)
-    manager = page.manager
-    assert manager.detail_card.isHidden()
-    assert page.result_buttons[1].rule_badge.text() == "등록된 기준 1건 ›"
+    assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건 ›"
     assert page.result_buttons[2].rule_badge is None
-    page.tabs.setCurrentIndex(0)
-    page.result_buttons[1].rule_badge.click()
-    assert page.tabs.currentIndex() == 1
-    assert manager.model.ids == (2,)
-    assert "저장된 버전별 Item 상태" in manager.model.rows[0][4]
-    manager.status_filter.setCurrentIndex(1)
-    assert set(manager.model.ids) == {3, 5}
+    # 배지 툴팁은 기준명 하나만, 부모 행 툴팁에는 기준명을 겹쳐 넣지 않는다(툴팁 중복 방지).
+    assert page.result_buttons[1].toolTip() == "Alarm <원문> & 보존"
+    assert page.result_buttons[1].rule_badge.toolTip() == "필수 기능"
+    # 배지는 상세를 열지 않고 그 Item의 위험 기준 판정 팝업을 연다.
+    page.back_to_list()
+    with patch.object(ItemRuleVerdictDialog, "exec", lambda self: 0):
+        page.result_buttons[1].rule_badge.click()
+    assert page.mode == "list" and page.verdict_dialog.item_id == 1 and page.verdict_dialog.rule.risk_rule_id == 9
+    page.verdict_dialog.deleteLater()
+    page.result_buttons[1].click()
+    page.more_button.setChecked(True)
+    assert page.selected_id == 1 and page.more_button.isChecked()
+    assert "필수 기능" in page.content_rules.text() and "위험 규칙" not in page.content.text()
+    assert "필수 기능" in page.inline_rules.text() and not page.inline_rules.isHidden()
+    # '위험 기준 등록된 Item만 보기' 필터
+    page.registered_only.setChecked(True)
+    assert tuple(page.result_buttons) == (1,) and "검색 결과 1건 · 위험 기준 등록만" == page.count.text()
+    page.registered_only.setChecked(False)
+    assert tuple(page.result_buttons) == (1, 2)
     window.close()
 
 
@@ -179,16 +185,18 @@ def test_risk_dialog_preview_invalidated_cancel_and_explicit_submit(app, data):
     gateway = SimpleNamespace(preview_risk_rule=lambda values, context: impact)
     dialog = ItemRiskDialog(None, data, gateway, lambda: None, lambda values: submitted.append(values) or True)
     dialog.name.setText("안전 필수")
-    dialog.verified.setChecked(True)
     dialog.preview_impact()
     wait_until(lambda: not dialog.request.busy)
-    assert dialog.save_button.isEnabled() and "새 위험 후보 2대" in dialog.preview.text()
+    assert dialog.save_button.isEnabled() and dialog.stat_values["new"].text() == "2" and not dialog.stats.isHidden()
+    # 메모는 영향 계산과 무관하므로 입력해도 등록 버튼이 꺼지지 않고, 메모 입력 뒤 등록 한 번으로 저장된다.
     dialog.memo.setText("변경")
+    assert dialog.save_button.isEnabled()
+    # 영향에 쓰이는 값(기준명 등)을 바꾸면 미리보기를 다시 계산하기 전까지 등록할 수 없다.
+    dialog.name.setText("안전 필수 변경")
     assert not dialog.save_button.isEnabled() and not dialog.save()
     dialog.preview_impact()
     wait_until(lambda: not dialog.request.busy)
-    assert not dialog.save_button.isEnabled()
-    dialog.verified.setChecked(True)
+    assert dialog.save_button.isEnabled()
     assert dialog.save() and len(submitted) == 1
     assert not dialog.save() and len(submitted) == 1  # 같은 창의 중복 저장 금지
     assert submitted[0]["item_manager"]["memo"] == "변경"
@@ -209,16 +217,16 @@ def test_selected_item_and_preview_appear_without_search_or_preview_click(app, d
     dialog.show()
     wait_until(lambda: dialog.preview_valid)
     assert dialog.item_editor.isHidden() and not dialog.item_search.isVisible()
-    assert data.versions.items[1].item.content in dialog.item_note.text()
+    assert data.versions.items[1].item.content in dialog.item_note.toolTip()
     assert len(calls) == 1 and calls[0]["item_id"] == 2
-    assert "원본" in dialog.next_step.text()
+    assert "등록하면" in dialog.save_button.toolTip() and dialog.advanced.isHidden()
     dialog.change_item.click()
     assert dialog.item_search.isVisible()
     dialog.item.setCurrentIndex(dialog.item.findData(1))
     wait_until(lambda: dialog.preview_valid)
-    assert calls[-1]["item_id"] == 1 and not dialog.save_button.isEnabled()
+    assert calls[-1]["item_id"] == 1 and dialog.save_button.isEnabled()  # 확인란 없이 계산 완료 즉시 등록 가능
     dialog.name.clear()
-    wait_until(lambda: dialog.next_step.text() == "기준명을 입력하세요.")
+    wait_until(lambda: dialog.next_step.text() == "위험 기준명을 입력하세요.")
     assert not dialog.save_button.isEnabled()
     dialog.reject()
 
@@ -271,3 +279,57 @@ def test_item_save_failure_notice_survives_followup_reload(app, data, uncertain)
     assert page.status_host.isVisible()
     assert window.pages["management"].locked is uncertain
     window.close()
+
+
+def test_dialog_without_observations_shows_single_clear_empty_state(app, data):
+    impact = SimpleNamespace(problems=(), base_date=None, newly_risky=0, hpa_excluded=0, saveable=True, count=lambda _: 0)
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=lambda values, context: impact), lambda: None,
+                            lambda _: True, family_id=10, item_id=2)
+    dialog.show()
+    wait_until(lambda: dialog.preview_valid)
+    assert dialog.stats.isHidden() and dialog.preview.text() == "설비 관측 자료가 없어 영향 설비를 계산할 수 없습니다."
+    assert dialog.save_button.isEnabled()
+    assert [c.text() for c in dialog.scope_chips][1:] == ["전체 Site", "전체 Line"]
+    assert dialog.item_first_chip.text().startswith("최초 포함 버전") and "미확인인" not in dialog.item_first_chip.text() and dialog.item_first_chip.toolTip() == ""  # 최초 포함 버전을 알면 설명 툴팁이 없다
+    dialog.close()
+
+
+def test_full_detail_without_observations_shows_one_notice_and_no_filters(app, data):
+    empty = replace(data, records=(), base_date=None, observations_connected=False)
+    window = create_window(item_loader=lambda: empty, chat_enabled=True)
+    window.resize(1500, 960)
+    window.show()
+    window.navigate("items")
+    page = window.pages["items"]
+    page.open_row(0)
+    page.more_button.setChecked(True)
+    assert not page.no_data_notice.isHidden() and "설비 관측 자료가 없어" in page.no_data_reason.text()
+    assert page.summary.isHidden() and page.filter_row.isHidden() and page.scope_count.isHidden() and page.equipment_empty.isHidden()
+    assert page.observation_note.isHidden()
+    window.close()
+
+
+def test_family_without_releases_shows_notice_and_disables_search(app, data):
+    no_release = replace(data, versions=replace(data.versions, releases=(), version_items=()))
+    window = create_window(item_loader=lambda: no_release, chat_enabled=True)
+    window.resize(1500, 960)
+    window.show()
+    window.navigate("items")
+    page = window.pages["items"]
+    assert page.search.placeholderText() == page.SEARCH_PLACEHOLDER
+    assert not page.family_notice.isHidden() and "연결된 릴리즈노트 아이템이 없습니다" in page.family_notice_title.text()
+    assert not page.search.isEnabled() and not page.registered_only.isEnabled() and page.empty.isHidden()
+    assert not hasattr(page, "import_button")
+    window.close()
+
+
+def test_popups_are_frameless_modal_without_duplicate_texts(app, data):
+    impact = SimpleNamespace(problems=(), base_date=None, newly_risky=0, hpa_excluded=0, saveable=True, count=lambda _: 0)
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=lambda values, context: impact), lambda: None,
+                            lambda _: True, family_id=10, item_id=2)
+    assert dialog.isModal() and dialog.windowFlags() & Qt.WindowType.FramelessWindowHint
+    texts = [w.text() for w in dialog.findChildren(QLabel)]
+    assert "저장 후 설비별 판정과 대시보드·히트맵 위험 집계에 반영됩니다." not in texts and "관련 릴리즈노트 아이템" not in texts
+    assert dialog.title.full == "위험 기준 등록" and dialog.close_x.accessibleName() == "닫기"
+    assert dialog.change_item.isVisibleTo(dialog)  # 정해진 Item이 있으면 변경 링크가 보인다
+    dialog.close()
