@@ -605,7 +605,8 @@ class HeatmapPage(QWidget):
         compact = not self.view_toggle.isChecked()
         self._set_list_compact(compact)
         rows, tones = [], []
-        for tile in filtered:
+        tooltips = {}
+        for row, tile in enumerate(filtered):
             empty_version = "분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록"
             versions = _version_text(tile, tile.families, show_tier=False, separator="\n", empty=empty_version)
             models = dict.fromkeys(family.title.partition(" · 계열 ")[0] for family in tile.families)
@@ -616,7 +617,9 @@ class HeatmapPage(QWidget):
             risk = tile.risk_label if compact else "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))
             rows.append((tile.code, location, names, versions, tile.goal.value, risk))
             tones.append(tile.version_tone)
-        self.list_model.set_rows(rows, tuple(t.equipment_id for t in filtered), tones)
+            if tile.goal is GoalState.UNKNOWN:
+                tooltips[row, self.list_model.tone_column] = tile.description
+        self.list_model.set_rows(rows, tuple(t.equipment_id for t in filtered), tones, tooltips=tooltips)
         if rows:
             fit_rows(self.list_table, compact=compact)
             if self.selected_id in self.list_model.ids:

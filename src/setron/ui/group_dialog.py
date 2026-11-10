@@ -3,13 +3,13 @@
 - 기본 화면에서는 기준 N을 고르고, 수동 설정을 켜면 버전별 단계를 직접 지정한다.
 - ``check_groups`` 결과를 막힘/경고로 보여 주고, 저장·이력·되돌리기는 저장 서비스(``GroupStore``)를 쓴다.
 - 줄마다 ``tier_of`` 색 단계를 보여 준다. 그룹을 정하기 전(목표 1개)에도 같은 단계로 나온다.
-- 저장하거나 되돌리면 앱에서 현재 조회 조건을 적용한다.
+- 편집하거나 이력을 불러온 기준은 저장에 성공하면 창을 닫아 적용한다.
 """
 
 from collections import Counter
 from html import escape
 
-from PySide6.QtCore import QPoint, QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QSignalBlocker, Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -34,8 +34,6 @@ HISTORY_PAGE_SIZE = 10
 
 
 class VersionGroupDialog(QDialog):
-    criteria_confirmed = Signal()
-
     def __init__(self, source, *, targets=None, group_key=None, pair_key=None, store=None, parent=None):
         super().__init__(parent)
         self.source = source
@@ -47,6 +45,7 @@ class VersionGroupDialog(QDialog):
         self.single = ({(t.model_id, t.family_id): t.release_id for t in targets} if targets is not None
                        else {p.key: p.current_id for p in self.pairs})
         self.drafts: dict[tuple[int, int], dict[int, Slot]] = {}  # 모델·계열 → 릴리즈 ID → 칸
+        self.restore_drafts = {}  # 모델·계열 → 불러온 이력
         self.history_pages: dict[tuple[int, int], GroupHistoryPage] = {}
         self.history_request = ReadRequest(self)
         self.history_request.completed.connect(self._history_loaded)
@@ -164,14 +163,14 @@ class VersionGroupDialog(QDialog):
         body.addWidget(self.status)
         actions = QHBoxLayout()
         actions.addStretch(1)
-        self.close_button = button("닫기")
-        self.close_button.setAutoDefault(False)
-        self.close_button.clicked.connect(self.accept)
+        self.cancel_button = button("취소")
+        self.cancel_button.setAutoDefault(False)
+        self.cancel_button.clicked.connect(self.reject)
         self.save_button = button("저장", primary=True)
         self.save_button.setAutoDefault(False)
-        self.save_button.setToolTip("현재 선택한 설비 모델·계열의 N 기준을 저장합니다.")
+        self.save_button.setToolTip("현재 모델·계열의 N 기준을 저장하고 창을 닫습니다.")
         self.save_button.clicked.connect(self.save)
-        actions.addWidget(self.close_button)
+        actions.addWidget(self.cancel_button)
         actions.addWidget(self.save_button)
         body.addLayout(actions)
         self.pair_combo.currentIndexChanged.connect(self._model_changed)
@@ -297,7 +296,8 @@ class VersionGroupDialog(QDialog):
                                  f"QCheckBox:checked {{background:#edf0fd;border-color:{PRIMARY};}}"
                                  f"QCheckBox:focus {{border:2px solid {PRIMARY};}}")
             choice.setChecked(draft.get(release_id) is Slot.N)
-            choice.toggled.connect(lambda checked, rid=release_id: self.set_slot(rid, Slot.N if checked else None))
+            choice.toggled.connect(lambda checked, rid=release_id: self.set_slot(
+                rid, Slot.N if checked else None, fill_range=checked))
             self.rows.addWidget(choice, row, 0)
             self.version_checks[release_id] = choice
             combo = ComboBox()
@@ -518,74 +518,54 @@ class VersionGroupDialog(QDialog):
         scrollbar.setValue(position)
 
     # --- 동작 ---
-    def set_slot(self, release_id, slot):
+    def set_slot(self, release_id, slot, *, fill_range=False):
         draft = self.draft()
-        if slot is None:
-            draft.pop(release_id, None)
-        else:
-            draft[release_id] = slot
-        choice, combo = self.version_checks[release_id], self.slot_combos[release_id]
-        with QSignalBlocker(choice), QSignalBlocker(combo):
-            choice.setChecked(slot is Slot.N)
-            combo.setCurrentIndex(SLOT_CHOICES.index(slot))
+        release_ids = (release_id,)
+        if fill_range:
+            ordered = list(self.version_checks)
+            selected = [index for index, rid in enumerate(ordered)
+                        if rid == release_id or draft.get(rid) is Slot.N]
+            release_ids = ordered[selected[0]:selected[-1] + 1]
+        for rid in release_ids:
+            if slot is None:
+                draft.pop(rid, None)
+            else:
+                draft[rid] = slot
+            choice, combo = self.version_checks[rid], self.slot_combos[rid]
+            with QSignalBlocker(choice), QSignalBlocker(combo):
+                choice.setChecked(slot is Slot.N)
+                combo.setCurrentIndex(SLOT_CHOICES.index(slot))
         self.status.clear()
         self._refresh()
 
-    def _store_change(self, write, *, restoring=False):
+    def save(self):
         pair, family = self.pair, self.family()
         if pair is None or pair.key not in self.history_pages or pair.key in self._history_reload:
             return False
+        groups = self.groups(pair)
+        entry = self.restore_drafts.get(pair.key)
         try:
-            result = write(pair.key, family)
+            if entry is not None and entry.groups == groups:
+                result = self.store.restore(pair.key, entry.sequence, family=family)
+            else:
+                result = self.store.save(pair.key, groups, family)
         except GroupSaveBlocked as error:
-            self.status.setText(f"{'되돌리지 않았습니다' if restoring else '저장하지 않았습니다'}: {error}")
+            self.status.setText(f"저장하지 않았습니다. {error}")
             return False
         except Exception as error:  # DB 연결·형식 오류는 그대로 안내하고 초안은 유지한다.
-            self.status.setText(f"{'되돌리지 못했습니다' if restoring else '저장하지 못했습니다'}: {error}")
+            self.status.setText(f"저장하지 못했습니다. {error}")
             return False
-        self.drafts[pair.key] = {rid: slot for slot, ids in result.saved.groups.slots.items() for rid in ids}
-        page = self.history_pages[pair.key]
-        refresh_history = result.changed or page.current != result.saved
-        scrollbar = self.scroll.verticalScrollBar()
-        position = scrollbar.value()
-        if refresh_history:
-            self._cancel_history()
-            if restoring:
-                self.history_pages[pair.key] = GroupHistoryPage(result.saved, page.entries, page.next_cursor)
-                if self._extra_history_sequence is not None and self._extra_history_sequence != result.saved.sequence:
-                    position = self._remove_extra_history_row(position)
-                self._show_extra_history_row(result.saved)
-                for entry in page.entries:
-                    self._set_history_row_active(entry, entry.sequence == result.saved.sequence)
-                self._show_history_status()
-            else:
-                self._history_reload.add(pair.key)
-                entries = (result.saved, *page.entries) if result.changed else page.entries
-                self.history_pages[pair.key] = GroupHistoryPage(result.saved, entries[:HISTORY_PAGE_SIZE], None)
-                self._render_history()
-        self._render()
-        if restoring:
-            scrollbar.setValue(position)
-        elif refresh_history:
-            self._request_history(None)
-        if not result.changed:
-            self.status.setText("이미 적용 중인 기준입니다." if restoring else "지금 기준과 같아 저장하지 않았습니다.")
-        else:
-            self.saved_any = True
-            warned = f" · 경고 {len(result.warnings)}건" if result.warnings else ""
-            action = "기준을 되돌렸습니다" if restoring else "저장했습니다"
-            self.status.setText(f"{action}{warned}.")
-        self.criteria_confirmed.emit()
+        self.saved_any = result.changed
+        self.accept()
         return True
 
-    def save(self):
-        if self.pair is None or self.pair.key not in self.history_pages:
-            return False
-        groups = self.groups()
-        return self._store_change(lambda key, family: self.store.save(key, groups, family))
-
     def revert(self, entry):
-        page = self.history_pages.get(self.pair.key) if self.pair is not None else None
+        pair = self.pair
+        page = self.history_pages.get(pair.key) if pair is not None else None
         if page is None or (entry != page.current and entry not in page.entries):
             return False
-        return self._store_change(lambda key, family: self.store.restore(key, entry.sequence, family=family), restoring=True)
+        self.restore_drafts[pair.key] = entry
+        self.drafts[pair.key] = {rid: slot for slot, ids in entry.groups.slots.items() for rid in ids}
+        self._render()
+        self.status.setText("이력의 기준을 불러왔습니다. 저장하면 적용합니다.")
+        return True

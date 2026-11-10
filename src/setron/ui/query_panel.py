@@ -1,11 +1,11 @@
-"""공통 조회 패널. 필터 선택을 확정하면 적용 스냅샷을 발행한다."""
+"""공통 조회 패널. 날짜와 필터 선택이 바뀌면 조회를 요청한다."""
 
 from collections import Counter
 from dataclasses import replace
 from datetime import date
 
 from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
 from setron.ui.calendar_widgets import DateEdit
@@ -105,7 +105,7 @@ class _FilterButton(QPushButton):
 
 class QueryPanel(QWidget):
     applied = Signal(object)  # AppliedQuery: 공통 조건 계약, 데이터 조회 완료 신호가 아님
-    confirmed = Signal()  # 필터·날짜 선택 완료
+    confirmed = Signal()  # 유효한 필터 변경 또는 날짜 확정
     draft_changed = Signal(object)  # QuerySelection
     catalog_changed = Signal(object)  # QueryCatalog
     targets_changed = Signal(object)  # 목표 초안 변경. 조회 적용과 별개
@@ -206,7 +206,7 @@ class QueryPanel(QWidget):
         self.card.body.addWidget(self.actions_row)
         self.version_pending = label("버전 선택 변경 · 다음 조회에 반영", 12, color=SECONDARY)
         self.card.body.addWidget(self.version_pending)
-        self.hint = label("날짜와 필터 선택을 확정하면 바로 조회합니다.",
+        self.hint = label("날짜와 필터를 변경하면 바로 조회합니다.",
                           13, color=SECONDARY, wrap=True)
         self.card.body.addWidget(self.hint)
         self.card.body.addWidget(self.source_label)
@@ -253,22 +253,30 @@ class QueryPanel(QWidget):
         if self.filter_popup is not None:
             self.filter_popup.reject()
         state = self.state
-        original, revision = state.draft, state.catalog_revision
+        expected, revision = state.draft, state.catalog_revision
         anchor = self.combos[field]
+        # 리플레이가 조회 중 카드를 잠가도 열린 팝업에서는 선택을 이어갈 수 있다.
         popup = QueryFilterPopup(FILTER_CAPTIONS[field], self._filter_options(field),
-                                 selection_keys(getattr(original, field)), parent=anchor,
+                                 selection_keys(getattr(expected, field)), parent=self, anchor=anchor,
                                  show_groups=field != "line_key")
         self.filter_popup = popup
         anchor.arrow.set_expanded(True)
 
-        def finish(result):
+        def change(keys):
+            nonlocal expected
+            if state.draft != expected or state.catalog_revision != revision:
+                return
+            self.select(field, keys or None)
+            if state.draft != expected:
+                expected = state.draft
+                self.confirmed.emit()
+
+        def finish(_result):
             self.filter_popup = None
             anchor.arrow.set_expanded(False)
-            if result == QDialog.DialogCode.Accepted and state.draft == original and state.catalog_revision == revision:
-                self.select(field, popup.selected_keys or None)
-                self.confirmed.emit()
             popup.deleteLater()
 
+        popup.selection_changed.connect(change)
         popup.finished.connect(finish)
         popup.open()
 

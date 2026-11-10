@@ -257,12 +257,11 @@ def test_kpi_and_matrix_use_the_same_snapshot_and_do_not_treat_risk_as_below(win
                and card.value.alignment() == Qt.AlignmentFlag.AlignCenter for card in page.metrics.values())
     assert page.metrics["risk"].value.text() == "2대"
     assert page.metrics["upgrade"].value.text() == "1대"
-    # Figma 셀은 달성률을 크게, 'N 이상/판단 가능' 건수는 아래 줄에, 대수는 툴팁과 접근성 이름에 둔다.
-    assert page.matrix_buttons[len(page.snapshot.rows), 4].layout().itemAt(0).widget().text() == "75%"
-    assert "N 이상 3건 / N 미만 1건" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
-    assert "분석 4대" in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
-    assert "TEST-" not in page.matrix_buttons[len(page.snapshot.rows), 4].toolTip()
-    assert page.matrix_buttons[len(page.snapshot.rows), 4].accessibleName() == "전체 전체 전체 설비 4대"
+    total = page.matrix_buttons[len(page.snapshot.rows), 4]
+    assert total.layout().itemAt(0).widget().text() == "75%"
+    assert total.toolTip() == "<qt>전체 / 전체 / 전체<br>N이상 3건<br>N미만 1건<br>정보 부족 1건</qt>"
+    assert total.accessibleName() == "전체 전체 전체 설비 4대"
+    assert page.matrix_buttons[1, 1].toolTip() == "<qt>테스트 A / P1 / O2<br>N이상 1건<br>N미만 1건<br>정보 부족 0건</qt>"
 
 
 def test_matrix_distinguishes_site_from_area_and_divides_only_at_site_changes(window, monkeypatch):
@@ -314,7 +313,6 @@ def test_general_cell_and_risk_badge_emit_distinct_exact_cohorts(window):
     main = page.matrix_buttons[row, 4]
     count = next(widget for widget in main.findChildren(QLabel) if widget.text() == "3/4건")
     button = page.risk_buttons[row, 4]
-    assert "설비 5대" in main.toolTip() and "TEST-" not in main.toolTip()
     assert "설비 2대" in button.toolTip() and "TEST-" not in button.toolTip()
     page.matrix_scroll.ensureWidgetVisible(main)
     window.scroll.ensureWidgetVisible(main)
@@ -569,6 +567,20 @@ def test_unregistered_sw_is_separate_and_prevents_complete_claim(app, source):
     page.apply_query(query)
     matrix = page.matrix_scroll.widget().layout()
     assert "SW 미등록 1대" in matrix.itemAtPosition(0, 0).widget().toolTip()
+    page.deleteLater()
+
+
+def test_matrix_explains_insufficient_information_on_hover(app, source):
+    records = tuple(replace(record, pms=() if record.equipment_id == 1 else
+                            (replace(record.pms[0], version_raw="v9"),))
+                    for record in source.records if record.equipment_id in (1, 2, 3))
+    source = test_source(records=records)
+    state = QueryState(source.catalog)
+    page = DashboardPage(state, source)
+    page.apply_query(state.apply())
+    cell = page.matrix_buttons[len(page.snapshot.rows), 4]
+    assert cell.layout().itemAt(0).widget().text() == "정보 부족"
+    assert cell.toolTip() == "SW 미등록 1대\n릴리즈 노트에 없는 버전 2개"
     page.deleteLater()
 
 

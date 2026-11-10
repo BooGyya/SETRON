@@ -1,6 +1,6 @@
 """공통 조회 조건의 검색 가능한 다중 선택 팝업."""
 
-from PySide6.QtCore import QPoint, QSignalBlocker, Qt
+from PySide6.QtCore import QPoint, QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout, QWidget
 
 from setron.ui.components import button, label
@@ -9,10 +9,13 @@ from setron.ui.version_filter_dialog import VersionChoice
 
 
 class QueryFilterPopup(QDialog):
-    """항목을 확인할 때만 키를 돌려준다. 빈 결과 튜플은 전체 선택을 뜻한다."""
+    """하나 이상 체크된 선택을 즉시 알린다. 빈 결과 튜플은 전체 선택을 뜻한다."""
 
-    def __init__(self, title, options, selected, *, parent, show_groups=True):
+    selection_changed = Signal(object)
+
+    def __init__(self, title, options, selected, *, parent, anchor=None, show_groups=True):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.anchor = parent if anchor is None else anchor
         self.setObjectName("queryFilterPopup")
         self.setWindowTitle(title)
         self.setAccessibleName(title)
@@ -99,7 +102,7 @@ class QueryFilterPopup(QDialog):
         self.show()  # Qt.Popup이 바깥 클릭을 처리하도록 창 모달을 추가하지 않는다.
 
     def showEvent(self, event):  # noqa: N802 - Qt API
-        anchor = self.parentWidget()
+        anchor = self.anchor
         bounds = anchor.screen().availableGeometry()
         width = min(max(anchor.width(), 300), bounds.width())
         origin = anchor.mapToGlobal(QPoint(0, 0))
@@ -143,14 +146,16 @@ class QueryFilterPopup(QDialog):
         self._review()
 
     def _review(self, *_):
-        count = sum(check.isChecked() for check in self.checks.values())
+        selected = tuple(key for key, check in self.checks.items() if check.isChecked())
+        count = len(selected)
         self.all_button.setText("전체 해제" if count and count == len(self.checks) else "전체 선택")
         self.all_button.setEnabled(bool(self.checks))
-        self.count.setText(f"{count}개 선택 중")
+        self.count.setText("하나 이상 선택해 주세요" if not count and self.checks else f"{count}개 선택 중")
         self.confirm_button.setEnabled(count > 0)
+        if selected:
+            self.selected_keys = () if count == len(self.checks) else selected
+            self.selection_changed.emit(self.selected_keys)
 
     def accept(self):
-        selected = tuple(key for key, check in self.checks.items() if check.isChecked())
-        if selected:
-            self.selected_keys = () if len(selected) == len(self.checks) else selected
+        if self.confirm_button.isEnabled():
             super().accept()

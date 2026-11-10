@@ -100,14 +100,16 @@ class ReadTableModel(QAbstractTableModel):
     def __init__(self, headings, *, numeric_columns=(), centered=False, tone_column=4):
         super().__init__()
         self.headings, self.rows, self.ids, self.tones = headings, (), (), ()
+        self.tooltips = {}
         self.numeric_columns = numeric_columns
         self.tone_column = tone_column
         self.alignment = (Qt.AlignmentFlag.AlignCenter if centered else
                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-    def set_rows(self, rows, ids=(), tones=()):
+    def set_rows(self, rows, ids=(), tones=(), *, tooltips=None):
         self.beginResetModel()
         self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
+        self.tooltips = dict(tooltips or {})
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()):
@@ -125,7 +127,9 @@ class ReadTableModel(QAbstractTableModel):
         if not index.isValid():
             return None
         text = self.rows[index.row()][index.column()]
-        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.AccessibleTextRole):
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return self.tooltips.get((index.row(), index.column()), text)
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.AccessibleTextRole):
             return text
         if role == Qt.ItemDataRole.UserRole and self.ids:
             return self.ids[index.row()]

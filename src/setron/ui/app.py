@@ -174,16 +174,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         remembered_pair = last_group_pair or settings.store.version_group_pair()
         dialog = VersionGroupDialog(source, targets=state.target_draft, group_key=single_selection(state.draft.group_key),
                                     pair_key=remembered_pair, parent=window)
-        def apply_criteria():
-            window.query_panel.apply_draft()
-            if window.route == "replay":
-                replay.apply_query()
-
-        dialog.criteria_confirmed.connect(apply_criteria)
         window.group_dialog = dialog
         initial_pair = dialog.pair.key if dialog.pair is not None else None
 
-        def finish(*_):
+        def finish(result):
             nonlocal last_group_pair
             if window.group_dialog is dialog:
                 window.group_dialog = None
@@ -195,6 +189,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                     except OSError:
                         pass  # 개인 설정을 저장하지 못해도 열린 창에서는 선택을 유지한다.
             dialog.deleteLater()
+            if result == VersionGroupDialog.DialogCode.Accepted:
+                window.query_panel.apply_draft()
+                if window.route == "replay":
+                    replay.apply_query()
+                elif replay.data is not None or replay.busy:
+                    replay.invalidate()
 
         dialog.finished.connect(finish)
         dialog.open()

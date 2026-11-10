@@ -107,7 +107,7 @@ class VersionFilterDialog(QDialog):
         actions.addStretch()
         self.cancel_button = button("취소")
         self.cancel_button.clicked.connect(self.reject)
-        self.confirm_button = button("선택 완료", primary=True)
+        self.confirm_button = button("확인", primary=True)
         self.confirm_button.clicked.connect(self.accept)
         for control in (self.cancel_button, self.confirm_button):
             control.setAutoDefault(False)

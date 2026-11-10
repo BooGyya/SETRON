@@ -24,7 +24,7 @@ def test_reasons_are_counted_by_what_the_user_must_fix():
     summary = summarize(records, FAMILIES, {(1, 20): 201})
 
     assert summary.undetermined == 4
-    assert undetermined_breakdown(summary) == "목표 N 미지정 2 · 버전 미입력 1 · 노트에 없는 버전 1"
+    assert undetermined_breakdown(summary) == "목표 N 미지정 2개\n버전 미입력 1개\n릴리즈 노트에 없는 버전 1개"
 
 
 def test_no_undetermined_gives_empty_text():

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 from setron.ui.components import Card, button, label
 from setron.ui.dashboard import TAB_STYLE
 from setron.ui.dashboard_charts import series_button_style, series_color
+from setron.ui.dashboard_data import information_gap_reasons
 from setron.ui.equipment import ignore_width
 from setron.ui.equipment_drawer import EquipmentDrawer
 from setron.ui.heatmap_data import EquipmentSelection
@@ -235,6 +236,10 @@ class ReplayPage(QWidget):
         return started
 
     def _loaded(self, data, error):
+        if self.pending_request is not None and self.pending_request.query.selection != self.state.draft:
+            # 팝업에서 계속 선택할 수 있으므로 읽기가 끝나면 가장 최근 선택으로 다시 조회한다.
+            self.apply_query()
+            return
         if error is not None or not isinstance(data, ReplayData) or data.request != self.pending_request:
             self.data, self.frames = None, ()
             self._notice("관측 자료를 읽지 못했습니다. 날짜와 조건을 확인한 뒤 다시 조회해 주세요.", error=True)
@@ -373,8 +378,10 @@ class ReplayPage(QWidget):
             if frame.at is not None and frame.at != frame.snapshot.base_date:
                 observed += f" · 마지막 저장일 {frame.snapshot.base_date} 기준"
             hpa = f" · HPA {summary.hpa_excluded}대 제외" if groups is None else ""
-            self.achievement.setToolTip(f"{frame.day} · 분석 {summary.equipment_count}대 ({observed}){hpa} · "
-                                        f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
+            tooltip = (f"{frame.day} · 분석 {summary.equipment_count}대 ({observed}){hpa} · "
+                       f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
+            reasons = information_gap_reasons(summary)
+            self.achievement.setToolTip(f"{tooltip}\n정보 부족 사유\n{reasons}" if reasons else tooltip)
             self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
             self.progress.setAccessibleDescription(value)
         self.heatmap.show_frame(self.data, frame, groups)
