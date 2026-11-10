@@ -521,6 +521,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         showing_equipment_result = (window.route == "equipment" and equipment.snapshot is not None
                                     and equipment.item_request is None)
         window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
+        # 데이터 가져오기 화면은 '합성 예시' 안내 박스를 숨긴다. DB 접속 실패 경고는 그대로 보인다.
+        warning = window.data_warning.text()
+        window.data_warning.setVisible(bool(warning) and not (window.route == "import" and warning.startswith("DB 접속 설정이 없어")))
         window.header.toolbar.setVisible(window.route not in {"items", "replay", "versions", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
