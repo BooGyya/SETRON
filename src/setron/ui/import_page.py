@@ -608,7 +608,7 @@ class ImportPage(QWidget):
         release_context.addWidget(_field("설비군 / SW 계열", self.release_family))
         release_context.addWidget(label("릴리즈 노트에는 기준 날짜·Site 대신 계열을 지정합니다. 모델·UI 범위는 추출 결과에서 따로 확인하세요.", 12, color=SECONDARY, wrap=True))
         release_context.addWidget(self.family_apply_button, 0, Qt.AlignmentFlag.AlignLeft)
-        select.body.insertWidget(4, self.release_context)
+        select.body.addWidget(self.release_context)
         self.row_model = _ReviewRowModel(("행", "상태"))
         self.row_model.editor = self._table_edit
         self.row_table = _import_table(self.row_model, "추출 행 목록", (64, 120))
