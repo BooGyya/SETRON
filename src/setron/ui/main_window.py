@@ -35,10 +35,10 @@ MENUS = (
     Menu("items", "아이템 매니저", *_ver5("items")),
     Menu("ai", "AI 분석", *_ver5("ai")),
     Menu("import", "데이터 가져오기", *_ver5("import")),
-    Menu("replay", "Version Replay", *_ver5("replay")),
+    Menu("replay", "버전 리플레이", *_ver5("replay")),
     Menu("versions", "버전 관리", *_ver5("versions")),
     # VER5 사이드바에 없는 기존 메뉴. 기능을 유지하고 데이터 관리 묶음에 둔다.
-    Menu("management", "관리 데이터", *_ver5("management", "settings")),
+    Menu("management", "데이터 관리", *_ver5("management", "settings")),
     Menu("reports", "보고서", *_ver5("reports")),
     Menu("settings", "설정", *_ver5("settings")),
 )
