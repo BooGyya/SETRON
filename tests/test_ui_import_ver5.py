@@ -118,7 +118,8 @@ def test_kind_changes_context_without_inventing_model_mapping(own):
     page = import_page(own)
     page.configure_choices(sites=("화성", "미국"), dates=(date(2026, 10, 21),), families=("C4", "O6"))
     page.kind_combo.setCurrentIndex(page.kind_combo.findData(ExtractKind.RELEASE_NOTE.value))
-    assert page.release_context.isVisibleTo(page) and not page.common_box.isVisibleTo(page)
+    # 릴리즈 노트도 ‘설비군 / SW 계열’ 입력 칸은 화면에 두지 않는다. 기준 날짜·Site 칸도 숨는다.
+    assert not page.release_context.isVisibleTo(page) and not page.common_box.isVisibleTo(page)
     d = draft(row(family_name=None), kind=ExtractKind.RELEASE_NOTE)
     page.draft = d
     page.release_family.setCurrentText("C4")

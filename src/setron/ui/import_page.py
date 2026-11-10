@@ -342,6 +342,7 @@ class ImportPage(QWidget):
         self.excel_request = ReadRequest(self)
         self.excel_request.completed.connect(self._excel_completed)
         self._excel_context = None
+        self._list_focus = False         # 목록 읽기 전 ‘열린 통합문서 불러오기’에 포커스가 있었는지
         self.save_request = ReadRequest(self)
         self.save_request.completed.connect(self._save_completed)
         self.progress_dialog = ImportProgressDialog(self)
@@ -537,8 +538,7 @@ class ImportPage(QWidget):
         common_layout.addWidget(_WrapRow([_field("기준일", self.common_date), _field("Site", self.common_site_combo),
                                           _field("메모리/파운드리", self.common_area), QWidget()], 230, fields=True))
         common_layout.addWidget(_WrapRow([self.common_apply_button, self.common_overwrite], 220))
-        self.common_box = common
-        select.body.insertWidget(3, common)
+        self.common_box = common   # 3단계 카드의 ‘검토 항목’ 바로 위에 번역표 후보 적용과 함께 둔다.
         self.release_context = QFrame()
         release_context = QVBoxLayout(self.release_context)
         release_context.setContentsMargins(0, 0, 0, 0)
@@ -592,6 +592,12 @@ class ImportPage(QWidget):
             widget.setFixedHeight(40)
         editor.addWidget(_WrapRow([self.suggestion_button, self.apply_edit_button, self.revert_button, self.exclude_button], 190))
         review.body.addWidget(self.editor)
+        review.body.addWidget(self.common_box)
+        self.candidate_button = button("번역표 후보 적용")
+        self.candidate_button.setToolTip("원문 모델 표기를 데이터 파트 번역표의 등록 모델로 바꾸고 빈 설비군·계열·UI를 채웁니다. "
+                                         "적용한 값은 사용자 수정으로 기록됩니다.")
+        self.candidate_button.setFixedHeight(40)
+        review.body.addWidget(_WrapRow([self.candidate_button], 200))
         issue_head = QHBoxLayout()
         issue_head.addWidget(label("검토 항목", 15, medium=True), 1)
         self.review_ack_button = button("선택 항목 확인 완료")
@@ -622,16 +628,12 @@ class ImportPage(QWidget):
         self.comparison_card = ComparisonCard()
         save.body.addWidget(self.comparison_card)
         self.save_button = button("검토 완료 · 저장", primary=True)
-        self.candidate_button = button("번역표 후보 적용")
-        self.candidate_button.setToolTip("원문 모델 표기를 데이터 파트 번역표의 등록 모델로 바꾸고 빈 설비군·계열·UI를 채웁니다. "
-                                         "적용한 값은 사용자 수정으로 기록됩니다.")
         self.revalidate_button = button("다시 검사")
         self.requery_button = button("대시보드로 이동")
         self.requery_button.setToolTip("이동만 합니다. 조회 결과를 갱신하려면 조회 적용을 다시 눌러 주세요.")
-        for widget in (self.save_button, self.candidate_button, self.revalidate_button, self.requery_button):
+        for widget in (self.save_button, self.revalidate_button, self.requery_button):
             widget.setFixedHeight(40)
-        save.body.addWidget(_WrapRow([self.save_button, self.candidate_button, self.revalidate_button,
-                                      self.requery_button], 200))
+        save.body.addWidget(_WrapRow([self.save_button, self.revalidate_button, self.requery_button], 200))
         self.result_label = label("", 13, wrap=True)
         self.result_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         save.body.addWidget(self.result_label)
@@ -946,7 +948,7 @@ class ImportPage(QWidget):
             self.row_table.selectRow(ids.index(self.selected_row_id))
         self.editor.setVisible(draft is not None and self.selected_row_id in ids)
         self.common_box.setVisible(self.kind is ExtractKind.EQUIPMENT_STATUS)
-        self.release_context.setVisible(self.kind is ExtractKind.RELEASE_NOTE)
+        self.release_context.hide()   # 릴리즈 노트의 ‘설비군 / SW 계열’ 입력은 화면에서 뺀다 (계열은 추출 결과에서 확인).
         self.comparison_card.setVisible(self.kind is ExtractKind.EQUIPMENT_STATUS)
         for widget in (self.common_date, self.common_site, self.common_site_combo, self.common_area, self.common_overwrite, self.release_family):
             widget.setEnabled(not self.busy and not self.locked)
@@ -1107,6 +1109,11 @@ class ImportPage(QWidget):
         if self.busy:
             return False
         self._excel_context = ("list", self.generation, self.workbook_combo.currentData(), self.state)
+        # 누른 버튼이 읽는 동안 꺼지면 Qt가 다음 칸(2. 원본 미리보기 표)으로 포커스를 넘기며 화면을 내린다.
+        # 미리 포커스를 풀어 두고, 목록을 다 읽으면 통합문서 선택 칸으로 돌려준다.
+        self._list_focus = self.list_button.hasFocus()
+        if self._list_focus:
+            self.list_button.clearFocus()
         self.state = "listing"
         self._set_status("통합문서 확인 중", "info", "실행 중인 Excel의 통합문서 목록을 읽고 있습니다.")
         self._render()
@@ -1277,6 +1284,9 @@ class ImportPage(QWidget):
         if context[0] == "list":
             self.state = context[3]
             self._workbooks_completed(result, error, context[2])
+            if self._list_focus:          # 누른 자리(1단계)에 포커스를 돌려 화면이 내려가지 않게 한다.
+                self._list_focus = False
+                (self.workbook_combo if self.workbook_combo.count() else self.list_button).setFocus()
             return
         workbook = context[2]
         if error is not None:
