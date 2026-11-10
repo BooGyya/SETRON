@@ -441,7 +441,7 @@ class DashboardPage(QWidget):
         self.context.clear()
         self.applied_row.hide()
         try:
-            if self.state.catalog != self.source.catalog:
+            if not self.state.catalog.is_view_of(self.source.catalog):
                 raise ValueError("조회 선택지와 데이터 공급자의 매핑이 다릅니다.")
             result = self.source.snapshot(query)
         except HpaClassificationConflict as error:

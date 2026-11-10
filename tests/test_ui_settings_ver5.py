@@ -157,6 +157,22 @@ def test_location_stale_confirm_blocked_and_addition_validation(own, theme):
     assert dialog.result() == QDialog.DialogCode.Accepted
 
 
+def test_personal_choices_allow_the_same_query_on_all_result_pages(own, theme):
+    _, store = theme
+    source = demo_dashboard_source()
+    group = source.catalog.groups[0]
+    store.save("personal", {**store.personal(), "lines": [], "groups": [group.key]})
+    window = own(create_window(source))
+    assert not window.query_state.catalog.lines
+    assert window.query_state.catalog.groups == (group,)
+
+    window.query_panel.apply_button.click()
+    snapshot = window.pages["dashboard"].snapshot
+    assert snapshot is not None and snapshot.equipment_ids
+    assert window.pages["heatmap"].snapshot is snapshot
+    assert window.pages["equipment"].snapshot is snapshot
+
+
 def test_whole_app_dark_existing_new_widgets_charts_and_light_restore(own, theme):
     current, store = theme
     w = own(create_window())

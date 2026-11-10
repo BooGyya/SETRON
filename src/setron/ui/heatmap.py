@@ -507,7 +507,8 @@ class HeatmapPage(QWidget):
         return "0대", "위험 후보 0대"
 
     def accept_result(self, query, result):
-        if not self.state.is_current(query) or result.query is not query or self.state.catalog != self.source.catalog:
+        if (not self.state.is_current(query) or result.query is not query
+                or not self.state.catalog.is_view_of(self.source.catalog)):
             return False
         self.tiles = equipment_tiles(result, self.source)
         self.snapshot, self.selected_id = result, None

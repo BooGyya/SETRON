@@ -697,7 +697,8 @@ class EquipmentPage(QWidget):
         self._render_list()
 
     def accept_result(self, query, snapshot):
-        if not self.state.is_current(query) or snapshot.query is not query or self.source.catalog != self.state.catalog:
+        if (not self.state.is_current(query) or snapshot.query is not query
+                or not self.state.catalog.is_view_of(self.source.catalog)):
             return False
         try:
             data = equipment_data(snapshot, self.source)

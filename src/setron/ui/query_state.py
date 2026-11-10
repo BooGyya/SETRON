@@ -84,6 +84,16 @@ class QueryCatalog:
     groups: tuple[GroupOption, ...] = ()
     source_label: str = "등록된 조회 선택지"
 
+    def is_view_of(self, catalog: "QueryCatalog") -> bool:
+        """개인 설정으로 Line·설비군을 숨겨도 남은 선택지는 같은 매핑이어야 한다."""
+        return (
+            self.sites == catalog.sites
+            and self.fabs == catalog.fabs
+            and self.source_label == catalog.source_label
+            and set(self.lines).issubset(catalog.lines)
+            and set(self.groups).issubset(catalog.groups)
+        )
+
     def __post_init__(self):
         types = (SiteOption, FabOption, LineOption, GroupOption)
         for field, option_type in zip(("sites", "fabs", "lines", "groups"), types):

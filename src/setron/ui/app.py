@@ -133,7 +133,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             return
         state = window.query_state
         generation = state.catalog_revision
-        current = lambda: state.catalog_revision == generation and state.catalog == source.catalog
+        current = lambda: state.catalog_revision == generation and state.catalog.is_view_of(source.catalog)
         if hasattr(source, "align_targets"):
             # DB 공급자는 조회 때마다 다시 읽으므로 새로 저장된 모델·계열을 목표 초안에 맞춘다.
             try:
@@ -194,7 +194,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dialog.open()
 
     window.query_panel.goal_button.clicked.connect(open_groups)
-    window.query_panel.catalog_changed.connect(lambda *_: window.query_panel.goal_button.setEnabled(window.query_state.catalog == source.catalog))
+    window.query_panel.catalog_changed.connect(
+        lambda catalog: window.query_panel.goal_button.setEnabled(catalog.is_view_of(source.catalog))
+    )
     dashboard = DashboardPage(window.query_state, source, drilldown_connected=True)
     heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
     equipment = EquipmentPage(window.query_state, source)
@@ -361,6 +363,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.navigate("management")
     settings.management_requested.connect(settings_management)
 
+    def personal_query_catalog(catalog, value):
+        return replace(catalog,
+            lines=tuple(o for o in catalog.lines if value["lines"] is None or o.key in value["lines"]),
+            groups=tuple(o for o in catalog.groups if value["groups"] is None or o.key in value["groups"]))
+
     def apply_personal(value):
         window.set_menu_order(value["order"])
         layout = dashboard.layout()
@@ -371,10 +378,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                          else (dashboard.kpi_grid, dashboard.overview))
         layout.insertWidget(position, first)
         layout.insertWidget(position + 1, second)
-        catalog = source.catalog
-        selected = replace(catalog,
-            lines=tuple(o for o in catalog.lines if value["lines"] is None or o.key in value["lines"]),
-            groups=tuple(o for o in catalog.groups if value["groups"] is None or o.key in value["groups"]))
+        selected = personal_query_catalog(source.catalog, value)
         if selected != window.query_state.catalog:
             window.set_query_catalog(selected)
     settings.personal_changed.connect(apply_personal)
@@ -952,6 +956,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         except RuntimeError as error:
             window.notice.setText(str(error))
             return False
+        catalog = personal_query_catalog(catalog, settings.personal)
         if catalog == window.query_state.catalog:
             return False
         state = window.query_state
