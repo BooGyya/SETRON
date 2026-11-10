@@ -47,6 +47,7 @@ from setron.features.excel_import.comparison import ComparisonScopeError, compar
 from setron.ui.import_widgets import ComparisonCard, PeriodDateField, ImportComparison, ImportSteps, Toast, import_combo_style, picture
 from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
 from setron.ui.import_tasks import discover_workbooks, read_workbook
+from setron.ui.sql_import_page import SqlImportPage
 from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font, set_widget_font, paint_font
 from setron.ui.versions import _field, _fit
 
@@ -373,7 +374,7 @@ class ImportPage(QWidget):
 
     def __init__(self, excel=None, extractor=None, saver=None, *, reference=None, confirm=None,
                  refresh_context_provider=None, release_review_chooser=None, sheet_extractor=None, rule_extractor=None,
-                 comparison_loader=None, delete_gateway=None, reset_confirm=None):
+                 comparison_loader=None, delete_gateway=None, reset_confirm=None, sql_importer=None):
         super().__init__()
         self.excel = excel if excel is not None else excel_reader
         self.extractor = extractor
@@ -416,12 +417,13 @@ class ImportPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(12)
-        self.tab_strip = QWidget()      # 탭이 하나만 남으면 앱 조립에서 줄째 숨긴다 (11-10 2차 7-1)
+        self.tab_strip = QWidget()
         tab_row = QHBoxLayout(self.tab_strip)
         tab_row.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabBar()
-        self.tabs.addTab("가져오기")
+        self.tabs.addTab("Excel")
         self.tabs.addTab("저장된 데이터 삭제")
+        self.tabs.addTab("SQL")
         self.tabs.setExpanding(False)
         self.tabs.setAccessibleName("데이터 가져오기 화면 선택")
         self.tabs.setStyleSheet("QTabBar::tab {background:transparent;border:0;border-radius:0;padding:8px 10px;color:#5b6880;}"
@@ -431,7 +433,8 @@ class ImportPage(QWidget):
         outer.addWidget(self.tab_strip)
         self.workspace = QStackedWidget()
         self.import_scroll, self.delete_scroll = QScrollArea(), QScrollArea()
-        for scroll in (self.import_scroll, self.delete_scroll):
+        sql_scroll = QScrollArea()
+        for scroll in (self.import_scroll, self.delete_scroll, sql_scroll):
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QFrame.Shape.NoFrame)
             scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -689,8 +692,12 @@ class ImportPage(QWidget):
         self.delete_scroll.verticalScrollBar().rangeChanged.connect(lambda *_: self._sync_delete_step())
         self.workspace.addWidget(self.import_scroll)
         self.workspace.addWidget(self.delete_scroll)
+        self.sql_page = SqlImportPage(sql_importer)
+        sql_scroll.setWidget(self.sql_page)
+        self.workspace.addWidget(sql_scroll)
         outer.addWidget(self.workspace, 1)
         self.tabs.currentChanged.connect(self._tab_changed)
+        self.sql_page.busy_changed.connect(self._sync_tabs)
         self.deletion.kind_combo.currentIndexChanged.connect(self._sync_delete_steps_visibility)
         self.deletion.busy_changed.connect(self._sync_tabs)
         self.deletion.busy_changed.connect(self._sync_progress)
@@ -753,7 +760,7 @@ class ImportPage(QWidget):
         self._sync_delete_step()
 
     def _sync_tabs(self):
-        self.tabs.setEnabled(not self.busy and not self.deletion.busy)
+        self.tabs.setEnabled(not self.busy and not self.deletion.busy and not self.sql_page.busy)
         self.reset_button.setEnabled(self._can_reset_import())
 
     def _can_reset_import(self):
@@ -785,7 +792,7 @@ class ImportPage(QWidget):
         self.progress_dialog.set_operation(key, title, text, visible=self.isVisible())
 
     def _tab_changed(self, index):
-        if self.busy or self.deletion.busy:
+        if self.busy or self.deletion.busy or self.sql_page.busy:
             self.tabs.blockSignals(True)
             self.tabs.setCurrentIndex(self.workspace.currentIndex())
             self.tabs.blockSignals(False)
@@ -1597,8 +1604,9 @@ class ImportPage(QWidget):
         - 자료 종류를 바꿨으면 True. 진행 중인 다른 작업을 지키느라 그대로 뒀으면 False.
         """
         requested = ExtractKind.RELEASE_NOTE if kind == "release" else ExtractKind.EQUIPMENT_STATUS
-        if not self.busy and not self.locked and not self.deletion.busy and (
+        if not self.busy and not self.locked and not self.deletion.busy and not self.sql_page.busy and (
                 self.draft is None or self.draft.kind is requested or self.state == "saved"):
+            self.tabs.setCurrentIndex(0)
             self.kind_combo.setCurrentIndex(self.kind_combo.findData(requested.value))
             return True
         if self.kind is not requested:

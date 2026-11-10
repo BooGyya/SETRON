@@ -251,11 +251,12 @@ def test_progress_and_tabs_stay_fixed_when_import_content_scrolls(own):
     extracted(page)
     QTest.qWait(50)
     before = page.steps.mapTo(window, QPoint()).y()
+    tab_y = page.tab_strip.mapTo(window, QPoint()).y()
     page.jump_to_step(3)
     QTest.qWait(50)
     assert page.import_scroll.verticalScrollBar().value() > 0
     assert page.steps.mapTo(window, QPoint()).y() == before
-    assert not page.tab_strip.isVisibleTo(window)   # 앱에서는 탭이 하나만 남아 탭 줄을 숨긴다
+    assert page.tab_strip.isVisibleTo(window) and page.tab_strip.mapTo(window, QPoint()).y() == tab_y
     assert page.mapTo(window, QPoint(0, page.height())).y() <= window.height()
 
 

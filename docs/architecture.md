@@ -631,7 +631,11 @@ DB 공급자는 `ui/database_source.py`의 `database_catalog()`로 저장 현황
 
 ### DB 전체 SQL 내보내기 (Jira S15P31B106-76)
 
-`features/db_export/service.py`의 `export_database(database, path)`가 관리 테이블(`TABLE_NAMES`) 13개의 구조(`SHOW CREATE TABLE`)와 모든 행을 한 트랜잭션에서 읽어 .sql 파일로 저장한다(멘토링 2차, REQ-054). 받은 사람이 빈 DB에서 실행하면 같은 자료와 AUTO_INCREMENT 값이 들어간다. `DROP TABLE`을 넣지 않으므로 같은 테이블이 있는 DB에서는 첫 `CREATE TABLE`에서 멈추고 기존 자료를 바꾸지 않는다. 다른 PC 자료의 가져오기·병합은 보류(REQ-055)다. 실행 중에만 외래키 검사를 끄고, 임시 파일에 다 쓴 뒤 이름을 바꿔 실패해도 반쯤 쓴 파일이 남지 않는다. 값은 pymysql의 `escape`로 적는다. 실패는 예외 대신 `ExportResult`로 돌려준다.
+`features/db_export/service.py`의 `export_database(database, path)`가 관리 테이블(`TABLE_NAMES`) 13개의 구조(`SHOW CREATE TABLE`)와 모든 행을 한 트랜잭션에서 읽어 .sql 파일로 저장한다(멘토링 2차, REQ-054). 받은 사람이 빈 DB에서 실행하면 같은 자료와 AUTO_INCREMENT 값이 들어간다. `DROP TABLE`을 넣지 않으므로 같은 테이블이 있는 DB에서는 첫 `CREATE TABLE`에서 멈추고 기존 자료를 바꾸지 않는다. 실행 중에만 외래키 검사를 끄고, 임시 파일에 다 쓴 뒤 이름을 바꿔 실패해도 반쯤 쓴 파일이 남지 않는다. 값은 pymysql의 `escape`로 적는다. 실패는 예외 대신 `ExportResult`로 돌려준다.
+
+### DB 전체 SQL 가져오기
+
+`features/db_import/`는 SETRON 백업의 13개 관리 테이블에서 행 값만 읽고, 대상 DB의 업무 키와 연결 관계로 병합 계획을 만든다. 사용자가 추가·덮어쓰기 방식과 변경 건수를 확인한 뒤 같은 대상 상태인지 잠금 상태에서 다시 확인하고 변경을 한 트랜잭션으로 저장한다. 다른 DB에서 같은 숫자 ID를 쓰는 경우에도 연결은 새 대상 ID에 맞춰 저장한다.
 
 화면에서는 상단 '데이터 내보내기' 버튼으로 실행한다. `SETRON_DB_*` 설정이 있을 때만 `ui/database_source.sql_exporter_from_env()`가 내보내기 함수를 만들고 버튼을 켠다. 저장 위치를 묻고 결과를 알림창으로 알린다. `tests/test_db_export_mysql.py`가 실제 MySQL에서 내보내기 → 테이블 삭제 → 파일 실행 → 내용·AUTO_INCREMENT 일치를 확인한다.
 
