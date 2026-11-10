@@ -415,10 +415,15 @@ class ThemeManager(QObject):
                 widget.set_arrow_pixmap(pixmap)
             else:
                 widget.setPixmap(pixmap)
-        if callable(getattr(widget, "icon", None)) and hasattr(widget, "setIcon") and not widget.property("fixedColorIcon"):
+        getter = getattr(widget, "icon", None)
+        current_icon = (getter() if callable(getter) and hasattr(widget, "setIcon")
+                        and not widget.property("fixedColorIcon") else None)
+        # QMessageBox.icon()은 그림(QIcon)이 아니라 종류(물음표·경고)를 돌려준다. 그림일 때만 테마 색을 입힌다.
+        # (11/11: 확인창이 뜰 때마다 'Icon' object has no attribute 'isNull' 오류가 이어져 확인창이 답을 못 돌려주던 문제)
+        if isinstance(current_icon, QIcon):
             original_icon = widget.property("setronOriginalIcon")
-            if original_icon is None and not widget.icon().isNull():
-                original_icon = widget.icon()
+            if original_icon is None and not current_icon.isNull():
+                original_icon = current_icon
                 widget.setProperty("setronOriginalIcon", original_icon)
             if original_icon is not None:
                 widget.setIcon(self.themed_icon(original_icon, widget.iconSize()))

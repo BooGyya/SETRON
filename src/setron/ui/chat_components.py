@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QStyle, QStyledItemDelegate,
     QStyleOptionViewItem, QVBoxLayout, QLayout, QWidget, QProxyStyle, QStyleFactory, QCheckBox, QRadioButton,
@@ -26,9 +26,61 @@ def asset_label(filename, *, slot=None):
     return widget
 
 
+TRON = Path(__file__).resolve().parent / "assets" / "tron"      # SETRON 보조 캐릭터 '트론' (11/11)
+AVATAR_SIZE = 36
+
+
+def _ratio() -> float:
+    screen = QGuiApplication.primaryScreen()
+    return screen.devicePixelRatio() if screen is not None else 1.0
+
+
+def tron_pixmap(name: str, height: int) -> QPixmap | None:
+    """트론 그림을 높이에 맞춰 선명하게 줄인다. 파일이 없으면 None (예전 아이콘을 쓴다)."""
+    source = QPixmap(str(TRON / f"{name}.png"))
+    if source.isNull():
+        return None
+    ratio = _ratio()
+    result = source.scaledToHeight(round(height * ratio), Qt.TransformationMode.SmoothTransformation)
+    result.setDevicePixelRatio(ratio)
+    return result
+
+
+def _round_face(size: int) -> QPixmap | None:
+    """동그라미 안에 트론 얼굴 (잘린 가장자리는 동그라미가 가린다)."""
+    face = QPixmap(str(TRON / "tron-face.png"))
+    if face.isNull():
+        return None
+    ratio = _ratio()
+    side = round(size * ratio)
+    result = QPixmap(side, side)
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    circle = QPainterPath()
+    circle.addEllipse(QRectF(0, 0, side, side))
+    painter.fillPath(circle, ui_color("#ebeffd"))
+    painter.setClipPath(circle)
+    scaled = face.scaledToWidth(round(side * 0.9), Qt.TransformationMode.SmoothTransformation)
+    painter.drawPixmap(round((side - scaled.width()) / 2), round(side * 0.2), scaled)      # 머리 위 파란 줄까지 보이게
+    painter.end()
+    result.setDevicePixelRatio(ratio)
+    return result
+
+
 def avatar():
-    widget = asset_label("./9d5d2.svg", slot=36)
-    widget.setStyleSheet("background: #ebeffd; border-radius: 18px;")
+    """AI 답·분석 중 카드 옆 동그라미. 트론 얼굴을 쓰고, 그림이 없으면 예전 별 아이콘."""
+    face = _round_face(AVATAR_SIZE)
+    if face is None:
+        widget = asset_label("./9d5d2.svg", slot=AVATAR_SIZE)
+        widget.setStyleSheet("background: #ebeffd; border-radius: 18px;")
+    else:
+        widget = QLabel()
+        widget.setProperty("tronImage", "tron/tron-face.png")   # 'assetFile'이면 테마 관리자가 SVG로 다시 그려 빈 그림이 된다
+        widget.setPixmap(face)
+        widget.setFixedSize(AVATAR_SIZE, AVATAR_SIZE)
+        widget.setStyleSheet("background: transparent;")
     widget.setObjectName("aiAvatar")
     return widget
 
