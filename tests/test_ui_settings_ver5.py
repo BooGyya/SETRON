@@ -5,10 +5,13 @@ import json
 from threading import Event
 
 import pytest
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QPoint, QRect, QSettings, Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QGraphicsSimpleTextItem, QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QColorDialog, QDialog, QDialogButtonBox, QGraphicsSimpleTextItem,
+    QLabel, QLineEdit, QPushButton, QWidget,
+)
 
 from setron.ui.appearance import contrasting, manager, ui_color
 from setron.ui.appearance_data import ACCENTS, Appearance, PersonalSettings
@@ -400,6 +403,51 @@ def test_accent_presets_align_with_custom_color_field(own, theme):
         for b in p.accent_buttons.values():
             assert b.mapTo(p, QPoint()).y() == field_y
             assert b.height() == field.height()
+        picker = p.color_picker_buttons["accent"]
+        assert picker.mapTo(p, QPoint()).y() == field_y
+        assert picker.height() == field.height()
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_color_palettes_use_current_color_preview_and_save(own, theme, mode):
+    current, store = theme
+    applied = Appearance(mode=mode)
+    current.apply(applied)
+    p = page(own, theme)
+    values = {"met": "#25823f", "below": "#d7b54e", "risk": "#d46165",
+              "rate": "#5c71c9", "accent": "#167e92", "canvas": "#304759", "surface": "#4b5864"}
+    assert set(p.color_picker_buttons) == set(values)
+
+    def open_palette(key):
+        p.color_picker_buttons[key].click()
+        dialog = next(d for d in p.findChildren(QColorDialog) if d.isVisible())
+        assert dialog.currentColor().name().upper() == p.fields[key].text()
+        return dialog
+
+    dialog = open_palette("accent")
+    dialog.setCurrentColor(QColor("#AB12CD"))
+    dialog.reject()
+    assert p.draft == applied
+    for key, value in values.items():
+        dialog = open_palette(key)
+        dialog.setCurrentColor(QColor(value))
+        confirm = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Ok)
+        assert confirm.text() == "확인"
+        confirm.click()
+        assert p.fields[key].text() == value.upper()
+        swatch = p.color_picker_buttons[key]
+        assert swatch.icon().pixmap(swatch.iconSize()).toImage().pixelColor(9, 9) == QColor(value)
+
+    assert p.draft.palette == "custom"
+    assert current.appearance == applied
+    assert store.appearance() == Appearance()
+    if mode == "dark":
+        assert p.draft.dark_colors == values and p.draft.canvas is None
+    else:
+        assert p.draft.dark_colors == {}
+    assert p.save_appearance()
+    until(lambda: not p.operation.busy)
+    assert store.appearance() == current.appearance == p.draft
 
 
 def test_clicking_settings_options_keeps_control_fonts_and_heights(own, theme):
@@ -441,6 +489,68 @@ def test_accent_palette_checked_buttons_render_blue_in_dark_mode(own, theme):
     p.update_draft(accent="#124567")
     assert not any(b.isChecked() for b in p.accent_buttons.values())
     assert p.custom_accent_label.palette().color(QPalette.ColorRole.WindowText).name() == current.tokens["accent"]
+
+
+def test_canvas_live_preview_is_not_saved_and_clears_on_cancel_or_leave(own, theme):
+    current, store = theme
+    window = own(create_window())
+    window.navigate("settings")
+    p = window.pages["settings"]
+    canvas = window.scroll.widget()
+    baseline = current.tokens["canvas"]
+
+    def background():
+        return canvas.grab(QRect(4, 4, 1, 1)).toImage().pixelColor(0, 0).name()
+
+    p.color_picker_buttons["canvas"].click()
+    picker = next(d for d in p.findChildren(QColorDialog) if d.isVisible())
+    picker.setCurrentColor(QColor("#ecd2b8"))
+    assert background() == "#ecd2b8"
+    assert p.draft.canvas is None
+    picker.reject()
+    assert background() == baseline
+
+    field = p.fields["canvas"]
+    field.setText("#C8DDED")
+    field.textEdited.emit(field.text())
+    assert background() == "#c8dded"
+    p._edit_color("canvas")
+    assert current.tokens["canvas"] == baseline and store.appearance().canvas is None
+    p.cancel_button.click()
+    assert background() == baseline
+
+    p.update_draft(canvas="#e9e1d4")
+    assert background() == "#e9e1d4"
+    window.navigate("dashboard")
+    assert background() == baseline
+    window.navigate("settings")
+    assert p.fields["canvas"].text() == baseline.upper()
+
+
+def test_settings_preview_scroll_follows_only_in_wide_layout(own, theme):
+    window = own(create_window())
+    window.resize(1660, 700)
+    window.navigate("settings")
+    p = window.pages["settings"]
+    scroll = window.scroll.verticalScrollBar()
+    viewport = window.scroll.viewport()
+    QApplication.processEvents()
+    assert p.appearance_row.width() >= p.preview_column.breakpoint
+    before = p.preview.mapTo(viewport, QPoint()).y()
+    maximum = scroll.maximum()
+    assert maximum > before
+    scroll.setValue(min(maximum, before + 50))
+    QApplication.processEvents()
+    assert p.preview.y() > 0
+    assert 0 <= p.preview.mapTo(viewport, QPoint()).y() <= before
+    assert scroll.maximum() == maximum
+
+    window.resize(960, 700)
+    QApplication.processEvents()
+    scroll.setValue(scroll.maximum())
+    QApplication.processEvents()
+    assert p.preview.y() == 0
+    assert p.preview_column.y() >= p.appearance_row.left.geometry().bottom()
 
 
 def test_management_save_progress_success_failure_unknown_and_no_duplicate(own, theme):

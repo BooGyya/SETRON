@@ -368,9 +368,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("reports", reports, uses_query=False)
     window.page_changed.connect(lambda key: reports.enter() if key == "reports" else None)
     window.register_page("management", management, uses_query=False)
-    settings = SettingsPage()
+    settings = SettingsPage(scroll_area=window.scroll, preview_background=window.canvas.set_preview_background)
     window.register_page("settings", settings, uses_query=False)
-    window.page_changed.connect(lambda key: settings.enter() if key == "settings" else None)
+    window.page_changed.connect(lambda key: settings.enter() if key == "settings" else settings.leave())
 
     def navigate_item_answer(route, answer):
         if answer is None or answer is not items.answer or answer.data is not items.data:
