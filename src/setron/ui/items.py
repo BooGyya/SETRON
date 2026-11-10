@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 
 from setron.infrastructure.excel_reader import open_source_cell
 from setron.features.item.schemas import APPLICATION_LABELS, Application, Basis, ItemState
-from setron.ui.appearance import ui_color
+from setron.ui.appearance import readable_ink, ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
@@ -224,18 +224,21 @@ class _VersionDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         model = index.model()
         painter.save()
+        fill = ui_color("white")
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, ui_color("#edf0fd"))
+            fill = ui_color("#edf0fd")
+            painter.fillRect(option.rect, fill)
         elif model.ids and model.ids[index.row()] in model.highlighted:
-            painter.fillRect(option.rect, ui_color("#fff6d2"))
+            fill = ui_color("#fff6d2")
+            painter.fillRect(option.rect, fill)
         painter.setPen(ui_color("#dee0e5"))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
         if index.row() in model.group_starts:
             rect = option.rect.adjusted(12, 9, -8, -9)
-            painter.setPen(ui_color(INK))
+            painter.setPen(readable_ink(ui_color(INK), fill))
             painter.setFont(paint_font(13, medium=True))
             painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, index.data())
-            painter.setPen(ui_color(SECONDARY))
+            painter.setPen(readable_ink(ui_color(SECONDARY), fill))
             painter.setFont(paint_font(11))
             painter.drawText(rect.adjusted(0, 19, 0, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                              model.dates[index.row()])

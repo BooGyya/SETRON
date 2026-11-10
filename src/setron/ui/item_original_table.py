@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
 
-from setron.ui.appearance import ui_color
+from setron.ui.appearance import readable_ink, ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
@@ -54,10 +54,11 @@ class EvidenceDelegate(QStyledItemDelegate):
             return super().paint(painter, option, index)
         painter.save()
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        painter.fillRect(option.rect, ui_color("#edf0fd" if selected else "#fff6d2" if highlighted else "white"))
+        fill = ui_color("#edf0fd" if selected else "#fff6d2" if highlighted else "white")
+        painter.fillRect(option.rect, fill)
         painter.setPen(ui_color("#dee0e5"))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
-        painter.setPen(foreground if foreground is not None else ui_color(INK))
+        painter.setPen(readable_ink(foreground if foreground is not None else ui_color(INK), fill))
         painter.setFont(paint_font(12, medium=True) if highlighted else index.data(Qt.ItemDataRole.FontRole))
         painter.drawText(option.rect.adjusted(12, 6, -12, -6),
                          index.data(Qt.ItemDataRole.TextAlignmentRole) | Qt.TextFlag.TextWordWrap,

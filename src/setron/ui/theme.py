@@ -88,7 +88,6 @@ def install_theme(app: QApplication) -> None:
     app.setStyle("Fusion")
     app.setFont(font())
     app.setStyleSheet("""
-        QWidget { color: #142033; }
         QMainWindow, QWidget#canvas { background: #f5f6f8; }
         QFrame#sidebar { background: white; border: none; border-right: 1px solid #d5d7da; }
         QWidget#sidebarContent { background: white; }
@@ -151,7 +150,7 @@ def install_theme(app: QApplication) -> None:
         QScrollBar::handle:horizontal { background: #cbd3e1; border-radius: 5px; min-width: 32px; }
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
         QToolTip { background-color: palette(tooltip-base); color: palette(tooltip-text);
-                   border: 1px solid #d5d7da; padding: 8px; font-size: 14px; }
+                   border: 1px solid #d5d7da; padding: 8px; }
         QMessageBox { background: #f5f6f8; }
     """)
     from setron.ui.appearance import install_appearance

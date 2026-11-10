@@ -589,7 +589,7 @@ def test_heatmap_reuses_tiles_and_matches_version_heatmap_presentation(own):
     reference_tile = reference.tile_buttons[control.data.equipment_id]
     assert control.code_label.alignment() == reference_tile.code_label.alignment() == Qt.AlignmentFlag.AlignCenter
     assert control.version_label.text() == reference_tile.version_label.text()
-    assert control.style_text == reference_tile.style_text and ":hover" in control.style_text
+    assert control.styleSheet() == reference_tile.styleSheet() and ":hover" in control.styleSheet()
     assert control.toolTip() == reference_tile.toolTip() == control.data.description
     assert heatmap.group_cards[0].styleSheet() == card.styleSheet()
     assert heatmap.group_cards[0].layout().spacing() == card.layout().spacing()
