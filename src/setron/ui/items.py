@@ -3,11 +3,11 @@
 from dataclasses import replace
 from html import escape
 
-from PySide6.QtCore import QPoint, QRect, QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu, QPushButton, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QSizePolicy,
+    QStyle, QStyledItemDelegate, QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 from setron.infrastructure.excel_reader import open_source_cell
@@ -26,9 +26,10 @@ from setron.ui.item_risk_dialog import _ClampLabel, warning_icon
 from setron.ui.item_risk_page import ItemRiskPage
 from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, category, repeats_item
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import ACCENT_SOFT, INK, PRIMARY, SECONDARY, TONES, font, set_widget_font
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, PRIMARY, SECONDARY, TONES, font, set_widget_font
 from setron.ui.versions import VersionsPage, _fit
 from setron.ui.read_worker import BackgroundRead, ReadRequest
+from setron.ui.version_data import family_display_name
 from setron.ui.source_notice import source_description, observation_description
 
 
@@ -44,56 +45,82 @@ class _ItemResultButton(QPushButton):
 
     rule_requested = Signal(int)
 
-    def __init__(self, content, rules):
+    def __init__(self):
+        """행 위젯은 한 번만 만들어 목록을 다시 그릴 때마다 set_content로 내용만 바꿔 재사용한다."""
         super().__init__()
-        self.setAccessibleName(content)
-        self.setToolTip(content)
         self.setCheckable(True)
         self.setAutoDefault(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.keyboard_focus = False  # 키보드(Tab)로 포커스했을 때만 포커스 링을 그린다(focus-visible).
         self.setStyleSheet(
             "QPushButton {background:white;border:0;border-top:1px solid #e5eaf3;"
             "border-bottom:1px solid transparent;border-left:3px solid transparent;border-radius:0;padding:0;min-height:46px;max-height:46px;}"
-            "QPushButton:hover {background:#f7f9fc;}"
+            "QPushButton:hover {background:#f5f6f8;}"
             "QPushButton:checked {background:#edf0fd;}"
-            'QPushButton[keyboardFocus="true"]:focus {border:1px dashed #66708a;border-left-width:3px;}'
+            "QPushButton:checked:hover {background:#e4e9fb;}"
         )
         row = QHBoxLayout(self)
         row.setContentsMargins(17, 0, 16, 0)
-        self.caption = label(content, 15, medium=True)
+        self.caption = label("", 15, medium=True)
         self.caption.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        arrow = DisclosureArrow()
-        for widget in (self.caption, arrow):
+        self.arrow = DisclosureArrow()
+        # 같은 제목이 여러 릴리즈에 나올 때 구분하는 작은 보조 텍스트. 고정 슬롯이라 제목 말줄임이 먼저 줄어든다.
+        self.version = ""
+        self.version_label = label("", 12, color=SECONDARY)
+        self.version_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        for widget in (self.caption, self.version_label, self.arrow):
             widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         row.addWidget(self.caption, 1)
-        self.rule_badge = None
+        row.addWidget(self.version_label)
+        # 부모가 없는 위젯에 setVisible(True)를 하면 빈 최상위 창이 잠깐 뜨므로, 보이기는 레이아웃에 넣은 뒤에 정한다.
+        self.version_label.hide()
+        self._badge = button("")
+        self._badge.setIcon(warning_icon())
+        self._badge.setStyleSheet(f"QPushButton {{background:{TONES['warning'][0]};color:{TONES['warning'][1]};border:1px solid {TONES['warning'][2]};border-radius:4px;padding:2px 8px;min-height:23px;max-height:23px;}}")
+        self._single_rule = None
+        self._badge.clicked.connect(self._badge_clicked)
+        row.addWidget(self._badge)
+        self._badge.hide()
+        row.addWidget(self.arrow)
+        self.rule_badge = None  # 위험 기준이 있는 행에서만 배지 위젯을 가리킨다.
+        self.toggled.connect(self.arrow.set_expanded)
+
+    def _badge_clicked(self):
+        if self._single_rule is not None:
+            self.rule_requested.emit(self._single_rule)
+
+    def set_content(self, content, rules, version="", version_tip=""):
+        self.setAccessibleName(content)
+        # 긴 제목은 한 줄로 줄이고 전체 제목을 툴팁으로 보여 준다. 릴리즈 정보도 같은 툴팁 하나에 합친다.
+        self.setToolTip(content + (f"\n{version_tip}" if version_tip else ""))
+        self.setAccessibleDescription(f"포함 릴리즈 {version}" if version else "")
+        self.version = version
+        self.version_label.setText(self.version_label.fontMetrics().elidedText(version, Qt.TextElideMode.ElideMiddle, 168))
+        self.version_label.setVisible(bool(version))
+        self._single_rule = rules[0].risk_rule_id if len(rules) == 1 else None
+        self._badge.setMenu(None)
         if rules:
-            self.rule_badge = button(f"위험 기준 {len(rules)}건 ›")
-            self.rule_badge.setIcon(warning_icon())
-            self.rule_badge.setStyleSheet(f"QPushButton {{background:{TONES['warning'][0]};color:{TONES['warning'][1]};border:1px solid {TONES['warning'][2]};border-radius:4px;padding:2px 8px;min-height:23px;max-height:23px;}}")
-            if len(rules) == 1:
-                self.rule_badge.clicked.connect(lambda: self.rule_requested.emit(rules[0].risk_rule_id))
-            else:
-                menu = QMenu(self.rule_badge)
+            self._badge.setText(f"위험 기준 {len(rules)}건 ›")
+            if len(rules) > 1:
+                menu = QMenu(self._badge)
                 for rule in rules:
                     action = menu.addAction(rule.display_name or rule.risk_reason)
                     action.triggered.connect(lambda checked=False, rid=rule.risk_rule_id: self.rule_requested.emit(rid))
-                self.rule_badge.setMenu(menu)
+                self._badge.setMenu(menu)
             names = "\n".join(rule.display_name or rule.risk_reason for rule in rules)
             # 부모 행과 배지가 같은 기준명을 각자 툴팁으로 갖고 있으면 배지 위에서 두 번 뜬다.
             # 행 툴팁은 Item 내용만, 기준명은 배지 툴팁 하나로만 보여 준다.
             self.setAccessibleDescription(f"등록된 위험 기준 {len(rules)}건. {names}")
-            self.rule_badge.setToolTip(names)
-            row.addWidget(self.rule_badge)
-        row.addWidget(arrow)
-        self.toggled.connect(arrow.set_expanded)
+            self._badge.setToolTip(names)
+        self._badge.setVisible(bool(rules))
+        self.rule_badge = self._badge if rules else None
+        self.setChecked(False)
+        self._elide()
 
     def _mark_keyboard_focus(self, enabled):
-        if self.property("keyboardFocus") != enabled:
-            self.setProperty("keyboardFocus", enabled)
-            self.style().unpolish(self)
-            self.style().polish(self)
+        if self.keyboard_focus != enabled:
+            self.keyboard_focus = enabled
             self.update()
 
     def focusInEvent(self, event):
@@ -101,14 +128,32 @@ class _ItemResultButton(QPushButton):
                                                      Qt.FocusReason.ShortcutFocusReason))
         super().focusInEvent(event)
 
+    def focusOutEvent(self, event):
+        self._mark_keyboard_focus(False)
+        super().focusOutEvent(event)
+
     def mousePressEvent(self, event):
         self._mark_keyboard_focus(False)
         super().mousePressEvent(event)
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.keyboard_focus and self.hasFocus():
+            # 점선 테두리 대신 둥근 모서리의 실선 링. 스타일시트 테두리를 건드리지 않아 레이아웃이 밀리지 않는다.
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor(PRIMARY), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 6, 6)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        badge_width = self.rule_badge.sizeHint().width() + self.layout().spacing() if self.rule_badge else 0
-        available = max(0, self.width() - 64 - badge_width)
+        self._elide()
+
+    def _elide(self):
+        badge_width = self._badge.sizeHint().width() + self.layout().spacing() if self.rule_badge else 0
+        version_width = self.version_label.sizeHint().width() + self.layout().spacing() if self.version else 0
+        available = max(0, self.width() - 64 - badge_width - version_width)
         self.caption.setText(self.caption.fontMetrics().elidedText(self.accessibleName(), Qt.TextElideMode.ElideRight, available))
 
 
@@ -125,84 +170,158 @@ def _style_raw_table(table):
     table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
 
-class _FlowLayout(QLayout):
-    """칩을 너비에 맞춰 줄바꿈한다. 좁은 창에서 가로 스크롤을 만들지 않는다."""
+class _PageBar(QWidget):
+    """« ‹ 1 2 3 4 5 … 54 › » 형태의 번호 페이지 이동. 번호 슬롯은 최대 7개라 좁은 창에서도 한 줄에 들어간다.
 
-    def __init__(self, parent, spacing):
-        super().__init__(parent)
-        self.items, self.gap = [], spacing
-        self.setContentsMargins(0, 0, 0, 0)
+    '…'를 누르면 해당 방향으로 10페이지 이동한다. 입력 칸이나 팝업 없이 54쪽 같은 긴 목록에서도
+    몇 번 눌러 가까이 갈 수 있고, 키보드 포커스·접근성 흐름이 번호 버튼과 같다.
+    """
 
-    def addItem(self, item):
-        self.items.append(item)
+    page_requested = Signal(int)  # 0부터 시작하는 페이지
+    slots = 7
+    jump = 10
 
-    def count(self):
-        return len(self.items)
+    def __init__(self):
+        super().__init__()
+        self.current, self.total = 0, 1
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self.first = self._make("«", "첫 페이지", lambda: self.page_requested.emit(0))
+        self.previous = self._make("‹", "이전 페이지", lambda: self.page_requested.emit(self.current - 1))
+        self.numbers = [self._make("", "", None) for _ in range(self.slots)]
+        self.next = self._make("›", "다음 페이지", lambda: self.page_requested.emit(self.current + 1))
+        self.last = self._make("»", "마지막 페이지", lambda: self.page_requested.emit(self.total - 1))
+        for widget in (self.first, self.previous, *self.numbers, self.next, self.last):
+            row.addWidget(widget)
+        for slot in self.numbers:
+            slot.clicked.connect(lambda checked=False, s=slot: self.page_requested.emit(s.target))
+            slot.hide()
+        self.setStyleSheet(
+            f"QPushButton#pageButton {{background:transparent;border:1px solid transparent;border-radius:8px;color:{INK};"
+            "padding:0;min-width:34px;max-width:60px;min-height:34px;max-height:34px;}"
+            "QPushButton#pageButton:hover {background:#f5f6f8;}"
+            f"QPushButton#pageButton[current=\"true\"] {{background:{ACCENT_SOFT};border-color:{ACCENT_SOFT};color:{PRIMARY};}}"
+            "QPushButton#pageButton:disabled {color:#a0a8b8;}"
+            f"QPushButton#pageButton:focus {{border:2px solid {PRIMARY};}}"
+        )
 
-    def itemAt(self, index):
-        return self.items[index] if 0 <= index < len(self.items) else None
+    def _make(self, text, name, handler):
+        widget = QPushButton(text)
+        widget.setObjectName("pageButton")
+        widget.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_widget_font(widget, font(14, medium=True))
+        widget.setAccessibleName(name)
+        widget.setToolTip(name)
+        widget.target = 0
+        if handler is not None:
+            widget.clicked.connect(handler)
+        return widget
 
-    def takeAt(self, index):
-        return self.items.pop(index) if 0 <= index < len(self.items) else None
+    def window_tokens(self):
+        """표시할 번호 목록. 정수는 1부터 시작하는 페이지, 'L'/'R'은 왼쪽/오른쪽 말줄임."""
+        total, page = self.total, self.current + 1
+        if total <= self.slots:
+            return list(range(1, total + 1))
+        if page <= 4:
+            return [1, 2, 3, 4, 5, "R", total]
+        if page >= total - 3:
+            return [1, "L", *range(total - 4, total + 1)]
+        return [1, "L", page - 1, page, page + 1, "R", total]
 
-    def expandingDirections(self):
-        return Qt.Orientation(0)
-
-    def hasHeightForWidth(self):
-        return True
-
-    def heightForWidth(self, width):
-        return self._arrange(QRect(0, 0, width, 0), apply=False)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._arrange(rect, apply=True)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for item in self.items:
-            size = size.expandedTo(item.minimumSize())
-        return size
-
-    def _arrange(self, rect, *, apply):
-        lines, current, x = [], [], rect.x()
-        for item in self.items:
-            if item.widget() is not None and item.widget().isHidden():
+    def set_state(self, current, total):
+        self.current, self.total = current, max(1, total)
+        tokens = self.window_tokens()
+        self.setVisible(self.total > 1)
+        for slot, token in zip(self.numbers, tokens + [None] * (self.slots - len(tokens))):
+            slot.setVisible(token is not None)
+            if token is None:
                 continue
-            hint = item.sizeHint()
-            if current and x + hint.width() > rect.right() + 1:
-                lines.append(current)
-                current, x = [], rect.x()
-            current.append((item, x, hint))
-            x += hint.width() + self.gap
-        if current:
-            lines.append(current)
-        y = rect.y()
-        for line in lines:
-            height = max(hint.height() for _, _, hint in line)
-            if apply:
-                for item, left, hint in line:
-                    item.setGeometry(QRect(QPoint(left, y + (height - hint.height()) // 2), hint))
-            y += height + self.gap
-        return max(0, y - self.gap - rect.y())
+            is_gap = token in ("L", "R")
+            if is_gap:
+                slot.target = max(1, self.current - self.jump) if token == "L" else min(self.total - 2, self.current + self.jump)
+                slot.setText("…")
+                name = f"{self.jump}페이지 {'앞' if token == 'L' else '뒤'}로 이동"
+                slot.setAccessibleName(name)
+                slot.setToolTip(name)
+            else:
+                slot.target = token - 1
+                slot.setText(str(token))
+                slot.setAccessibleName(f"{token}페이지로 이동")
+                slot.setToolTip(f"{token}페이지로 이동" + (" (현재)" if token - 1 == self.current else ""))
+            current_slot = not is_gap and token - 1 == self.current
+            slot.setProperty("current", current_slot)
+            slot.setAccessibleDescription("현재 페이지" if current_slot else "")
+            slot.style().unpolish(slot)
+            slot.style().polish(slot)
+        self.first.setEnabled(self.current > 0)
+        self.previous.setEnabled(self.current > 0)
+        self.next.setEnabled(self.current + 1 < self.total)
+        self.last.setEnabled(self.current + 1 < self.total)
 
 
-def _chip(text):
-    chip = QPushButton(text)
-    chip.setCheckable(True)
-    chip.setCursor(Qt.CursorShape.PointingHandCursor)
-    set_widget_font(chip, font(14, medium=True))
-    chip.setObjectName("familyChip")
-    chip.setFixedHeight(36)
-    chip.setStyleSheet("QPushButton#familyChip {background:transparent;border:1px solid transparent;border-radius:10px;"
-                       f"padding:0 12px;min-height:34px;max-height:34px;color:{INK};}}"
-                       "QPushButton#familyChip:hover {background:#f5f6f8;}"
-                       f"QPushButton#familyChip:checked {{background:{ACCENT_SOFT};border-color:{ACCENT_SOFT};color:{PRIMARY};}}"
-                       f"QPushButton#familyChip:focus {{border:2px solid {PRIMARY};}}")
-    return chip
+class _DimmedItemDelegate(QStyledItemDelegate):
+    """자료 없는 계열 항목을 보조색으로 그린다. 스타일시트의 항목 색이 ForegroundRole을 덮어서 직접 적용한다.
+    키보드 하이라이트·선택 상태에서는 기본 색을 유지해 대비를 지킨다."""
+
+    def paint(self, painter, option, index):
+        brush = index.data(Qt.ItemDataRole.ForegroundRole)
+        if brush is None or option.state & (QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_MouseOver):
+            return super().paint(painter, option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget).adjusted(2, 0, -2, 0)
+        painter.save()
+        painter.setPen(brush.color())
+        painter.setFont(opt.font)
+        painter.drawText(rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text)
+        painter.restore()
+
+
+class _Toolbar(QWidget):
+    """계열 선택·필터(왼쪽)와 검색(오른쪽)을 한 줄에 두고, 폭이 모자라면 검색만 아래 줄로 내린다."""
+
+    gap = 16
+    search_minimum = 200
+
+    def __init__(self, leading, trailing):
+        super().__init__()
+        self.leading, self.trailing, self.stacked = leading, trailing, None
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(self.gap)
+        self.grid.setVerticalSpacing(12)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._arrange(False)
+
+    def minimumSizeHint(self):
+        # 한 줄 폭을 부모 최소 폭으로 강제하면 줄바꿈이 일어나지 않는다.
+        return QSize(0, self.grid.minimumSize().height())
+
+    def _arrange(self, stacked):
+        if self.stacked == stacked:
+            return
+        self.grid.removeWidget(self.leading)
+        self.grid.removeWidget(self.trailing)
+        self.grid.setColumnStretch(0, 0)
+        self.grid.setColumnStretch(1, 0)
+        if stacked:
+            self.grid.addWidget(self.leading, 0, 0, 1, 2)
+            self.grid.addWidget(self.trailing, 1, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+        else:
+            self.grid.addWidget(self.leading, 0, 0)
+            self.grid.addWidget(self.trailing, 0, 1, Qt.AlignmentFlag.AlignRight)
+            self.grid.setColumnStretch(1, 1)
+        self.stacked = stacked
+        self.updateGeometry()
+
+    def resizeEvent(self, event):
+        needed = self.leading.sizeHint().width() + self.gap + max(self.trailing.width(), self.search_minimum)
+        self._arrange(event.size().width() < needed)
+        super().resizeEvent(event)
 
 
 class ItemsPage(QWidget):
@@ -241,6 +360,7 @@ class ItemsPage(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
         self.family_id = None
+        self.family_item_counts = {}
         self.status = StatusBadge("Item 자료 확인 중", "info")
         self.notice = _text()
         self.status_host = QWidget()
@@ -255,33 +375,21 @@ class ItemsPage(QWidget):
         for layout in (listing, detail):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(16)
-        # Figma 08 설비군 선택: 저장된 SW 계열만 칩으로 표시한다.
-        card = Card(padding=16)
-        card.setProperty("outlined", True)
-        card.body.setContentsMargins(16, 12, 16, 12)
-        top = QHBoxLayout()
-        top.setSpacing(12)
+        # SW 계열은 드롭다운으로 고른다. 계열 수가 늘어도 툴바 높이가 변하지 않는다.
         self.family_title = label("SW 계열", 14, medium=True)
-        top.addWidget(self.family_title)
-        top.addStretch()
-        self.family_host = QWidget()
-        self.family_host.setAccessibleName("설비군 선택 항목")
-        self.family_flow = _FlowLayout(self.family_host, 8)
-        self.family_group = QButtonGroup(self)
-        self.family_group.setExclusive(True)
-        self.family_group.idClicked.connect(self.select_family)
-        self.family_empty = label("", 13, color=SECONDARY, wrap=True)
-        card.body.addLayout(top)
-        # 제목을 선택지와 같은 흐름에 넣지 않아, 줄바꿈 후에도 하나의 선택 영역으로 읽힌다.
-        self.family_choices = QFrame()
-        self.family_choices.setObjectName("itemFamilyChoices")
-        self.family_choices.setStyleSheet("QFrame#itemFamilyChoices {background:transparent;border:0;}")
-        choices = QVBoxLayout(self.family_choices)
-        choices.setContentsMargins(0, 0, 0, 0)
-        choices.addWidget(self.family_host)
-        card.body.addWidget(self.family_choices)
-        listing.addWidget(card)
-        # 검색창은 결과 제목 줄 오른쪽에 작게 둔다(폭 고정). 엔터 또는 검색 버튼으로 실행한다.
+        self.family_combo = ComboBox()
+        self.family_combo.setAccessibleName("SW 계열")
+        self.family_combo.setProperty("queryField", True)
+        self.family_combo.setFixedSize(240, 40)
+        self.family_combo.setMaxVisibleItems(10)
+        self.family_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        caret = (ASSETS / "caret-down.svg").as_posix()
+        self.family_combo.setStyleSheet("QComboBox {padding-right:28px;} QComboBox::drop-down {border:0;width:28px;}"
+                                        f"QComboBox::down-arrow {{image:url({caret});width:12px;height:12px;}}")
+        self.family_combo.setItemDelegate(_DimmedItemDelegate(self.family_combo))
+        self.family_title.setBuddy(self.family_combo)
+        self.family_combo.currentIndexChanged.connect(self._family_combo_changed)
+        # 검색창은 툴바 오른쪽에 작게 둔다(폭 고정). 엔터 또는 검색 버튼으로 실행한다.
         bar = QFrame()
         bar.setObjectName("itemSearchBar")
         bar.setFixedWidth(280)
@@ -326,13 +434,26 @@ class ItemsPage(QWidget):
         self.registered_only.setAccessibleName("위험 기준 등록된 Item만 보기")
         self.registered_only.setCursor(Qt.CursorShape.PointingHandCursor)
         self.registered_only.toggled.connect(self._registered_filter_changed)
-        heading_row = QHBoxLayout()
-        heading_row.setSpacing(16)
+        # 한 줄 툴바: [SW 계열 ▾ · 위험 기준 등록 필터] ····· [검색]. 그 아래에 결과 제목을 둔다.
+        leading = QWidget()
+        leading_row = QHBoxLayout(leading)
+        leading_row.setContentsMargins(0, 0, 0, 0)
+        leading_row.setSpacing(8)
+        leading_row.addWidget(self.family_title, 0, Qt.AlignmentFlag.AlignVCenter)
+        leading_row.addWidget(self.family_combo, 0, Qt.AlignmentFlag.AlignVCenter)
+        leading_row.addSpacing(8)
+        leading_row.addWidget(self.registered_only, 0, Qt.AlignmentFlag.AlignVCenter)
+        leading_row.addStretch()
+        self.toolbar = _Toolbar(leading, bar)
+        self.toolbar.setObjectName("itemToolbar")
+        card.body.addWidget(self.toolbar)
+        card.body.addSpacing(4)
         self.count.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        heading_row.addWidget(self.count, 1, Qt.AlignmentFlag.AlignVCenter)
-        heading_row.addWidget(self.registered_only, 0, Qt.AlignmentFlag.AlignVCenter)
-        heading_row.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
-        card.body.addLayout(heading_row)
+        card.body.addWidget(self.count)
+        setTabOrder = QWidget.setTabOrder
+        setTabOrder(self.family_combo, self.registered_only)
+        setTabOrder(self.registered_only, self.search)
+        setTabOrder(self.search, self.ai_search)
         # 선택한 계열에 릴리즈노트가 없으면 결과 자리에 이 안내 한 블록만 두고 검색·필터는 끈다.
         self.family_notice = QFrame()
         self.family_notice.setObjectName("familyNotice")
@@ -350,16 +471,19 @@ class ItemsPage(QWidget):
         self.result_rows.setSpacing(0)
         card.body.addLayout(self.result_rows)
         self.result_buttons = {}
+        self.row_pool = []
         self.empty = _text()
         card.body.addWidget(self.empty)
         controls = QHBoxLayout()
-        self.previous, self.next, self.refresh = button("이전"), button("다음"), button("다시 불러오기")
-        self.page_label = label("", 13)
-        self.previous.clicked.connect(lambda: self.change_page(-1))
-        self.next.clicked.connect(lambda: self.change_page(1))
+        self.refresh = button("다시 불러오기")
+        self.page_total = 1
+        self.page_bar = _PageBar()
+        self.page_bar.page_requested.connect(self.go_to_page)
+        # 기존 이름 유지: 이전/다음/처음/끝 버튼.
+        self.first_page, self.previous, self.next, self.last_page = (
+            self.page_bar.first, self.page_bar.previous, self.page_bar.next, self.page_bar.last)
         self.refresh.clicked.connect(self.reload)
-        for widget in (self.previous, self.page_label, self.next):
-            controls.addWidget(widget)
+        controls.addWidget(self.page_bar)
         controls.addStretch()
         controls.addWidget(self.refresh)
         card.body.addLayout(controls)
@@ -510,6 +634,8 @@ class ItemsPage(QWidget):
             widget.setMinimumWidth(0)
             widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.site_filter.addItem("전체 Site", None)
+        # 폭을 정하지 않으면 줄 끝에서 글자가 보이지 않는 빈 상자로 줄어든다.
+        self.distribution_view.setFixedWidth(184)
         self.distribution_view.addItem("설비 목록", "list")
         self.distribution_view.addItem("Site · 설비 히트맵", "heatmap")
         self.filter_row = _WrapRow([self.site_filter, self.state_filter, self.distribution_view], 160, fields=True)
@@ -639,7 +765,7 @@ class ItemsPage(QWidget):
         if restore and self.data:
             item_id, family, scoped, site, state, page_index, previous_answer = restore
             entry = next((e for e in self.data.versions.items if e.item.item_id == item_id), None)
-            if entry and self.family_group.button(family):
+            if entry and self.family_combo.findData(family) >= 0:
                 self.select_family(family)
                 if previous_answer and previous_answer.question == self.search.text():
                     release_ids = {e.release.release_version_id for e in data.versions.releases if e.release.family_id == family}
@@ -661,40 +787,93 @@ class ItemsPage(QWidget):
         self.status_host.show()
 
     def render_families(self):
-        """전달된 SW 계열만 칩으로 만든다. 자료가 없으면 칩을 만들지 않는다."""
-        for chip in self.family_group.buttons():
-            self.family_group.removeButton(chip)
-        while self.family_flow.count():
-            widget = self.family_flow.takeAt(0).widget()
-            if widget is not None and widget is not self.family_empty:
-                widget.hide()
-                widget.deleteLater()
+        """전달된 SW 계열만 드롭다운 항목으로 만든다. 자료가 없으면 안내 한 줄만 두고 비활성화한다."""
         families = {}
         for pair in (self.data.versions.pairs if self.data else ()):
             families.setdefault(pair.family_id, pair.family_name)
         if self.family_id not in families:
             self.family_id = next(iter(sorted(families)), None)
-        for family_id in sorted(families):
-            chip = _chip(families[family_id].replace("파운드리", "Foundry"))
-            chip.setToolTip(f"SW 계열 ID {family_id} · 이 계열의 릴리즈 노트 Item 보기")
-            chip.setChecked(family_id == self.family_id)
-            self.family_group.addButton(chip, family_id)
-            self.family_flow.addWidget(chip)
-        if not families:
-            self.family_empty.setText("전달된 SW 계열 없음" if self.data else "조회 결과 미확인")
-            self.family_empty.show()
-            self.family_flow.addWidget(self.family_empty)
-        else:
-            self.family_empty.hide()
-        self.family_host.updateGeometry()
+        # 이미 불러온 릴리즈·Item 연결만 한 번 훑어 계열별 Item 수를 얻는다(추가 DB 조회 없음).
+        self.family_item_counts = self._family_item_counts()
+        combo = self.family_combo
+        with QSignalBlocker(combo):
+            combo.clear()
+            for family_id in sorted(families):
+                combo.addItem(family_display_name(families[family_id]), family_id)
+                index = combo.count() - 1
+                empty = self.family_item_counts.get(family_id, 0) == 0
+                combo.setItemData(index, f"SW 계열 ID {family_id} · " + ("연결된 릴리즈노트 Item 없음" if empty
+                                                                      else "이 계열의 릴리즈 노트 Item 보기"),
+                                  Qt.ItemDataRole.ToolTipRole)
+                if empty:  # 자료 없는 계열은 연하게. 선택은 가능하다.
+                    combo.setItemData(index, QBrush(QColor(SECONDARY)), Qt.ItemDataRole.ForegroundRole)
+            if families:
+                combo.setCurrentIndex(combo.findData(self.family_id))
+            else:
+                combo.addItem("전달된 SW 계열 없음" if self.data else "조회 결과 미확인", None)
+                combo.setCurrentIndex(0)
+        combo.setEnabled(bool(families))
+        combo.setToolTip("" if families else combo.currentText())
+        # 가장 긴 계열 이름이 목록에서 잘리지 않게 한다. 항목이 많으면 목록은 최대 높이 안에서 스크롤된다.
+        widest = max((combo.fontMetrics().horizontalAdvance(combo.itemText(i)) for i in range(combo.count())), default=0)
+        combo.view().setMinimumWidth(max(combo.width(), widest + 48))
+
+    def _family_item_counts(self):
+        """계열별 연결 Item 수. 메모리의 릴리즈·Item 연결만 사용한다."""
+        if not self.data:
+            return {}
+        family_of = {e.release.release_version_id: e.release.family_id for e in self.data.versions.releases}
+        linked = {}
+        for row in self.data.versions.version_items:
+            family = family_of.get(row.release_version_id)
+            if family is not None:
+                linked.setdefault(family, set()).add(row.item_id)
+        return {pair.family_id: len(linked.get(pair.family_id, ())) for pair in self.data.versions.pairs}
+
+    def _release_caption(self, item_id):
+        """선택한 계열에서 Item이 속한 릴리즈를 (대표 버전 '외 N', 전체 목록 툴팁)으로 만든다.
+
+        이미 불러온 release_version_item·release_version 연결만 쓴다. 대표는 확인된 순서가 가장 빠른(최초 포함) 릴리즈다.
+        """
+        if not self.data:
+            return "", ""
+        key = (id(self.data), self.family_id)
+        if getattr(self, "_release_cache_key", None) != key:
+            releases = {e.release.release_version_id: e.release for e in self.data.versions.releases
+                        if e.release.family_id == self.family_id}
+            found, fallback = {}, {}
+            for row in self.data.versions.version_items:
+                release = releases.get(row.release_version_id)
+                if release is not None:
+                    (found if row.state is ItemState.APPLIED else fallback).setdefault(row.item_id, {})[release.release_version_id] = release
+            self._release_cache_key = key
+            self._release_cache = {item_id: sorted((found.get(item_id) or fallback[item_id]).values(),
+                                                   key=lambda r: (r.version_order is None, r.version_order or 0, r.release_version_id))
+                                   for item_id in {*found, *fallback}}
+        releases = self._release_cache.get(item_id, ())
+        if not releases:
+            return "", ""
+        first = releases[0]
+        text = first.version_raw + (f" 외 {len(releases) - 1}" if len(releases) > 1 else "")
+        lines = [f"{r.version_raw} · 출시일 {r.released_at or '미확인'}" for r in releases[:8]]
+        if len(releases) > 8:
+            lines.append(f"… 외 {len(releases) - 8}개")
+        # 행 오른쪽 버전은 '최초 포함 버전'이 아니라 이 Item이 들어 있는 릴리즈다. 툴팁 첫 줄에 그 뜻을 밝힌다.
+        return text, (f"포함 릴리즈: {text}\n" + "\n".join(lines)) if len(releases) > 1 else f"포함 릴리즈: {lines[0]}"
+
+    def _family_combo_changed(self, index):
+        family_id = self.family_combo.itemData(index)
+        if family_id is not None and family_id != self.family_id:
+            self.select_family(family_id)
 
     def select_family(self, family_id):
         """선택한 SW 계열의 릴리즈 노트 Item만 표시한다."""
         self.family_id = family_id
+        index = self.family_combo.findData(family_id)
+        if index >= 0 and index != self.family_combo.currentIndex():
+            with QSignalBlocker(self.family_combo):
+                self.family_combo.setCurrentIndex(index)
         self._filter_changed()
-        button_ = self.family_group.button(family_id)
-        if button_ is not None:
-            button_.setChecked(True)
 
     def _clear_answer(self):
         self.answer_request.cancel()
@@ -778,7 +957,7 @@ class ItemsPage(QWidget):
     def render_list(self):
         """전달된 Item 목록과 조회 결과 미확인을 구분해 표시한다."""
         query = self.search.text().strip()
-        family_name = next((p.family_name for p in self.data.versions.pairs if p.family_id == self.family_id), "") if self.data else ""
+        family_name = next((family_display_name(p.family_name) for p in self.data.versions.pairs if p.family_id == self.family_id), "") if self.data else ""
         found = ()
         if self.data and self.family_id is not None:
             if self.answer is None:
@@ -796,17 +975,24 @@ class ItemsPage(QWidget):
         pages = max(1, (len(found) + self.page_size - 1) // self.page_size)
         self.page_index = max(0, min(self.page_index, pages - 1))
         self.visible_entries = found[self.page_index * self.page_size:(self.page_index + 1) * self.page_size]
-        for control in self.result_buttons.values():
-            self.result_rows.removeWidget(control)
-            control.hide()
-            control.deleteLater()
+        # 행 위젯은 풀에서 재사용한다(생성·스타일 계산 비용이 행당 약 7ms였다). 남는 행은 숨긴다.
         self.result_buttons.clear()
         for row, entry in enumerate(self.visible_entries):
-            control = _ItemResultButton(entry.item.content, rules_by_item.get(entry.item.item_id, ()))
-            control.rule_requested.connect(self.open_registered_rule)
-            control.clicked.connect(lambda checked=False, i=row: self.toggle_result(i))
+            if row == len(self.row_pool):
+                control = _ItemResultButton()
+                control.rule_requested.connect(self.open_registered_rule)
+                control.clicked.connect(lambda checked=False, c=control: self.toggle_result(c.row))
+                self.row_pool.append(control)
+                self.result_rows.addWidget(control)
+            control = self.row_pool[row]
+            control.row = row
+            version, version_tip = self._release_caption(entry.item.item_id)
+            control.set_content(entry.item.content, rules_by_item.get(entry.item.item_id, ()), version, version_tip)
+            control.show()
             self.result_buttons[entry.item.item_id] = control
-            self.result_rows.addWidget(control)
+        for control in self.row_pool[len(self.visible_entries):]:
+            control.hide()
+            control.setChecked(False)
         self._place_detail()
         no_release = bool(self.data and self.family_id is not None and family_name
                           and not any(e.release.family_id == self.family_id for e in self.data.versions.releases))
@@ -820,17 +1006,23 @@ class ItemsPage(QWidget):
                            "검색어와 일치하는 아이템이 없습니다." if query else
                            "선택한 계열에 연결된 아이템이 없습니다." if family_name else "등록된 계열이 없습니다.")
         suffix = " · 위험 기준 등록만" if registered_only else ""
+        # 자료가 없는 계열은 안내와 중복되는 '전체 0건' 없이 계열 이름만 보여 준다.
+        family_has_no_items = bool(self.data and self.family_id is not None and self.family_item_counts.get(self.family_id, 0) == 0)
         self.count.setText(f"검색 결과 {len(found)}건{suffix}" if query else
+                           family_name if family_has_no_items and not registered_only else
                            (f"{family_name} 위험 기준 등록 아이템 {len(found)}건" if registered_only
                             else f"{family_name} 아이템 전체 {len(found)}건").strip())
-        self.page_label.setText(f"{self.page_index + 1} / {pages}")
+        self.page_total = pages
         if self.data is None:
             self.count.setText("조회 결과 미확인")
-        for control in (self.previous, self.next, self.page_label):
-            control.setVisible(pages > 1)
+        self.page_bar.set_state(self.page_index, pages)
         self.refresh.setVisible(self.data is None)
-        self.previous.setEnabled(self.page_index > 0)
-        self.next.setEnabled(self.page_index + 1 < pages)
+
+    def go_to_page(self, index):
+        """0부터 시작하는 페이지로 이동한다. 범위를 벗어난 값은 처음·끝으로 보정한다."""
+        index = max(0, min(index, self.page_total - 1))
+        if index != self.page_index:
+            self.change_page(index - self.page_index)
 
     def change_page(self, delta):
         self.page_index += delta
@@ -902,7 +1094,7 @@ class ItemsPage(QWidget):
         self.more_button.setChecked(False)
         self.source_button.setChecked(False)
         catalog = self.data.catalog()
-        names = {p.family_id: p.family_name for p in self.data.versions.pairs}
+        names = {p.family_id: family_display_name(p.family_name) for p in self.data.versions.pairs}
         releases = catalog.item_versions(item.item_id)
         self.release_model.set_rows(tuple((names[r.release.family_id], r.release.version_raw,
             self.data.versions.order_label(r.release),
@@ -920,7 +1112,10 @@ class ItemsPage(QWidget):
         self.source_note.setText("출처 행을 두 번 클릭하거나 Enter를 눌러 원본 Excel 파일의 셀을 확인하세요."
                                  if entry.sources else "저장된 원본 위치가 없습니다.")
         rules = [r for r in self.data.risk_rules if r.item_id == item.item_id]
-        self.inline_register.setText("위험 기준 추가" if any(r.is_enabled and r.family_id == self.family_id for r in rules) else "위험 기준 등록")
+        # 같은 동작의 두 버튼(요약·전체 현황)은 문구도 같아야 한다.
+        register_text = "위험 기준 추가" if any(r.is_enabled and r.family_id == self.family_id for r in rules) else "위험 기준 등록"
+        self.inline_register.setText(register_text)
+        self.register_rule.setText(register_text)
         inclusion = next((f for f in catalog.overview(item, ()).families if f.family_id == self.family_id), None)
         first = inclusion.first_included if inclusion else None
         self.register_rule.setEnabled(self.manager.gateway is not None and inclusion is not None)
@@ -940,7 +1135,11 @@ class ItemsPage(QWidget):
         self.inline_register.setEnabled(self.register_rule.isEnabled())
         missing = [e for e in self.equipment if e.application is Application.NOT_APPLIED]
         self.first_value.setText(first.version_raw if first else "미확인")
-        self.first_note.setText(f"{names.get(self.family_id, '계열 미확인')} 계열 기준")
+        family_label = names.get(self.family_id, '계열 미확인')
+        included = self._release_caption(item.item_id)[0]
+        # 최초 포함 버전을 모를 때는 행의 '포함 릴리즈'와 충돌하지 않게 이유와 이미 아는 포함 릴리즈를 함께 보여 준다.
+        self.first_note.setText(f"{family_label} 계열 기준" if first else
+                                f"{family_label} 계열 · 버전 순서 미확정" + (f" · 포함 릴리즈 {included}" if included else ""))
         enabled_rules = [r for r in rules if r.is_enabled and r.family_id == self.family_id]
         self.rules_box.setVisible(bool(enabled_rules))
         if enabled_rules:
@@ -1026,7 +1225,7 @@ class ItemsPage(QWidget):
         site = self.site_filter.currentData()
         rows = [e for e in self.equipment if (state is None or e.application == state)
                 and (site is None or e.record.site == site)]
-        family_names = {p.family_id: p.family_name for p in self.data.versions.pairs} if self.data else {}
+        family_names = {p.family_id: family_display_name(p.family_name) for p in self.data.versions.pairs} if self.data else {}
         heatmap = self.distribution_view.currentData() == "heatmap"
         self.distribution.set_results(self.equipment if heatmap else (), rows if heatmap else (), self.selected_equipment_id)
         self.distribution.set_scope(site, state)

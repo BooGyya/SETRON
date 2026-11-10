@@ -284,7 +284,7 @@ def test_narrow_window_and_long_original_content(window, data, size):
 
 def test_default_family_is_selected_and_search_enabled(window):
     page = window.pages["items"]
-    assert page.family_id == 10 and page.family_group.button(10).isChecked()
+    assert page.family_id == 10 and page.family_combo.currentData() == 10
     assert page.ai_search.isEnabled()
 
 

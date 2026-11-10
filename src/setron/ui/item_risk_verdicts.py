@@ -15,6 +15,7 @@ from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_original_table import show_item_source
 from setron.ui.item_risk_dialog import FIRST_HINT, PopupDialog, choice, field, warning_icon
 from setron.ui.theme import SECONDARY, TONES, font, paint_font
+from setron.ui.version_data import family_display_name
 
 STATUS_CAPTIONS = {RiskStatus.RISK: "위험 후보", RiskStatus.UNKNOWN: "미확인", RiskStatus.NO_RISK: "위험 없음"}
 STATUS_TONES = {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning", RiskStatus.NO_RISK: "success"}
@@ -161,7 +162,7 @@ class ItemRuleVerdictDialog(PopupDialog):
         outer = self.body
         outer.setSpacing(12)
         family_id = self.rule.family_id if self.rule else None
-        family = next((p.family_name for p in data.versions.pairs if p.family_id == family_id), "계열 미확인")
+        family = next((family_display_name(p.family_name) for p in data.versions.pairs if p.family_id == family_id), "계열 미확인")
         overview = data.catalog().overview(entry.item, ()) if entry else None
         first = next((f.first_included for f in overview.families if f.family_id == family_id), None) if overview else None
         meta = QHBoxLayout()
@@ -296,7 +297,7 @@ class ItemRuleVerdictDialog(PopupDialog):
             self.condition_text.setText(CONDITIONS[rule.rule_type])
             names = {p.model_id: p.model_name for p in data.versions.pairs}
             model_ids = rule.target_model_ids or ((rule.group_id,) if rule.group_id is not None else ())
-            family = next((p.family_name for p in data.versions.pairs if p.family_id == rule.family_id), "미확인 계열")
+            family = next((family_display_name(p.family_name) for p in data.versions.pairs if p.family_id == rule.family_id), "미확인 계열")
             self.scope_text.setText(" · ".join((family, ", ".join(names.get(m, str(m)) for m in model_ids) or "계열 전체",
                                                 rule.target_site or "전체 Site", rule.target_line or "전체 Line")))
         has_rows = bool(self.verdicts)
