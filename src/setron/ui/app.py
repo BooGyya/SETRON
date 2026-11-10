@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
@@ -54,9 +54,9 @@ from setron.ui.management_page import ManagementPage
 from setron.ui.data_management_page import DataManagementPage
 from setron.ui.data_export_page import DataExportPage
 from setron.ui.management_data import gateway_from_env
-from setron.ui.management_integration import export_failure, report_filter
+from setron.ui.management_integration import export_failure, report_filter, save_numbered_export
 from setron.ui.settings_page import SettingsPage
-from setron.ui.import_dialogs import ImportProgressDialog
+from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
 
 
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
@@ -596,19 +596,38 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         export_action.setEnabled(True)
         export_action.setToolTip("DB 전체 SQL · 관리 자료 XLSX · 현재 조회 현황 XLSX 내보내기")
 
+    def run_numbered_export(exporter, path, suffix, *, interactive):
+        def confirm_duplicate(requested):
+            dialog = ImportConfirmDialog(
+                f"같은 이름의 파일이 있습니다.\n{requested.name}\n\n계속 저장할까요?",
+                window, title="파일 덮어쓰기 확인", action_text="확인",
+            )
+            try:
+                return dialog.exec() == QDialog.DialogCode.Accepted
+            finally:
+                dialog.deleteLater()
+
+        def write(destination):
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                return exporter(destination)
+            finally:
+                QApplication.restoreOverrideCursor()
+
+        return save_numbered_export(write, path, suffix, confirm_duplicate=confirm_duplicate if interactive else None)
+
     def export_sql(path=None):
         """DB 전체를 .sql로 내보낸다. ``path``가 없으면 저장 위치를 묻고 결과를 알림창으로 알린다."""
         interactive = path is None
         if interactive:
             default = Path.home() / f"setron_db_{datetime.now():%Y%m%d_%H%M}.sql"
-            path, _ = QFileDialog.getSaveFileName(window, "DB 전체 SQL 내보내기", str(default), "SQL 파일 (*.sql)")
+            path, _ = QFileDialog.getSaveFileName(window, "DB 전체 SQL 내보내기", str(default), "SQL 파일 (*.sql)",
+                                                  options=QFileDialog.Option.DontConfirmOverwrite)
             if not path:
                 return None
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            result = db_exporter(path)
-        finally:
-            QApplication.restoreOverrideCursor()
+        result = run_numbered_export(db_exporter, path, ".sql", interactive=interactive)
+        if result is None:
+            return None
         text = (f"{result.path} 에 저장했습니다 ({result.message}).\n받은 사람은 빈 DB에서 이 파일을 실행하면 됩니다."
                 if result.saved else f"내보내지 못했습니다. {result.message}")
         if interactive:
@@ -625,14 +644,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         interactive = path is None
         if interactive:
             default = Path.home() / f"setron_data_{datetime.now():%Y%m%d_%H%M}.xlsx"
-            path, _ = QFileDialog.getSaveFileName(window, "관리 데이터 Excel 내보내기", str(default), "Excel 통합문서 (*.xlsx)")
+            path, _ = QFileDialog.getSaveFileName(window, "관리 데이터 Excel 내보내기", str(default),
+                                                  "Excel 통합문서 (*.xlsx)",
+                                                  options=QFileDialog.Option.DontConfirmOverwrite)
             if not path:
                 return None
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            result = data_exporter(path)
-        finally:
-            QApplication.restoreOverrideCursor()
+        result = run_numbered_export(data_exporter, path, ".xlsx", interactive=interactive)
+        if result is None:
+            return None
         if interactive:
             text = (f"{result.path}에 저장했습니다. {result.message}" if result.saved
                     else f"내보내지 못했습니다. {result.message}")
@@ -653,22 +672,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             busy = "내보내기 진행 중입니다."
         elif window.management_saving:
             busy = "관리 데이터 저장 완료 후 이용할 수 있습니다."
-        managed = "관리 자료 연결이 필요합니다." if management_gateway is None else ""
-        if not managed and management.locked:
-            managed = "관리 데이터 저장 결과를 먼저 확인해 주세요."
         export_page.set_availability({
             "sql": "DB 연결이 필요합니다." if db_exporter is None else "",
             "summary": "DB 연결이 필요합니다." if data_exporter is None else "",
-            "management": managed,
-            "status": managed or ("대시보드에서 조회 조건을 먼저 적용해 주세요."
-                                  if not window.query_state.applied_is_current else ""),
         }, busy=busy)
 
     window.page_changed.connect(sync_export_page)
-    window.query_panel.applied.connect(sync_export_page)
-    window.query_panel.draft_changed.connect(sync_export_page)
-    window.query_panel.catalog_changed.connect(sync_export_page)
-    window.query_panel.targets_changed.connect(sync_export_page)
 
     def management_export(kind, path=None):
         interactive = path is None
@@ -723,9 +732,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.export_request.completed.connect(finish_management_export)
     window.export_management_xlsx = lambda path=None: management_export("management", path)
     window.export_current_xlsx = lambda path=None: management_export("status", path)
-    for key, handler in (("sql", export_sql), ("summary", export_data),
-                         ("management", window.export_management_xlsx), ("status", window.export_current_xlsx)):
-        export_page.buttons[key].clicked.connect(lambda checked=False, run=handler: run())
+    export_page.buttons["sql"].clicked.connect(lambda: export_sql())
+    export_page.buttons["summary"].clicked.connect(lambda: export_data())
 
     def choose_export():
         if management_gateway is None and db_exporter is None and data_exporter is not None:
