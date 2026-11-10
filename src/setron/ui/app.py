@@ -52,6 +52,7 @@ from setron.ui.replay_page import ReplayPage
 from setron.ui.reports_page import ReportsPage
 from setron.ui.management_page import ManagementPage
 from setron.ui.data_management_page import DataManagementPage
+from setron.ui.data_export_page import DataExportPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter
 from setron.ui.settings_page import SettingsPage
@@ -504,7 +505,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def sync_mode(*_):
         sync_back()
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions", "data", "reports", "settings") + (("ai",) if chat_enabled else ())
+        quiet = ("import", "export", "dashboard", "heatmap", "items", "replay", "versions", "data", "reports", "settings") + (("ai",) if chat_enabled else ())
         showing_equipment_result = (window.route == "equipment" and equipment.snapshot is not None
                                     and equipment.item_request is None)
         window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
@@ -512,7 +513,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         warning = window.data_warning.text()
         window.data_warning.setVisible(bool(warning) and not (window.route == "import" and warning.startswith("DB 접속 설정이 없어")))
         # 데이터 가져오기 화면도 머리 줄 '설비 목록' 버튼을 숨긴다 (11-10 2차 3-1).
-        window.header.toolbar.setVisible(window.route not in {"import", "items", "replay", "versions", "data", "reports", "settings"})
+        window.header.toolbar.setVisible(window.route not in {"import", "export", "items", "replay", "versions", "data", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap", "ai"))
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
@@ -525,9 +526,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         elif window.route == "import":
             window.notice.setText(f"데이터 가져오기 · 실행 중인 Excel 읽기 · {importer.extraction_label} · 저장 위치: {importer.saver.target_label}")
             list_action.setEnabled(False)
-        elif window.route == "replay":
+        elif window.route in ("replay", "export"):
             list_action.setEnabled(False)
         elif window.route == "ai":
+            window.header.title.setText("AI 분석")
             window.notice.setText(getattr(ai, "notice_text", "AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음"))
             list_action.setEnabled(False)
         elif window.route == "reports":
@@ -640,6 +642,33 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.export_data = export_data
     window.export_request = ReadRequest(window)
     window.export_title = None
+    export_page = DataExportPage()
+    window.register_page("export", export_page, uses_query=False)
+
+    def sync_export_page(*_):
+        if window.route != "export":
+            return
+        busy = ""
+        if window.export_request.busy:
+            busy = "내보내기 진행 중입니다."
+        elif window.management_saving:
+            busy = "관리 데이터 저장 완료 후 이용할 수 있습니다."
+        managed = "관리 자료 연결이 필요합니다." if management_gateway is None else ""
+        if not managed and management.locked:
+            managed = "관리 데이터 저장 결과를 먼저 확인해 주세요."
+        export_page.set_availability({
+            "sql": "DB 연결이 필요합니다." if db_exporter is None else "",
+            "summary": "DB 연결이 필요합니다." if data_exporter is None else "",
+            "management": managed,
+            "status": managed or ("대시보드에서 조회 조건을 먼저 적용해 주세요."
+                                  if not window.query_state.applied_is_current else ""),
+        }, busy=busy)
+
+    window.page_changed.connect(sync_export_page)
+    window.query_panel.applied.connect(sync_export_page)
+    window.query_panel.draft_changed.connect(sync_export_page)
+    window.query_panel.catalog_changed.connect(sync_export_page)
+    window.query_panel.targets_changed.connect(sync_export_page)
 
     def management_export(kind, path=None):
         interactive = path is None
@@ -675,12 +704,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         management.setEnabled(False)
         window.notice.setText(title + " · 저장 중")
         window.export_request.start(BackgroundRead(load))
+        sync_export_page()
         return None
 
     def finish_management_export(result, error):
         export_action.setEnabled(True)
         management.setEnabled(True)
         title, window.export_title = window.export_title, None
+        sync_export_page()
         if error is not None or result is None:
             QMessageBox.warning(window, title or "내보내기", "자료를 내보내지 못했습니다. DB 연결과 파일 저장 권한을 확인해 주세요.")
         elif result.saved:
@@ -692,6 +723,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.export_request.completed.connect(finish_management_export)
     window.export_management_xlsx = lambda path=None: management_export("management", path)
     window.export_current_xlsx = lambda path=None: management_export("status", path)
+    for key, handler in (("sql", export_sql), ("summary", export_data),
+                         ("management", window.export_management_xlsx), ("status", window.export_current_xlsx)):
+        export_page.buttons[key].clicked.connect(lambda checked=False, run=handler: run())
 
     def choose_export():
         if management_gateway is None and db_exporter is None and data_exporter is not None:
@@ -870,6 +904,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def begin_management_save():
         window.management_saving = True
+        sync_export_page()
         if not versions.progress.isVisible():
             window.management_progress.set_operation("save", "변경 사항 저장 중", "검토한 변경 사항을 저장하고 있습니다. 잠시만 기다려 주세요.")
         cancel_management_refresh()
@@ -954,6 +989,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def finish_management_save(result, catalog, preserve_detail):
         reapplied = apply_saved_catalog(catalog, reapply=True)
         window.management_saving = False
+        sync_export_page()
         window.management_last_success = result is not None
         versions.setEnabled(True)
         items.setEnabled(True)
@@ -986,6 +1022,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def uncertain_management_save():
         window.management_saving = False
+        sync_export_page()
         window.management_progress.set_operation(None)
         ai.invalidate_data()
         window.notice.setText("저장 결과 미확인 · 같은 수정 묶음을 다시 저장하지 말고 DB 기록을 확인해 주세요.")

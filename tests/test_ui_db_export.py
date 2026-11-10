@@ -1,10 +1,10 @@
-"""헤더의 '데이터 내보내기'로 DB 전체 SQL 내보내기를 실행하는 연결을 검증한다 (Jira S15P31B106-76)."""
+"""데이터 내보내기 화면과 기존 내보내기 공급자 연결을 검증한다."""
 
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.infrastructure.database import Database, DatabaseConnectionError
@@ -21,7 +21,48 @@ def test_export_action_is_disabled_without_db(qapp):
     window = create_window()
 
     assert not window.header.actions["export"].isEnabled()
+    window.nav["export"].click()
+    assert window.route == "export"
+    assert not any(action.isEnabled() for action in window.pages["export"].buttons.values())
     window.close()
+
+
+def test_sidebar_export_actions_use_existing_save_workflows(qapp, tmp_path, monkeypatch):
+    from test_ui_management import FakeGateway, wait_for
+
+    calls = []
+
+    def exporter(key):
+        def save(path, *_):
+            calls.append((key, Path(path)))
+            return ExportResult(ExportStatus.SAVED, Path(path), "저장 완료")
+        return save
+
+    gateway = FakeGateway()
+    gateway.export_management = exporter("management")
+    gateway.export_status = exporter("status")
+    window = create_window(db_exporter=exporter("sql"), data_exporter=exporter("summary"),
+                           management_gateway=gateway)
+    page = window.pages["export"]
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _, title, text: pytest.fail(f"{title}: {text}"))
+    try:
+        window.nav["export"].click()
+        assert window.route == "export" and not page.buttons["status"].isEnabled()
+        assert "조회 조건을 먼저 적용" in page.details["status"].text()
+        window.navigate("dashboard")
+        window.query_panel.apply_draft()
+        window.nav["export"].click()
+        assert all(action.isEnabled() for action in page.buttons.values())
+        for key in page.buttons:
+            path = tmp_path / (key + (".sql" if key == "sql" else ".xlsx"))
+            monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(path), ""))
+            page.buttons[key].click()
+            wait_for(qapp, lambda: not window.export_request.busy)
+            assert calls[-1] == (key, path)
+            assert page.buttons[key].isEnabled()
+    finally:
+        window.close()
 
 
 def test_export_action_runs_given_exporter(qapp, tmp_path):
