@@ -9,7 +9,7 @@ from setron.ui.appearance import ui_color
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.heatmap import TileGrid
-from setron.ui.theme import PRIMARY, SECONDARY, TONES, font
+from setron.ui.theme import PRIMARY, SECONDARY, TONES, paint_font
 from setron.ui.versions import _fit
 
 
@@ -38,7 +38,7 @@ class DistributionDelegate(QStyledItemDelegate):
         painter.setPen(ui_color(PRIMARY if option.state & (QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus) else border))
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
         painter.setPen(ui_color(ink))
-        painter.setFont(font(13))
+        painter.setFont(paint_font(13))
         painter.drawText(rect.adjusted(10, 0, -10, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, index.data())
         painter.restore()
 

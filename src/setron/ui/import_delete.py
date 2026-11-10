@@ -23,7 +23,7 @@ from setron.ui.import_widgets import PeriodDateField, import_combo_style, pictur
 from setron.ui.import_dialogs import ImportDialog
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font, icon, svg_size
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font, icon, svg_size, set_widget_font
 
 
 class _DeleteFilterRow(QWidget):
@@ -323,7 +323,7 @@ class ImportDeletePage(QWidget):
         for text, mode in (("가장 최근 기준일", "latest"), ("최근 1개월", "month"), ("최근 3개월", "quarter"), ("직접 선택", "manual")):
             item = button(text)
             item.setCheckable(True)
-            item.setFont(font(12, medium=True))
+            set_widget_font(item, font(12, medium=True))
             item.setFixedHeight(32)
             item.setStyleSheet(f"QPushButton {{background:white;color:{INK};border:1px solid {LINE};"
                               "border-radius:16px;padding:0 12px;min-height:30px;}"

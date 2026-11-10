@@ -351,38 +351,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("reports", reports, uses_query=False)
     window.page_changed.connect(lambda key: reports.enter() if key == "reports" else None)
     window.register_page("management", management, uses_query=False)
-    settings = SettingsPage(source)
+    settings = SettingsPage()
     window.register_page("settings", settings, uses_query=False)
-    settings.targets_requested.connect(open_groups)
-
-    def settings_management(table):
-        if management.busy or management.locked or management.state in {"review", "saving"} or management.pending or management.pending_applicability:
-            settings.feedback.setText("관리 데이터에서 진행 중인 검토·저장을 완료한 뒤 다시 열어 주세요.")
-            return
-        management.kind.setCurrentIndex(management.kind.findData(table))
-        window.navigate("management")
-    settings.management_requested.connect(settings_management)
-
-    def personal_query_catalog(catalog, value):
-        return replace(catalog,
-            lines=tuple(o for o in catalog.lines if value["lines"] is None or o.key in value["lines"]),
-            groups=tuple(o for o in catalog.groups if value["groups"] is None or o.key in value["groups"]))
-
-    def apply_personal(value):
-        window.set_menu_order(value["order"])
-        layout = dashboard.layout()
-        layout.removeWidget(dashboard.kpi_grid)
-        layout.removeWidget(dashboard.overview)
-        position = layout.indexOf(dashboard.result_status) + 1
-        first, second = ((dashboard.overview, dashboard.kpi_grid) if value["home"] == "heatmap"
-                         else (dashboard.kpi_grid, dashboard.overview))
-        layout.insertWidget(position, first)
-        layout.insertWidget(position + 1, second)
-        selected = personal_query_catalog(source.catalog, value)
-        if selected != window.query_state.catalog:
-            window.set_query_catalog(selected)
-    settings.personal_changed.connect(apply_personal)
-    apply_personal(settings.personal)
+    window.page_changed.connect(lambda key: settings.enter() if key == "settings" else None)
 
     def navigate_item_answer(route, answer):
         if answer is None or answer is not items.answer or answer.data is not items.data:
@@ -510,8 +481,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             action = items.back_to_list
         elif window.route == "versions" and versions.active_tab == 1 and versions.mode == "detail":
             action = versions.back_to_list
-        elif window.route == "settings" and settings.stack.currentWidget() is settings.location:
-            action = settings.location.back_requested.emit
         window.set_page_back(action)
 
     def sync_mode(*_):
@@ -830,7 +799,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     versions.mode_changed.connect(sync_mode)
     items.mode_changed.connect(sync_mode)
     items.tabs.currentChanged.connect(lambda _: sync_back())
-    settings.stack.current_changed.connect(sync_back)
     window.page_changed.connect(sync_mode)
     sync_mode()  # 첫 화면(대시보드)에도 안내 배지 표시 규칙을 바로 적용한다.
     def ensure_loaded(key):
@@ -959,7 +927,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         except RuntimeError as error:
             window.notice.setText(str(error))
             return False
-        catalog = personal_query_catalog(catalog, settings.personal)
         if catalog == window.query_state.catalog:
             return False
         state = window.query_state

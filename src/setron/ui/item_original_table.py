@@ -8,7 +8,7 @@ from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
-from setron.ui.theme import INK, SECONDARY, font
+from setron.ui.theme import INK, SECONDARY, paint_font
 
 
 def show_item_source(parent, data, item_id):
@@ -58,7 +58,7 @@ class EvidenceDelegate(QStyledItemDelegate):
         painter.setPen(ui_color("#dee0e5"))
         painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
         painter.setPen(foreground if foreground is not None else ui_color(INK))
-        painter.setFont(font(12, medium=True) if highlighted else index.data(Qt.ItemDataRole.FontRole))
+        painter.setFont(paint_font(12, medium=True) if highlighted else index.data(Qt.ItemDataRole.FontRole))
         painter.drawText(option.rect.adjusted(12, 6, -12, -6),
                          index.data(Qt.ItemDataRole.TextAlignmentRole) | Qt.TextFlag.TextWordWrap,
                          str(index.data() or ""))

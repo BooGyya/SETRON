@@ -47,7 +47,7 @@ from setron.features.excel_import.comparison import ComparisonScopeError, compar
 from setron.ui.import_widgets import ComparisonCard, PeriodDateField, ImportComparison, ImportDataStateDialog, ImportSteps, import_combo_style, picture
 from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
 from setron.ui.import_tasks import discover_workbooks, read_workbook
-from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font
+from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font, set_widget_font, paint_font
 from setron.ui.versions import _field, _fit
 
 SOURCE_LABELS = {
@@ -97,7 +97,7 @@ class _BadgeDelegate(QStyledItemDelegate):
         if not text:
             return
         background, ink, border = TONES[self.tone_for(text)]
-        badge_font = font(12, medium=True)
+        badge_font = paint_font(12, medium=True)
         metrics = QFontMetrics(badge_font)
         width = min(metrics.horizontalAdvance(text) + 16, option.rect.width() - 8)
         height = metrics.height() + 6
@@ -155,7 +155,7 @@ class _IssueModel(ReadTableModel):
                 return "확인 완료"
             return ISSUE_ACTIONS.get(level, "")
         if role == Qt.ItemDataRole.FontRole:
-            return font(13, medium=True)
+            return paint_font(13, medium=True)
         if role == Qt.ItemDataRole.ForegroundRole:
             return ui_color(DANGER_INK if level is IssueLevel.ERROR else INK)
         return None
@@ -181,7 +181,7 @@ def _import_table(model, name, widths):
     table.setAccessibleName(name)
     table.setMinimumWidth(0)
     table.setMinimumHeight(140)
-    table.setFont(font(13))
+    set_widget_font(table, font(13))
     table.setWordWrap(True)
     table.setTextElideMode(Qt.TextElideMode.ElideNone)
     table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
@@ -300,7 +300,7 @@ class SheetGridModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ForegroundRole and self.marks.get(address) is IssueLevel.ERROR:
             return ui_color(DANGER_INK)
         if role == Qt.ItemDataRole.FontRole:
-            return font(12)
+            return paint_font(12)
         return None
 
 
@@ -448,7 +448,7 @@ class ImportPage(QWidget):
             widget.setAccessibleName(name)
             widget.setProperty("queryField", True)
             widget.setFixedHeight(42)
-            widget.setFont(font(14, medium=True))
+            set_widget_font(widget, font(14, medium=True))
             widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             widget.setMinimumContentsLength(10)
             widget.setStyleSheet(import_combo_style())
@@ -1607,7 +1607,7 @@ class ImportPage(QWidget):
             field = QLineEdit(row.value(name) or "")
             field.setAccessibleName(f"{row_id}행 {FIELD_LABELS[name]}")
             field.setFixedHeight(40)
-            field.setFont(font(14, medium=True))
+            set_widget_font(field, font(14, medium=True))
             field.setProperty("reviewValue", row.value(name) or "")
             field.setMinimumWidth(0)
             field.setReadOnly(self.busy or self.locked)
@@ -1640,7 +1640,7 @@ class ImportPage(QWidget):
                 cell_box.setTextFormat(Qt.TextFormat.PlainText)
                 cell_box.setAccessibleName(f"{row_id}행 {FIELD_LABELS[name]} 원본 셀 {address or '미확인'}")
                 cell_box.setStyleSheet(box_style + ("" if address else f"color:{SECONDARY};"))
-            cell_box.setFont(font(13, medium=True, numeric=True))
+            set_widget_font(cell_box, font(13, medium=True, numeric=True))
             cell_box.setFixedSize(96, 40)
             self.editor_grid.addWidget(cell_box, line * 2, 2)
         address = row.sources.get("equipment_code") if self.kind is ExtractKind.EQUIPMENT_STATUS else row.sources.get("content")

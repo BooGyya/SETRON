@@ -12,7 +12,7 @@ from setron.ui.dashboard_data import RiskRuleState, count_value, missing_sw_coun
 from setron.ui.equipment import FlowGrid, ReadTableModel, fit_rows, ignore_width, read_table
 from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
-from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font, icon, svg_size
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, SOFT, TONES, font, icon, svg_size, set_widget_font
 
 
 # 타일 채움색은 5단계(11/05 팀 결정·멘토 확인): 진초록 N+1 이상 · 연초록 N · 노랑 N-1 · 빨강 N-2 이하 · 회색 비교 불가·HPA.
@@ -267,7 +267,7 @@ class HeatmapPage(QWidget):
         self.search.setPlaceholderText("설비 검색")
         self.search.setAccessibleName("설비 검색 · 설비명·위치·버전 원문")
         self.search.addAction(icon("b2c35.svg"), QLineEdit.ActionPosition.LeadingPosition)
-        self.search.setFont(font(15))
+        set_widget_font(self.search, font(15))
         self.search.setFixedHeight(46)
         self.search.setMinimumWidth(136)
         self.search.setStyleSheet(f"QLineEdit#heatmapSearch {{background:white;border:1px solid {LINE};border-radius:12px;"
@@ -292,7 +292,7 @@ class HeatmapPage(QWidget):
             control.setCheckable(True)
             control.setChecked(index == 1)
             control.setObjectName("heatmapView")
-            control.setFont(font(15, medium=True))
+            set_widget_font(control, font(15, medium=True))
             control.setStyleSheet(
                 f"QPushButton#heatmapView {{background:white;border:1px solid {LINE};border-radius:10px;padding:0 22px;"
                 "min-height:40px;max-height:40px;}"
@@ -311,7 +311,7 @@ class HeatmapPage(QWidget):
         self.risk_button = QCheckBox("위험 후보만")
         self.risk_button.setIcon(icon("7880d.svg"))
         self.risk_button.setIconSize(svg_size("7880d.svg"))
-        self.risk_button.setFont(font(15, medium=True))
+        set_widget_font(self.risk_button, font(15, medium=True))
         self.risk_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.risk_button.setStyleSheet(
             "QCheckBox {spacing:8px;padding:0 6px;}"
@@ -336,7 +336,7 @@ class HeatmapPage(QWidget):
             control.setCheckable(True)
             control.setChecked(index == 0)
             control.setCursor(Qt.CursorShape.PointingHandCursor)
-            control.setFont(font(15, medium=True))
+            set_widget_font(control, font(15, medium=True))
             control.setStyleSheet(
                 "QPushButton#layoutOption {background:transparent;border:none;border-radius:9px;padding:0 18px;"
                 "min-height:34px;max-height:34px;}"

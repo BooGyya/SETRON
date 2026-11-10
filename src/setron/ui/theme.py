@@ -43,6 +43,20 @@ def font(size: int = 14, *, medium: bool = False, numeric: bool = False) -> QFon
     return result
 
 
+def set_widget_font(widget, base: QFont) -> None:
+    from setron.ui.appearance import refresh_widget_font
+
+    widget.setProperty("setronBaseFont", base)
+    refresh_widget_font(widget)
+
+
+def paint_font(size: int = 14, *, medium: bool = False, numeric: bool = False) -> QFont:
+    """모델 데이터·직접 그리기처럼 위젯의 기본 폰트를 쓰지 않는 텍스트에 사용한다."""
+    from setron.ui.appearance import scaled_font
+
+    return scaled_font(font(size, medium=medium, numeric=numeric))
+
+
 class WheelGuard(QObject):
     """콤보·숫자 입력·탭이 마우스 휠로 값이 바뀌지 않게 하고, 휠은 바깥 스크롤로 넘긴다."""
 
@@ -98,12 +112,16 @@ def install_theme(app: QApplication) -> None:
                       padding: 8px 18px; min-height: 20px; }
         QPushButton:hover { background: #edf0fd; border-color: #3c5ce9; }
         QPushButton:pressed { background: #d8defb; }
-        QPushButton:focus { border: 2px solid #3c5ce9; }
+        QPushButton:focus { border-color: #3c5ce9; }
         QPushButton:disabled { color: #8b95a8; background: #f9fafb; border-color: #e9eef6; }
         QPushButton[primary="true"] { border-color: #3c5ce9; color: white;
             background: qlineargradient(x1:0,y1:0,x2:0.3,y2:1,stop:0 #3c5ce9,stop:0.714 #3652ca); }
-        QPushButton[soft="true"] { background: #e8ebfc; border-color: #a8b4fa; color: #3c5ce9; }
-        QPushButton[soft="true"]:hover { background: #dfe4fb; border-color: #3c5ce9; }
+        QPushButton[soft="true"], QPushButton[settingsOption="true"]:checked {
+            background: #e8ebfc; border-color: #a8b4fa; color: #3c5ce9; }
+        QPushButton[soft="true"]:hover, QPushButton[settingsOption="true"]:checked:hover {
+            background: #dfe4fb; border-color: #3c5ce9; }
+        QPushButton[soft="true"]:focus, QPushButton[settingsOption="true"]:checked:focus { border-color: #3c5ce9; }
+        QPushButton[primary="true"]:focus { border-color: #142033; }
         QPushButton[primary="true"]:hover { background: #304dc9; }
         QPushButton[primary="true"]:disabled { background: #d8defb; border-color: #d8defb; color: #5b6880; }
         QPushButton[nav="true"] { padding: 0; min-height: 44px; max-height: 44px; border: 1px solid transparent;
@@ -132,7 +150,7 @@ def install_theme(app: QApplication) -> None:
         QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
         QScrollBar::handle:horizontal { background: #cbd3e1; border-radius: 5px; min-width: 32px; }
         QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-        QToolTip { background: #142033; color: white; border: none; padding: 8px; }
+        QToolTip { background: #142033; color: white; border: none; padding: 8px; font-size: 14px; }
         QMessageBox { background: #f5f6f8; }
     """)
     from setron.ui.appearance import install_appearance

@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 from PySide6.QtCore import QEvent, QObject, QStandardPaths, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
 from setron.ui.appearance_data import Appearance, PersonalSettings
@@ -14,6 +14,48 @@ from setron.ui.appearance_data import Appearance, PersonalSettings
 def manager():
     app = QApplication.instance()
     return getattr(app, "appearance_manager", None) if app else None
+
+
+def scaled_font(base, factor=None):
+    """디자인의 원래 크기에만 배율을 적용해 반복 변경 시 크기가 누적되지 않게 한다."""
+    if factor is None:
+        controller = manager()
+        factor = controller.appearance.font_scale if controller else 1.0
+    result = QFont(base)
+    if base.pixelSize() > 0:
+        result.setPixelSize(max(1, round(base.pixelSize() * factor)))
+    elif base.pointSizeF() > 0:
+        result.setPointSizeF(base.pointSizeF() * factor)
+    return result
+
+
+def refresh_widget_font(widget):
+    base = widget.property("setronBaseFont")
+    if base is not None:
+        value = scaled_font(base, widget.property("setronPreviewFontScale"))
+        if widget.font() != value:
+            widget.setFont(value)
+
+
+def chart_font(part, name, base=None):
+    """축·범례·막대 값의 원래 폰트를 보존하고 같은 배율로 그린다."""
+    key = "setronBase_" + name
+    getter = getattr(part, name)
+    original = base if base is not None else part.property(key)
+    if original is None:
+        original = getter()
+    part.setProperty(key, original)
+    value = scaled_font(original)
+    if getter() != value:
+        getattr(part, "set" + name[0].upper() + name[1:])(value)
+
+
+CHART_TEXT_BASE_FONT = 1
+
+
+def chart_text_font(item, base):
+    item.setData(CHART_TEXT_BASE_FONT, base)
+    item.setFont(scaled_font(base))
 
 
 def ui_color(*args):
@@ -43,6 +85,7 @@ class ThemeManager(QObject):
         self.appearance = self.store.appearance()
         self.base_stylesheet = app.styleSheet()
         self.base_palette = QPalette(app.palette())
+        self.base_font = QFont(app.font())
         self._guard = False
         self._asset_cache = {}
         app.installEventFilter(self)
@@ -109,6 +152,9 @@ class ThemeManager(QObject):
             return text
         def declaration(match):
             name, value = match.group(1), match.group(2)
+            if name == "font-size":
+                value = re.sub(r"(\d+(?:\.\d+)?)(px|pt)\b",
+                               lambda m: f"{float(m[1]) * self.appearance.font_scale:g}{m[2]}", value)
             role = "background" if "background" in name else "border" if "border" in name else "foreground"
             value = re.sub(r"#[0-9a-fA-F]{6}\b|\bwhite\b|\bblack\b", lambda m: self.color(m[0], role), value)
             return name + ":" + value
@@ -145,6 +191,7 @@ class ThemeManager(QObject):
         return self._asset_cache[key]
 
     def _widget(self, widget):
+        refresh_widget_font(widget)
         if widget.property("themePreview"):
             return
         if widget.property("setronOwnPalette"):
@@ -233,9 +280,13 @@ class ThemeManager(QObject):
         chart.setBackgroundBrush(QBrush(QColor(t["surface"])))
         chart.setPlotAreaBackgroundBrush(QBrush(QColor(t["surface"])))
         chart.setTitleBrush(QBrush(QColor(t["ink"])))
+        chart_font(chart, "titleFont")
+        chart_font(chart.legend(), "font")
         chart.legend().setLabelColor(QColor(t["ink"]))
         widget.setBackgroundBrush(QBrush(QColor(t["surface"])))
         for axis in chart.axes():
+            chart_font(axis, "labelsFont")
+            chart_font(axis, "titleFont")
             axis.setLabelsColor(QColor(t["muted"]))
             axis.setTitleBrush(QBrush(QColor(t["ink"])))
             axis.setLinePen(QPen(QColor(t["line"])))
@@ -243,7 +294,14 @@ class ThemeManager(QObject):
         for item in chart.scene().items() if chart.scene() else ():
             if isinstance(item, QGraphicsSimpleTextItem):
                 item.setBrush(QBrush(QColor(t["ink"])))
+                if (base := item.data(CHART_TEXT_BASE_FONT)) is not None:
+                    item.setFont(scaled_font(base))
+        if place_labels := getattr(chart, "_setron_place_labels", None):
+            place_labels(chart.plotArea())
         for series in chart.series():
+            if hasattr(series, "barSets"):
+                for bar_set in series.barSets():
+                    chart_font(bar_set, "labelFont")
             if hasattr(series, "color") and hasattr(series, "setColor"):
                 original = series.property("setronOriginalColor")
                 if original is None:
@@ -254,6 +312,7 @@ class ThemeManager(QObject):
     def _begin(self, appearance):
         self.appearance = appearance
         self._tokens = appearance.colors(self.dark)
+        self.app.setFont(scaled_font(self.base_font, appearance.font_scale))
         t = self.tokens
         palette = QPalette(self.base_palette)
         for role, color in ((QPalette.ColorRole.Window, t["canvas"]), (QPalette.ColorRole.Base, t["surface"]),
