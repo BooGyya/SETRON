@@ -91,10 +91,10 @@ def test_slow_review_keeps_ui_responsive_and_blocks_mutation_and_duplicate_work(
     assert slow.thread != get_ident() and page.busy and page.review_request.busy
     assert not page.save_button.isEnabled() and not page.revalidate_button.isEnabled()
     assert not page.workbook_combo.isEnabled() and not page.sheet_combo.isEnabled() and not page.kind_combo.isEnabled()
-    assert page.inputs["version_raw"].isReadOnly()
-    assert not page.apply_edit_button.isEnabled() and not page.exclude_button.isEnabled()
+    assert not page.row_model.edit_values     # 검사 중에는 표 칸을 고칠 수 없다
+    assert not page.revert_button.isEnabled() and not page.exclude_button.isEnabled()
     assert not page.save() and not page.revalidate()
-    assert not page.apply_edits() and not page.revert_selected() and not page.toggle_excluded()
+    assert not page.edit_cell("version_raw", "v9") and not page.revert_selected() and not page.toggle_excluded()
     assert not page.load_workbooks() and not page.read_selected() and not page.extract()
     assert len(slow.calls) == 1 and slow.calls[0][0] == current and slow.calls[0][0] is not current
 
@@ -107,7 +107,7 @@ def test_slow_review_keeps_ui_responsive_and_blocks_mutation_and_duplicate_work(
     slow.release.set()
     wait_until(lambda: not page.busy)
     assert completed == [get_ident()]
-    assert page.save_button.isEnabled() and not page.inputs["version_raw"].isReadOnly()
+    assert page.save_button.isEnabled() and page.row_model.edit_values
     assert page.reference is slow.value and page.draft is current
 
 

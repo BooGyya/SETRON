@@ -75,7 +75,7 @@ def test_actual_save_refreshes_both_pages_and_reports_unresolved_risk(app, revis
         assert window.query_state.applied.targets == (TargetN(1, 1, selected),)
         assert window.query_state.target_draft == (TargetN(1, 1, None),)
         assert receipt.refresh.unresolved_risk_ids
-        message = window.pages["import"].result_label.text()
+        message = window.pages["import"].toast.text.text()   # 저장 뒤 확인할 점은 토스트로 알린다
         assert "수동 위험 지정 1건" in message and "미확인" in message and "확인해 주세요" in message
         assert all_rows(storage, "risk_rule")[0]["mapping_status"] == "UNRESOLVED"
     finally:

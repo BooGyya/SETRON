@@ -94,8 +94,7 @@ def test_review_reads_database_and_displays_previous_and_new_values(page):
 def test_edited_values_refresh_reference_and_revalidate_the_whole_draft(page):
     review(page)
     page.saver.reference_data = existing_reference(version="v1", line="새 라인")
-    page.inputs["version_raw"].setText("v2")
-    assert page.apply_edits()
+    assert page.edit_cell("version_raw", "v2")
     wait_review(page)
     assert len(page.saver.load_calls) == 2
     assert page.saver.load_calls[-1] == (page.draft,)
@@ -133,7 +132,7 @@ def test_confirmation_uses_reviewed_reference_and_file_name_without_unseen_refre
     page.saver.reference_data = existing_reference(version="v3", line="변경된 라인")
     assert page.save()
     wait_review(page)
-    assert page.state == "saved"
+    assert page.draft is None and len(page.saver.saved) == 1   # 저장 뒤 1단계로 돌아간다
     assert page.reference is reviewed and len(page.saver.load_calls) == 1
     request, = page.saver.saved
     assert request.rows[0].family_id == 1
@@ -159,8 +158,7 @@ def test_memory_saver_keeps_injected_reference_without_database_lookup(app):
 def test_revalidate_keeps_review_edits_and_refreshes_database_after_reconnect(page):
     review(page)
     page.saver.failure = RuntimeError("연결 중단")
-    page.inputs["version_raw"].setText("v4")
-    assert page.apply_edits()
+    assert page.edit_cell("version_raw", "v4")
     wait_review(page)
     edited = page.draft
     request_id = page.request_id
@@ -169,21 +167,17 @@ def test_revalidate_keeps_review_edits_and_refreshes_database_after_reconnect(pa
 
     page.saver.failure = None
     page.saver.reference_data = existing_reference(version="v3", site="화성")
-    page.inputs["version_raw"].setText("아직 반영하지 않은 입력")
     page.revalidate_button.click()
     wait_review(page)
 
     assert page.draft == edited and page.draft.row(1).edits["version_raw"] == "v4"
     assert page.draft.row(1).original["version_raw"] == "v1"
-    assert page.inputs["version_raw"].text() == "아직 반영하지 않은 입력"
     assert page.request_id != request_id
     assert page.reference is page.saver.reference_data
     assert any(issue.field == "version_raw" and issue.previous_value == "v3" and issue.current_value == "v4"
                for issue in page.issues)
     assert not any(issue.code == "REFERENCE_LOAD_FAILED" for issue in page.issues)
-    # VER5: 재검토가 성공해도 편집창의 미반영 입력을 버린 채 저장하지 않는다.
-    assert not page.save_button.isEnabled()
-    assert not page.save() and "수정 반영" in page.notice.text()
+    assert page.save_button.isEnabled()
 
 
 @pytest.mark.parametrize("state", ["reading", "extracting", "validating", "saving", "saved", "unknown"])

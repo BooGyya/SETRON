@@ -1,9 +1,9 @@
 """VER5 가져오기 표시 부품. 원본·업무 판정·DB는 변경하지 않는다."""
 
-from PySide6.QtCore import QDate, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QDate, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QTextCharFormat, QTextLayout
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLineEdit, QMenu,
+    QDialog, QFrame, QHBoxLayout, QLineEdit, QMenu,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QWidgetAction, QHeaderView, QSizePolicy,
     QStyle, QStyleOptionFrame, QToolButton,
 )
@@ -13,7 +13,7 @@ from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.calendar_widgets import CalendarWidget
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, icon, svg_size
+from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, TONES, icon, svg_size
 
 
 def import_combo_style():
@@ -75,7 +75,14 @@ class DateField(QLineEdit):
 
 
 class PeriodDateField(DateField):
-    """기준일·기간 입력: 클릭은 첫 자리부터, 편집은 Qt 기본 동작, 블록 커서만 생략한다."""
+    """기준일·기간 입력: 클릭은 첫 자리부터, 편집은 Qt 기본 동작, 블록 커서만 생략한다.
+
+    ``open_on_click``을 켜면 칸 어디를 눌러도 달력이 열린다 (가져오기 기준일, 11-10 2차 6-2). 키보드 입력은 그대로다.
+    """
+
+    def __init__(self, text="", parent=None, *, open_on_click=False):
+        super().__init__(text, parent)
+        self.open_on_click = open_on_click
 
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
@@ -88,6 +95,8 @@ class PeriodDateField(DateField):
         if (event.button() == Qt.MouseButton.LeftButton and not self.isReadOnly()
                 and event.position().toPoint() == getattr(self, "_press_position", None)):
             self.setCursorPosition(0)
+            if self.open_on_click:
+                self.open_calendar()
 
     def paintEvent(self, event):
         # 입력 마스크는 커서를 한 글자 크기의 검은 선택 배경으로 그린다.
@@ -179,7 +188,7 @@ class ImportSteps(QWidget):
         for index, item in enumerate(self.buttons):
             done = self.show_completion and index < stage
             self.markers[index].setText(str(index + 1))
-            self.completions[index].setVisible(done)
+            self.completions[index].setVisible(False)   # '완료' 글자 없이 색으로만 구분한다 (11-10 2차 2-1)
             state = ("완료" if done else "진행 중" if index == stage else "대기") if self.show_completion else (
                 "선택됨" if index == stage else "이동")
             item.setAccessibleName(f"{index + 1}단계 {self.titles[index]} · {state}")
@@ -190,6 +199,53 @@ class ImportSteps(QWidget):
                               f"QPushButton:focus {{border:1px solid {PRIMARY};}}")
             for text in (self.markers[index], self.captions[index], self.completions[index]):
                 text.setStyleSheet(f"color:{ink};")
+
+
+class Toast(QFrame):
+    """창 위쪽 가운데에 잠깐 떴다 사라지는 알림. 누르면 바로 닫힌다.
+
+    이미 떠 있는 알림이 있으면 새 문구를 아래 줄에 붙이고, 더 심각한 색을 쓴다.
+    """
+
+    ORDER = ("success", "info", "warning", "danger")
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("importToast")
+        self.tone = "info"
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 12, 18, 12)
+        self.text = label("", 14, medium=True, wrap=True)
+        self.text.setMaximumWidth(760)
+        layout.addWidget(self.text)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_message(self, text, tone="success", milliseconds=3500):
+        if not self.isHidden() and self.text.text():
+            text = "\n".join((self.text.text(), text))
+            tone = max(tone, self.tone, key=self.ORDER.index)
+        self.tone = tone
+        background, ink, border = TONES[tone]
+        self.setStyleSheet(f"QFrame#importToast {{background:{background};border:1px solid {border};border-radius:10px;}}")
+        self.text.setStyleSheet(f"color:{ink};")
+        self.text.setText(text)
+        # 줄바꿈 글상자는 좁게 잡히므로, 가장 긴 줄 길이에 맞춰 폭을 정한다 (최대 760px).
+        metrics = self.text.fontMetrics()
+        self.text.setFixedWidth(min(760, max(metrics.horizontalAdvance(line) for line in text.split("\n")) + 8))
+        self.adjustSize()
+        parent = self.parentWidget()
+        if parent is not None:
+            self.move(max(0, (parent.width() - self.width()) // 2), 24)   # 제목 줄 높이: 단계 칩을 가리지 않는다
+        self.raise_()
+        self.show()
+        self.timer.start(milliseconds)
+
+    def mousePressEvent(self, event):
+        self.hide()
+        super().mousePressEvent(event)
 
 
 class ComparisonCard(Card):

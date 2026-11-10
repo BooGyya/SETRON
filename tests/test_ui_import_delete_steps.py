@@ -21,8 +21,8 @@ TITLES = ("삭제 범위 선택", "삭제 대상 확인", "삭제 영향 확인"
 def test_each_workflow_has_its_own_step_bar_without_losing_import_draft(own):
     page = own(ImportPage(excel=DemoExcel(), extractor=example_extractor))
     extracted(page)
+    page.edit_cell("version_raw", "수정 중인 버전")
     draft, snapshot = page.draft, page.snapshot
-    page.inputs["version_raw"].setText("수정 중인 버전")
     import_stage = page.progress_steps.stage
     assert page.steps.isVisibleTo(page) and not page.delete_steps.isVisibleTo(page)
     page.tabs.setCurrentIndex(1)
@@ -32,7 +32,7 @@ def test_each_workflow_has_its_own_step_bar_without_losing_import_draft(own):
     page.tabs.setCurrentIndex(0)
     assert page.steps.isVisibleTo(page) and not page.delete_steps.isVisibleTo(page)
     assert page.draft is draft and page.snapshot is snapshot
-    assert page.inputs["version_raw"].text() == "수정 중인 버전"
+    assert page.draft.row(page.selected_row_id).value("version_raw") == "수정 중인 버전"
     assert page.progress_steps.stage == import_stage
 
 
@@ -89,7 +89,7 @@ def test_delete_step_bar_stays_fixed_and_visible_when_content_scrolls(own, size)
         target = page.deletion.step_cards[index]
         top = target.mapTo(page.delete_scroll.viewport(), QPoint()).y()
         assert top < page.delete_scroll.viewport().height() and top + target.height() > 0
-    assert page.tabs.mapTo(window, QPoint()).y() < before
+    assert not page.tab_strip.isVisibleTo(window)   # 앱에서는 탭이 하나만 남아 탭 줄을 숨긴다
     assert page.mapTo(window, QPoint(0, page.height())).y() <= window.height()
 
 

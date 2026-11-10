@@ -158,7 +158,7 @@ def test_manual_link_choice_and_captured_targets_reach_actual_saver(page):
     page.release_review_chooser = choose
     assert page.save()
     wait(page)
-    assert page.state == "saved" and len(observed) == 2
+    assert page.draft is None and len(observed) == 2   # 저장 뒤 1단계로 돌아간다
     saved, = page.saver.saved
     assert saved.release_note_confirmed and saved.filename_confirmed
     assert saved.release_reviews[0].link_choices[("release", "item")] == "CURRENT"

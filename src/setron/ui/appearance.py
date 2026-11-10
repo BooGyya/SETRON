@@ -217,7 +217,9 @@ class ThemeManager(QObject):
         if current != target:
             widget.setProperty("setronRenderedStyle", target)
             widget.setStyleSheet(target)
-        elif rendered is None:
+        else:
+            # 지금 적용된 스타일을 늘 기록한다. 옛 값이 남으면 A→B→A로 바꿀 때 되돌린 A를 바뀌지 않은 것으로 보고
+            # B를 다시 입힌다 (가져오기 'AI 추출 전' 배지가 노랗게 남던 문제, 11-10).
             widget.setProperty("setronRenderedStyle", target)
         # 아이콘은 원본 자산과 슬롯 크기를 유지하고 다크 모드에서만 명암을 조정한다.
         asset = widget.property("assetFile")

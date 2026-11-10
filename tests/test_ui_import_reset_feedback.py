@@ -34,17 +34,17 @@ def test_step_numbers_and_captions_stay_together_at_every_stage(own, width):
                 assert complete.width() >= complete.sizeHint().width()
 
 
-def test_reset_cancel_preserves_loaded_data_and_unapplied_editor_changes(own):
+def test_reset_cancel_preserves_loaded_data_and_edits(own):
     page = own(ImportPage(excel=CountingExcel(), extractor=example_extractor))
     extracted(page)
     page.select_row(page.draft.rows[0].row_id)
-    page.inputs["site"].setText("수정 중인 사업장")
+    page.edit_cell("site", "수정 중인 사업장")
     original = (page.draft, page.snapshot, page.workbook_id, page.generation)
     calls = []
     page.reset_confirm = lambda text: calls.append(text) or False
     assert not page.reset_import()
     assert (page.draft, page.snapshot, page.workbook_id, page.generation) == original
-    assert page.inputs["site"].text() == "수정 중인 사업장"
+    assert page.draft.rows[0].value("site") == "수정 중인 사업장"
     assert "미저장" in calls[0] and "원본 Excel과 이미 저장된 데이터는 변경하지 않습니다" in calls[0]
 
 
@@ -58,7 +58,8 @@ def test_reset_clears_only_import_session_without_io_or_stored_data_changes(own,
     if saved:
         assert page.save()
         wait_for_extraction(page)
-        assert page.state == "saved"
+        assert page.state == "idle" and page.draft is None and len(saver.saved) == 1   # 저장 뒤 1단계로 돌아간다
+        extracted(page)
     page.configure_choices(dates=(date(2026, 10, 5),), families=("C4", "O2"), sites=("화성", "평택"))
     page.common_date.setText("2026-10-05")
     page.common_site.setText("화성")
@@ -70,7 +71,6 @@ def test_reset_clears_only_import_session_without_io_or_stored_data_changes(own,
     original, snapshot = page.draft, page.snapshot
     original_rows, original_cells = original.rows, dict(snapshot.cells)
     stored, calls = tuple(saver.saved), tuple(excel.calls)
-    page.inputs["site"].setText("미반영 수정")
     assert page.reset_import()
     assert page.state == "idle" and page.kind is ExtractKind.EQUIPMENT_STATUS
     assert page.workbooks == () and page.workbook_name is None and page.workbook_id is None
@@ -78,7 +78,6 @@ def test_reset_clears_only_import_session_without_io_or_stored_data_changes(own,
     assert page.selected_row_id is None and page.issues == () and not page.reviewed_issues
     assert page.workbook_combo.count() == page.sheet_combo.count() == 0
     assert page.grid_model.rowCount() == page.row_model.rowCount() == page.issue_model.rowCount() == 0
-    assert page.editor_grid.count() == 0 and page.inputs == page.source_inputs == page.originals == {}
     assert not page.common_date.text() and not page.common_site.text() and not page.release_family.currentText()
     assert page.common_area.currentIndex() == 0 and not page.common_overwrite.isChecked()
     assert page.common_site_combo.findText("평택") >= 0 and page.release_family.findText("C4") >= 0
