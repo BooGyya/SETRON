@@ -347,7 +347,7 @@ def test_representative_states_use_one_reusable_detail(window, eid, goal):
     page, query = open_list(window)
     assert page.open_detail(EquipmentSelection(query, DAY, eid))
     assert goal.value in page.detail_goal_badge.text()
-    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "items", "import", "ai", "management", "replay", "reports", "settings"}
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "data", "items", "import", "ai", "management", "replay", "reports", "settings"}
     if eid == 3:
         assert page.detail_model.rows[0][2] == "미입력" and "버전 값이 비어" in page.detail_model.rows[0][5]
     if eid in (4, 5):

@@ -212,7 +212,10 @@ class SaveRow:
 
 @dataclass(frozen=True)
 class SaveRequest:
-    """한 번의 저장 묶음. ``workbook_name``은 확인창 표시용이며 ``raw_data``에 넣지 않는다."""
+    """한 번의 저장 묶음. ``workbook_name``은 확인창 표시용이며 ``raw_data``에 넣지 않는다.
+
+    DB 입력 작업에는 데이터 관리 변경 이력용으로 ``[파일]`` 키에 따로 보관한다 (11-10, ``batch_raw_data``).
+    """
 
     request_id: str
     kind: ExtractKind

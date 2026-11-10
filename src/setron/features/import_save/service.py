@@ -26,6 +26,7 @@ from typing import Any
 from threading import Lock
 
 from setron.features.ai.schemas import ExtractKind
+from setron.features.data_admin.service import WORKBOOK_KEY, with_workbook
 from setron.features.reference_data import (
     FOUNDRY_FAMILY_MODELS, FOUNDRY_SUFFIX, MODEL_CATEGORIES as _REFERENCE_CATEGORIES, area_of, resolve_model_text,
     strip_foundry,
@@ -189,6 +190,8 @@ class DatabaseImportSaver:
                                  for address, value in cells.items()),
                              "같은 시트명·셀 주소의 원본 값이 다릅니다. 한 계열의 전체 누적 노트를 같은 통합문서에서 검토해 주세요.")
                     destination.update(cells)
+                if (request.workbook_name or "").strip():
+                    target[WORKBOOK_KEY] = request.workbook_name.strip()  # 시트 합치기 뒤에 파일 이름만 더한다
         for request in requests:
             if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE and not request.release_note_confirmed:
                 for row in request.rows:
@@ -328,7 +331,8 @@ class DatabaseImportSaver:
             for request in requests:
                 if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE and request.release_note_confirmed:
                     continue
-                batch = tx.insert("import_batch", {"source_type": "EXCEL", "raw_data": batch_raw_data(request.raw_data)})
+                batch = tx.insert("import_batch", {"source_type": "EXCEL",
+                                                   "raw_data": batch_raw_data(request.raw_data, request.workbook_name)})
                 receipt_batches[request.request_id] = (batch["batch_id"],)
                 snapshots = (self._snapshots(tx, request.rows, batch["batch_id"])
                              if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS else ())
@@ -619,14 +623,15 @@ class DatabaseImportSaver:
 
 # --- 형식 변환 --------------------------------------------------------------------
 
-def batch_raw_data(raw: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def batch_raw_data(raw: Mapping[str, Any], workbook_name: str | None = None) -> dict[str, Any]:
     """가져오기 원본(``{sheet, cells, merged}``)을 입력 작업 형식(``{시트: {셀: 값}}``)으로 바꾼다.
 
     병합 범위는 입력 작업 형식에 자리가 없어 넣지 않는다. 병합 셀의 값은 왼쪽 위 셀에 남아 있다.
+    workbook_name을 주면 데이터 관리 변경 이력에 보이도록 파일 이름을 WORKBOOK_KEY로 함께 보관한다 (11-10 결정).
     """
     _require(isinstance(raw, Mapping) and isinstance(raw.get("sheet"), str) and isinstance(raw.get("cells"), Mapping),
              "원본 시트 자료가 올바르지 않습니다.")
-    return {raw["sheet"]: dict(raw["cells"])}
+    return with_workbook({raw["sheet"]: dict(raw["cells"])}, workbook_name)
 
 
 def _refresh_context(requests):

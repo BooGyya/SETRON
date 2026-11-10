@@ -21,6 +21,7 @@ from setron.features.storage.service import StorageService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.ai_client import ResponseSource
 from setron.infrastructure.database import DatabaseConfig
+from setron.features.data_admin import WORKBOOK_KEY  # 11-10: 가져오기 원본에 파일 이름도 보관
 from test_schema_mysql import schema_database  # noqa: F401  공통 스키마 생성·정리 fixture 재사용
 from test_import_validation import draft as review_draft, row as review_row
 
@@ -128,7 +129,7 @@ def test_mixed_equipment_is_saved_with_batch_sources_and_pm_models(storage):
 
     with storage.transaction() as tx:
         batch = tx.get("import_batch", {"batch_id": receipt.batch_id})
-    assert batch["source_type"] == "EXCEL" and set(batch["raw_data"]) == {SHEET}
+    assert batch["source_type"] == "EXCEL" and set(batch["raw_data"]) == {SHEET, WORKBOOK_KEY}
     saved = EquipmentService(storage).get_snapshot("QA-MIXED", date(2026, 10, 21))
     assert saved.group_id is None and saved.site == "화성" and saved.production_area == "MEMORY"
     assert [(sw.version_raw, [pm.pm_name for pm in sw.pms]) for sw in saved.software] == [("v1.2", ["PM1"]), ("v2.0", ["PM3"])]
@@ -388,7 +389,7 @@ def test_pipeline_combines_all_pm_software_and_snapshot_sources(storage, csv_sou
     assert [pm.source_reference["pm_name"]["cells"] for pm in saved.software[0].pms] == [["G1"], ["G2"]]
     with storage.transaction() as tx:
         batch = tx.get("import_batch", {"batch_id": receipt.batch_id})
-    assert batch["raw_data"] == {source.sheet.sheet_name: source.sheet.cells}
+    assert batch["raw_data"] == {source.sheet.sheet_name: source.sheet.cells, WORKBOOK_KEY: source.workbook_name}
 
 
 def test_pipeline_preserves_confirmed_alias_raw_text_and_release_id(storage):

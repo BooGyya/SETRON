@@ -51,6 +51,7 @@ from setron.ui.release_refresh import capture_release_context, is_database_impor
 from setron.ui.replay_page import ReplayPage
 from setron.ui.reports_page import ReportsPage
 from setron.ui.management_page import ManagementPage
+from setron.ui.data_management_page import DataManagementPage
 from setron.ui.management_data import gateway_from_env
 from setron.ui.management_integration import export_failure, report_filter
 from setron.ui.settings_page import SettingsPage
@@ -249,6 +250,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 initial_targets(source))
     replay = ReplayPage(source, targets_provider=replay_targets)
     management = ManagementPage(management_gateway, context_provider=release_refresh_context)
+    # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 저장은 같은 관리 저장 흐름(after_management_save)을 쓴다.
+    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context,
+                                   risk_opener=lambda family_id, item_id: items.manager.open_add(
+                                       family_id=family_id, item_id=item_id))
+    # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 저장 자료 삭제로 옮긴다 (같은 객체·연결 유지).
+    data_page.attach_deletion(importer.deletion)
+    importer.tabs.setTabVisible(1, False)
     versions.configure(management_gateway, release_refresh_context, edit_allowed=lambda: (
         not management.busy and not management.locked and management.state not in {"review", "saving"}
         and not management.pending and not management.pending_applicability))
@@ -335,6 +343,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.register_page("dashboard", dashboard)
     window.register_page("heatmap", heatmap)
     window.register_page("versions", versions, uses_query=False)
+    window.register_page("data", data_page, uses_query=False)
     window.register_page("items", items, uses_query=False)
     window.register_page("import", importer, uses_query=False)
     window.register_page("replay", replay, uses_query=False)
@@ -485,14 +494,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def sync_mode(*_):
         sync_back()
         # 가져오기 화면은 자체 단계 배너를 쓰고, 대시보드·히트맵은 화면 단순화를 위해 공통 안내 배지를 숨긴다.
-        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions", "reports", "settings") + (("ai",) if chat_enabled else ())
+        quiet = ("import", "dashboard", "heatmap", "items", "replay", "versions", "data", "reports", "settings") + (("ai",) if chat_enabled else ())
         showing_equipment_result = (window.route == "equipment" and equipment.snapshot is not None
                                     and equipment.item_request is None)
         window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
         # 데이터 가져오기 화면은 '합성 예시' 안내 박스를 숨긴다. DB 접속 실패 경고는 그대로 보인다.
         warning = window.data_warning.text()
         window.data_warning.setVisible(bool(warning) and not (window.route == "import" and warning.startswith("DB 접속 설정이 없어")))
-        window.header.toolbar.setVisible(window.route not in {"items", "replay", "versions", "reports", "settings"})
+        window.header.toolbar.setVisible(window.route not in {"items", "replay", "versions", "data", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
@@ -511,6 +520,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.notice.setText(getattr(ai, "notice_text", "AI 분석 · 예제 응답 · 질문으로 DB를 바꾸지 않음"))
             list_action.setEnabled(False)
         elif window.route == "reports":
+            list_action.setEnabled(False)
+        elif window.route == "data":
+            window.header.title.setText("데이터 관리")
             list_action.setEnabled(False)
         elif window.route == "versions":
             window.header.title.setText("버전 관리")
@@ -766,6 +778,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             items.reload()
         elif key == "replay":
             replay.enter()
+        elif key == "data":
+            data_page.enter()
     window.page_changed.connect(ensure_loaded)
     window.header.action_requested.connect(open_all)
 
@@ -937,6 +951,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.notice.setText("저장 결과 미확인 · 같은 수정 묶음을 다시 저장하지 말고 DB 기록을 확인해 주세요.")
 
     management.save_started.connect(begin_management_save)
+    data_page.save_started.connect(begin_management_save)
+    data_page.saved.connect(after_management_save)
+    data_page.save_failed.connect(lambda: after_management_save(None))
+    management.saved.connect(data_page.invalidate)
+    importer.saved.connect(data_page.invalidate)
+    importer.deletion.deleted.connect(data_page.invalidate)
     management.saved.connect(after_management_save)
     management.save_uncertain.connect(uncertain_management_save)
     management.save_failed.connect(lambda: after_management_save(None))
@@ -957,7 +977,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     management.request.completed.connect(lambda *_: ai.refresh())
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
-    window.close_guard = lambda: (management.state != "saving" and not versions.saving
+    window.close_guard = lambda: (management.state != "saving" and not versions.saving and not data_page.saving
                                  and not settings.operation.busy
                                  and not reports.saving
                                  and not versions.history_panel.read_request.busy and importer.state != "saving"
