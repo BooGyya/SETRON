@@ -415,7 +415,7 @@ def _priority(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tup
         rows.append(("-", entry.record.equipment_code, entry.record.line or "-", "확인 필요", "버전 위치를 알 수 없음", "확인 필요"))
         tones.append("warning")
     has_rules = result.has_rules or any(getattr(v, "value", v) == "RISK" for v in data.risks.values())
-    notices = [] if has_rules else ["등록된 위험 기준이 없어 버전 위치(목표까지 남은 칸)로만 정렬했습니다 · 판단 기준 확정 전"]
+    notices = [] if has_rules else ["등록된 위험 기준이 없어 버전 위치(목표까지 남은 칸)로만 정렬했습니다."]
     if not needing:
         return "업그레이드가 필요한 설비가 없습니다.", [Table("업그레이드 우선순위", ("순위", "설비명", "원본 구역", "현재 → 목표 N", "근거", "우선도"), tuple(rows), tuple(tones))], notices
     top = [e for e in result.ranked if any((p.steps_behind or 0) > 0 for p in e.positions)][:2]
@@ -602,7 +602,7 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
                           suggestions=SUGGESTIONS[:4])
     if any(f.pms and f.pms[0].comparison.reason is CompareReason.TARGET_NOT_SET
            for s in scope.statuses.values() for f in s.families):
-        notices.append("목표 N이 정해지지 않은 계열이 있어 그 설비는 '확인 필요'로 셉니다 · 판단 기준 확정 전")
+        notices.append("목표 N이 정해지지 않은 계열이 있어 그 설비는 '확인 필요'로 셉니다.")
     for intent in request.intents:
         if intent is Intent.SEARCH:
             text, found, equipment_ids = _search(request, data, scope)
