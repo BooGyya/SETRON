@@ -521,14 +521,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         showing_equipment_result = (window.route == "equipment" and equipment.snapshot is not None
                                     and equipment.item_request is None)
         window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
-        window.header.toolbar.setVisible(window.route not in {"replay", "versions", "reports", "settings"})
+        window.header.toolbar.setVisible(window.route not in {"items", "replay", "versions", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap"))  # Figma 헤더에 없음. 대시보드는 카드의 "설비 목록 →"
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)
             return
         if window.route == "items":
-            window.header.title.setText("Item 상세" if items.mode == "detail" and items.tabs.currentIndex() == 0 else "아이템 매니저")
+            window.header.title.setText("아이템 매니저")
             window.notice.setText("Item 조회 전용 · 자료 출처와 관측 기준일은 본문 참조")
             list_action.setEnabled(False)
         elif window.route == "import":
@@ -978,7 +978,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         replay.setEnabled(True)
         replay.invalidate()
         versions.refresh_after_save()
-        items.refresh_after_save()
+        if item_risk_save_pending and result:
+            items.last_saved_rule_id = next((r.key["risk_rule_id"] for r in result.records if r.table == "risk_rule"), None)
+            if items.tabs.currentIndex() == 1:
+                items.manager.pending_rule_id = items.last_saved_rule_id
+        items.refresh_after_save(preserve_detail=item_risk_save_pending)
         ai.invalidate_data()
         query = window.query_state.applied
         cancel_management_refresh()

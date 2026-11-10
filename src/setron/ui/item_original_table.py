@@ -2,13 +2,36 @@
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
 
 from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.theme import INK, SECONDARY, font
+
+
+def show_item_source(parent, data, item_id):
+    entry = next((e for e in data.versions.items if e.item.item_id == item_id), None)
+    if entry is None:
+        return
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("아이템 원본 근거")
+    layout = QVBoxLayout(dialog)
+    layout.addWidget(label(entry.item.content, 15, medium=True, wrap=True))
+    table = ItemOriginalTable()
+    layout.addWidget(table)
+    rows = tuple(r for r in data.versions.original_rows if r.item_id == item_id)
+    table.set_rows(rows, (item_id,))
+    for ref in entry.sources:
+        layout.addWidget(label(" · ".join(str(v) for v in (ref.document, ref.sheet, ref.cells) if v), wrap=True))
+    if not rows:
+        layout.addWidget(label("보관된 원본 행이 없습니다. 위 내용은 저장된 관리값입니다.", wrap=True))
+    close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+    close.rejected.connect(dialog.reject)
+    layout.addWidget(close)
+    dialog.resize(720, 360)
+    dialog.exec()
 
 
 def _column_key(text):

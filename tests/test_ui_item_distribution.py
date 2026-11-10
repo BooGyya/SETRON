@@ -14,6 +14,7 @@ from setron.ui.item_data import selected_application
 def open_item(window):
     page = window.pages["items"]
     assert page.open_row(0)
+    page.more_button.click()
     return page
 
 
@@ -23,6 +24,7 @@ def test_site_matrix_matches_counts_and_zero_cells_keep_empty_scope(window, data
     page.loader = lambda: replace(data, records=records)
     page.reload()
     page.open_row(0)
+    page.more_button.click()
     page.distribution_view.setCurrentIndex(1)
     assert page.distribution.model.rows == (("Site A", "1대", "0대", "2대", "0대"),
                                             ("Site B", "0대", "1대", "0대", "1대"))
@@ -83,6 +85,7 @@ def test_table_enter_and_release_source_are_connected(window, data):
     page.loader = lambda: replace(data, versions=versions)
     page.reload()
     page.open_row(0)
+    page.more_button.click()
     page.equipment_table.setCurrentIndex(page.equipment_model.index(0, 0))
     QTest.keyClick(page.equipment_table, Qt.Key.Key_Return)
     detail = window.pages["equipment"]

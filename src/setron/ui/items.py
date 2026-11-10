@@ -1,17 +1,20 @@
 """VER5 Item 분석·관리. 원본/판정 조회를 조합하고 명시적 위험 등록은 기존 관리 경계에 위임한다."""
 
+from dataclasses import replace
+from html import escape
+
 from PySide6.QtCore import QPoint, QRect, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton, QSizePolicy,
+    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu, QPushButton, QSizePolicy,
     QStyle, QStyledItemDelegate, QTabBar, QVBoxLayout, QWidget,
 )
 
 from setron.infrastructure.excel_reader import open_source_cell
-from setron.features.item.schemas import APPLICATION_LABELS, Application, ItemState
+from setron.features.item.schemas import APPLICATION_LABELS, Application, Basis, ItemState
 from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
-from setron.ui.components import Card, StatusBadge, button, label
+from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_data import (
     BASIS_LABELS, ItemEquipmentSelection, ItemManagerData, release_note_rows, selected_application,
@@ -22,7 +25,7 @@ from setron.ui.item_answer_card import ItemAnswerCard
 from setron.ui.item_original_table import EvidenceDelegate, ItemOriginalTable
 from setron.ui.item_risk_page import ItemRiskPage
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import ACCENT_SOFT, INK, PRIMARY, SECONDARY, font, icon, svg_size
+from setron.ui.theme import ACCENT_SOFT, INK, PRIMARY, SECONDARY, font
 from setron.ui.versions import VersionsPage, _fit
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.source_notice import source_description, observation_description
@@ -36,6 +39,77 @@ def _text(text="", size=13):
     widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     return widget
+
+
+class _ItemResultButton(QPushButton):
+    """Keep the title and disclosure icon in fixed slots in all interaction states."""
+
+    rule_requested = Signal(int)
+
+    def __init__(self, content, rules):
+        super().__init__()
+        self.setAccessibleName(content)
+        self.setToolTip(content)
+        self.setCheckable(True)
+        self.setAutoDefault(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet(
+            "QPushButton {background:white;border:0;border-top:1px solid #e5eaf3;"
+            "border-bottom:1px solid transparent;border-left:3px solid transparent;border-radius:0;padding:0;min-height:46px;max-height:46px;}"
+            "QPushButton:hover {background:#f7f9fc;}"
+            "QPushButton:checked {background:#edf0fd;}"
+            'QPushButton[keyboardFocus="true"]:focus {border:1px dashed #66708a;border-left-width:3px;}'
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(17, 0, 16, 0)
+        self.caption = label(content, 15, medium=True)
+        self.caption.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        arrow = DisclosureArrow()
+        for widget in (self.caption, arrow):
+            widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        row.addWidget(self.caption, 1)
+        self.rule_badge = None
+        if rules:
+            self.rule_badge = button(f"등록된 기준 {len(rules)}건 ›")
+            self.rule_badge.setStyleSheet("QPushButton {background:#edf0fd;color:#3652ca;border:0;border-radius:4px;padding:2px 8px;min-height:23px;max-height:23px;}")
+            if len(rules) == 1:
+                self.rule_badge.clicked.connect(lambda: self.rule_requested.emit(rules[0].risk_rule_id))
+            else:
+                menu = QMenu(self.rule_badge)
+                for rule in rules:
+                    action = menu.addAction(rule.display_name or rule.risk_reason)
+                    action.triggered.connect(lambda checked=False, rid=rule.risk_rule_id: self.rule_requested.emit(rid))
+                self.rule_badge.setMenu(menu)
+            names = "\n".join(rule.display_name or rule.risk_reason for rule in rules)
+            self.setToolTip(f"{content}\n{names}")
+            self.setAccessibleDescription(f"등록된 위험 기준 {len(rules)}건. {names}")
+            self.rule_badge.setToolTip(names)
+            row.addWidget(self.rule_badge)
+        row.addWidget(arrow)
+        self.toggled.connect(arrow.set_expanded)
+
+    def _mark_keyboard_focus(self, enabled):
+        if self.property("keyboardFocus") != enabled:
+            self.setProperty("keyboardFocus", enabled)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
+
+    def focusInEvent(self, event):
+        self._mark_keyboard_focus(event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                                                     Qt.FocusReason.ShortcutFocusReason))
+        super().focusInEvent(event)
+
+    def mousePressEvent(self, event):
+        self._mark_keyboard_focus(False)
+        super().mousePressEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        badge_width = self.rule_badge.sizeHint().width() + self.layout().spacing() if self.rule_badge else 0
+        available = max(0, self.width() - 64 - badge_width)
+        self.caption.setText(self.caption.fontMetrics().elidedText(self.accessibleName(), Qt.TextElideMode.ElideRight, available))
 
 
 def _style_raw_table(table):
@@ -205,6 +279,9 @@ class ItemsPage(QWidget):
         self.loader, self.data = loader, None
         self.ai_client = ai_client
         self.save_feedback = None
+        self.last_saved_rule_id = None
+        self.restore_detail = None
+        self.scoped_detail = False
         self.answer = None
         self.answer_request = ReadRequest(self)
         self.answer_request.completed.connect(self._answer_loaded)
@@ -217,8 +294,8 @@ class ItemsPage(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
         self.tabs = QTabBar()
-        self.tabs.addTab("Item 분석")
-        self.tabs.addTab("Item 관리")
+        self.tabs.addTab("아이템 조회")
+        self.tabs.addTab("위험 기준 관리")
         self.tabs.setExpanding(False)
         self.tabs.setDrawBase(True)
         self.tabs.setAccessibleName("아이템 매니저 탭")
@@ -235,6 +312,10 @@ class ItemsPage(QWidget):
         status_row.setSpacing(12)
         status_row.addWidget(self.status, alignment=Qt.AlignmentFlag.AlignVCenter)
         status_row.addWidget(self.notice, 1)
+        self.saved_rule_button = button("등록한 기준 보기")
+        self.saved_rule_button.hide()
+        self.saved_rule_button.clicked.connect(self.open_saved_rule)
+        status_row.addWidget(self.saved_rule_button)
         body.addWidget(self.status_host)
         self.list_view, self.detail_view = QWidget(), QWidget()
         listing, detail = QVBoxLayout(self.list_view), QVBoxLayout(self.detail_view)
@@ -247,7 +328,7 @@ class ItemsPage(QWidget):
         card.body.setContentsMargins(16, 12, 16, 12)
         top = QHBoxLayout()
         top.setSpacing(12)
-        self.family_title = label("설비군 선택", 14, medium=True)
+        self.family_title = label("SW 계열", 14, medium=True)
         top.addWidget(self.family_title)
         top.addStretch()
         self.family_host = QWidget()
@@ -266,44 +347,56 @@ class ItemsPage(QWidget):
         # 제목을 선택지와 같은 흐름에 넣지 않아, 줄바꿈 후에도 하나의 선택 영역으로 읽힌다.
         self.family_choices = QFrame()
         self.family_choices.setObjectName("itemFamilyChoices")
-        self.family_choices.setStyleSheet("QFrame#itemFamilyChoices {background:#f9fafb;border:1px solid #e5eaf3;border-radius:8px;}")
+        self.family_choices.setStyleSheet("QFrame#itemFamilyChoices {background:transparent;border:0;}")
         choices = QVBoxLayout(self.family_choices)
-        choices.setContentsMargins(8, 8, 8, 8)
+        choices.setContentsMargins(0, 0, 0, 0)
         choices.addWidget(self.family_host)
         card.body.addWidget(self.family_choices)
         listing.addWidget(card)
-        # Figma 08 AI 검색 막대: AI 답변은 미연결이므로 기존 키워드 검색만 수행한다.
+        search_panel = card
         bar = QFrame()
         bar.setObjectName("itemSearchBar")
-        bar.setStyleSheet(f"QFrame#itemSearchBar {{background:white;border:1.5px solid {PRIMARY};border-radius:12px;}}")
+        bar.setStyleSheet(f"QFrame#itemSearchBar {{background:#f9fafb;border:1px solid #d5d7da;border-radius:8px;}}")
         row = QHBoxLayout(bar)
         row.setContentsMargins(18, 8, 8, 8)
         row.setSpacing(12)
-        sparkle = QLabel()
-        sparkle.setPixmap(icon("57f36.svg").pixmap(svg_size("57f36.svg")))
-        sparkle.setFixedSize(svg_size("57f36.svg"))
-        row.addWidget(sparkle)
+
         self.search = QLineEdit()
         self.search.setAccessibleName("Item 검색")
-        self.search.setPlaceholderText("예) Recipe Edit 경고 기능은 어떤 버전에 포함됐고, 현재 적용 현황은 어때?")
+        self.search.setPlaceholderText("기능명이나 증상을 입력하세요. 예) Recipe Edit 경고")
         self.search.setFixedHeight(40)
         self.search.setMinimumWidth(0)
         self.search.setFont(font(15))
         self.search.setStyleSheet("QLineEdit {background:transparent;border:0;padding:0;}")
         row.addWidget(self.search, 1)
-        self.ai_search = button("AI 검색", primary=True)
+        self.ai_search = button("검색", primary=True)
         self.ai_search.setFixedSize(80, 40)
         self.ai_search.setToolTip("관련 Item을 찾고 저장된 릴리즈·설비 관측으로 적용 현황을 계산합니다.")
         self.ai_search.clicked.connect(self.search_answer)
         self.search.returnPressed.connect(self.search_answer)
         row.addWidget(self.ai_search)
-        listing.addWidget(bar)
+        search_panel.body.setSpacing(8)
+        search_panel.body.addWidget(bar)
+        self.setFocusProxy(self.search)
+        bar.setFocusProxy(self.search)
+        self.search.setClearButtonEnabled(True)
         # Figma 08 릴리즈 노트 원본: 저장된 열(버전·No·내용)과 저장 상태·모델 범위만 표시한다.
         card = Card(padding=24)
         card.body.setContentsMargins(24, 20, 24, 20)
         self.answer_card = ItemAnswerCard()
         self.answer_card.navigate_requested.connect(self.answer_navigation)
-        card.body.addWidget(self.answer_card)
+        self.answer_toggle = button("검색 분석 보기")
+        self.answer_toggle.setCheckable(True)
+        self.answer_toggle.toggled.connect(self.answer_card.setVisible)
+        self.answer_toggle.hide()
+        listing.addWidget(self.answer_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+        listing.addWidget(self.answer_card)
+        self.original_toggle = button("릴리즈노트 원본 보기")
+        self.original_toggle.setCheckable(True)
+        self.original_toggle.toggled.connect(card.setVisible)
+        self.original_toggle.toggled.connect(lambda opened: self.original_toggle.setText("릴리즈노트 원본 접기" if opened else "릴리즈노트 원본 보기"))
+        card.hide()
+        original_card = card
         head = QHBoxLayout()
         head.setSpacing(10)
         titles = QVBoxLayout()
@@ -333,19 +426,16 @@ class ItemsPage(QWidget):
         card.body.addWidget(self.release_note_table)
         self.release_note_empty = _text()
         card.body.addWidget(self.release_note_empty)
-        listing.addWidget(card)
         card = Card(padding=24)
+        self.results_card = card
         card.body.setContentsMargins(24, 20, 24, 20)
-        card.body.addWidget(label("전체 Item 목록", 17, medium=True))
-        self.count = _text("", 12)
-        self.count.setStyleSheet(f"color:{SECONDARY};")
+        self.count = label("검색 결과", 16, medium=True)
+        self.count.setFont(font(18, medium=True))
         card.body.addWidget(self.count)
-        self.list_model = ReadTableModel(("No / Item ID", "변경 내용", "확인된 포함 릴리즈", "출처 문서"))
-        self.table = read_table(self.list_model, "Item 목록", (170, 440, 190, 280))
-        _style_raw_table(self.table)
-        self.table.clicked.connect(lambda index: self.open_row(index.row()))
-        self.table.activated.connect(lambda index: self.open_row(index.row()))
-        card.body.addWidget(self.table)
+        self.result_rows = QVBoxLayout()
+        self.result_rows.setSpacing(0)
+        card.body.addLayout(self.result_rows)
+        self.result_buttons = {}
         self.empty = _text()
         card.body.addWidget(self.empty)
         controls = QHBoxLayout()
@@ -360,27 +450,87 @@ class ItemsPage(QWidget):
         controls.addWidget(self.refresh)
         card.body.addLayout(controls)
         listing.addWidget(card)
-        self.back = button("Item 목록으로 돌아가기")
+        self.listing = listing
+        listing.addWidget(self.detail_view)
+        listing.addWidget(self.original_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+        listing.addWidget(original_card)
+        self.back = button("검색 결과로 돌아가기")
         self.back.clicked.connect(self.back_to_list)
-        detail.addWidget(self.back, alignment=Qt.AlignmentFlag.AlignLeft)
+
         card = Card()
         card.body.setContentsMargins(24, 20, 24, 20)
         self.title, self.content = _text("", 20), _text("", 14)
         self.title.setFont(font(20, medium=True))
-        card.body.addWidget(self.title)
+        card.body.setSpacing(8)
+        detail_panel = self.full_detail = card
+        heading = QHBoxLayout()
+        heading.addWidget(self.title, 1)
+        heading.addWidget(self.back)
+        card.body.addLayout(heading)
         card.body.addWidget(self.content)
+        self.inline_box = QFrame()
+        self.inline_box.setObjectName("inlineItemFacts")
+        self.inline_box.setStyleSheet("QFrame#inlineItemFacts {background:#f7f9fc;border:0;}")
+        inline = QVBoxLayout(self.inline_box)
+        inline.setContentsMargins(18, 14, 16, 14)
+        inline.setSpacing(12)
+        facts = QHBoxLayout()
+        facts.setSpacing(32)
+        self.first_value = label("", 20, medium=True)
+        self.missing_value = label("", 20, medium=True)
+        for name, value in (("최초 포함 버전", self.first_value), ("미적용 설비", self.missing_value)):
+            metric = QVBoxLayout()
+            metric.setSpacing(1)
+            metric.addWidget(label(name, 12, color=SECONDARY))
+            metric.addWidget(value)
+            facts.addLayout(metric)
+        self.inline_date = label("", 12, color=SECONDARY)
+        metric.addWidget(self.inline_date)
+        facts.setAlignment(Qt.AlignmentFlag.AlignTop)
+        facts.addStretch()
+        self.inline_equipment = label("", 14, wrap=True)
+        self.inline_equipment.setTextFormat(Qt.TextFormat.RichText)
+        self.inline_equipment.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.inline_equipment.setStyleSheet("border-top:1px solid #dbe1ed;padding-top:8px;")
+        inline.addLayout(facts)
+        inline.addWidget(self.inline_equipment)
+        links = QHBoxLayout()
+        self.more_button = button("전체 적용 현황")
+        self.more_button.setCheckable(True)
+        self.more_button.toggled.connect(card.setVisible)
+        links.addStretch()
+        links.addWidget(self.more_button)
+        self.inline_register = button("위험 기준 등록")
+        self.inline_register.setProperty("soft", True)
+        self.inline_register.clicked.connect(lambda: self.manager.open_add(item_id=self.selected_id, family_id=self.family_id))
+        links.addWidget(self.inline_register)
+        inline.addLayout(links)
+        detail.addWidget(self.inline_box)
+        self.source_button = button("버전 · 원본 근거")
+        self.source_button.setCheckable(True)
+        self.register_rule = button("위험 기준 등록")
+        self.register_rule.clicked.connect(lambda: self.manager.open_add(item_id=self.selected_id, family_id=self.family_id))
         detail.addWidget(card)
+        evidence = QWidget()
+        evidence_body = QVBoxLayout(evidence)
+        evidence_body.setContentsMargins(0, 0, 0, 0)
+        self.detail_original = ItemOriginalTable()
+        evidence_body.addWidget(self.detail_original)
+        evidence.hide()
+        self.source_button.toggled.connect(evidence.setVisible)
         self.release_model, self.release_table, self.release_note = self._section(
-            detail, "포함 릴리즈 · 모델 적용 범위", ("SW 계열", "버전 원문", "확인된 순서", "포함 상태", "모델 범위"),
+            evidence_body, "포함 릴리즈 · 모델 적용 범위", ("SW 계열", "버전 원문", "확인된 순서", "포함 상태", "모델 범위"),
             (180, 240, 200, 180, 280))
         self.source_model, self.source_table, self.source_note = self._section(
-            detail, "Item 출처 · 원본 위치", ("대상 / 필드", "문서 · 리비전", "시트 · 셀", "입력 작업"), (180, 380, 280, 180))
+            evidence_body, "Item 출처 · 원본 위치", ("대상 / 필드", "문서 · 리비전", "시트 · 셀", "입력 작업"), (180, 380, 280, 180))
         self.source_table.activated.connect(self.open_source_cell)
-        card = Card()
-        card.body.setContentsMargins(24, 20, 24, 20)
-        card.body.addWidget(label("설비별 적용 현황", 17, medium=True))
-        self.observation_note, self.summary = _text(), _text()
-        card.body.addWidget(self.observation_note)
+        card = detail_panel
+        line = QHBoxLayout()
+        self.observation_note, self.summary = _text("", 12), _text("", 14)
+        line.addWidget(label("설비별 적용 현황", 16, medium=True), 1)
+        self.observation_note.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        line.addWidget(self.observation_note, 1)
+        card.body.addLayout(line)
         card.body.addWidget(self.summary)
         self.state_filter = ComboBox()
         self.state_filter.setAccessibleName("Item 설비 적용 상태")
@@ -414,11 +564,13 @@ class ItemsPage(QWidget):
         self.scope_count = _text()
         card.body.addWidget(self.scope_count)
         card.body.addWidget(self.equipment_empty)
-        detail.addWidget(card)
-        detail.addWidget(_text("설비 행 또는 타일 선택 → 기존 설비 상세와 Item 근거 · 복귀 시 선택 범위 유지\n"
-                               "출처 표의 행을 두 번 클릭하면 원본 Excel 셀을 열 수 있습니다."))
+        actions = QHBoxLayout()
+        actions.addWidget(self.source_button)
+        actions.addStretch()
+        actions.addWidget(self.register_rule)
+        card.body.addLayout(actions)
+        detail.addWidget(evidence)
         body.addWidget(self.list_view)
-        body.addWidget(self.detail_view)
         self.manager = ItemRiskPage()
         _style_raw_table(self.manager.table)
         body.addWidget(self.manager)
@@ -444,15 +596,27 @@ class ItemsPage(QWidget):
 
     def _set_mode(self, mode):
         self.mode = mode
+        self._place_detail()
         analysis = self.tabs.currentIndex() == 0
-        for view, visible in ((self.list_view, analysis and mode == "list"), (self.detail_view, analysis and mode == "detail"),
+        for view, visible in ((self.list_view, analysis), (self.detail_view, analysis and mode == "detail"),
                               (self.manager, not analysis)):
             view.setVisible(visible)
             view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred if visible else QSizePolicy.Policy.Ignored)
         self.mode_changed.emit(mode)
 
-    def refresh_after_save(self):
+    def open_registered_rule(self, rule_id):
+        self.tabs.setCurrentIndex(1)
+        self.manager.select_rule(rule_id)
+
+    def open_saved_rule(self):
+        if self.last_saved_rule_id is not None:
+            self.open_registered_rule(self.last_saved_rule_id)
+
+    def refresh_after_save(self, *, preserve_detail=False):
         """저장 전 조회 응답과 상세 선택을 폐기하고 현재 Item 자료를 읽는다."""
+        if preserve_detail and self.mode == "detail" and self.tabs.currentIndex() == 0:
+            self.restore_detail = (self.selected_id, self.family_id, self.scoped_detail, self.site_filter.currentData(),
+                                   self.state_filter.currentData(), self.page_index, self.answer)
         self.read_request.cancel()
         self.reload()
 
@@ -462,6 +626,7 @@ class ItemsPage(QWidget):
             return
         self._clear_answer()
         self.save_feedback = None
+        self.saved_rule_button.hide()
         self._invalidate_selection()
         self.selected_id, self.equipment = None, ()
         self.title.clear()
@@ -508,10 +673,27 @@ class ItemsPage(QWidget):
             self.show_save_feedback(*self.save_feedback)
         self.render_families()
         self._filter_changed()
+        restore, self.restore_detail = self.restore_detail, None
+        if restore and self.data:
+            item_id, family, scoped, site, state, page_index, previous_answer = restore
+            entry = next((e for e in self.data.versions.items if e.item.item_id == item_id), None)
+            if entry and self.family_group.button(family):
+                self.select_family(family)
+                if previous_answer and previous_answer.question == self.search.text():
+                    release_ids = {e.release.release_version_id for e in data.versions.releases if e.release.family_id == family}
+                    valid_ids = {r.item_id for r in data.versions.version_items if r.release_version_id in release_ids}
+                    ids = tuple(i for i in previous_answer.item_ids if i in valid_ids)
+                    self._answer_loaded(replace(previous_answer, data=data, item_ids=ids), None)
+                self.page_index = page_index
+                self.render_list()
+                self._open_entry(entry, scoped=scoped)
+                self.site_filter.setCurrentIndex(max(0, self.site_filter.findData(site)))
+                self.state_filter.setCurrentIndex(max(0, self.state_filter.findData(state)))
 
     def show_save_feedback(self, text, tone):
         """저장 실패/미확인 안내가 후속 읽기 응답에 가려지지 않게 보존한다."""
         self.save_feedback = text, tone
+        self.saved_rule_button.setVisible(tone == "success" and self.last_saved_rule_id is not None and self.tabs.currentIndex() == 0)
         self.notice.setText(text)
         self.status.setText("저장 완료" if tone == "success" else "저장 결과 확인")
         self.status.set_tone(tone)
@@ -548,15 +730,16 @@ class ItemsPage(QWidget):
     def select_family(self, family_id):
         """선택한 SW 계열의 릴리즈 노트 Item만 표시한다."""
         self.family_id = family_id
-        self._clear_answer()
+        self._filter_changed()
         button_ = self.family_group.button(family_id)
         if button_ is not None:
             button_.setChecked(True)
-        self.render_release_notes()
 
     def _clear_answer(self):
         self.answer_request.cancel()
         self.answer = None
+        self.answer_toggle.setChecked(False)
+        self.answer_toggle.hide()
         self.answer_card.hide()
         self.ai_search.setEnabled(self.data is not None)
 
@@ -582,8 +765,19 @@ class ItemsPage(QWidget):
             return
         if answer.data is not self.data or answer.family_id != self.family_id or answer.question != self.search.text():
             return
+        if self.mode == "detail" and self.selected_id not in answer.item_ids:
+            self._invalidate_selection()
+            self.selected_id = None
+            self._set_mode("list")
         self.answer = answer
-        self.answer_card.show_answer(answer)
+        self.page_index = 0
+        self.render_list()
+        if len(answer.item_ids) == 1:
+            self.answer_card.show_answer(answer)
+            self.answer_toggle.show()
+            self.answer_card.setVisible(self.answer_toggle.isChecked())
+        else:
+            self.answer_card.hide()
         self.render_release_notes()
 
     def open_item_id(self, item_id):
@@ -598,6 +792,7 @@ class ItemsPage(QWidget):
         self.release_rows = release_note_rows(data, family_id, ids) if data and family_id is not None else ()
         names = {p.family_id: p.family_name for p in data.versions.pairs} if data else {}
         name = names.get(family_id)
+        self.search.setPlaceholderText(f"{name} 계열에 등록된 릴리즈노트가 없습니다" if name and data and not any(e.release.family_id == family_id for e in data.versions.releases) else "기능명이나 증상을 입력하세요. 예) Recipe Edit 경고")
         self.release_title.setText(f"{name} · 릴리즈 노트 Item" if name else "릴리즈 노트 Item")
         docs = ()
         if data and family_id is not None:
@@ -649,7 +844,7 @@ class ItemsPage(QWidget):
 
     def open_release_row(self, row):
         """릴리즈 노트 행의 Item 상세를 연다. 저장 행이 없는 버전 행은 열지 않는다."""
-        if self.mode != "list" or not 0 <= row < len(self.release_rows) or self.release_rows[row].entry is None:
+        if not 0 <= row < len(self.release_rows) or self.release_rows[row].entry is None:
             return False
         return self._open_entry(self.release_rows[row].entry)
 
@@ -690,34 +885,75 @@ class ItemsPage(QWidget):
 
     def render_list(self):
         """전달된 Item 목록과 조회 결과 미확인을 구분해 표시한다."""
-        found = self.data.search(self.search.text()) if self.data else ()
+        query = self.search.text().strip()
+        family_name = next((p.family_name for p in self.data.versions.pairs if p.family_id == self.family_id), "") if self.data else ""
+        found = ()
+        if self.data and self.family_id is not None:
+            if self.answer is None:
+                found = self.data.search(query, family_id=self.family_id)
+            else:
+                matched = set(self.answer.item_ids)
+                found = tuple(e for e in self.data.search(family_id=self.family_id) if e.item.item_id in matched)
         pages = max(1, (len(found) + self.page_size - 1) // self.page_size)
         self.page_index = max(0, min(self.page_index, pages - 1))
         self.visible_entries = found[self.page_index * self.page_size:(self.page_index + 1) * self.page_size]
-        rows = []
-        for entry in self.visible_entries:
-            item = entry.item
-            count = sum(r.item_id == item.item_id and r.state is ItemState.APPLIED for r in self.data.versions.version_items)
-            docs = tuple(dict.fromkeys(s.document for s in entry.sources if s.document))
-            rows.append((f"{item.item_no if item.item_no is not None else '번호 미확인'} · ID {item.item_id}",
-                         item.content, f"확인된 {count}건", "\n".join(docs) or "출처 미확인"))
-        self.list_model.set_rows(rows, tuple(e.item.item_id for e in self.visible_entries))
-        _fit(self.table)
-        self.table.setVisible(bool(rows))
-        self.empty.setVisible(not rows)
-        self.empty.setText("자료 불러오기 실패 · 재시도해 주세요." if self.data is None else
-                           "검색 결과가 없습니다." if self.search.text().strip() else "전달된 Item 자료가 없습니다. 미포함으로 판정하지 않습니다.")
-        self.count.setText(f"검색 결과 {len(found)}건 · 행 선택 또는 Enter로 상세 보기 · 포함 건수는 저장된 확인 행 기준")
+        for control in self.result_buttons.values():
+            self.result_rows.removeWidget(control)
+            control.hide()
+            control.deleteLater()
+        self.result_buttons.clear()
+        rules_by_item = {}
+        for rule in self.data.risk_rules if self.data else ():
+            if rule.is_enabled and rule.family_id == self.family_id and rule.item_id is not None:
+                rules_by_item.setdefault(rule.item_id, []).append(rule)
+        for row, entry in enumerate(self.visible_entries):
+            control = _ItemResultButton(entry.item.content, rules_by_item.get(entry.item.item_id, ()))
+            control.rule_requested.connect(self.open_registered_rule)
+            control.clicked.connect(lambda checked=False, i=row: self.toggle_result(i))
+            self.result_buttons[entry.item.item_id] = control
+            self.result_rows.addWidget(control)
+        self._place_detail()
+        self.empty.setVisible(not found)
+        self.empty.setText("자료를 불러오지 못했습니다. 다시 불러오기를 눌러주세요." if self.data is None else
+                           "검색어와 일치하는 아이템이 없습니다." if query else
+                           "선택한 계열에 연결된 아이템이 없습니다." if family_name else "등록된 계열이 없습니다.")
+        self.count.setText(f"검색 결과 {len(found)}건" if query else f"{family_name} 아이템 전체 {len(found)}건".strip())
         self.page_label.setText(f"{self.page_index + 1} / {pages}")
         if self.data is None:
             self.count.setText("조회 결과 미확인")
+        for control in (self.previous, self.next, self.page_label):
+            control.setVisible(pages > 1)
+        self.refresh.setVisible(self.data is None)
         self.previous.setEnabled(self.page_index > 0)
         self.next.setEnabled(self.page_index + 1 < pages)
 
     def change_page(self, delta):
         self.page_index += delta
+        self._invalidate_selection()
+        self._set_mode("list")
         self.selected_id = None
         self.render_list()
+
+    def toggle_result(self, row):
+        if self.mode == "detail" and self.visible_entries[row].item.item_id == self.selected_id:
+            self.back_to_list()
+        else:
+            self.open_row(row)
+
+    def _place_detail(self):
+        selected = self.result_buttons.get(self.selected_id)
+        inline = self.mode == "detail" and selected is not None and not self.results_card.isHidden()
+        self.result_rows.removeWidget(self.detail_view)
+        self.listing.removeWidget(self.detail_view)
+        if inline:
+            self.result_rows.insertWidget(self.result_rows.indexOf(selected) + 1, self.detail_view)
+        else:
+            self.listing.insertWidget(self.listing.indexOf(self.results_card) + 1, self.detail_view)
+        for item_id, control in self.result_buttons.items():
+            active = inline and item_id == self.selected_id
+            control.setChecked(active)
+        self.inline_box.setVisible(inline)
+        self.full_detail.setVisible(not inline or self.more_button.isChecked())
 
     def open_row(self, row):
         """선택한 Item의 출처와 명시된 관측 상태를 표시한다.
@@ -728,9 +964,9 @@ class ItemsPage(QWidget):
         return
         - 상세 열기 성공이면 True, 유효한 행이 아니면 False.
         """
-        if self.mode != "list" or not 0 <= row < len(self.visible_entries):
+        if not 0 <= row < len(self.visible_entries):
             return False
-        return self._open_entry(self.visible_entries[row])
+        return self._open_entry(self.visible_entries[row], scoped=True)
 
     def open_source_cell(self, index):
         refs = getattr(self, "source_refs", ())
@@ -751,11 +987,15 @@ class ItemsPage(QWidget):
         else:
             self.source_note.setText(f"Excel에서 {ref.sheet} · {ref.cells} 위치를 열었습니다.")
 
-    def _open_entry(self, entry):
+    def _open_entry(self, entry, *, scoped=False):
+        self.scoped_detail = scoped
         self._invalidate_selection()
         item = entry.item
         self.selected_id = item.item_id
-        self.title.setText(f"Item {item.item_no if item.item_no is not None else '번호 미확인'} · ID {item.item_id}")
+        self.title.setText(item.content)
+        self.back.setText("현황 접기")
+        self.more_button.setChecked(False)
+        self.source_button.setChecked(False)
         catalog = self.data.catalog()
         names = {p.family_id: p.family_name for p in self.data.versions.pairs}
         releases = catalog.item_versions(item.item_id)
@@ -771,19 +1011,54 @@ class ItemsPage(QWidget):
         VersionsPage._append_sources(sources, f"Item {item.item_id}", entry.sources)
         self.source_model.set_rows(sources)
         self.source_refs = entry.sources
+        self.detail_original.set_rows(tuple(r for r in self.data.versions.original_rows if r.item_id == item.item_id), (item.item_id,))
         self.source_note.setText("출처 행을 두 번 클릭하거나 Enter를 눌러 원본 Excel 파일의 셀을 확인하세요."
                                  if entry.sources else "저장된 원본 위치가 없습니다.")
         rules = [r for r in self.data.risk_rules if r.item_id == item.item_id]
-        self.content.setText(item.content + "".join(f"\n위험 규칙 {r.risk_rule_id} · {r.risk_reason}" for r in rules))
+        self.inline_register.setText("기준 추가" if any(r.is_enabled and r.family_id == self.family_id for r in rules) else "위험 기준 등록")
+        inclusion = next((f for f in catalog.overview(item, ()).families if f.family_id == self.family_id), None)
+        first = inclusion.first_included if inclusion else None
+        self.register_rule.setEnabled(self.manager.gateway is not None and inclusion is not None)
+        self.content.setText(f"{names.get(self.family_id, '계열 미확인')} · 최초 확인 포함 {first.version_raw if first else '미확인'}" + "".join(f"\n위험 규칙 {r.risk_rule_id} · {r.risk_reason}" for r in rules))
         # 연결이 전혀 없는 Item은 다른 계열의 대상 외라는 판정을 확대하지 않는다.
         connected = self.data.observations_connected and bool(releases)
-        summary = catalog.summarize(item, self.data.records) if connected else None
+        records = self.data.records
+        if scoped:
+            records = tuple(replace(r, pms=tuple(pm for pm in r.pms if pm.family_id == self.family_id))
+                            for r in records if any(pm.family_id == self.family_id for pm in r.pms))
+        summary = catalog.summarize(item, records) if connected else None
         self.equipment = summary.equipment if summary else ()
-        self.observation_note.setText(observation_description(self.data))
+        self.inline_register.setEnabled(self.register_rule.isEnabled())
+        missing = [e for e in self.equipment if e.application is Application.NOT_APPLIED]
+        self.first_value.setText(first.version_raw if first else "미확인")
+        self.inline_date.setText(f"{self.data.base_date} 관측" if self.data.observations_connected else "관측 미연결")
+        self.missing_value.setText(f"{len(missing)}대" if summary else "미확인")
+        lines = []
+        for equipment in missing[:3]:
+            record = equipment.record
+            location = " · ".join(filter(None, (record.site, record.line)))
+            lines.append(f"<b>{escape(record.equipment_code)}</b> &nbsp; {escape(location)}")
+            reasons = {}
+            for pm in equipment.pms:
+                if pm.application is Application.NOT_APPLIED:
+                    reasons.setdefault((pm.pm.version_raw, pm.basis), []).append(pm.pm.pm_name or "공통 SW")
+            for (version, basis), pms in reasons.items():
+                observed = f"{', '.join(pms)} · {version or '미확인 버전'} 사용"
+                reason = (f"최초 포함 {first.version_raw} 이전" if basis is Basis.BEFORE_INCLUDED and first
+                          else "이 버전에 미적용으로 기록돼 있습니다." if basis is Basis.STORED else BASIS_LABELS[basis])
+                lines.append(escape(f"{observed} · {reason}"))
+        if len(missing) > 3:
+            lines.append(f"외 {len(missing) - 3}대 · 전체 적용 현황에서 확인하세요.")
+        if summary and summary.counts()[Application.UNKNOWN]:
+            lines.append(f"판정 불가 {summary.counts()[Application.UNKNOWN]}대")
+        self.inline_equipment.setText("<br>".join(lines) if lines else
+                                      "미적용으로 확인된 설비가 없습니다." if summary else "관측 자료 또는 릴리즈 연결이 필요합니다.")
+        self.observation_note.setText(f"{self.data.base_date} 관측" if self.data.observations_connected else "설비 관측 자료 미연결")
+        self.observation_note.setToolTip(observation_description(self.data))
         self.summary.setText(" · ".join(f"{APPLICATION_LABELS[s]} {n}대" for s, n in summary.counts().items())
                              + f" · HPA 제외 {summary.hpa_excluded}대" if summary else "적용 현황 미확인 · 릴리즈 연결 또는 설비 관측 자료가 필요합니다.")
         with QSignalBlocker(self.state_filter):
-            self.state_filter.setCurrentIndex(0)
+            self.state_filter.setCurrentIndex(self.state_filter.findData(Application.NOT_APPLIED) if scoped and self.search.text().strip() else 0)
         with QSignalBlocker(self.site_filter):
             self.site_filter.clear()
             self.site_filter.addItem("전체 Site", None)
@@ -795,7 +1070,11 @@ class ItemsPage(QWidget):
         self._set_mode("detail")
         for table in (self.release_table, self.source_table, self.equipment_table):
             _fit(table)
-        self.back.setFocus()
+        control = self.result_buttons.get(self.selected_id)
+        if control and control.isVisible():
+            control.setFocus(Qt.FocusReason.OtherFocusReason)
+        else:
+            self.back.setFocus()
         return True
 
     def render_equipment(self, *_):
@@ -809,7 +1088,7 @@ class ItemsPage(QWidget):
         self.distribution.set_scope(site, state)
         self.distribution.setVisible(heatmap)
         self.equipment_model.set_rows(tuple((f"{e.record.equipment_code} · ID {e.record.equipment_id}",
-            e.record.site, e.record.model_name, e.label,
+            f"{e.record.site} · {e.record.line or '라인 미지정'}", e.record.model_name, e.label,
             "\n".join(f"{p.pm.pm_name or '일반 SW'} · 계열 {family_names.get(p.pm.family_id, p.pm.family_id)} · "
                       f"{p.pm.version_raw or '버전 미확인'} · "
                       f"{APPLICATION_LABELS[p.application]} ({BASIS_LABELS[p.basis]})" for p in e.pms)
@@ -820,7 +1099,8 @@ class ItemsPage(QWidget):
             self.equipment_table.setCurrentIndex(self.equipment_model.index(self.equipment_model.ids.index(self.selected_equipment_id), 0))
         self.equipment_table.setVisible(bool(rows) and not heatmap)
         self.equipment_empty.setVisible(not rows)
-        self.equipment_empty.setText("표시할 설비가 없습니다. 관측 자료 연결 여부와 선택 상태를 확인해 주세요.")
+        self.equipment_empty.setText("설비 관측 또는 릴리즈 연결을 확인해 주세요." if not self.state_filter.isEnabled() else
+                                     "현재 조건에 해당하는 설비가 없습니다.")
         _fit(self.equipment_table)
 
     def _invalidate_selection(self):
@@ -874,9 +1154,8 @@ class ItemsPage(QWidget):
     def back_to_list(self):
         self._invalidate_selection()
         self._set_mode("list")
-        if self.selected_id in self.list_model.ids:
-            self.table.setCurrentIndex(self.list_model.index(self.list_model.ids.index(self.selected_id), 0))
-            self.table.setFocus()
+        if self.selected_id in self.result_buttons:
+            self.result_buttons[self.selected_id].setFocus()
         elif self.selected_id in self.release_note_model.ids:
             self.release_note_table.setCurrentIndex(
                 self.release_note_model.index(self.release_note_model.ids.index(self.selected_id), 0))

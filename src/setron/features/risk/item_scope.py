@@ -3,6 +3,13 @@
 CATEGORIES = ("환경안전 필수", "결함 버전", "공정 위험", "기타")
 
 
+def targets(rule, record):
+    return ((rule.target_site is None or record.site == rule.target_site)
+            and (rule.target_line is None or record.line == rule.target_line)
+            and any(pm.family_id == rule.family_id and (rule.group_id is None or pm.group_id == rule.group_id)
+                    and (not rule.target_model_ids or pm.group_id in rule.target_model_ids) for pm in record.pms))
+
+
 def scope_fields(reference):
     value = (reference or {}).get("item_manager")
     if value is None:
