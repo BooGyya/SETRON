@@ -1,4 +1,4 @@
-"""설비군 제목과 선택 영역을 구분하고, 관리 필터의 추가 버튼을 입력칸에 맞춘다."""
+"""SW 계열 드롭다운과 검색·필터가 한 줄 툴바에 놓이는지, 계열 수·창 폭이 달라도 깨지지 않는지 확인한다."""
 
 from dataclasses import replace
 
@@ -11,77 +11,135 @@ from setron.ui.version_data import ModelFamily
 
 from test_ui_items import app, data
 
+NAMES = ("C3 구UI", "C3 통합UI", "C4", "O2", "O3", "O5", "Inline O2", "Cluster O2", "HPA",
+         "C3 구UI (파운드리)", "C3 통합UI (파운드리)", "C4 (파운드리)", "O2 (파운드리)", "Inline Ox", "Cluster Ox")
 
-@pytest.fixture
-def window(app, data):
-    names = ("C3 구UI", "C3 통합UI", "C4", "O2", "O3", "O5", "Inline O2", "Cluster O2", "HPA",
-             "C3 구UI (파운드리)", "C3 통합UI (파운드리)", "C4 (파운드리)", "O2 (파운드리)", "Inline Ox", "Cluster Ox")
-    pairs = (*tuple(ModelFamily(1, "모델 A", 10 + i, name) for i, name in enumerate(names)),
-             ModelFamily(2, "모델 B", 10, names[0]))
-    value = replace(data, versions=replace(data.versions, pairs=pairs))
+
+def _open(app, data, names, width=1600):
+    pairs = tuple(ModelFamily(1, "모델 A", 10 + i, name) for i, name in enumerate(names))
+    if names:  # 합성 릴리즈가 모델 B·계열 10을 참조한다.
+        pairs += (ModelFamily(2, "모델 B", 10, names[0]),)
+        versions = replace(data.versions, pairs=pairs)
+    else:
+        versions = replace(data.versions, pairs=(), releases=(), items=(), version_items=())
+    value = replace(data, versions=versions)
     result = create_window(item_loader=lambda: value)
-    result.resize(1600, 960)
+    result.resize(width, 900)
     result.show()
     result.navigate("items")
-    yield result
+    QTest.qWait(30)
+    return result
+
+
+def _close(result):
     result.close()
     result.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
+@pytest.fixture
+def window(app, data):
+    result = _open(app, data, NAMES)
+    yield result
+    _close(result)
+
+
 @pytest.mark.parametrize("width", [960, 1100, 1920])
-def test_family_title_is_outside_wrapping_choice_group(window, width):
+def test_family_dropdown_replaces_chips_and_selects_family(window, width):
     page = window.pages["items"]
     window.resize(width, 900)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    assert page.family_title.text() == "SW 계열"
-    assert not page.family_host.isAncestorOf(page.family_title)
-    title_bottom = page.family_title.mapTo(page.list_view, page.family_title.rect().bottomLeft()).y()
-    choices_top = page.family_choices.mapTo(page.list_view, QPoint()).y()
-    assert title_bottom < choices_top
-    assert len(page.family_group.buttons()) == 15
-    for chip in page.family_group.buttons():
-        assert page.family_host.rect().contains(chip.geometry())
-    if width < 1920:
-        assert len({chip.y() for chip in page.family_group.buttons()}) > 1
-    selected = page.family_group.button(22)
-    selected.click()
-    assert page.family_id == 22 and selected.isChecked()
+    assert page.family_title.text() == "SW 계열" and page.family_combo.accessibleName() == "SW 계열"
+    assert page.family_combo.count() == 15 and page.family_combo.width() >= 220
+    page.family_combo.setCurrentIndex(page.family_combo.findData(22))
+    assert page.family_id == 22 and page.family_combo.currentData() == 22
     page.render_families()
-    QTest.qWait(30)
-    assert page.family_id == 22 and page.family_group.button(22).isChecked()
-    assert page.family_flow.count() == 15  # 선택지 이외의 안내·가짜 추가 버튼은 표시하지 않는다.
-    assert all(page.family_flow.itemAt(i).widget() in page.family_group.buttons()
-               for i in range(page.family_flow.count()))
+    assert page.family_id == 22 and page.family_combo.currentData() == 22
+    assert page.count.text() == "O2 (Foundry)"  # 자료 없는 계열은 '전체 0건' 없이 표시 이름만
 
 
-@pytest.mark.parametrize("width", [960, 1100, 1920])
-def test_search_box_sits_small_on_the_result_title_row(window, width):
+@pytest.mark.parametrize("width", [1280, 1920])
+def test_toolbar_is_one_row_with_search_on_the_right(window, width):
     page = window.pages["items"]
     window.resize(width, 900)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     bar = page.search.parentWidget()
     assert bar.width() == 280 and page.ai_search.isVisible()
-    count_row = page.count.mapTo(page.results_card, QPoint()).y()
-    assert abs(bar.mapTo(page.results_card, QPoint()).y() + bar.height() // 2 - count_row - page.count.height() // 2) <= 4
-    assert bar.mapTo(page.results_card, QPoint()).x() > page.registered_only.mapTo(page.results_card, QPoint()).x()
+    origin = lambda w: w.mapTo(page.results_card, QPoint())
+    mid = lambda w: origin(w).y() + w.height() // 2
+    assert abs(mid(page.family_combo) - mid(bar)) <= 4 and abs(mid(page.registered_only) - mid(bar)) <= 4
+    assert origin(page.family_combo).x() < origin(page.registered_only).x() < origin(bar).x()
+    assert origin(page.count).y() > origin(bar).y() + bar.height()  # 결과 제목은 툴바 아래
     assert page.registered_only.text() == "위험 기준 등록된 Item만 보기"
     assert page.manager.isHidden()
 
 
-def test_empty_and_reloaded_family_group_keep_heading_and_single_message(window):
+def test_toolbar_wraps_search_below_on_narrow_width_without_clipping(app, data):
+    window = _open(app, data, NAMES, width=800)
+    try:
+        page = window.pages["items"]
+        window.resize(800, 900)
+        QTest.qWait(60)
+        assert window.scroll.horizontalScrollBar().maximum() == 0
+        bar = page.search.parentWidget()
+        assert page.toolbar.stacked
+        assert bar.mapTo(page.toolbar, QPoint()).y() >= page.family_combo.mapTo(page.toolbar, QPoint()).y() + page.family_combo.height()
+        for widget in (page.family_combo, page.registered_only, bar):
+            assert page.toolbar.rect().contains(widget.geometry().translated(widget.parentWidget().mapTo(page.toolbar, QPoint())))
+    finally:
+        _close(window)
+
+
+def test_dropdown_popup_keeps_long_names_and_scrolls_with_many_families(app, data):
+    names = tuple(f"C{i} 통합UI (파운드리)" for i in range(30))
+    window = _open(app, data, names)
+    try:
+        page = window.pages["items"]
+        combo = page.family_combo
+        assert combo.count() == 30 and combo.maxVisibleItems() <= 10
+        assert combo.view().minimumWidth() >= combo.fontMetrics().horizontalAdvance("C29 통합UI (Foundry)")
+        combo.showPopup()
+        QTest.qWait(30)
+        assert combo.view().window().isVisible()
+        combo.hidePopup()
+        combo.setCurrentIndex(29)
+        assert page.family_id == combo.currentData() and page.count.text() == "C29 통합UI (Foundry)"
+    finally:
+        _close(window)
+
+
+def test_no_family_and_single_family_toolbars(app, data):
+    window = _open(app, data, ())
+    try:
+        page = window.pages["items"]
+        assert page.family_combo.count() == 1 and not page.family_combo.isEnabled()
+        assert page.family_combo.currentText() == "전달된 SW 계열 없음" and page.family_id is None
+        assert page.family_combo.currentData() is None
+        assert page.search_answer() is False
+    finally:
+        _close(window)
+    window = _open(app, data, ("C4",))
+    try:
+        page = window.pages["items"]
+        assert page.family_combo.count() == 1 and page.family_combo.currentText() == "C4"
+        assert page.family_id == 10 and page.ai_search.isEnabled()
+    finally:
+        _close(window)
+
+
+def test_empty_and_reloaded_family_dropdown_keep_label_and_single_message(window):
     page = window.pages["items"]
     original = page.data
     page.data = None
     page.render_families()
     assert page.family_title.text() == "SW 계열"
-    assert page.family_empty.text() == "조회 결과 미확인" and not page.family_empty.isHidden()
-    assert page.family_flow.count() == 1
+    assert page.family_combo.currentText() == "조회 결과 미확인" and page.family_combo.count() == 1
+    assert not page.family_combo.isEnabled()
     page.data = original
     page.render_families()
-    assert page.family_empty.isHidden() and page.family_flow.count() == 15
+    assert page.family_combo.isEnabled() and page.family_combo.count() == 15
 
 
 def test_foundry_labels_change_display_only_and_keep_family_selection(window):
@@ -90,11 +148,10 @@ def test_foundry_labels_change_display_only_and_keep_family_selection(window):
     names = {pair.family_id: pair.family_name for pair in original_pairs}
     assert sum("파운드리" in name for name in names.values()) == 4
     for family_id, name in names.items():
-        assert page.family_group.button(family_id).text() == name.replace("파운드리", "Foundry")
-    page.family_group.button(22).click()
-    assert page.family_id == 22 and page.family_group.button(22).text() == "O2 (Foundry)"
+        assert page.family_combo.itemText(page.family_combo.findData(family_id)) == name.replace("파운드리", "Foundry")
+    page.family_combo.setCurrentIndex(page.family_combo.findData(22))
+    assert page.family_id == 22 and page.family_combo.currentText() == "O2 (Foundry)"
     page.render_families()
-    assert page.family_group.button(22).isChecked()
-    assert page.family_group.button(22).text() == "O2 (Foundry)"
+    assert page.family_combo.currentData() == 22 and page.family_combo.currentText() == "O2 (Foundry)"
     assert page.data.versions.pairs == original_pairs
     assert names[22] == "O2 (파운드리)"

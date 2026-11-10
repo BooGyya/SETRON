@@ -19,6 +19,11 @@ class ModelFamily:
     family_name: str
 
 
+def family_display_name(name: str) -> str:
+    """화면에 보여 줄 SW 계열 이름. DB의 원본 이름은 바꾸지 않고 '파운드리'만 'Foundry'로 표시한다."""
+    return name.replace("파운드리", "Foundry")
+
+
 @dataclass(frozen=True)
 class SourceReference:
     """필드별 원본 위치. 값이 없으면 확인되지 않은 것이며 파일을 자동으로 열지 않는다."""
