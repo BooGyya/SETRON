@@ -6,10 +6,11 @@
 from copy import deepcopy
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, timedelta
 
 from setron.features.aggregation.service import summarize
 from setron.features.targets.groups import with_saved_groups
+from setron.features.version.schemas import CompareStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource, GroupBinding, family_name
 from setron.ui.equipment_data import EquipmentDetail
 from setron.ui.heatmap_data import EquipmentTile, record_tiles
@@ -34,10 +35,11 @@ class ReplayRequest:
 class ReplayFrame:
     snapshot: DashboardSnapshot
     tiles: tuple[EquipmentTile, ...]
+    at: date | None = None  # 재생 간격(1주·1개월…)으로 만든 시점. 없으면 실제 저장 날짜(snapshot.base_date)
 
     @property
     def day(self):
-        return self.snapshot.base_date
+        return self.at or self.snapshot.base_date
 
     @property
     def observed(self):
@@ -50,16 +52,66 @@ class ReplayFrame:
         return sum(r.base_date < self.day for r in self.snapshot.selected_records if not r.is_hpa)
 
 
+def can_replay(frames):
+    """재생하려면 설비가 있는 시점이 두 개 이상 필요하다."""
+    return sum(frame.snapshot.summary.equipment_count > 0 for frame in frames) >= 2
+
+
+# 재생 간격: None = 저장일마다(실제 저장 날짜), 나머지는 (일, 개월) 간격.
+INTERVALS = {None: "저장일마다", "week": "1주", "month": "1개월", "quarter": "3개월"}
+_STEPS = {"week": (7, 0), "month": (0, 1), "quarter": (0, 3)}
+
+
+def _add_months(day, months):
+    month = day.month - 1 + months
+    year, month = day.year + month // 12, month % 12 + 1
+    last = (date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)).day
+    return date(year, month, min(day.day, last))
+
+
+def interval_days(start, end, step):
+    """시작 날짜부터 간격마다의 날짜. 마지막 간격이 종료 날짜에 딱 맞지 않으면 종료 날짜를 끝에 더한다."""
+    days_step, months_step = _STEPS[step]
+    result, k = [], 0
+    while True:
+        day = start + timedelta(days=days_step * k) if days_step else _add_months(start, months_step * k)
+        if day > end:
+            break
+        result.append(day)
+        k += 1
+    if result and result[-1] != end:
+        result.append(end)
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class ReplayData:
     request: ReplayRequest
     source: DashboardSource
     frames: tuple[ReplayFrame, ...]
     options: tuple[str | None, ...]
+    seed: ReplayFrame | None = None  # 시작 날짜가 저장 날짜가 아닐 때, 시작 날짜 시점의 상태(그 전 마지막 저장일 기준)
 
     @property
     def can_replay(self):
-        return sum(frame.snapshot.summary.equipment_count > 0 for frame in self.frames) >= 2
+        return can_replay(self.frames)
+
+    def frames_for(self, step):
+        """재생 간격별 시점 (요청 2-1).
+
+        - None: 실제 저장 날짜마다 (기존 동작).
+        - 'week' · 'month' · 'quarter': 시작~종료를 간격으로 끊은 날짜마다. 각 시점은 그 날짜까지 설비별 최신 관측이므로
+          그 날짜 이전 마지막 저장일의 프레임과 같은 내용이고, 날짜(at)만 다르다. 첫 저장 전 날짜는 뺀다.
+        """
+        if step is None:
+            return self.frames
+        known = tuple(sorted(((self.seed,) if self.seed else ()) + self.frames, key=lambda f: f.snapshot.base_date))
+        result = []
+        for day in interval_days(self.request.start, self.request.end, step):
+            base = next((f for f in reversed(known) if f.snapshot.base_date <= day), None)
+            if base is not None:
+                result.append(replace(base, at=day))
+        return tuple(result)
 
 
 def freeze_source(source):
@@ -129,16 +181,25 @@ def load_replay(source, request):
     if targets is not None:
         frozen.targets = target_map(targets)
     days = tuple(day for day in frozen.analysis_dates if request.start <= day <= request.end)
-    frames, versions = [], set()
-    for day in days:
+
+    def frame_at(day):
         query = replace(request.query, selection=replace(request.query.selection, as_of=day), targets=targets)
         snapshot = frozen.snapshot(query)
-        if snapshot.base_date != day:
-            raise ValueError("요청한 날짜와 실제 관측 날짜가 다릅니다.")
         # 공통 히트맵의 '별도 최신 HPA'를 과거 프레임에 섞지 않는다.
         snapshot = replace(snapshot, hpa_lookup_records=(), hpa_lookup_locations=())
         analyzed = tuple(r for r in snapshot.selected_records if not r.is_hpa)
-        frames.append(ReplayFrame(snapshot, record_tiles(analyzed, snapshot.summary, frozen)))
+        return query, ReplayFrame(snapshot, record_tiles(analyzed, snapshot.summary, frozen))
+
+    # 재생 간격 시점용: 시작 날짜가 저장 날짜가 아니고 그 전에 저장된 날짜가 있으면, 시작 날짜 시점 상태를 하나 더 만든다.
+    seed = None
+    if request.start not in days and any(day < request.start for day in frozen.analysis_dates):
+        seed = frame_at(request.start)[1]
+    frames, versions = [], set()
+    for day in days:
+        query, frame = frame_at(day)
+        if frame.snapshot.base_date != day:
+            raise ValueError("요청한 날짜와 실제 관측 날짜가 다릅니다.")
+        frames.append(frame)
         all_versions = replace(query, selection=replace(query.selection, versions=None))
         for record in frozen._scope_records(frozen.snapshot_records(day), all_versions):
             if record.is_hpa:
@@ -150,17 +211,49 @@ def load_replay(source, request):
     # 대소문자를 무시하고 정렬한다 (QA R-05). 원문은 합치지 않는다(끝 공백·대소문자도 다른 버전으로 유지).
     options = tuple(sorted((v for v in versions if v is not None), key=lambda v: (v.strip().casefold(), v)))
     options += (None,) if None in versions else ()
-    return ReplayData(request, frozen, tuple(frames), options)
+    return ReplayData(request, frozen, tuple(frames), options, seed)
+
+
+def group_view(data, frame, groups):
+    """설비군 칩에서 고른 설비군만으로 본 집계 (요청 2-2).
+
+    param
+    - groups: 고른 설비군 키 집합. None이면 전체(조회 결과 그대로, HPA 제외 대수 포함).
+
+    return
+    - (Summary, 이날 저장 대수, 이전 관측 이어받은 대수). 고른 설비군이 없으면 (None, 0, 0).
+    """
+    snapshot = frame.snapshot
+    if groups is None:
+        return snapshot.summary, frame.observed, frame.carried
+    if not groups:
+        return None, 0, 0
+    records = data.source._scope_records(snapshot.selected_records, snapshot.query, group_keys=tuple(groups))
+    summary = data.source._summary(records)
+    analyzed = tuple(r for r in records if not r.is_hpa)
+    return (summary, sum(r.base_date == frame.day for r in analyzed), sum(r.base_date < frame.day for r in analyzed))
+
+
+def group_completion(cell):
+    """한 설비군 칸의 완료 설비 수 (요청 3-2): 판정된 SW가 하나 이상이고 목표 N 미달이 없는 설비 / 판정된 설비."""
+    determined = (CompareStatus.AT_OR_ABOVE, CompareStatus.BELOW)
+    done = judged = 0
+    for equipment in cell.summary.equipment:
+        statuses = [family.status for family in equipment.families if family.status in determined]
+        if statuses:
+            judged += 1
+            done += CompareStatus.BELOW not in statuses
+    return done, judged
 
 
 def replay_detail(data, frame, equipment_id):
     """현재 프레임의 전체 SW를 같은 고정 N·규칙으로 읽는다. 이력 편집/DB 저장은 제공하지 않는다."""
-    if frame not in data.frames:
+    if frame.snapshot not in {f.snapshot for f in data.frames + ((data.seed,) if data.seed else ())}:
         raise ValueError("현재 Replay에 없는 관측입니다.")
     selected = next(t for t in frame.tiles if t.equipment_id == equipment_id)
     source = data.source
     # 그날 저장되지 않은 설비는 이어받은 이전 관측(실제 관측일 유지)의 전체 SW를 보여 준다.
-    record = next(r for r in source.snapshot_records(frame.day) if r.equipment_id == equipment_id)
+    record = next(r for r in source.snapshot_records(frame.snapshot.base_date) if r.equipment_id == equipment_id)
     summary = summarize((record,), source.families, with_saved_groups(source.targets, source.saved_groups))
     whole = record_tiles((record,), summary, source)[0]
     status = next((s for s in summary.equipment if s.record.equipment_id == equipment_id), None)

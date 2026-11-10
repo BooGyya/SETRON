@@ -239,9 +239,15 @@ def test_replay_reset_and_apply_align_with_adjacent_input_fields(own, width):
     page = own(ReplayPage(demo_dashboard_source()))
     page.resize(width, 1200)
     QTest.qWait(50)
-    positions = [control.mapTo(page.filters, QPoint()).y() for control in (
-        page.combos["group_key"], page.reset_button, page.apply_button)]
-    assert len(set(positions)) == 1
+    y = lambda control: control.mapTo(page.filters, QPoint()).y()  # noqa: E731
+    # 설비군 드롭다운을 뺀 뒤(리플레이 요청 1-1) 좁은 폭에서는 버튼이 다음 줄로 갈 수 있다.
+    # 같은 줄에 입력칸이 있으면 그 입력칸과 높이가 맞아야 한다.
+    fields = (page.start, page.end, *page.combos.values())
+    same_row = [field for field in fields if abs(y(field) - y(page.reset_button)) < 30]
+    assert y(page.reset_button) == y(page.apply_button)
+    assert all(y(field) == y(page.reset_button) for field in same_row)
+    if width == 1320:
+        assert len(same_row) == len(fields)  # 넓은 화면에서는 한 줄
     assert page.reset_button.height() == page.apply_button.height() == 38
     assert page.reset_button.x() < page.apply_button.x()
     assert page.apply_button.mapTo(page.filters, page.apply_button.rect().bottomRight()).x() <= page.filters.width()

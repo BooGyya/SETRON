@@ -4,8 +4,8 @@ from dataclasses import replace
 
 from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QCursor, QPen
+from PySide6.QtWidgets import QFrame, QToolTip, QVBoxLayout, QWidget
 
 from setron.ui.appearance import ui_color
 from setron.ui.components import label
@@ -14,12 +14,14 @@ from setron.ui.equipment import ignore_width
 from setron.features.risk.schemas import RiskStatus
 from setron.ui.heatmap import GroupCards, TileButton, TileGrid, _version_text, tile_detail_text, tile_style
 from setron.ui.heatmap_data import GoalState
+from setron.ui.replay_data import group_completion
 from setron.ui.theme import LINE, SECONDARY
 
 # 그래프 시리즈 이름. 범례는 숨겨져 있고, 테스트·접근성에서 선의 역할을 구분하는 데 쓴다.
 CURRENT_MARKER = "현재 시점"
 FUTURE_SUFFIX = " · 이후"
 CURRENT_SUFFIX = " · 현재"
+POINT_SUFFIX = " · 시점"  # 실제 시점마다 찍는 점(계단 모서리와 구분). 누르기·마우스 올리기는 이 점에서 받는다.
 
 
 class ReplayChart(DashboardChart):
@@ -30,29 +32,43 @@ class ReplayChart(DashboardChart):
         self.setMinimumHeight(300)
         self.setMaximumHeight(300)
         self.setAccessibleName("설비군별 목표 적용 추이 · 저장된 관측일의 달성률")
-        self.values = {}
+        self.values, self.completion, self.labels, self.days = {}, {}, {}, ()
         self.current = None
 
     def clear(self):
         super().clear()
-        self.values = {}
+        self.values, self.completion, self.labels, self.days = {}, {}, {}, ()
         self.current = None
         self.setAccessibleDescription("")
 
-    def show_data(self, data, visible_groups, current=None):
-        """current(재생 중인 날짜 번호)까지는 진한 실선, 이후는 흐린 점선으로 그리고 현재 날짜에 세로선을 둔다.
-
-        재생할 때마다 실선이 오른쪽으로 자라고 세로선이 움직인다. 이후 날짜의 점도 남겨 두어 눌러서 이동할 수 있다.
-        current가 None이면 마지막 날짜를 현재로 본다.
-        """
-        chart = self._chart()
-        self.values = {}
-        self.setAccessibleDescription("")
-        if not data.frames:
+    def _hover(self, key, point, state):
+        """점에 마우스를 올리면 그 설비군의 그날 완료 설비 수를 보인다 (요청 3-2)."""
+        if not state:
+            QToolTip.hideText()
             return
-        current = len(data.frames) - 1 if current is None else max(0, min(current, len(data.frames) - 1))
+        index = round(point.x())
+        counts = self.completion.get(key, ())
+        if not 0 <= index < len(counts) or counts[index] is None:
+            return
+        done, judged = counts[index]
+        QToolTip.showText(QCursor.pos(), f"{self.labels[key]} · {self.days[index]:%m-%d} · {done} / {judged}대 완료", self)
+
+    def show_data(self, data, visible_groups, current=None, frames=None):
+        """계단형으로 그린다 (요청 3-1). 다음 날짜까지 값을 유지하다가 그 날짜에서 바뀐다.
+
+        current(재생 중인 날짜 번호)까지는 진한 실선, 이후는 흐린 점선, 현재 날짜에는 세로선과 큰 점을 둔다.
+        실제 시점마다 점을 찍고, 점을 누르면 그 날짜로 가고 마우스를 올리면 완료 설비 수가 나온다.
+        frames를 주지 않으면 실제 저장 날짜(data.frames)를 쓴다. current가 None이면 마지막 시점을 현재로 본다.
+        """
+        frames = data.frames if frames is None else frames
+        chart = self._chart()
+        self.values, self.completion, self.labels, self.days = {}, {}, {}, ()
+        self.setAccessibleDescription("")
+        if not frames:
+            return
+        current = len(frames) - 1 if current is None else max(0, min(current, len(frames) - 1))
         self.current = current
-        days = tuple(frame.day for frame in data.frames)
+        days = self.days = tuple(frame.day for frame in frames)
         x, y = QBarCategoryAxis(), QValueAxis()
         pattern = "%Y-%m-%d" if days[0].year != days[-1].year else "%m-%d"
         x.append([d.strftime(pattern) for d in days])
@@ -79,11 +95,12 @@ class ReplayChart(DashboardChart):
         for group in data.source.catalog.groups:
             if group.key not in visible_groups:
                 continue
-            values, segments, segment = [], [], []
-            for i, frame in enumerate(data.frames):
+            values, counts, segments, segment = [], [], [], []
+            for i, frame in enumerate(frames):
                 cell = next((g for g in frame.snapshot.groups if g.group_keys == (group.key,)), None)
                 rate = cell.summary.rate if cell is not None else None
                 values.append(rate)
+                counts.append(group_completion(cell) if cell is not None else None)
                 if rate is None:
                     if segment:
                         segments.append(segment)
@@ -92,33 +109,47 @@ class ReplayChart(DashboardChart):
                     segment.append((i, rate * 100))
             if segment:
                 segments.append(segment)
-            self.values[group.key] = tuple(values)
+            self.values[group.key], self.completion[group.key] = tuple(values), tuple(counts)
+            self.labels[group.key] = group.label
             color = ui_color(series_color(group.key))
             faded = QColor(color)
             faded.setAlpha(90)
+
+            def connect(series, key=group.key):
+                series.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
+                series.hovered.connect(lambda point, state, key=key: self._hover(key, point, state))
+
             for points in segments:
                 past = [p for p in points if p[0] <= current]
                 future = [p for p in points if p[0] >= current]
                 # 현재 날짜 점은 실선 쪽에 이미 있으므로 이후 쪽이 그 점 하나뿐이면 그리지 않는다.
                 if len(future) == 1 and future[0][0] == current:
                     future = []
-                for part, name, pen_color, width, style in (
-                        (past, group.label, color, 2.5, Qt.PenStyle.SolidLine),
-                        (future, f"{group.label}{FUTURE_SUFFIX}", faded, 1.5, Qt.PenStyle.DashLine)):
+                for part, name, pen_color, width, style, size in (
+                        (past, group.label, color, 2.5, Qt.PenStyle.SolidLine, 7),
+                        (future, f"{group.label}{FUTURE_SUFFIX}", faded, 1.5, Qt.PenStyle.DashLine, 6)):
                     if not part:
                         continue
-                    series = QLineSeries() if len(part) > 1 else QScatterSeries()
-                    series.setName(name)
-                    series.setColor(pen_color)
-                    if isinstance(series, QLineSeries):
-                        series.setPen(QPen(pen_color, width, style))
-                        series.setPointsVisible(True)
-                    else:
-                        series.setMarkerSize(6)
+                    if len(part) > 1:
+                        line = QLineSeries()
+                        line.setName(name)
+                        line.setPen(QPen(pen_color, width, style))
+                        # 계단형: 앞 값을 다음 날짜까지 수평으로 끌고 가서 그 날짜에서 수직으로 바꾼다.
+                        for k, (px, py) in enumerate(part):
+                            if k:
+                                line.append(px, part[k - 1][1])
+                            line.append(px, py)
+                        add(line)
+                        line.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
+                    dots = QScatterSeries()
+                    dots.setName(name + POINT_SUFFIX)
+                    dots.setColor(pen_color)
+                    dots.setBorderColor(pen_color)
+                    dots.setMarkerSize(size)
                     for px, py in part:
-                        series.append(px, py)
-                    add(series)
-                    series.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
+                        dots.append(px, py)
+                    add(dots)
+                    connect(dots)
             # 현재 날짜 점을 크게 표시한다. 판단 불가인 날은 점을 찍지 않는다(0%로 그리지 않음).
             if values[current] is not None:
                 dot = QScatterSeries()
@@ -128,7 +159,7 @@ class ReplayChart(DashboardChart):
                 dot.setMarkerSize(12)
                 dot.append(current, values[current] * 100)
                 add(dot)
-                dot.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
+                connect(dot)
         self.setAccessibleDescription(f"현재 {days[current]} · " + " · ".join(
             f"{group}: " + ", ".join(f"{day} {'확인 필요' if value is None else f'{value:.1%}'}"
                                      for day, value in zip(days, values))
@@ -219,8 +250,11 @@ class ReplayHeatmap(QWidget):
     def _card_key(title, lines):
         return title, tuple((key, tuple(tile.equipment_id for tile, _ in items)) for key, items in lines)
 
-    def _plan(self, data, frame):
-        """[(설비군 제목, [((Site, Line), [(타일, 보일 계열)])])]"""
+    def _plan(self, data, frame, selected=None):
+        """[(설비군 제목, [((Site, Line), [(타일, 보일 계열)])])]
+
+        selected: 설비군 칩에서 고른 설비군 키 (요청 2-2). None이면 전체이고, 이때만 SW 미등록·HPA 카드도 보인다.
+        """
         tiles = frame.tiles
         groups, covered = [], set()
         for group in data.source.catalog.groups:
@@ -228,13 +262,14 @@ class ReplayHeatmap(QWidget):
             ids = set(cell.equipment_ids) if cell is not None else set()
             members = tuple(t for t in tiles if t.equipment_id in ids and t.goal is not GoalState.EXCLUDED)
             if members:
-                groups.append((group.label, members))
                 covered.update(t.equipment_id for t in members)
+                if selected is None or group.key in selected:
+                    groups.append((group.label, members))
         unknown = tuple(t for t in tiles if t.equipment_id not in covered and t.goal is not GoalState.EXCLUDED)
-        if unknown:
+        if unknown and selected is None:
             groups.append(("SW 미등록", unknown))
         hpa = tuple(t for t in tiles if t.goal is GoalState.EXCLUDED)
-        if hpa:
+        if hpa and selected is None:
             groups.append(("HPA · 분석 제외", hpa))
         site_order = {site.label: i for i, site in enumerate(data.source.catalog.sites)}
         plan = []
@@ -251,12 +286,17 @@ class ReplayHeatmap(QWidget):
             plan.append((title, ordered))
         return plan
 
-    def show_frame(self, data, frame):
-        """날짜를 넘길 때 설비군 구성이 같으면 카드를 다시 쓰고, 설비가 바뀐 카드만 새로 만든다 (QA R-04)."""
+    def show_frame(self, data, frame, selected=None):
+        """날짜를 넘길 때 설비군 구성이 같으면 카드를 다시 쓰고, 설비가 바뀐 카드만 새로 만든다 (QA R-04).
+
+        selected: 설비군 칩에서 고른 설비군 키. None이면 전체.
+        """
         self.rebuilt_tiles = self.restyled_tiles = 0
-        tiles = frame.tiles
-        plan = self._plan(data, frame)
-        titles = (bool(tiles), tuple(title for title, _ in plan))
+        plan = self._plan(data, frame, selected)
+        tiles = tuple({tile.equipment_id: tile for _, lines in plan for _, items in lines for tile, _ in items}.values())
+        empty = ("선택한 설비군이 없습니다. 위 설비군 버튼에서 하나 이상 골라 주세요." if selected is not None and not selected
+                 else "선택한 관측일에 조건에 맞는 설비가 없습니다.")
+        titles = (bool(tiles), tuple(title for title, _ in plan), empty)
         if self._grid is not None and titles == self._titles:
             for card, (title, lines) in zip(self._cards, plan):
                 key = self._card_key(title, lines)
@@ -281,9 +321,10 @@ class ReplayHeatmap(QWidget):
             self.body.addWidget(self._grid)
             self._titles = titles
             if not tiles:
-                message = label("선택한 관측일에 조건에 맞는 설비가 없습니다.", 13, color=SECONDARY, wrap=True)
-                self.body.addWidget(message)
-        self.visible_ids = tuple(t.equipment_id for t in tiles)
+                self.body.addWidget(label(empty, 13, color=SECONDARY, wrap=True))
+        # 물리 설비 ID (복수 SW 설비는 여러 카드에 보여도 한 번만). 원래 프레임 타일 순서를 유지한다.
+        shown = {tile.equipment_id for tile in tiles}
+        self.visible_ids = tuple(t.equipment_id for t in frame.tiles if t.equipment_id in shown)
         self.group_cards = [card["widget"] for card in self._cards]
         self.tile_buttons, self.tile_occurrences = {}, []
         for card in self._cards:

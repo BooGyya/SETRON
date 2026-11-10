@@ -3,7 +3,9 @@
 from dataclasses import replace
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QButtonGroup, QDialog, QFrame, QHBoxLayout, QProgressBar, QSizePolicy, QVBoxLayout, QWidget,
+)
 
 from setron.features.excel_import.service import parse_date
 from setron.features.targets.groups import with_saved_groups
@@ -18,9 +20,9 @@ from setron.ui.import_widgets import PeriodDateField, import_combo_style
 from setron.ui.query_panel import _WrapRow
 from setron.ui.query_state import UNASSIGNED, QuerySelection, QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.replay_data import ReplayData, ReplayRequest, load_replay, replay_detail
+from setron.ui.replay_data import INTERVALS, ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
 from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap
-from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font
 from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.versions import _field
 
@@ -38,7 +40,7 @@ class ReplayPage(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.advance)
-        self.date_buttons, self.legend_buttons = [], {}
+        self.legend_buttons, self.legend_tools, self.frames = {}, (), ()  # frames: 지금 재생 간격의 시점들
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
@@ -66,7 +68,8 @@ class ReplayPage(QWidget):
         period_row.addWidget(separator, 0, Qt.AlignmentFlag.AlignBottom)
         period_row.addWidget(_field("종료 날짜", self.end))
         self.combos, fields = {}, [period]
-        for key, title in (("site_key", "Site"), ("fab_key", "Fab"), ("line_key", "Line"), ("group_key", "설비군")):
+        # 설비군은 조회 조건이 아니라 그래프 위 설비군 버튼에서 고른다 (요청 1-1, 2-2).
+        for key, title in (("site_key", "Site"), ("fab_key", "Fab"), ("line_key", "Line")):
             control = ComboBox()
             control.setAccessibleName("Replay " + title)
             control.setProperty("queryField", True)
@@ -136,18 +139,41 @@ class ReplayPage(QWidget):
         self.observation_note.setAccessibleName("선택 시점의 관측 구성")
         ignore_width(self.observation_note)
         self.content.body.addWidget(self.observation_note)
+        # 날짜 칩 대신 재생 간격 (요청 2-1). 하나만 고르는 세그먼트 버튼. 바꾸면 다시 조회하지 않고 시점만 다시 만든다.
         self.timeline = QWidget()
-        self.timeline_body = QVBoxLayout(self.timeline)
-        self.timeline_body.setContentsMargins(0, 0, 0, 0)
+        interval_row = QHBoxLayout(self.timeline)
+        interval_row.setContentsMargins(0, 0, 0, 0)
+        interval_row.setSpacing(12)
+        interval_row.addWidget(label("재생 간격", 14, medium=True, color=SECONDARY))
+        segment = QWidget()
+        segment.setObjectName("replayInterval")
+        segment.setStyleSheet(f"QWidget#replayInterval {{background:#f3f5f8;border:1px solid {LINE};border-radius:10px;}}")
+        segment_row = QHBoxLayout(segment)
+        segment_row.setContentsMargins(3, 3, 3, 3)
+        segment_row.setSpacing(2)
+        self.interval_group = QButtonGroup(self)
+        self.interval_group.setExclusive(True)
+        self.interval_buttons, self.step = {}, None
+        for step, caption in INTERVALS.items():
+            control = button(caption)
+            control.setCheckable(True)
+            control.setChecked(step is None)
+            control.setFixedSize(96 if step is None else 72, 34)
+            control.setAccessibleName(f"재생 간격 {caption}")
+            control.setToolTip("실제 저장된 날짜마다 재생" if step is None else
+                               f"시작 날짜부터 {caption} 간격으로 재생 · 저장되지 않은 날짜는 그 전 마지막 관측으로 계산")
+            control.setStyleSheet(f"QPushButton {{background:transparent;color:{SECONDARY};border:0;border-radius:8px;padding:0;"
+                                  "min-height:34px;max-height:34px;}"
+                                  f"QPushButton:checked {{background:white;color:{PRIMARY};border:1px solid {PRIMARY};}}"
+                                  f"QPushButton:disabled {{color:#b8bec9;}}"
+                                  f"QPushButton:focus {{border:2px solid {PRIMARY};}}")
+            control.clicked.connect(lambda checked=False, s=step: self.set_interval(s))
+            self.interval_group.addButton(control)
+            self.interval_buttons[step] = control
+            segment_row.addWidget(control)
+        interval_row.addWidget(segment)
+        interval_row.addStretch()
         self.content.body.addWidget(self.timeline)
-        playback = []
-        self.play_button, self.pause_button, self.restart_button = button("재생", primary=True), button("일시정지"), button("처음부터")
-        for control in (self.play_button, self.pause_button, self.restart_button):
-            control.setStyleSheet("QPushButton {padding:0;min-height:38px;max-height:38px;}"
-                                 "QPushButton:focus {min-height:36px;max-height:36px;}")
-            control.setFixedSize(136, 40)
-            playback.append(control)
-        self.content.body.addWidget(_WrapRow(playback, 136))
         self.chart_card = Card(padding=20)
         self.chart_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.chart_card.body.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -164,6 +190,23 @@ class ReplayPage(QWidget):
         self.chart.date_selected.connect(self.select_date)
         self.chart_card.body.addWidget(self.chart)
         self.content.body.addWidget(self.chart_card)
+        # 재생 버튼: 그래프 아래, 재생 상태 글자 위. 글자 대신 기호 (요청 2-3, 3-3).
+        playback = QWidget()
+        playback_row = QHBoxLayout(playback)
+        playback_row.setContentsMargins(0, 0, 0, 0)
+        playback_row.setSpacing(8)
+        # 앱 글꼴(IBM Plex Sans KR)에 있는 기호만 쓴다. ⏸·⏮는 글꼴에 없어 네모로 깨진다.
+        self.play_button, self.pause_button, self.restart_button = button("▶", primary=True), button("‖"), button("↺")
+        for control, name in ((self.play_button, "재생"), (self.pause_button, "일시정지"), (self.restart_button, "처음부터")):
+            control.setAccessibleName(name)
+            control.setToolTip(name)
+            control.setFont(font(16, medium=True))
+            control.setStyleSheet("QPushButton {padding:0;min-height:38px;max-height:38px;}"
+                                  "QPushButton:focus {min-height:36px;max-height:36px;}")
+            control.setFixedSize(56, 40)
+            playback_row.addWidget(control)
+        playback_row.addStretch()
+        self.content.body.addWidget(playback)
         self.playback_status = label("일시정지 · 0 / 0", 15, medium=True)
         self.content.body.addWidget(self.playback_status)
         self.achievement = label("등록 SW 목표 달성 —", 20, medium=True, wrap=True)
@@ -179,7 +222,8 @@ class ReplayPage(QWidget):
         self.content.body.addWidget(self.progress)
         self.heatmap_title = label("선택 시점의 설비 Heatmap", 16, medium=True)
         self.content.body.addWidget(self.heatmap_title)
-        description = label("재생하면 날짜 칩 순서대로 타일 색이 바뀝니다 · 버전 히트맵과 같은 설비군 → Line → 설비 묶음",
+        description = label("재생하면 시점 순서대로 타일 색이 바뀝니다 · 위 설비군 버튼에서 고른 설비군만 보입니다 · "
+                            "버전 히트맵과 같은 설비군 → Line → 설비 묶음",
                             12, color=SECONDARY, wrap=True)
         ignore_width(description)
         self.content.body.addWidget(description)
@@ -227,13 +271,18 @@ class ReplayPage(QWidget):
 
     @property
     def frame(self):
-        return self.data.frames[self.index] if self.data and self.data.frames else None
+        return self.frames[self.index] if self.data is not None and self.frames else None
+
+    def selected_groups(self):
+        """설비군 버튼에서 고른 설비군 키. 보이는 버튼을 모두 골랐으면 None(전체)."""
+        chosen = {key for key, control in self.legend_buttons.items() if control.isChecked()}
+        return None if chosen == set(self.legend_buttons) else chosen
 
     def _fill_choices(self):
         self._filling = True
         try:
             for key, options in (("site_key", self.state.catalog.sites), ("fab_key", self.state.available_fabs()),
-                                 ("line_key", self.state.available_lines()), ("group_key", self.state.catalog.groups)):
+                                 ("line_key", self.state.available_lines())):
                 combo = self.combos[key]
                 combo.clear()
                 combo.addItem("전체", None)
@@ -267,10 +316,13 @@ class ReplayPage(QWidget):
         for control in (self.start, self.end, *self.combos.values(), self.reset_button, self.version_button, self.apply_button):
             control.setEnabled(not self.busy)
         self.apply_button.setText("조회 중" if self.busy else "조회 적용")
-        self.play_button.setEnabled(ready and self.data.can_replay and not self.timer.isActive())
+        self.play_button.setEnabled(ready and can_replay(self.frames) and not self.timer.isActive())
         self.pause_button.setEnabled(ready and self.timer.isActive())
-        self.restart_button.setEnabled(ready and bool(self.data.frames))
-        for control in self.date_buttons:
+        self.restart_button.setEnabled(ready and bool(self.frames))
+        for step, control in self.interval_buttons.items():
+            # 간격이 기간보다 길어 시점이 2개 미만이면 그 간격은 고를 수 없다. 저장일마다는 항상 고를 수 있다.
+            control.setEnabled(ready and (step is None or can_replay(self.data.frames_for(step))))
+        for control in (*self.legend_buttons.values(), *self.legend_tools):
             control.setEnabled(ready)
         self.heatmap.setEnabled(ready)
         self.chart.setEnabled(ready)
@@ -302,7 +354,7 @@ class ReplayPage(QWidget):
             return False
         self.epoch += 1
         self.pending_request = request
-        self.data, self.index = None, 0
+        self.data, self.index, self.frames = None, 0, ()
         self.dirty = False
         self._clear_display()
         self.badge.setText("조회 중")
@@ -314,12 +366,17 @@ class ReplayPage(QWidget):
 
     def _loaded(self, data, error):
         if error is not None or not isinstance(data, ReplayData) or data.request != self.pending_request:
-            self.data = None
+            self.data, self.frames = None, ()
             self.badge.setText("조회 실패")
             self._notice("관측 자료를 읽지 못했습니다. 날짜와 조건을 확인한 뒤 다시 조회해 주세요.", error=True)
             self._sync_controls()
             return
-        self.data, self.index, self.dirty = data, max(0, len(data.frames) - 1), False
+        self.data, self.dirty = data, False
+        self.frames = data.frames_for(self.step)
+        if self.step is not None and not can_replay(self.frames):
+            self.step, self.frames = None, data.frames  # 새 기간에 맞지 않는 간격이면 저장일마다로 되돌린다
+            self.interval_buttons[None].setChecked(True)
+        self.index = max(0, len(self.frames) - 1)
         self.epoch += 1
         self.badge.setText("적용됨")
         selection = data.request.query.selection
@@ -331,14 +388,28 @@ class ReplayPage(QWidget):
         self.context.setText(f"기간 {data.request.start} ~ {data.request.end} · 저장된 기준일 {len(data.frames)}개 · "
                              f"{scope} · 목표 N {n}개 · 위험 판정 기준 고정")
         self.context.setToolTip(data.source.source_label)
-        self.chart_context.setText((next((g.label for g in data.source.catalog.groups
-                                         if g.key == data.request.query.selection.group_key), "전체 설비")) + " · 조회 적용 시 목표 N 고정")
-        self._make_dates()
         self._make_legend()
         self._render_frame()
         self._notice("기간 안에 저장된 관측일이 없습니다." if not data.frames else
                      "재생하려면 조건에 맞는 실제 관측일이 두 개 이상 필요합니다." if not data.can_replay else "")
         self._sync_controls()
+
+    def set_interval(self, step):
+        """재생 간격을 바꾼다 (요청 2-1). 다시 조회하지 않고 이미 읽은 자료로 시점만 다시 만든다."""
+        if step not in self.interval_buttons:
+            return False
+        self.interval_buttons[step].setChecked(True)
+        if self.data is None or self.dirty or self.busy or step == self.step:
+            return False
+        frames = self.data.frames_for(step)
+        if step is not None and not can_replay(frames):
+            self.interval_buttons[self.step].setChecked(True)
+            return False
+        self.timer.stop()
+        self.step, self.frames, self.index = step, frames, max(0, len(frames) - 1)
+        self._render_frame()
+        self._sync_controls()
+        return True
 
     @staticmethod
     def _empty_layout(layout):
@@ -347,25 +418,24 @@ class ReplayPage(QWidget):
             widget.hide()
             widget.deleteLater()
 
-    def _make_dates(self):
-        self._empty_layout(self.timeline_body)
-        self.date_buttons = []
-        for index, frame in enumerate(self.data.frames):
-            caption = frame.day.strftime("%m.%d" if self.data.frames[0].day.year == self.data.frames[-1].day.year else "%Y.%m.%d")
-            control = button(caption)
-            control.setCheckable(True)
-            control.setFixedSize(136, 40)
-            control.setAccessibleName(f"{frame.day} 관측 선택")
-            control.clicked.connect(lambda checked=False, i=index: self.select_date(i))
-            self.date_buttons.append(control)
-        self.timeline_body.addWidget(_WrapRow(self.date_buttons, 136) if self.date_buttons else QWidget())
-
     def _make_legend(self):
+        """설비군 버튼 (요청 2-2). 조회 결과(선택한 Site 등)에 설비가 있는 설비군만 만들고, 앞에 전체 선택·해제를 둔다."""
         previous = {key: b.isChecked() for key, b in self.legend_buttons.items()}
         self._empty_layout(self.legend_body)
         self.legend_buttons = {}
+        known = self.data.frames + ((self.data.seed,) if self.data.seed else ())
+        present = {cell.group_keys[0] for frame in known for cell in frame.snapshot.groups
+                   if len(cell.group_keys) == 1 and cell.equipment_ids}
+        select_all, clear_all = button("전체 선택"), button("전체 해제")
+        for control, checked in ((select_all, True), (clear_all, False)):
+            control.setFixedHeight(36)
+            control.setMinimumWidth(96)
+            control.setStyleSheet("QPushButton {padding:0 12px;min-height:34px;max-height:34px;}"
+                                  "QPushButton:focus {min-height:32px;max-height:32px;}")
+            control.clicked.connect(lambda _=False, value=checked: self.set_all_groups(value))
+        self.legend_tools = (select_all, clear_all)
         for group in self.data.source.catalog.groups:
-            if self.data.request.query.selection.group_key not in (None, group.key):
+            if group.key not in present:
                 continue
             control = button(group.label)
             control.setCheckable(True)
@@ -377,18 +447,39 @@ class ReplayPage(QWidget):
                                  "QPushButton {min-height:34px;max-height:34px;}"
                                  f"QPushButton:checked {{color:{INK};border:2px solid {color};min-height:32px;max-height:32px;}}"
                                  "QPushButton:focus {background:#f7f9fc;}")
-            control.toggled.connect(self._draw_chart)
+            control.setAccessibleName(f"설비군 {group.label} 보기")
+            control.toggled.connect(self._groups_changed)
             self.legend_buttons[group.key] = control
-        self.legend_body.addWidget(_WrapRow(list(self.legend_buttons.values()), 120) if self.legend_buttons else QWidget())
+        widgets = [*self.legend_tools, *self.legend_buttons.values()] if self.legend_buttons else []
+        self.legend_body.addWidget(_WrapRow(widgets, 120) if widgets else QWidget())
+        self._update_chart_context()
+
+    def set_all_groups(self, checked):
+        """설비군 버튼 전체 선택·해제. 화면은 한 번만 다시 그린다."""
+        for control in self.legend_buttons.values():
+            blocked = control.blockSignals(True)
+            control.setChecked(checked)
+            control.blockSignals(blocked)
+        self._groups_changed()
+
+    def _groups_changed(self, *_):
+        """고른 설비군이 바뀌면 그래프 선·달성률·히트맵을 같은 설비군으로 다시 그린다 (요청 2-2)."""
+        self._update_chart_context()
+        if self.data is not None and not self.dirty:
+            self._render_frame()
+
+    def _update_chart_context(self):
+        total = len(self.legend_buttons)
+        chosen = sum(control.isChecked() for control in self.legend_buttons.values())
+        self.chart_context.setText(("설비군 전체" if chosen == total else f"설비군 {chosen} / {total}개 선택")
+                                   + " · 달성률과 히트맵도 고른 설비군 기준 · 조회 적용 시 목표 N 고정")
 
     def _draw_chart(self, *_):
         if self.data is not None:
             self.chart.show_data(self.data, {key for key, control in self.legend_buttons.items() if control.isChecked()},
-                                 current=self.index)
+                                 current=self.index, frames=self.frames)
 
     def _clear_display(self):
-        self._empty_layout(self.timeline_body)
-        self.date_buttons = []
         self.chart.clear()
         self.heatmap.clear()
         self.snapshot_title.setText("관측 시점")
@@ -409,29 +500,34 @@ class ReplayPage(QWidget):
             return
         self.snapshot_title.setText(f"{frame.day} 관측 스냅샷")
         self.heatmap_title.setText(f"선택 시점({frame.day})의 설비 Heatmap")
-        self.playback_status.setText(f"{'재생 중' if self.timer.isActive() else '일시정지'} · {self.index + 1} / {len(self.data.frames)}")
-        summary = frame.snapshot.summary
-        decided = summary.compliant + summary.below
-        value = f"{summary.rate:.1%}" if summary.rate is not None else "계산 불가"
-        self.achievement.setText(f"등록 SW 목표 달성 {summary.compliant} / {decided}건 · {value}")
-        observed = f"이날 저장 {frame.observed}대"
-        if frame.carried:
-            observed += f" · 이전 관측 이어받음 {frame.carried}대"
-        self.observation_note.setText(observed)
-        self.achievement.setToolTip(f"분석 {summary.equipment_count}대 ({observed}) · HPA {summary.hpa_excluded}대 제외 · "
-                                    f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
-        self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
-        self.progress.setAccessibleDescription(value)
-        for i, control in enumerate(self.date_buttons):
-            control.setChecked(i == self.index)
-            control.setStyleSheet(f"QPushButton {{background:{'#e8ebfc' if i == self.index else '#f9fafb'};"
-                                 f"color:{PRIMARY if i == self.index else INK};border:1px solid {PRIMARY if i == self.index else LINE};"
-                                 "border-radius:10px;padding:0;min-height:38px;max-height:38px;}"
-                                 f"QPushButton:focus {{border:2px solid {PRIMARY};min-height:36px;max-height:36px;}}")
-        self.heatmap.show_frame(self.data, frame)
+        self.playback_status.setText(f"{'재생 중' if self.timer.isActive() else '일시정지'} · {self.index + 1} / {len(self.frames)}")
+        groups = self.selected_groups()
+        summary, observed_count, carried_count = group_view(self.data, frame, groups)
+        if summary is None:
+            self.achievement.setText("등록 SW 목표 달성 — · 설비군을 하나 이상 골라 주세요")
+            self.achievement.setToolTip("")
+            self.observation_note.setText("")
+            self.progress.setValue(0)
+            self.progress.setAccessibleDescription("설비군 선택 없음")
+        else:
+            decided = summary.compliant + summary.below
+            value = f"{summary.rate:.1%}" if summary.rate is not None else "계산 불가"
+            self.achievement.setText(f"등록 SW 목표 달성 {summary.compliant} / {decided}건 · {value}")
+            observed = f"이날 저장 {observed_count}대"
+            if carried_count:
+                observed += f" · 이전 관측 이어받음 {carried_count}대"
+            if frame.at is not None and frame.at != frame.snapshot.base_date:
+                observed += f" · 마지막 저장일 {frame.snapshot.base_date} 기준"
+            self.observation_note.setText(observed)
+            hpa = f" · HPA {summary.hpa_excluded}대 제외" if groups is None else ""
+            self.achievement.setToolTip(f"분석 {summary.equipment_count}대 ({observed}){hpa} · "
+                                        f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
+            self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
+            self.progress.setAccessibleDescription(value)
+        self.heatmap.show_frame(self.data, frame, groups)
 
     def select_date(self, index):
-        if self.data is None or self.dirty or not 0 <= index < len(self.data.frames):
+        if self.data is None or self.dirty or not 0 <= index < len(self.frames):
             return False
         self.pause()
         self.index = index
@@ -442,9 +538,9 @@ class ReplayPage(QWidget):
         return True
 
     def play(self):
-        if self.data is None or self.dirty or self.busy or not self.data.can_replay:
+        if self.data is None or self.dirty or self.busy or not can_replay(self.frames):
             return False
-        if self.index == len(self.data.frames) - 1:
+        if self.index == len(self.frames) - 1:
             self.index = 0
         self.timer.start()
         self._render_frame()
@@ -453,12 +549,12 @@ class ReplayPage(QWidget):
 
     def pause(self):
         self.timer.stop()
-        if self.data is not None and self.data.frames:
-            self.playback_status.setText(f"일시정지 · {self.index + 1} / {len(self.data.frames)}")
+        if self.data is not None and self.frames:
+            self.playback_status.setText(f"일시정지 · {self.index + 1} / {len(self.frames)}")
         self._sync_controls()
 
     def restart(self):
-        if self.data is None or self.dirty or not self.data.frames:
+        if self.data is None or self.dirty or not self.frames:
             return False
         self.index = 0
         self._render_frame()
@@ -467,10 +563,10 @@ class ReplayPage(QWidget):
     def advance(self):
         if not self.timer.isActive() or self.data is None or self.dirty:
             return
-        if self.index < len(self.data.frames) - 1:
+        if self.index < len(self.frames) - 1:
             self.index += 1
             self._render_frame()
-        if self.index == len(self.data.frames) - 1:
+        if self.index == len(self.frames) - 1:
             self.pause()
 
     def reset_filters(self):
@@ -525,7 +621,7 @@ class ReplayPage(QWidget):
         self.pause()
         self.read_request.cancel()
         self.epoch += 1
-        self.data, self.pending_request, self.dirty = None, None, True
+        self.data, self.pending_request, self.dirty, self.frames = None, None, True, ()
         self._clear_display()
         self.badge.setText("재조회 필요")
         self._notice("저장 자료가 변경되었습니다. 조회 적용으로 다시 확인해 주세요.")
