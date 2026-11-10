@@ -1,4 +1,4 @@
-"""QA Q-03: DB를 못 읽어 합성 예시 자료로 시작하면 모든 화면에 '실제 자료 아님' 경고가 계속 보인다."""
+"""DB 접속 실패와 설정 없이 시작한 예시 모드의 공통 경고를 확인한다."""
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -15,9 +15,12 @@ def app():
     yield result
 
 
-def test_startup_warning_says_numbers_are_not_real():
-    text = startup_warning("DB 자료를 읽지 못해 합성 예시로 시작했습니다: 연결 실패", None)
-    assert text.startswith("실제 자료 아님") and "합성 예시" in text and "연결 실패" in text
+def test_startup_warning_distinguishes_db_failure_from_demo_mode():
+    assert startup_warning("연결 실패", "AI 접속 설정 오류") == (
+        "DB에 연결하지 못했습니다. MySQL 실행 상태와 접속 설정을 확인해주세요."
+    )
+    demo = startup_warning(None, None, demo_without_db=True)
+    assert demo == "DB 접속 설정이 없어 합성 예시를 표시합니다. setron.env를 확인해주세요."
     assert startup_warning(None, "AI 접속 설정 오류") == "AI 예제 응답 · AI 접속 설정 오류"
     assert startup_warning(None, None) == ""
 
