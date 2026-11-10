@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.risk.schemas import RiskStatus
+from setron.ui.appearance import readable_color, set_color_style, surface_edge
+from setron.ui.appearance_data import HEATMAP_FIELDS, HEATMAP_STANDARD, HEATMAP_TIERS, Appearance
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import RiskRuleState
@@ -18,20 +20,9 @@ from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, 
 
 # 타일 채움색은 5단계: 진초록 N+1 이상 · 연초록 N · 연분홍 N-1 · 진분홍 N-2 이하 · 회색 비교 불가·HPA.
 # 위험 후보는 빨강(N-2 이하)과 헷갈리지 않게 채움색 대신 굵은 빨간 테두리로 보인다 (범례 설명과 같은 규칙).
-RISK_LINE = "#c9485e"
+RISK_LINE = HEATMAP_STANDARD[False][-1]
 RISK_FILL = "#fde2e7"
-GOAL_FILL = {GoalState.MET: "#ddf4e5", GoalState.BELOW: "#fff0b7", GoalState.UNKNOWN: "#eceef1",
-             GoalState.EXCLUDED: "#eceef1"}
-TIER_FILL = {Tier.ABOVE: "#a9dbbd", Tier.AT: "#ddf4e5", Tier.ONE_BELOW: "#fce4e7", Tier.TWO_BELOW: "#f6c5cd",
-             Tier.UNKNOWN: "#eceef1"}
-TIER_LEGEND = ((Tier.ABOVE, "N+1 이상"), (Tier.AT, "N"), (Tier.ONE_BELOW, "N-1"), (Tier.TWO_BELOW, "N-2 이하"),
-               (Tier.UNKNOWN, "비교 불가 · HPA"))
-
-
-def _tile_label(text, size, *, medium=False, color=INK):
-    result = label(text, size, medium=medium, color=color, wrap=True)
-    ignore_width(result)
-    return result
+TIER_FILL = dict(zip(HEATMAP_TIERS, HEATMAP_STANDARD[False]))
 
 
 def _version_text(data, families, *, show_tier=True, separator=" / ", empty="SW 미등록"):
@@ -47,15 +38,27 @@ def _version_text(data, families, *, show_tier=True, separator=" / ", empty="SW 
     return separator.join(dict.fromkeys(parts)) or empty
 
 
-def tile_style(data, *, minimum_height=0):
-    """타일 채움색·테두리 스타일. 위험 후보는 굵은 빨간 테두리."""
+def heatmap_cell_colors(colors, key, risk=False):
+    background = colors[key]
+    ink = readable_color(colors["ink"], background)
+    border = (readable_color(colors["heat_risk"], background, 3) if risk
+              else surface_edge(background, colors["surface"], background))
+    return background, ink, border
+
+
+def tile_style(data, *, minimum_height=0, colors=None):
+    """비교 단계는 채움색, 위험 후보는 테두리로 표시한다."""
+    colors = Appearance().colors() if colors is None else colors
     risk = data.risk is RiskStatus.RISK and data.goal is not GoalState.EXCLUDED
-    background = GOAL_FILL[data.goal] if data.goal is GoalState.EXCLUDED else TIER_FILL[data.tier]
-    border = f"2px solid {RISK_LINE}" if risk else f"1px solid {background}"
-    return (f"QPushButton#equipmentTile {{background:{background};border:{border};"
+    tier = Tier.UNKNOWN if data.goal is GoalState.EXCLUDED else data.tier
+    background, ink, border = heatmap_cell_colors(colors, HEATMAP_TIERS[tier][0], risk)
+    focus = readable_color(colors["accent"], background, 3)
+    return (f"QPushButton#equipmentTile {{background:{background};border:{2 if risk else 1}px solid {border};"
             f"border-radius:4px;padding:0;min-height:{minimum_height}px;}}"
-            f"QPushButton#equipmentTile:hover {{border-color:{PRIMARY};}}"
-            f"QPushButton#equipmentTile:focus, QPushButton#equipmentTile:checked {{outline:none;border:2px solid {PRIMARY};}}")
+            f"QPushButton#equipmentTile QLabel {{color:{ink};}}"
+            f"QPushButton#equipmentTile:hover {{border-color:{border if risk else focus};}}"
+            f"QPushButton#equipmentTile:focus, QPushButton#equipmentTile:checked "
+            f"{{outline:none;border:{3 if risk else 2}px solid {border if risk else focus};}}")
 
 
 class TileButton(QPushButton):
@@ -72,18 +75,18 @@ class TileButton(QPushButton):
         body = QVBoxLayout(self)
         body.setContentsMargins(10, 8 if not expanded else 10, 10, 8 if not expanded else 10)
         body.setSpacing(4)
-        self.code_label = label(data.code, 16, medium=True, color=INK)
+        self.code_label = label(data.code, 16, medium=True)
         self.code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         body.addStretch()
         body.addWidget(self.code_label)
         if expanded:
-            self.version_label = _tile_label("", 14)
+            self.version_label = label("", 14, wrap=True)
+            ignore_width(self.version_label)
             self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             body.addWidget(self.version_label)
         for child in self.findChildren(QWidget):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         body.addStretch()
-        self.style_text = ""
         self.update_appearance(families)
 
     def set_data(self, data):
@@ -96,10 +99,9 @@ class TileButton(QPushButton):
         if self.version_label is not None:
             self.version_label.setText(_version_text(self.data, families, show_tier=False))
         # Qt가 QSS의 최소 높이를 레이아웃 힌트보다 우선하므로 타일 본문을 기준으로 지정한다.
-        style = tile_style(self.data, minimum_height=self.layout().minimumSize().height())
-        if style != self.style_text:
-            self.style_text = style
-            self.setStyleSheet(style)
+        height = self.layout().minimumSize().height()
+        data = self.data
+        set_color_style(self, lambda colors: tile_style(data, minimum_height=height, colors=colors))
 
     def minimumSizeHint(self):
         return QSize(0, self.layout().minimumSize().height())
@@ -160,7 +162,9 @@ class HeatmapLegend(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(20)
         self.items = []
-        for color, text in [(TIER_FILL[tier], name) for tier, name in TIER_LEGEND] + [(None, "위험 후보")]:
+        for key, text in HEATMAP_FIELDS:
+            if key == "heat_risk":
+                text = "위험 후보"
             item = QWidget()
             item.setAccessibleName("범례 " + text)
             body = QHBoxLayout(item)
@@ -168,8 +172,14 @@ class HeatmapLegend(QWidget):
             body.setSpacing(6)
             dot = QFrame()
             dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background:{color};border-radius:5px;" if color else
-                              f"background:white;border:2px solid {RISK_LINE};border-radius:3px;")
+            if key == "heat_risk":
+                set_color_style(dot, lambda colors: (
+                    f"background:{colors['surface']};border:2px solid "
+                    f"{readable_color(colors['heat_risk'], colors['surface'], 3)};border-radius:3px;"))
+            else:
+                set_color_style(dot, lambda colors, k=key: (
+                    f"background:{colors[k]};border-radius:5px;"
+                    f"border:1px solid {surface_edge(colors[k], colors['surface'], colors[k])};"))
             body.addWidget(dot)
             body.addWidget(label(text, 12, color=SECONDARY))
             row.addWidget(item)
@@ -226,7 +236,7 @@ class HeatmapPage(QWidget):
         self.context.hide()
 
         self.metrics = {
-            "analysis": DashboardKpi("분석 설비", "32ac4.svg", accent=True, show_caption=False),
+            "analysis": DashboardKpi("분석 설비", "32ac4.svg", accent=True, show_caption=False, rate_key="accent"),
             "met": DashboardKpi("목표 달성", "bbc12.svg", show_caption=False),
             "below": DashboardKpi("목표 미달", "e53b6.svg", show_caption=False),
             "unknown": DashboardKpi("확인 필요", "60dbd.svg", show_caption=False),

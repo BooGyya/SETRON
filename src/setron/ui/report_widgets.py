@@ -10,13 +10,13 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTabBar, QVBoxLayout, QWidget,
 )
 
-from setron.ui.appearance import chart_font, ui_color
+from setron.ui.appearance import chart_font, readable_ink, ui_color
 from setron.ui.chat_export import chart_png, export_folder
 from setron.ui.components import button, label
 from setron.ui.import_dialogs import ImportBusyBar, ImportConfirmDialog, ImportDialog
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.report_export import display_value, save_generated_report
-from setron.ui.theme import PRIMARY, SECONDARY, font, icon, svg_size
+from setron.ui.theme import INK, PRIMARY, SECONDARY, font, icon, svg_size
 from setron.ui.version_management_widgets import card, note, set_rows, table, text_field
 
 COLORS = ("#3c5ce9", "#293b66", "#9ca3af")
@@ -375,9 +375,11 @@ class TreeMap(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), ui_color("white"))
+        surface = ui_color("white")
+        painter.fillRect(self.rect(), surface)
         total = sum(sum(row[1:]) for row in self.table.rows)
         if not total:
+            painter.setPen(readable_ink(ui_color(INK), surface))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "자료 없음")
             return
         x = 0.0
@@ -392,10 +394,12 @@ class TreeMap(QWidget):
                     continue
                 height = self.height() * value / count
                 rect = QRectF(x, y, width, height)
-                painter.fillRect(rect, ui_color(COLORS[index]))
-                painter.setPen(QPen(ui_color("white"), 1))
+                fill = ui_color(COLORS[index])
+                painter.fillRect(rect, fill)
+                painter.setPen(QPen(surface, 1))
                 painter.drawRect(rect)
                 if width > 100 and height > 38:
+                    painter.setPen(readable_ink(ui_color(INK), fill))
                     painter.drawText(rect.adjusted(8, 4, -8, -4), Qt.AlignmentFlag.AlignCenter,
                                      f"{row[0]} · {self.table.columns[index + 1]} {value}건")
                 y += height

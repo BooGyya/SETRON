@@ -208,6 +208,10 @@ class _ContentCanvas(QWidget):
         color = QColor(value) if value else QColor()
         if color != self._preview_background:
             self._preview_background = color
+            self.setProperty("setronCanvasPreview", color.name() if color.isValid() else None)
+            from setron.ui.appearance import manager
+            if controller := manager():
+                controller.refresh_canvas_preview(self)
             self.update()
 
     def paintEvent(self, event):

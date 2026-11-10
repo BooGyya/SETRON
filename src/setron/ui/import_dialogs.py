@@ -1,13 +1,14 @@
 """가져오기 전용 진행·확인 창. Figma의 둥근 흰색 카드와 기존 Qt 컨트롤을 사용한다."""
 
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QRectF, Qt, QVariantAnimation
-from PySide6.QtGui import QPainter, QPainterPath
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout,
     QMessageBox, QProgressBar, QScrollArea, QVBoxLayout,
 )
 
-from setron.ui.appearance import ui_color
+from setron.ui.appearance import manager, readable_color, refresh_widget_font, ui_color
+from setron.ui.appearance_data import Appearance
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import button, label
 from setron.ui.import_widgets import import_combo_style
@@ -136,15 +137,16 @@ def import_question(parent, title, text, buttons, default):
 
 
 class ImportBusyBar(QProgressBar):
-    """테마에 의존하지 않는 왕복 없는 대기 표시. 완료율을 추정하지 않는다."""
+    """진행률을 제공하지 않는 작업에 쓰는 왕복 표시."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.phase = 0.0
+        self._colors = None
         self.animation = QVariantAnimation(self)
         self.animation.setStartValue(0.0)
         self.animation.setEndValue(1.0)
-        self.animation.setDuration(1400)
+        self.animation.setDuration(2200)
         self.animation.setLoopCount(-1)
         self.animation.setEasingCurve(QEasingCurve.Type.Linear)
         self.animation.valueChanged.connect(self._advance)
@@ -162,6 +164,7 @@ class ImportBusyBar(QProgressBar):
         reduced = bool(app and app.property("reducedMotion"))
         running = self.isVisible() and self.minimum() == self.maximum() == 0 and not reduced
         if running and self.animation.state() != QAbstractAnimation.State.Running:
+            self.phase = 0.0
             self.animation.start()
         elif not running:
             self.animation.stop()
@@ -180,17 +183,30 @@ class ImportBusyBar(QProgressBar):
         self.animation.stop()
         super().hideEvent(event)
 
+    def keep_current_colors(self):
+        self._colors = self._theme_colors()
+        self.update()
+
+    @staticmethod
+    def _theme_colors():
+        track = ui_color("#e8edfc")
+        fill = QColor(readable_color(ui_color(PRIMARY).name(), track.name(), 3))
+        return track, fill
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         track = QPainterPath()
         track.addRoundedRect(QRectF(self.rect()), 3, 3)
-        painter.fillPath(track, ui_color("#e8edfc"))
+        track_color, fill = self._colors or self._theme_colors()
+        painter.fillPath(track, track_color)
         painter.setClipPath(track)
-        segment = max(32.0, self.width() * 0.28)
-        start = self.phase * (self.width() + segment) - segment
+        segment = min(self.width(), max(32.0, self.width() * 0.28))
+        moving = self.animation.state() == QAbstractAnimation.State.Running
+        position = 1 - abs(2 * self.phase - 1) if moving else 0.5
+        start = position * (self.width() - segment)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(ui_color(PRIMARY))
+        painter.setBrush(fill)
         painter.drawRoundedRect(QRectF(start, 0, segment, self.height()), 3, 3)
 
 
@@ -206,12 +222,32 @@ class ImportProgressDialog(ImportDialog):
         self.body.addWidget(self.hint)
         self.operation = None
 
+    def _keep_current_theme(self):
+        """진행 중 전역 테마가 바뀌어도 같은 팝업 색과 글자 크기를 유지한다."""
+        controller = manager()
+        colors = controller.tokens if controller else Appearance().colors()
+        font_scale = controller.appearance.font_scale if controller else 1.0
+        background = colors["surface"]
+        self.setProperty("themePreview", True)
+        self.setStyleSheet("QDialog {background:transparent;}")
+        self.surface.setProperty("themePreview", True)
+        self.surface.setStyleSheet(
+            f"QFrame#importDialogSurface {{background:{background};border:1px solid {colors['line']};border-radius:16px;}}")
+        for label_, preferred in ((self.heading, colors["ink"]), (self.message, colors["muted"]), (self.hint, colors["muted"])):
+            label_.setProperty("themePreview", True)
+            label_.setProperty("setronPreviewFontScale", font_scale)
+            label_.setStyleSheet("color:" + readable_color(preferred, background) + ";")
+            refresh_widget_font(label_)
+        self.progress.keep_current_colors()
+
     def set_operation(self, operation, title="", text="", *, visible=True):
         if operation is None:
             self.operation = None
             self.progress.setRange(0, 1)
             self.hide()
             return
+        if self.operation is None or (visible and not self.isVisible()):
+            self._keep_current_theme()
         self.operation = operation
         self.heading.setText(title)
         self.setWindowTitle(title)
@@ -219,7 +255,9 @@ class ImportProgressDialog(ImportDialog):
         self.message.scroll_area.setFixedHeight(max(38, min(90, self.message.heightForWidth(self.dialog_width - 104) + 8)))
         self.hint.setText("완료되면 자동으로 닫힙니다. 잠시만 기다려 주세요.")
         self.progress.setRange(0, 0)
-        if visible and not self.isVisible():
+        if not visible:
+            self.hide()
+        elif not self.isVisible():
             self.adjustSize()
             self.open()
 

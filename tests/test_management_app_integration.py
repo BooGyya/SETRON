@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
+from threading import Event
 import time
 
 import pytest
@@ -267,8 +268,25 @@ def test_line_rename_updates_query_choices_and_reapplies_same_query(app, file_st
         before = window.query_state.applied
         page = open_record(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id})
         page.inputs["line"].editor.setText("새 화성 라인")
-        save_current(window, app, page)
+        entered, release = Event(), Event()
+        reload_catalog = source.reload_catalog
+        def slow_reload():
+            entered.set()
+            assert release.wait(5)
+            return reload_catalog()
+        source.reload_catalog = slow_reload
+        try:
+            assert page.add_current() and page.review() and page.save()
+            wait_for(app, entered.is_set)
+            progress = window.management_progress
+            assert progress.isVisible() and "저장 결과 반영 중" == progress.heading.text()
+            phase = progress.progress.phase
+            QTest.qWait(100)
+            assert progress.progress.phase != phase and window.query_state.applied is before
+        finally:
+            release.set()
         wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
+        assert not window.management_progress.isVisible()
 
         applied = window.query_state.applied
         assert applied is not before and window.query_state.applied_is_current

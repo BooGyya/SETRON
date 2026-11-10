@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from setron.features.aggregation.service import summarize
 from setron.features.version.schemas import CompareStatus
+from setron.ui.appearance import readable_color, set_color_style, surface_edge
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import (
     DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, series_button_style, series_color, trend_point_rate,
@@ -19,12 +20,8 @@ from setron.ui.dashboard_data import (
     information_gap_reasons, missing_sw_count,
 )
 from setron.ui.query_state import matches_selection
-from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, set_widget_font, svg_size
+from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
 
-# Figma VER4 대시보드 셀 색 (--met / --below / --soft / --v4-red). 이 화면에서만 쓴다.
-MET = "#ddf4e5"
-BELOW = "#fff0b7"
-RISK_RED = "#db4054"
 OUTLINE_BUTTON = (f"QPushButton {{background:white;border:1px solid {LINE};border-radius:8px;padding:0 16px;"
                   "min-height:32px;max-height:32px;}"
                   f"QPushButton:hover {{background:{ACCENT_SOFT};border-color:{PRIMARY};}}"
@@ -63,21 +60,35 @@ def _clear_layout(layout):
 def _equipment_state(status):
     """설비 한 대의 표시 상태. 집계 결과(계열별 판정)를 그대로 읽기만 한다."""
     if status is None or not status.families:
-        return "미확인", SOFT
+        return "미확인", "dashboard_unknown"
     if status.needs_upgrade:
-        return "미달", BELOW
+        return "미달", "below"
     if any(f.status is CompareStatus.UNDETERMINED for f in status.families):
-        return "확인 필요", SOFT
-    return "달성", MET
+        return "확인 필요", "dashboard_unknown"
+    return "달성", "met"
+
+
+def dashboard_cell_colors(colors, key):
+    background = colors[key]
+    preferred = {"met": "#246b4a", "below": "#8a6400", "risk": "#ad344d"}.get(key, colors["muted"])
+    if colors["ink"] != INK:
+        preferred = colors["ink"]
+    return background, readable_color(preferred, background)
+
+
+def _dashboard_badge_style(colors, key, rules):
+    background, ink = dashboard_cell_colors(colors, key)
+    return f"background:{background};color:{ink};{rules}"
 
 
 class DashboardGrid(QWidget):
     def __init__(self, widgets, *, minimum_width=260, maximum_columns=4, spacing=16,
-                 alignment=Qt.AlignmentFlag(0)):
+                 alignment=Qt.AlignmentFlag(0), captions=None):
         super().__init__()
         self.widgets, self.minimum_width, self.maximum_columns = widgets, minimum_width, maximum_columns
         self.spacing = spacing
         self.alignment = alignment
+        self.captions = captions or {}
         self.columns = 0
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(0, 0, 0, 0)
@@ -91,12 +102,18 @@ class DashboardGrid(QWidget):
     def _arrange(self, columns):
         if columns == self.columns:
             return
-        for widget in self.widgets:
+        for widget in (*self.widgets, *self.captions.values()):
             self.grid.removeWidget(widget)
         for index in range(max(columns, self.columns)):
             self.grid.setColumnStretch(index, int(index < columns))
         for index, widget in enumerate(self.widgets):
-            self.grid.addWidget(widget, index // columns, index % columns, self.alignment)
+            row, column = divmod(index, columns)
+            if self.captions:
+                row *= 2
+                if caption := self.captions.get(widget):
+                    self.grid.addWidget(caption, row, column)
+                row += 1
+            self.grid.addWidget(widget, row, column, self.alignment)
         self.columns = columns
         self.updateGeometry()
 
@@ -131,13 +148,14 @@ class SplitRow(QWidget):
 class DashboardKpi(Card):
     """VER4 대시보드 상단의 간결한 지표 카드. 첫 카드(달성률)는 강조색으로 채운다."""
 
-    def __init__(self, title, asset, *, accent=False, show_caption=True):
+    def __init__(self, title, asset, *, accent=False, show_caption=True, rate_key="rate"):
         super().__init__(padding=18)
         self.body.setSpacing(3)
         self.body.setAlignment(Qt.AlignmentFlag.AlignTop if show_caption else Qt.AlignmentFlag.AlignVCenter)
         ink, muted = ("white", "white") if accent else (INK, SECONDARY)
         if accent:
             self.setProperty("appearanceRate", "background")
+            self.setProperty("appearanceRateKey", rate_key)
             self.setStyleSheet(f"QFrame#card {{background:{PRIMARY};border:1px solid {PRIMARY};border-radius:12px;}}")
         else:
             self.setStyleSheet("QFrame#card {background:white;border:1px solid white;border-radius:12px;}")
@@ -212,10 +230,13 @@ class DashboardPage(QWidget):
         legend_body.setContentsMargins(0, 0, 0, 0)
         legend_body.setSpacing(16)
         legend_body.addWidget(label("목표 달성률", 12, color=SECONDARY))
-        for text, color in (("목표 달성", MET), ("미달 · 확인 필요", BELOW), ("위험 후보", RISK_RED)):
+        for text, key in (("목표 달성", "met"), ("목표 미달", "below"),
+                          ("확인 필요", "dashboard_unknown"), ("위험 후보", "dashboard_risk_marker")):
             dot = QFrame()
             dot.setFixedSize(8, 8)
-            dot.setStyleSheet(f"background:{color};border-radius:4px;")
+            set_color_style(dot, lambda colors, k=key: (
+                f"background:{colors[k]};border-radius:4px;"
+                f"border:1px solid {surface_edge(colors[k], colors['surface'], colors[k])};"))
             item = QHBoxLayout()
             item.setSpacing(6)
             item.addWidget(dot)
@@ -227,7 +248,10 @@ class DashboardPage(QWidget):
         risk_body = QHBoxLayout(self.risk_note)
         risk_body.setContentsMargins(0, 0, 0, 0)
         risk_body.setSpacing(6)
-        risk_body.addWidget(label("⚠", 13, color=RISK_RED))
+        risk_symbol = label("⚠", 13)
+        set_color_style(risk_symbol, lambda colors: (
+            f"color:{readable_color(colors['dashboard_risk_marker'], colors['surface'])};"))
+        risk_body.addWidget(risk_symbol)
         risk_body.addWidget(self.description, 1)
         self.content.body.addWidget(self.risk_note)
         self.series_widgets = []
@@ -514,14 +538,17 @@ class DashboardPage(QWidget):
         _clear_layout(self.composition_rows)
         counts = (data.summary.compliant, data.summary.below, data.summary.undetermined)
         total = sum(counts)
-        styles = (("달성", ACCENT_SOFT, PRIMARY), ("미달", BELOW, INK), ("확인 필요", "#f3f4f6", INK))
-        for (name, background, ink), count, ids in zip(styles, counts, composition_cohorts(data.summary)):
+        styles = (("달성", "composition_met_chip", "rate"), ("미달", "below", "ink"),
+                  ("확인 필요", "composition_unknown_chip", "ink"))
+        for (name, key, preferred), count, ids in zip(styles, counts, composition_cohorts(data.summary)):
             row = QHBoxLayout()
             row.setSpacing(16)
-            chip = label(name, 16, medium=True, color=ink)
+            chip = label(name, 16, medium=True)
             chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
             chip.setFixedSize(90, 30)
-            chip.setStyleSheet(f"background:{background};border-radius:4px;")
+            set_color_style(chip, lambda colors, k=key, p=preferred: (
+                f"background:{colors[k]};color:{readable_color(colors[p], colors[k])};border-radius:4px;"
+                f"border:1px solid {surface_edge(colors[k], colors['surface'], colors[k])};"))
             row.addWidget(chip)
             share = f"{count / total:.1%}" if total else "—"
             count_label = label(f"{count}건", 12, color=INK)
@@ -564,18 +591,20 @@ class DashboardPage(QWidget):
             row_body.setSpacing(12)
             marker = QFrame()
             marker.setFixedSize(4, 4)
-            marker.setStyleSheet(f"background:{RISK_RED};border-radius:2px;")
+            set_color_style(marker, lambda colors: (
+                f"background:{readable_color(colors['dashboard_risk_marker'], colors['surface'], 3)};border-radius:2px;"))
             row_body.addWidget(marker, alignment=Qt.AlignmentFlag.AlignVCenter)
             identity = QVBoxLayout()
             identity.setSpacing(0)
             identity.addWidget(label(f"{code}  ·  {groups}", 13, medium=True))
             identity.addWidget(label(f"{self._area_label(equipment_id)}  ·  위험 후보", 11, color=SECONDARY))
             row_body.addLayout(identity, 1)
-            state, background = _equipment_state(statuses.get(equipment_id))
+            state, color_key = _equipment_state(statuses.get(equipment_id))
             badge = label(state, 12, medium=True)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setMinimumSize(56, 28)
-            badge.setStyleSheet(f"background:{background};color:{INK};border-radius:8px;padding:0 10px;")
+            set_color_style(badge, lambda colors, k=color_key: _dashboard_badge_style(
+                colors, k, "border-radius:8px;padding:0 10px;"))
             row_body.addWidget(badge)
             open_button = button("↗")
             open_button.setFixedSize(28, 28)
@@ -760,8 +789,7 @@ class DashboardPage(QWidget):
         """Figma 셀: 큰 달성률, 아래에 'N 이상/판단 가능 건' + 위험 후보·판단 불가 표시."""
         summary = cell.summary
         complete = summary.rate is not None and summary.complete and not missing_sw_count(summary)
-        background = SOFT if summary.rate is None else MET if complete else BELOW
-        ink = "#246b4a" if background == MET else "#8a6400" if background == BELOW else SECONDARY
+        color_key = "dashboard_unknown" if summary.rate is None else "met" if complete else "below"
         if not cell.equipment_ids:
             text = "—"
         elif summary.hpa_excluded and not summary.equipment_count:
@@ -772,10 +800,16 @@ class DashboardPage(QWidget):
             text = f"{summary.rate * 100:.1f}".removesuffix(".0") + "%"
         main = button("")
         main.setObjectName("dashboardCell")
-        main.setStyleSheet(f"QPushButton#dashboardCell {{background:{background};border:1px solid transparent;"
-                           "border-radius:6px;padding:0;min-height:54px;}"
-                           f"QPushButton#dashboardCell:hover:enabled {{border-color:{PRIMARY};}}"
-                           f"QPushButton#dashboardCell:focus {{border:2px solid {PRIMARY};}}")
+        def cell_style(colors):
+            background, ink = dashboard_cell_colors(colors, color_key)
+            border = surface_edge(background, colors["surface"], background)
+            focus = readable_color(colors["accent"], background, 3)
+            return (f"QPushButton#dashboardCell {{background:{background};border:1px solid {border};"
+                    "border-radius:6px;padding:0;min-height:54px;}"
+                    f"QPushButton#dashboardCell QLabel {{color:{ink};}}"
+                    f"QPushButton#dashboardCell:hover:enabled {{border-color:{focus};}}"
+                    f"QPushButton#dashboardCell:focus {{border:2px solid {focus};}}")
+        set_color_style(main, cell_style)
         main.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         main.setEnabled(bool(cell.equipment_ids))
         main.setAccessibleName(f"{row.label} {cell.label} 전체 설비 {summary.equipment_count}대")
@@ -795,7 +829,7 @@ class DashboardPage(QWidget):
         body = QVBoxLayout(main)
         body.setContentsMargins(4, 4, 4, 4)
         body.setSpacing(0)
-        value = label(text, 15 if summary.rate is not None else 12, medium=True, color=ink)
+        value = label(text, 15 if summary.rate is not None else 12, medium=True)
         value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         body.addWidget(value, 1)
         self.matrix_buttons[row_index, column] = main
@@ -803,21 +837,23 @@ class DashboardPage(QWidget):
             detail = QHBoxLayout()
             detail.setSpacing(6)
             detail.addStretch(1)
-            detail.addWidget(label(f"{summary.compliant}/{summary.compliant + summary.below}건", 11, color=ink))
+            detail.addWidget(label(f"{summary.compliant}/{summary.compliant + summary.below}건", 11))
             if cell.risky_ids:
                 risk = button(f"후보 {len(cell.risky_ids)}")
                 risk.setProperty("dashboardRiskBadge", True)
                 set_widget_font(risk, font(10, medium=True))
-                risk.setStyleSheet("QPushButton {color:#ad344d;background:#fce2e7;border:1px solid transparent;"
-                                   "border-radius:4px;padding:0 5px;min-height:16px;max-height:16px;}"
-                                   f"QPushButton:focus {{border:1px solid {PRIMARY};}}")
+                set_color_style(risk, lambda colors: (
+                    "QPushButton {" + _dashboard_badge_style(
+                        colors, "risk", "border:1px solid transparent;border-radius:4px;"
+                        "padding:0 5px;min-height:16px;max-height:16px;") + "}"
+                    f"QPushButton:focus {{border-color:{readable_color(colors['accent'], colors['risk'], 3)};}}"))
                 risk.setAccessibleName(f"{row.label} {cell.label} 위험 후보만 {len(cell.risky_ids)}대")
                 risk.setToolTip(equipment_count_tooltip(f"위험 후보 · {title}", cell.risky_ids))
                 risk.clicked.connect(lambda checked=False: self._select(title, cell.risky_ids, risk_only=True))
                 detail.addWidget(risk)
                 self.risk_buttons[row_index, column] = risk
             elif summary.undetermined:
-                detail.addWidget(label(f"미확인{summary.undetermined}", 11, color=ink))
+                detail.addWidget(label(f"미확인{summary.undetermined}", 11))
             detail.addStretch(1)
             body.addLayout(detail)
         for caption in main.findChildren(QLabel):

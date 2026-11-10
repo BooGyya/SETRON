@@ -293,6 +293,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     items.manager.configure(management_gateway, release_refresh_context, submit_item_risk)
     window.management_gateway = management_gateway
     window.management_refresh = ReadRequest(window)
+    catalog_refresh = ReadRequest(window)
     window.management_refresh_query = None
     window.management_saving = False
     window.management_last_success = False
@@ -793,7 +794,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.page_changed.connect(ensure_loaded)
     window.header.action_requested.connect(open_all)
 
+    defer_query_apply = False
+
     def apply_query(query):
+        if defer_query_apply:
+            return
         if not heatmap.begin_query(query):
             return
         equipment.clear(f"{getattr(source, 'result_label', '예시 결과')} 계산 중")
@@ -856,11 +861,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     ai.fresh_data_ready.connect(lambda data: accept_current_snapshot(data.snapshot))
 
-    def cancel_management_refresh():
+    def cancel_management_refresh(*, hide_progress=True):
         """저장 전 관리 재조회와 그 응답을 받을 조회 기준을 함께 폐기한다."""
         window.management_refresh.cancel()
         window.management_refresh_query = None
-        if not window.management_saving:
+        if hide_progress and not window.management_saving:
             window.management_progress.set_operation(None)
 
     def begin_management_save():
@@ -896,20 +901,34 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.notice.setText(prefix + " · 같은 조회 조건으로 집계·위험 결과를 다시 읽었습니다. 목표 N 선택은 유지했습니다.")
         ai.refresh()
 
-    def refresh_query_catalog(*, reapply=False):
-        """저장 뒤 DB의 새 Site·Line을 조회 선택지에 반영한다. 선택지가 같으면 아무것도 바꾸지 않는다.
+    catalog_ready = None
 
-        선택지가 바뀌면 적용 조건이 무효가 된다. ``reapply``이고 적용 조건·목표 N이 초안과 같으며
-        새 선택지에서도 유효하면 같은 조건을 다시 적용하고 True를 돌려준다.
-        """
-        if not hasattr(source, "reload_catalog"):
-            return False
-        try:
-            catalog = source.reload_catalog()
-        except RuntimeError as error:
+    def finish_catalog_reload(catalog, error):
+        nonlocal catalog_ready
+        ready, catalog_ready = catalog_ready, None
+        if error is not None:
             window.notice.setText(str(error))
-            return False
-        if catalog == window.query_state.catalog:
+        if ready is not None:
+            ready(catalog)
+
+    catalog_refresh.completed.connect(finish_catalog_reload)
+
+    def read_saved_catalog(ready, *, background):
+        nonlocal catalog_ready
+        loader = getattr(source, "reload_catalog", None)
+        if loader is None:
+            ready(None)
+            return
+        catalog_refresh.cancel()
+        catalog_ready = ready
+        if background:
+            window.management_progress.set_operation("catalog", "저장 결과 반영 중", "저장 자료와 조회 선택지를 다시 읽고 있습니다.")
+        catalog_refresh.start(BackgroundRead(loader) if background else loader)
+
+    def apply_saved_catalog(catalog, *, reapply=False):
+        """유효한 같은 조회 조건은 다시 적용하고, 결과는 이어지는 워커에서 읽는다."""
+        nonlocal defer_query_apply
+        if catalog is None or catalog == window.query_state.catalog:
             return False
         state = window.query_state
         applied = state.applied
@@ -918,34 +937,45 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.query_panel.set_catalog(catalog)
         if not (reapply and same and state.draft == applied.selection):
             return False
-        window.query_panel.apply_draft()
+        defer_query_apply = True
+        try:
+            window.query_panel.apply_draft()
+        finally:
+            defer_query_apply = False
         return True
 
     def after_management_save(result):
+        preserve_detail = item_risk_save_pending
+        if result is None:
+            finish_management_save(result, None, preserve_detail)
+        else:
+            read_saved_catalog(lambda catalog: finish_management_save(result, catalog, preserve_detail), background=True)
+
+    def finish_management_save(result, catalog, preserve_detail):
+        reapplied = apply_saved_catalog(catalog, reapply=True)
         window.management_saving = False
-        reapplied = result is not None and refresh_query_catalog(reapply=True)
         window.management_last_success = result is not None
         versions.setEnabled(True)
         items.setEnabled(True)
         replay.setEnabled(True)
         replay.invalidate()
         versions.refresh_after_save()
-        if item_risk_save_pending and result:
+        if preserve_detail and result:
             items.last_saved_rule_id = next((r.key["risk_rule_id"] for r in result.records if r.table == "risk_rule"), None)
             if items.tabs.currentIndex() == 1:
                 items.manager.pending_rule_id = items.last_saved_rule_id
-        items.refresh_after_save(preserve_detail=item_risk_save_pending)
+        items.refresh_after_save(preserve_detail=preserve_detail)
+        if preserve_detail and result:
+            item_save_notice("저장 완료 · 현재 자료로 다시 조회합니다.", "success")
         ai.invalidate_data()
         query = window.query_state.applied
-        cancel_management_refresh()
-        if reapplied:
-            window.management_progress.set_operation(None)
-            # 선택지가 바뀌어 같은 조건을 다시 적용했다. 적용 과정에서 화면을 이미 새로 읽었다.
-            window.notice.setText("저장 완료 · 조회 선택지(Site·Line)를 새로 읽고 같은 조회 조건을 다시 적용했습니다.")
-        elif query is not None and window.query_state.is_current(query):
+        cancel_management_refresh(hide_progress=False)
+        if query is not None and window.query_state.is_current(query):
             window.management_refresh_query = query
             window.management_progress.set_operation("refresh", "저장 결과 반영 중", "저장된 자료로 화면을 다시 조회하고 있습니다.")
             window.management_refresh.start(BackgroundRead(lambda: source.snapshot(query)))
+            if reapplied:
+                window.notice.setText("저장 완료 · 새 조회 선택지에서 같은 조회 조건을 다시 적용했습니다.")
         else:
             window.management_progress.set_operation(None)
             prefix = "저장 완료" if window.management_last_success else "저장 실패 · 기존값 유지"
@@ -981,7 +1011,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if item_risk_save_pending:
             items.show_save_feedback(text, tone)
             item_risk_save_pending = False
-    management.saved.connect(lambda *_: item_save_notice("저장 완료 · 현재 자료로 다시 조회합니다.", "success"))
     management.save_failed.connect(lambda: item_save_notice("저장 실패 · 기존 자료 유지 · 관리 데이터에서 오류를 확인해 주세요.", "danger"))
     management.save_uncertain.connect(lambda: item_save_notice("저장 결과 미확인 · 중복 등록하지 말고 관리 데이터와 DB 기록을 확인해 주세요.", "warning"))
     management.request.completed.connect(lambda *_: ai.refresh())
@@ -1002,15 +1031,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if not is_database_import_saver(importer.saver):
             return
         cancel_management_refresh()
-        refresh_query_catalog()
         dashboard.invalidate()
         ai.invalidate_data()
         heatmap.invalidate()
         replay.invalidate()
         equipment.clear("저장 자료 변경 · 조회 조건을 다시 선택해 주세요.")
         list_action.setEnabled(False)
-        versions.refresh_after_save()
-        items.refresh_after_save()
+        read_saved_catalog(finish_import_catalog, background=importer.progress_dialog.isVisible())
         judgments = getattr(receipt, "refresh", None)
         invalid = tuple(target for target in judgments.targets if not target.valid) if judgments else ()
         if invalid:
@@ -1029,19 +1056,27 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     importer.saved.connect(invalidate_saved_results)
     importer.saved.connect(lambda receipt: versions.record_import(
         receipt, importer.draft, persisted=is_database_import_saver(importer.saver)))
-    importer.saved.connect(lambda *_: configure_import_choices())
+    def update_import_choices_for_memory(*_):
+        if not is_database_import_saver(importer.saver):
+            configure_import_choices()
+
+    importer.saved.connect(update_import_choices_for_memory)
+    def finish_import_catalog(catalog):
+        apply_saved_catalog(catalog)
+        versions.refresh_after_save()
+        items.refresh_after_save()
+        configure_import_choices()
+        window.management_progress.set_operation(None)
+
     def after_import_delete(result):
         cancel_management_refresh()
-        refresh_query_catalog()
         dashboard.invalidate()
         heatmap.invalidate()
         replay.invalidate()
         equipment.clear("저장 자료 삭제 · 조회 조건을 다시 선택해 주세요.")
         ai.invalidate_data()
-        versions.refresh_after_save()
-        items.refresh_after_save()
         list_action.setEnabled(False)
-        configure_import_choices()
+        read_saved_catalog(finish_import_catalog, background=importer.progress_dialog.isVisible())
     importer.deletion.deleted.connect(after_import_delete)
     return window
 

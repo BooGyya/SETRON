@@ -5,16 +5,20 @@ from dataclasses import replace
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QColorDialog, QDialogButtonBox, QFrame, QHBoxLayout, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QVBoxLayout, QWidget,
 )
 
-from setron.ui.appearance import contrasting, manager, refresh_widget_font
-from setron.ui.appearance_data import ACCENTS, FONT_SCALES, Appearance, PersonalSettings
+from setron.ui.appearance import manager, readable_color, refresh_widget_font
+from setron.ui.appearance_data import (
+    ACCENTS, DASHBOARD_FIELDS, DASHBOARD_KEYS, FONT_SCALES, HEATMAP_FIELDS, HEATMAP_KEYS, Appearance, PersonalSettings,
+)
 from setron.ui.components import button, label
 from setron.ui.dashboard import DashboardGrid, SplitRow
-from setron.ui.settings_preview import PreviewColumn
+from setron.ui.import_widgets import Toast
+from setron.ui.settings_color_dialog import SettingsColorDialog
+from setron.ui.settings_preview import AppearancePreview, PreviewColumn
 from setron.ui.settings_tasks import SettingsSave
-from setron.ui.theme import PRIMARY, SECONDARY
+from setron.ui.theme import SECONDARY
 from setron.ui.version_management_widgets import actions, card, note, tabs, text_field
 
 
@@ -37,6 +41,7 @@ class SettingsPage(QWidget):
         self._canvas_preview_active = False
         self._rendering = False
         self.operation = SettingsSave(self)
+        self.toast = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(18)
@@ -57,7 +62,6 @@ class SettingsPage(QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(20)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        body.addWidget(note("개인 보기 설정"))
         controls = QWidget()
         settings = QVBoxLayout(controls)
         settings.setContentsMargins(0, 0, 0, 0)
@@ -110,7 +114,6 @@ class SettingsPage(QWidget):
         accent = card("포인트 색상")
         self.fields = {}
         self.color_picker_buttons = {}
-        self.legend_widgets = []
         self.accent_buttons = {}
         for (title, value), asset in zip(ACCENTS.items(), ("aee60.svg", "58cb7.svg", "75ed9.svg")):
             b = _option(title, asset="settings-ver5/" + asset)
@@ -118,23 +121,23 @@ class SettingsPage(QWidget):
             b.clicked.connect(lambda checked=False, v=value: self.update_draft(accent=v))
             self.accent_buttons[title] = b
         self.accent_field = self._color_field("accent", "직접 선택")
+        height = self.fields["accent"].minimumHeight()
         for b in self.accent_buttons.values():
-            b.setFixedHeight(self.fields["accent"].minimumHeight())
+            b.setFixedHeight(height)
+            b.setStyleSheet(f"QPushButton {{padding:0 18px;min-height:{height - 2}px;max-height:{height - 2}px;}}")
         accent.body.addWidget(DashboardGrid([*self.accent_buttons.values(), self.accent_field],
                                             minimum_width=144, maximum_columns=4, spacing=12,
-                                            alignment=Qt.AlignmentFlag.AlignBottom))
+                                            captions={self.accent_field: self.custom_accent_label}))
         settings.addWidget(accent)
-        heat = card("히트맵 색상")
-        self.palette_buttons = {}
-        for key, title in (("standard", "기본"), ("distinct", "색 구분 강화"), ("custom", "직접 선택")):
-            b = _option(title)
-            b.clicked.connect(lambda checked=False, k=key: self.update_draft(palette=k))
-            self.palette_buttons[key] = b
-        heat.body.addWidget(DashboardGrid(list(self.palette_buttons.values()), minimum_width=140, maximum_columns=3))
-        heat.body.addWidget(DashboardGrid([self._color_field(key, title) for key, title in
-            (("met", "목표 달성"), ("below", "목표 미달"), ("risk", "안전·결함 후보"))], minimum_width=150, maximum_columns=3))
-        heat.body.addWidget(DashboardGrid([self._color_field("rate", "달성률 강조색"),
-            *self._legend()], minimum_width=144, maximum_columns=4, spacing=8))
+        dashboard = card("대시보드 색상")
+        self.dashboard_palette_buttons = self._palette_options(dashboard, "dashboard_palette")
+        dashboard.body.addWidget(DashboardGrid([self._color_field(key, title) for key, title in DASHBOARD_FIELDS],
+                                               minimum_width=150, maximum_columns=3))
+        settings.addWidget(dashboard)
+        heat = card("버전 히트맵 색상")
+        self.palette_buttons = self._palette_options(heat, "heatmap_palette")
+        heat.body.addWidget(DashboardGrid([self._color_field(key, title) for key, title in HEATMAP_FIELDS],
+                                          minimum_width=150, maximum_columns=3))
         settings.addWidget(heat)
         background = card("배경 · 카드 색상")
         background.body.addWidget(DashboardGrid([self._color_field("canvas", "화면 배경"), self._color_field("surface", "카드 배경")], minimum_width=180, maximum_columns=2))
@@ -146,47 +149,20 @@ class SettingsPage(QWidget):
         settings.addWidget(actions(self.reset_button, None, self.cancel_button, self.save_button))
         self.feedback = note()
         settings.addWidget(self.feedback)
-        self.preview = card("미리보기")
-        self.preview.setMinimumWidth(0)
-        self.preview.setProperty("themePreview", True)
-        preview_top = actions(button("대시보드"), None, button("조회 적용", primary=True))
-        preview_top.setEnabled(False)
-        self.preview.body.addWidget(preview_top)
-        self.preview_metric = card()
-        self.preview_metric.body.addWidget(label("등록 SW N 달성률", 14, medium=True))
-        self.preview_value = label("60.0 %", 46, medium=True)
-        self.preview_metric.body.addWidget(self.preview_value)
-        self.preview_metric.body.addWidget(note("48 / 80대 · 미확인 포함 · 미리보기 예시"))
-        self.preview.body.addWidget(self.preview_metric)
-        self.preview_tiles = []
-        for code, version, caption, key in (("DM-001", "v90.1.0.43", "목표 달성", "met"),
-                ("DM-007", "v90.1.0.41", "목표 미달", "below"), ("DM-010", "미입력", "확인 필요", "below"),
-                ("DM-006 · 위험", "v2296.9_k", "목표 달성", "risk")):
-            tile = card(outlined=False)
-            tile.setMinimumHeight(106)
-            tile.body.setSpacing(6)
-            tile.body.addWidget(label(code, 14, medium=True))
-            tile.body.addWidget(label(version, 13))
-            tile.body.addWidget(label(caption, 13))
-            self.preview_tiles.append((tile, key))
-        self.preview.body.addWidget(DashboardGrid([tile for tile, _ in self.preview_tiles], minimum_width=145, maximum_columns=2, spacing=12))
-        self.preview.body.addWidget(note("초록 달성 · 노랑 미달/확인 필요 · 빨강 위험 후보"))
-        self.preview.body.addWidget(DashboardGrid(self._legend(), minimum_width=110, maximum_columns=3, spacing=6))
+        self.preview = AppearancePreview()
         self.preview_column = PreviewColumn(self.preview, self.scroll_area, breakpoint=1040)
         self.appearance_row = SplitRow(controls, self.preview_column, breakpoint=self.preview_column.breakpoint)
         body.addWidget(self.appearance_row)
         return page
 
-    def _legend(self):
-        result = []
-        for key, caption in (("met", "목표 달성"), ("below", "미달 · 확인 필요"), ("risk", "위험 후보")):
-            item = label(caption, 12, wrap=True)
-            item.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            item.setMinimumHeight(40)
-            item.setProperty("themePreview", True)
-            self.legend_widgets.append((item, key))
-            result.append(item)
-        return result
+    def _palette_options(self, panel, attribute):
+        choices = {}
+        for key, title in (("standard", "기본"), ("distinct", "색각 보정"), ("custom", "직접 선택")):
+            choice = _option(title)
+            choice.clicked.connect(lambda checked=False, k=key: self.update_draft(**{attribute: k}))
+            choices[key] = choice
+        panel.body.addWidget(DashboardGrid(list(choices.values()), minimum_width=140, maximum_columns=3))
+        return choices
 
     def _color_field(self, key, title):
         host = QWidget()
@@ -204,20 +180,24 @@ class SettingsPage(QWidget):
         heading.setBuddy(field)
         if key == "accent":
             self.custom_accent_label = heading
-        box.addWidget(heading)
+        else:
+            box.addWidget(heading)
         picker_button = button("")
         picker_button.setAccessibleName(f"{title} 색상 팔레트 열기")
         picker_button.setProperty("fixedColorIcon", True)
         picker_button.setIconSize(QSize(18, 18))
-        picker_button.setFixedSize(field.minimumHeight(), field.minimumHeight())
-        picker_button.setStyleSheet("QPushButton {padding:0;}")
+        side = field.minimumHeight()
+        picker_button.setFixedSize(side, side)
+        picker_button.setStyleSheet(f"QPushButton {{padding:0;min-height:{side - 2}px;max-height:{side - 2}px;}}")
         picker_button.clicked.connect(lambda checked=False: self._open_color_picker(key, title))
-        row = QHBoxLayout()
+        input_row = QWidget()
+        input_row.setFixedHeight(side)
+        row = QHBoxLayout(input_row)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         row.addWidget(field, 1)
         row.addWidget(picker_button)
-        box.addLayout(row)
+        box.addWidget(input_row)
         self.fields[key] = field
         self.color_picker_buttons[key] = picker_button
         return host
@@ -225,16 +205,10 @@ class SettingsPage(QWidget):
     def _open_color_picker(self, key, title):
         if self.operation.busy:
             return
+        self._select_color_preview(key)
         dark = self._dark()
-        dialog = QColorDialog(QColor(self.draft.colors(dark)[key]), self)
-        dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
-        dialog.setWindowTitle(f"{title} 색상 선택")
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        if buttons := dialog.findChild(QDialogButtonBox):
-            for role, caption in ((QDialogButtonBox.StandardButton.Ok, "확인"),
-                                  (QDialogButtonBox.StandardButton.Cancel, "취소")):
-                if control := buttons.button(role):
-                    control.setText(caption)
+        colors = self.controller.tokens if self.controller else self.saved.colors(dark)
+        dialog = SettingsColorDialog(self.draft.colors(dark)[key], title, colors, self)
         dialog.colorSelected.connect(lambda color: self._apply_color(key, color.name(), dark=dark))
         if key == "canvas":
             dialog.currentColorChanged.connect(lambda color: self._preview_canvas(color.name()))
@@ -244,9 +218,15 @@ class SettingsPage(QWidget):
     def _apply_color(self, key, value, *, dark):
         if value.lower() == self.draft.colors(dark)[key].lower():
             return
-        draft = replace(self.draft, palette="custom") if key in ("met", "below", "risk") else self.draft
-        self.draft = draft.with_colors(dark, **{key: value})
+        self.draft = self.draft.with_colors(dark, **{key: value})
+        self._select_color_preview(key)
         self._render()
+
+    def _select_color_preview(self, key):
+        if key in HEATMAP_KEYS:
+            self.preview.show_page("heatmap")
+        elif key in DASHBOARD_KEYS:
+            self.preview.show_page("dashboard")
 
     def _render_color_picker(self, key, value):
         control = self.color_picker_buttons[key]
@@ -256,7 +236,7 @@ class SettingsPage(QWidget):
         swatch = QPixmap(18, 18)
         swatch.fill(QColor(value))
         painter = QPainter(swatch)
-        painter.setPen(QColor(SECONDARY))
+        painter.setPen(QColor(readable_color(SECONDARY, value, 3)))
         painter.drawRect(0, 0, 17, 17)
         painter.end()
         control.setIcon(QIcon(swatch))
@@ -276,6 +256,10 @@ class SettingsPage(QWidget):
         colors = {key: values.pop(key) for key in tuple(values) if key in self.fields}
         self.draft = replace(self.draft, **values)
         self.draft = self.draft.with_colors(self._dark(), **colors)
+        if "heatmap_palette" in values or set(colors) & set(HEATMAP_KEYS):
+            self.preview.show_page("heatmap")
+        elif "dashboard_palette" in values or set(colors) & set(DASHBOARD_KEYS):
+            self.preview.show_page("dashboard")
         self._render()
 
     def _dark(self):
@@ -290,7 +274,7 @@ class SettingsPage(QWidget):
         self.saved = replace(self.saved, font_size=applied)
         if follow_applied:
             self.draft = replace(self.draft, font_size=applied)
-            self._resize_preview_fonts()
+            self.preview.render(self.draft.colors(self._dark()), self.draft.font_scale)
         self._render_font_sizes()
 
     def _render_font_sizes(self):
@@ -330,56 +314,35 @@ class SettingsPage(QWidget):
         if self._set_preview_background:
             self._set_preview_background(color)
 
-    def _resize_preview_fonts(self):
-        for child in self.preview.findChildren(QWidget):
-            child.setProperty("setronPreviewFontScale", self.draft.font_scale)
-            refresh_widget_font(child)
-
     def _render(self):
         self._rendering = True
         dark = self._dark()
         colors = self.draft.colors(dark)
         for key, b in self.mode_buttons.items():
             b.setChecked(key == self.draft.mode)
-        for key, b in self.palette_buttons.items():
-            b.setChecked(key == self.draft.palette)
+        for buttons, active in ((self.dashboard_palette_buttons, self.draft.dashboard_palette),
+                                (self.palette_buttons, self.draft.heatmap_palette)):
+            for key, b in buttons.items():
+                b.setChecked(key == active)
         # 다크 기본 Blue는 밝은 모드의 프리셋 HEX와 다른 기본값을 사용한다.
         preset = next((name for name, value in ACCENTS.items() if value == colors["accent"]),
                       "Blue" if colors["accent"] == Appearance().colors(dark)["accent"] else None)
         for key, b in self.accent_buttons.items():
             b.setChecked(key == preset)
-        self.custom_accent_label.setStyleSheet(f"color:{PRIMARY if preset is None else SECONDARY};")
         self._render_font_sizes()
         for key, field in self.fields.items():
             field.setText(colors[key].upper())
             self._render_color_picker(key, colors[key])
-        self.preview.setStyleSheet(f"QFrame#card {{background:{colors['surface']};border:1px solid {colors['line']};border-radius:16px;}} QLabel {{color:{colors['ink']};}}")
-        self.preview_metric.setProperty("themePreview", True)
-        self.preview_metric.setStyleSheet(f"QFrame#card {{background:{colors['selected']};border:1px solid {colors['line']};border-radius:16px;}}")
-        self.preview_value.setProperty("themePreview", True)
-        self.preview_value.setStyleSheet(f"color:{colors['rate']};")
-        for tile, key in self.preview_tiles:
-            tile.setProperty("themePreview", True)
-            tile.setStyleSheet(f"QFrame#card {{background:{colors[key]};border:1px solid {colors['line']};border-radius:4px;}} QLabel {{color:{contrasting(colors[key])};}}")
-        for item, key in self.legend_widgets:
-            item.setStyleSheet(f"background:{colors[key]};color:{contrasting(colors[key])};border:1px solid {colors['line']};border-radius:4px;padding:4px;")
-        for child in self.preview.findChildren(QWidget):
-            child.setProperty("themePreview", True)
-            if child not in (self.preview_value, *(item for item, _ in self.legend_widgets)) and not child.styleSheet().startswith("QFrame#card"):
-                child.setStyleSheet("")
-        self._resize_preview_fonts()
+        self.preview.render(colors, self.draft.font_scale)
         self._rendering = False
         self._preview_canvas()
 
     def _collect(self):
         # 저장 클릭은 editingFinished 발생 순서와 무관하게 모든 입력값을 검증한다.
-        colors = self.draft.colors(self.draft.mode == "dark" or self.draft.mode == "system"
-            and QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
+        dark = self._dark()
+        colors = self.draft.colors(dark)
         changes = {key: field.text() for key, field in self.fields.items() if field.text().lower() != colors[key].lower()}
-        if set(changes) & {"met", "below", "risk"}:
-            changes["palette"] = "custom"
-        palette = changes.pop("palette", self.draft.palette)
-        return replace(self.draft, palette=palette).with_colors(self._dark(), **changes)
+        return self.draft.with_colors(dark, **changes)
 
     def save_appearance(self):
         if self.operation.busy:
@@ -389,14 +352,23 @@ class SettingsPage(QWidget):
         except ValueError as error:
             self.feedback.setText(str(error))
             return False
+        self.feedback.clear()
+        if self.toast is not None:
+            self.toast.hide()
+
         def stored(done):
             def applied():
                 self.saved = self.draft = draft
-                self.feedback.setText("저장 완료 · 모든 화면에 적용했습니다.")
                 self._render()
                 done()
+                host = self.window()
+                if self.toast is None or self.toast.parentWidget() is not host:
+                    if self.toast is not None:
+                        self.toast.deleteLater()
+                    self.toast = Toast(host)
+                self.toast.show_message("저장 완료 · 모든 화면에 적용했습니다.")
             if self.controller:
-                self.controller.apply_async(draft, applied)
+                self.controller.apply_async(draft, applied, progress_window=self.operation.dialog)
             else:
                 applied()
         return self.operation.start(self.store, "appearance", draft, "화면 설정 저장 중", stored, self.feedback.setText)

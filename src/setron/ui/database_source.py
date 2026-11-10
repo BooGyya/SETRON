@@ -264,7 +264,7 @@ class DatabaseDashboardSource(DashboardSource):
             self._copy(fresh)
 
     def reload_catalog(self) -> QueryCatalog:
-        """저장 현황으로 조회 선택지를 다시 만들고 자료도 함께 다시 읽는다. 저장 직후 화면 스레드에서 부른다."""
+        """저장 현황으로 조회 선택지를 다시 만들고 자료도 함께 다시 읽는다."""
         with self._lock:
             try:
                 fresh = self._load(None)

@@ -3,6 +3,7 @@
 from dataclasses import replace
 import json
 from threading import Event
+from time import sleep
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSettings, Qt
@@ -10,11 +11,14 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication, QColorDialog, QDialog, QDialogButtonBox, QGraphicsSimpleTextItem,
-    QLabel, QLineEdit, QPushButton, QWidget,
+    QLabel, QLineEdit, QPushButton, QSpinBox, QWidget,
 )
 
-from setron.ui.appearance import contrasting, manager, ui_color
-from setron.ui.appearance_data import ACCENTS, Appearance, PersonalSettings
+from setron.ui.appearance import contrast_ratio, contrasting, manager, surface_edge, ui_color
+from setron.ui.appearance_data import (
+    ACCENTS, DASHBOARD_COLOR_VISION, DASHBOARD_KEYS, HEATMAP_KEYS, HEATMAP_STANDARD, HEATMAP_TIERS,
+    Appearance, PersonalSettings,
+)
 from setron.ui.components import label
 from setron.ui.app import create_window
 from setron.ui.dashboard_demo import demo_dashboard_source
@@ -50,13 +54,19 @@ def test_appearance_validation_corrupt_restore_and_roundtrip(tmp_path):
         Appearance(mode="invalid")
     with pytest.raises(ValueError):
         Appearance(font_size="huge")
-    value = Appearance(mode="dark", accent="#12aacc", palette="custom", met="#155577", font_size="large")
+    value = Appearance(mode="dark", accent="#12aacc", dashboard_palette="custom", met="#155577", font_size="large")
     store.save("appearance", value)
     assert store.appearance() == value
     store.settings.setValue("appearance", "{broken")
     assert store.appearance() == Appearance()
     store.settings.setValue("appearance", json.dumps({"mode": "dark"}))
     assert store.appearance() == Appearance(mode="dark", font_size="normal")
+    store.settings.setValue("appearance", json.dumps({"palette": "standard", "rate": "#112233"}))
+    assert store.appearance() == Appearance(dashboard_palette="custom", rate="#112233")
+    store.settings.setValue("appearance", json.dumps({"palette": "distinct", "rate": "#112233"}))
+    restored = store.appearance()
+    assert restored.dashboard_palette == "custom" and restored.heatmap_palette == "distinct"
+    assert restored.colors()["rate"] == "#112233"
 
 
 def test_fixed_tabs_no_help_preview_cancel_reset_and_saved_theme(own, theme):
@@ -65,11 +75,15 @@ def test_fixed_tabs_no_help_preview_cancel_reset_and_saved_theme(own, theme):
     assert p.tabs.count() == 1 and p.tabs.tabText(0) == "화면 · 테마"
     assert not p.tabs.usesScrollButtons()
     captions = {widget.text() for widget in p.findChildren(QLabel)}
-    assert not captions & {"위험 기준", "버전 계열 · 연결", "메뉴 순서 · 화면 배치", "나의 라인 · 설비군"}
+    assert not captions & {"위험 기준", "버전 계열 · 연결", "메뉴 순서 · 화면 배치", "나의 라인 · 설비군", "개인 보기 설정"}
+    assert "미리보기 화면 선택" in captions
     assert not any("도움말" in b.text() for b in p.findChildren(QPushButton))
     p.mode_buttons["dark"].click()
     assert p.draft.mode == "dark" and not current.dark
-    assert "#242b36" in p.preview.styleSheet()
+    assert "#242b36" in p.preview.sample.styleSheet()
+    assert p.preview.switch_buttons["dashboard"].isChecked()
+    assert [b.text() for b in p.preview.switch_buttons.values()] == ["대시보드", "버전 히트맵"]
+    assert all(b.isEnabled() and not p.preview.sample.isAncestorOf(b) for b in p.preview.switch_buttons.values())
     p.cancel_button.click()
     assert p.draft.mode == "light" and not current.dark
     p.update_draft(mode="dark", accent="#12aacc")
@@ -190,11 +204,66 @@ def test_system_mode_and_distinct_custom_palette(own, theme):
     current.apply(Appearance(mode="system"))
     assert current.dark == (QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark)
     p = page(own, theme)
-    p.update_draft(palette="distinct")
-    assert "#d8f1fa" in p.preview_tiles[0][0].styleSheet() if not current.dark else True
-    p.fields["met"].setText("#112233")
+    p.update_draft(mode="light")
+    assert tuple(p.fields[key].text().lower() for key in HEATMAP_KEYS) == HEATMAP_STANDARD[False]
+    p.palette_buttons["distinct"].click()
+    assert p.preview.switch_buttons["heatmap"].isChecked()
+    assert p.preview.heatmap_page.isVisible() and not p.preview.dashboard_page.isVisible()
+    assert "#85bce4" in p.preview.heatmap_tiles["heat_above"].styleSheet()
+    p.fields["heat_at"].setText("#112233")
+    p._edit_color("heat_at")
+    assert p.draft.heatmap_palette == "custom" and p.draft.heat_at == "#112233"
+    assert p.draft.colors()["heat_above"] == "#85bce4"
+    assert p.draft.colors()["met"] == Appearance().colors()["met"]
+    p.fields["met"].setText("#151515")
     p._edit_color("met")
-    assert p.draft.palette == "custom" and p.draft.met == "#112233"
+    assert p.preview.switch_buttons["dashboard"].isChecked()
+    assert "#151515" in p.preview.dashboard_tiles["met"].styleSheet()
+    assert p.draft.colors()["heat_at"] == "#112233"
+    p.dashboard_palette_buttons["distinct"].click()
+    for dark in (False, True):
+        assert tuple(p.draft.colors(dark)[key] for key in DASHBOARD_KEYS) == DASHBOARD_COLOR_VISION[dark]
+    assert p.draft.heatmap_palette == "custom"
+    p.preview.switch_buttons["heatmap"].click()
+    assert p.preview.heatmap_page.isVisible() and not p.preview.dashboard_page.isVisible()
+    p.dashboard_palette_buttons["standard"].click()
+    assert p.preview.dashboard_page.isVisible()
+    assert p.draft.colors()["met"] == Appearance().colors()["met"]
+    p.dashboard_palette_buttons["custom"].click()
+    assert p.draft.colors()["met"] == "#151515"
+    assert p.save_appearance()
+    until(lambda: not p.operation.busy)
+    assert page(own, theme).dashboard_palette_buttons["custom"].isChecked()
+
+
+def test_saved_palette_has_readable_text_in_existing_dashboard_and_heatmap(own, theme):
+    current, store = theme
+    window = own(create_window())
+    window.query_panel.apply_draft()
+    dashboard = window.pages["dashboard"]
+    heatmap = window.pages["heatmap"]
+    window.navigate("heatmap")
+    QApplication.processEvents()
+    tile = next(iter(heatmap.tile_buttons.values()))
+    heat_key = HEATMAP_TIERS[tile.data.tier][0]
+    window.navigate("settings")
+    p = window.pages["settings"]
+    p.update_draft(dashboard_unknown="#111111", surface="#111111", rate="#eeeeee", **{heat_key: "#161616"})
+    assert "#161616" not in tile.styleSheet()
+    assert p.save_appearance()
+    until(lambda: not p.operation.busy)
+    assert store.appearance() == current.appearance
+    assert "background:#161616" in tile.styleSheet()
+    tile_ink = tile.code_label.palette().color(QPalette.ColorRole.WindowText).name()
+    assert contrast_ratio(tile_ink, "#161616") >= 4.5
+    unknown = next(cell for cell in dashboard.matrix_buttons.values() if "background:#111111" in cell.styleSheet())
+    unknown_ink = unknown.findChild(QLabel).palette().color(QPalette.ColorRole.WindowText).name()
+    assert contrast_ratio(unknown_ink, "#111111") >= 4.5
+    edge = surface_edge("#111111", "#111111", "#111111")
+    assert contrast_ratio(edge, "#111111") >= 3
+    assert f"border:1px solid {edge}" in unknown.styleSheet()
+    rate_ink = dashboard.metrics["rate"].value.palette().color(QPalette.ColorRole.WindowText).name()
+    assert contrast_ratio(rate_ink, current.tokens["selected"]) >= 4.5
 
 
 def test_light_background_does_not_leak_into_dark_and_mode_colors_are_independent(own, theme):
@@ -226,7 +295,7 @@ def test_existing_light_tones_and_primary_text_contrast(own, theme):
     assert contrasting("#3c5ce9") == "#f4f7ff"
     current.apply(Appearance(mode="dark"))
     assert action.palette().color(QPalette.ColorRole.ButtonText).lightnessF() < .3
-    assert "#a8baff" in QApplication.instance().styleSheet()
+    assert action.palette().color(QPalette.ColorRole.LinkVisited).name() == "#a8baff"
 
 
 def test_actual_dark_pixels_existing_light_hex_and_light_restore(own, theme):
@@ -247,6 +316,36 @@ def test_actual_dark_pixels_existing_light_hex_and_light_restore(own, theme):
     QApplication.processEvents()
     assert w.centralWidget().grab().toImage().pixelColor(300, 10).name() == "#f5f6f8"
     assert w.nav["dashboard"].caption.palette().color(QPalette.ColorRole.WindowText).lightnessF() < .3
+
+
+def test_titles_follow_canvas_and_card_contrast_independently(own, theme):
+    current, _ = theme
+    window = own(create_window())
+    reports = window.pages["reports"]
+    settings = window.pages["settings"]
+    cases = (
+        Appearance(mode="dark"),
+        Appearance(mode="dark", dark_colors={"canvas": "#000000", "surface": "#FFFFFF"}),
+        Appearance(canvas="#FFFFFF", surface="#101010"),
+    )
+    for appearance in cases:
+        current.apply(appearance)
+        window.navigate("reports")
+        QApplication.processEvents()
+        headers = {child.text(): child for child in reports.findChildren(QLabel)}
+        title = headers["버전 표준화 리포트"]
+        recent = headers["최근 생성된 보고서"]
+        ink = title.palette().color(QPalette.ColorRole.WindowText)
+        assert contrast_ratio(ink.name(), current.tokens["surface"]) >= 4.5
+        assert contrast_ratio(recent.palette().color(QPalette.ColorRole.WindowText).name(),
+                              current.tokens["surface"]) >= 4.5
+        pixels = title.grab().toImage()
+        assert any(pixels.pixelColor(x, y) == ink for y in range(pixels.height()) for x in range(pixels.width()))
+        window.navigate("settings")
+        mode = next(child for child in settings.findChildren(QLabel) if child.text() == "표시 모드")
+        for widget, background in ((window.header.title, "canvas"), (mode, "surface")):
+            assert contrast_ratio(widget.palette().color(QPalette.ColorRole.WindowText).name(),
+                                  current.tokens[background]) >= 4.5
 
 
 def test_background_settings_save_popup_animation_duplicate_and_failure(own, theme, monkeypatch):
@@ -275,6 +374,8 @@ def test_background_settings_save_popup_animation_duplicate_and_failure(own, the
         gate.set()
     until(lambda: not p.operation.busy)
     assert theme[0].dark and not p.operation.dialog.isVisible()
+    assert p.toast.isVisible() and "모든 화면에 적용했습니다" in p.toast.text.text()
+    assert not p.feedback.text()
     previous = theme[0].appearance
     def fail():
         raise OSError("failure")
@@ -284,6 +385,36 @@ def test_background_settings_save_popup_animation_duplicate_and_failure(own, the
     until(lambda: not p.operation.busy)
     assert theme[0].appearance == previous
     assert "저장하지 못했습니다" in p.feedback.text()
+    assert not p.toast.isVisible()
+
+
+def test_theme_apply_keeps_popup_painting_until_toast(own, theme, monkeypatch):
+    current, _ = theme
+    p = page(own, theme)
+    p.update_draft(mode="dark", font_size="large")
+    app_style = QApplication.instance().styleSheet()
+    update = current._widget
+    def slow_update(widget):
+        if not p.updatesEnabled():
+            sleep(0.005)
+        update(widget)
+    monkeypatch.setattr(current, "_widget", slow_update)
+    assert p.save_appearance()
+    dialog = p.operation.dialog
+    before = (dialog.surface.styleSheet(), dialog.heading.styleSheet(), dialog.heading.font(), dialog.progress._colors)
+    until(lambda: current.dark and not p.updatesEnabled())
+    progress = p.operation.dialog.progress
+    assert progress.updatesEnabled() and p.toast is None
+    first = progress.grab().toImage()
+    QTest.qWait(100)
+    assert p.operation.busy and progress.isVisible()
+    assert first != progress.grab().toImage()
+    assert (dialog.surface.styleSheet(), dialog.heading.styleSheet(),
+            dialog.heading.font(), dialog.progress._colors) == before
+    until(lambda: not p.operation.busy)
+    assert current.dark and p.updatesEnabled() and not p.operation.dialog.isVisible()
+    assert p.toast.isVisible() and not p.feedback.text()
+    assert QApplication.instance().styleSheet() == app_style
 
 
 def test_font_size_preview_save_reload_and_reset(own, theme):
@@ -296,10 +427,10 @@ def test_font_size_preview_save_reload_and_reset(own, theme):
     assert choice_sizes(p) == [12, 14, 16]
     p.font_size_buttons["large"].click()
     assert p.draft.font_size == "large"
-    assert p.preview_value.font().pixelSize() > 46
+    assert p.preview.value.font().pixelSize() > 46
     assert current.appearance.font_size == "normal"
     p.cancel_button.click()
-    assert p.preview_value.font().pixelSize() == 46
+    assert p.preview.value.font().pixelSize() == 46
     p.font_size_buttons["small"].click()
     p.save_button.click()
     until(lambda: not p.operation.busy)
@@ -381,7 +512,7 @@ def test_display_choices_highlight_and_reopen_at_applied_values(own, theme):
     assert p.palette_buttons["standard"].isChecked()
     assert p.fields["canvas"].text() == original_canvas
 
-    current.apply(Appearance(mode="system", font_size="small", palette="distinct",
+    current.apply(Appearance(mode="system", font_size="small", heatmap_palette="distinct",
                              accent=ACCENTS["Violet"], dark_colors={"accent": ACCENTS["Violet"]}))
     window.navigate("dashboard")
     window.navigate("settings")
@@ -401,7 +532,9 @@ def test_accent_presets_align_with_custom_color_field(own, theme):
         QApplication.processEvents()
         field_y = field.mapTo(p, QPoint()).y()
         for b in p.accent_buttons.values():
-            assert b.mapTo(p, QPoint()).y() == field_y
+            assert b.mapTo(p, QPoint()).y() == field_y, (
+                size, b.geometry(), field.geometry(), p.color_picker_buttons["accent"].geometry(),
+            )
             assert b.height() == field.height()
         picker = p.color_picker_buttons["accent"]
         assert picker.mapTo(p, QPoint()).y() == field_y
@@ -415,7 +548,10 @@ def test_color_palettes_use_current_color_preview_and_save(own, theme, mode):
     current.apply(applied)
     p = page(own, theme)
     values = {"met": "#25823f", "below": "#d7b54e", "risk": "#d46165",
-              "rate": "#5c71c9", "accent": "#167e92", "canvas": "#304759", "surface": "#4b5864"}
+              "rate": "#5c71c9", "accent": "#167e92", "canvas": "#304759", "surface": "#4b5864",
+              "dashboard_unknown": "#858585", "heat_above": "#265b80", "heat_at": "#287345",
+              "heat_one_below": "#a96e1c", "heat_two_below": "#b22e3b", "heat_unknown": "#7f8184",
+              "heat_risk": "#6a51a3"}
     assert set(p.color_picker_buttons) == set(values)
 
     def open_palette(key):
@@ -425,6 +561,11 @@ def test_color_palettes_use_current_color_preview_and_save(own, theme, mode):
         return dialog
 
     dialog = open_palette("accent")
+    buttons = dialog.findChild(QDialogButtonBox)
+    cancel, confirm = (buttons.button(role) for role in
+                       (QDialogButtonBox.StandardButton.Cancel, QDialogButtonBox.StandardButton.Ok))
+    assert cancel.text() == "취소" and confirm.text() == "확인"
+    assert cancel.mapTo(dialog, QPoint()).x() < confirm.mapTo(dialog, QPoint()).x()
     dialog.setCurrentColor(QColor("#AB12CD"))
     dialog.reject()
     assert p.draft == applied
@@ -438,7 +579,7 @@ def test_color_palettes_use_current_color_preview_and_save(own, theme, mode):
         swatch = p.color_picker_buttons[key]
         assert swatch.icon().pixmap(swatch.iconSize()).toImage().pixelColor(9, 9) == QColor(value)
 
-    assert p.draft.palette == "custom"
+    assert p.draft.dashboard_palette == p.draft.heatmap_palette == "custom"
     assert current.appearance == applied
     assert store.appearance() == Appearance()
     if mode == "dark":
@@ -450,13 +591,41 @@ def test_color_palettes_use_current_color_preview_and_save(own, theme, mode):
     assert store.appearance() == current.appearance == p.draft
 
 
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_palette_controls_keep_contrast_with_custom_backgrounds(own, theme, mode):
+    current, _ = theme
+    current.apply(Appearance(mode=mode, canvas="#000000", surface="#000000", accent="#ffffff",
+                             dark_colors={"canvas": "#ffffff", "surface": "#ffffff", "accent": "#000000"}))
+    p = page(own, theme)
+    p.color_picker_buttons["heat_at"].click()
+    dialog = next(d for d in p.findChildren(QColorDialog) if d.isVisible())
+    QApplication.processEvents()
+    surface = current.tokens["surface"]
+    assert dialog.grab().toImage().pixelColor(3, 3).name() == surface
+    captions = [widget for widget in dialog.findChildren(QLabel) if widget.text() and widget.isVisible()]
+    assert captions
+    for caption in captions:
+        assert contrast_ratio(caption.palette().color(QPalette.ColorRole.WindowText).name(), surface) >= 4.5
+
+    edits = [widget for widget in dialog.findChildren(QLineEdit) if widget.isVisible()]
+    assert edits and dialog.findChildren(QSpinBox)
+    buttons = [widget for widget in dialog.findChildren(QPushButton) if widget.isVisible()]
+    for widget, role in [*((edit, QPalette.ColorRole.Text) for edit in edits),
+                         *((button, QPalette.ColorRole.ButtonText) for button in buttons)]:
+        ink = widget.palette().color(role).name()
+        pixels = widget.grab().toImage()
+        background = pixels.pixelColor(pixels.width() // 2, 4).name()
+        assert contrast_ratio(ink, background) >= 4.5, (widget.metaObject().className(), ink, background)
+    dialog.reject()
+
+
 def test_clicking_settings_options_keeps_control_fonts_and_heights(own, theme):
     current, _ = theme
     current.apply(Appearance(mode="dark", font_size="large"))
     p = page(own, theme)
     p.resize(1460, 1150)
     current.apply(Appearance(mode="dark", font_size="normal"))
-    groups = (p.palette_buttons, p.accent_buttons, p.mode_buttons, p.font_size_buttons)
+    groups = (p.palette_buttons, p.dashboard_palette_buttons, p.accent_buttons, p.mode_buttons, p.font_size_buttons)
     buttons = [b for group in groups for b in group.values()]
     controls = [*buttons, *p.fields.values(), p.reset_button, p.cancel_button, p.save_button]
     QApplication.processEvents()
@@ -486,9 +655,15 @@ def test_accent_palette_checked_buttons_render_blue_in_dark_mode(own, theme):
     assert background(distinct) == selected
     assert background(basic) == unselected
     assert background(p.accent_buttons["Blue"]) == selected
-    p.update_draft(accent="#124567")
+    role = QPalette.ColorRole.WindowText
+    label_color = p.custom_accent_label.palette().color(role).name()
+    p.update_draft(accent="#38ffde")
     assert not any(b.isChecked() for b in p.accent_buttons.values())
-    assert p.custom_accent_label.palette().color(QPalette.ColorRole.WindowText).name() == current.tokens["accent"]
+    current.apply(p.draft)
+    assert p.custom_accent_label.palette().color(role).name() == label_color
+    assert contrast_ratio(label_color, current.tokens["surface"]) >= 4.5
+    swatch = p.color_picker_buttons["accent"]
+    assert swatch.icon().pixmap(swatch.iconSize()).toImage().pixelColor(9, 9).name() == "#38ffde"
 
 
 def test_canvas_live_preview_is_not_saved_and_clears_on_cancel_or_leave(own, theme):
@@ -504,6 +679,9 @@ def test_canvas_live_preview_is_not_saved_and_clears_on_cancel_or_leave(own, the
 
     p.color_picker_buttons["canvas"].click()
     picker = next(d for d in p.findChildren(QColorDialog) if d.isVisible())
+    picker.setCurrentColor(QColor("#111111"))
+    assert background() == "#111111"
+    assert contrast_ratio(window.header.title.palette().color(QPalette.ColorRole.WindowText).name(), "#111111") >= 4.5
     picker.setCurrentColor(QColor("#ecd2b8"))
     assert background() == "#ecd2b8"
     assert p.draft.canvas is None

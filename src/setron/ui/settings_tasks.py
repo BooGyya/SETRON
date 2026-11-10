@@ -33,8 +33,7 @@ class SettingsSave(QObject):
             self.failed("개인 설정을 저장하지 못했습니다. 이전 설정을 유지합니다.")
             self._finish()
             return
-        self.dialog.heading.setText("화면에 적용 중")
-        self.dialog.message.setText("저장한 설정을 화면에 적용하고 있습니다.")
+        self.dialog.set_operation(self.dialog.operation, "화면에 적용 중", "저장한 설정을 화면에 적용하고 있습니다.")
         self.after_save(self._finish)
 
     def _finish(self):

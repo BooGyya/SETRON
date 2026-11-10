@@ -11,7 +11,8 @@ from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
 
 from setron.features.aggregation.schemas import Summary
 from setron.features.version.schemas import CompareStatus
-from setron.ui.appearance import chart_font, chart_text_font, ui_color
+from setron.ui.appearance import chart_font, chart_text_font, manager, surface_edge, ui_color
+from setron.ui.appearance_data import Appearance
 from setron.ui.dashboard_data import denominator_equipment_ids
 from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, SOFT, font
 
@@ -144,12 +145,16 @@ class DashboardChart(QChartView):
         series = QPieSeries()
         series.setPieSize(0.90)
         series.setHoleSize(0.65)
-        for title, count, color, ids in zip(("N 이상", "N 미만", "판단 불가"), counts, (PRIMARY, "#fdf0b8", "#e5e7eb"),
+        controller = manager()
+        colors = controller.tokens if controller else Appearance().colors()
+        keys = ("composition_met", "composition_below", "composition_unknown")
+        for title, count, key, ids in zip(("N 이상", "N 미만", "판단 불가"), counts, keys,
                                             composition_cohorts(snapshot.summary)):
             if count:
                 part = series.append(f"{title} {count}건 ({count / total:.1%})", count)
-                part.setColor(ui_color(color))
-                part.setBorderColor(ui_color(color))
+                part.setProperty("dashboardCompositionColor", key)
+                part.setColor(QColor(colors[key]))
+                part.setBorderColor(QColor(surface_edge(colors[key], colors["surface"], colors[key])))
                 tooltip = equipment_count_tooltip(part.label(), ids)
                 part.hovered.connect(lambda hovered, target=part, text=tooltip: self._hover_tooltip(chart, target, text if hovered else ""))
         chart.addSeries(series)
