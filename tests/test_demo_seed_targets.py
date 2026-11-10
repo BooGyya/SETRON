@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from setron.features.targets.groups import _payload_history, setting_key
+from setron.features.targets.groups import LEGACY_SCHEMA, _current, setting_key
 from setron.features.version.groups import VersionGroups
 
 DATABASE = Path(__file__).resolve().parents[1] / "database"
@@ -58,11 +58,12 @@ def test_every_pair_with_release_notes_gets_one_n_group_in_app_format(built):
         key_sql, value_sql = _split(statement.split("SELECT ", 1)[1].rsplit("\nFROM DUAL", 1)[0])
         key, payload = _evaluate(key_sql, env), json.loads(_evaluate(value_sql, env))
         pair = (payload["model_id"], payload["family_id"])
-        history = _payload_history(payload, pair)                      # 앱이 저장값을 읽을 때 쓰는 검사 그대로
-        assert key == setting_key(pair) and list(history[-1]["groups"]) == ["N"]
-        groups = VersionGroups.from_dict(history[-1]["groups"])
+        assert key == setting_key(pair) and payload["schema"] == LEGACY_SCHEMA     # 시드는 예전(1) 형식, 앱이 그대로 읽음
+        current = _current({"setting_value": payload}, pair)                # 앱이 저장값을 읽을 때 쓰는 검사 그대로
+        groups = current.entry.groups
+        assert isinstance(groups, VersionGroups) and list(groups.to_dict()) == ["N"]
         assert [len(members) for members in groups.slots.values()] == [1]          # N 칸에 버전 하나
-        assert history[-1]["memo"] == "시연 기준: 최신 바로 아래 버전을 N"
+        assert current.entry.memo == "시연 기준: 최신 바로 아래 버전을 N"
 
 
 def test_target_is_the_second_latest_applicable_release(built):
