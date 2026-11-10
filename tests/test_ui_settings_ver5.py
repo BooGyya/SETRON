@@ -333,8 +333,8 @@ def test_titles_follow_canvas_and_card_contrast_independently(own, theme):
         window.navigate("reports")
         QApplication.processEvents()
         headers = {child.text(): child for child in reports.findChildren(QLabel)}
-        title = headers["버전 표준화 리포트"]
-        recent = headers["최근 생성된 보고서"]
+        title = headers["보고서 유형"]
+        recent = headers["저장한 보고서"]
         ink = title.palette().color(QPalette.ColorRole.WindowText)
         assert contrast_ratio(ink.name(), current.tokens["surface"]) >= 4.5
         assert contrast_ratio(recent.palette().color(QPalette.ColorRole.WindowText).name(),

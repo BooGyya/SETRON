@@ -19,9 +19,9 @@ from setron.ui.replay_data import ReplayRequest, load_replay
 REPORT_TYPES = (
     ("status", "현황·표준화", "버전 표준화 리포트", "Site·설비군별 표준화율과 N 적용률 추이", "10542.svg"),
     ("upgrade", "업그레이드", "업그레이드 현황 리포트", "업그레이드 필요 설비와 진행 현황", "d2feb.svg"),
-    ("item", "Item 배포", "릴리즈 적용 현황 리포트", "릴리즈·기능(Item)별 적용/미적용 설비", "c7361.svg"),
+    ("item", "Item 배포", "릴리즈 적용 현황 리포트", "선택한 Item의 설비별 적용 현황", "c7361.svg"),
     ("change", "변경 이력", "설비별 변경 이력 리포트", "기간 내 설비별 버전 변경 내역", "57213.svg"),
-    ("ai", "AI 분석", "AI 분석 리포트", "파편화 원인·우선순위·통일 예측 요약", "4c3e7.svg"),
+    ("ai", "AI 분석", "AI 분석 리포트", "AI 분석 탭에서 완료한 가장 최근 답변", "4c3e7.svg"),
 )
 FORMATS = (("xlsx", "Excel", "Excel (.xlsx)"), ("docx", "Word", "Word (.docx)"), ("pdf", "PDF · 대체", "PDF (.pdf)"))
 
@@ -162,7 +162,7 @@ def generate_report(source, request, versions=None):
     add(0, "생성 당시 고정 조건", "자료·목표 N·판정 규칙은 생성 당시 기준입니다. N 달성과 결함 위험은 별도입니다.",
         ("조건", "값"), (("관측 기준일", str(request.base_date)), ("조회 범위", scope),
         ("기간", f"{request.start} ~ {request.end}"), ("자료 출처", source_label),
-        ("출력 형식", request.format.upper()), ("실제 관측 날짜 수", len(frames)),
+        ("실제 관측 날짜 수", len(frames)),
         ("N 그룹", "모델·계열별 저장 기준 적용" if frozen.saved_groups else "저장 그룹 없음 · 개별 목표 N 적용"), *target_rows))
     if current is None:
         add(0, "자료 없음", "선택한 기준일에 저장된 관측 자료가 없습니다. 다른 날짜의 자료나 0%로 대신하지 않습니다.")
@@ -238,7 +238,7 @@ def generate_report(source, request, versions=None):
             for notice in (*answer.issues, *answer.notices):
                 add(3, "AI 주의 사항", notice)
         add(3, "예측 안내", "참고용 계산이며 완료 약속이 아닙니다. 판단 불가·미관측·목표 미지정은 별도 표시하고 자료가 부족하면 예측을 생략합니다.")
-    else:
+    elif request.kind == "ai":
         add(3, "AI 해석", "AI 응답 없이 수치표만 생성했습니다. 보고서 생성으로 AI를 호출하지 않습니다.")
     title = next(r[2] for r in REPORT_TYPES if r[0] == request.kind)
     return GeneratedReport(request, datetime.now(), title, tuple(sections), scope, source_label)
