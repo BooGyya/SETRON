@@ -89,7 +89,7 @@ def test_delete_step_bar_stays_fixed_and_visible_when_content_scrolls(own, size)
         target = page.deletion.step_cards[index]
         top = target.mapTo(page.delete_scroll.viewport(), QPoint()).y()
         assert top < page.delete_scroll.viewport().height() and top + target.height() > 0
-    assert not page.tab_strip.isVisibleTo(window)   # 앱에서는 탭이 하나만 남아 탭 줄을 숨긴다
+    assert page.tab_strip.isVisibleTo(window)
     assert page.mapTo(window, QPoint(0, page.height())).y() <= window.height()
 
 

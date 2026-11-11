@@ -213,7 +213,7 @@ class Database:
             ) from exc
 
     @contextmanager
-    def transaction(self) -> Iterator[Session]:
+    def transaction(self, *, isolation_level: str | None = None) -> Iterator[Session]:
         """한 업무의 조회·저장을 같은 세션과 트랜잭션으로 관리한다.
 
         블록이 정상 종료하면 commit하고, 블록 안에서 오류가 나면 변경을 취소한다.
@@ -235,7 +235,10 @@ class Database:
             with self._sessions.begin() as session:
                 # 업무 실행 전에 연결을 확보해 접속 실패와 저장 실패를 구분한다.
                 try:
-                    session.connection()
+                    if isolation_level is None:
+                        session.connection()
+                    else:
+                        session.connection(execution_options={"isolation_level": isolation_level})
                 except RuntimeError as exc:
                     # 인증 중 드라이버가 발생시킨 RuntimeError도 접속 실패로 처리한다.
                     raise DatabaseConnectionError(

@@ -18,6 +18,10 @@ Excel 미실행·연결 실패·선택 파일/시트 없음·동일 파일명 �
 
 실제 Excel 연동에는 Windows용 데스크톱 Excel이 필요합니다. 파일 선택창에서 XLSX 파일을 직접 읽는 방식은 아직 구현되어 있지 않습니다. 현재 모듈은 파일을 서버에 업로드하거나 앱으로 복사하지 않고, 실행 중인 Excel에서 값을 읽습니다.
 
+## SQL 가져오기
+
+**데이터 가져오기 → SQL**에서 **데이터 내보내기 → DB 전체 SQL**로 저장한 `.sql` 파일을 선택합니다. 대상은 SETRON 관리 테이블을 설치한 현재 연결 DB입니다. **신규 항목만 추가**는 일치하는 기존 항목을 유지합니다. **같은 항목 덮어쓰기**는 일치하는 항목을 파일 값으로 갱신하며, 같은 호기·기준일의 PM과 적용 버전도 파일 구성에 맞춥니다. 검토 화면에서 변경 건수를 확인한 뒤 적용합니다.
+
 ## AI API 설정
 
 `infrastructure/ai_client.py`의 `OpenAICompatibleChatClient`는 기존 `ChatClient` 계약을 구현합니다. Excel 추출·질문 해석·분석 서비스에 같은 방식으로 전달하며, GMS와 사내 OpenAI 호환 서버를 바꿀 때는 환경변수만 변경합니다. [GMS 가이드](https://gms.ssafy.io/web/guide/quickstart)의 OpenAI 경로와 [공식 SDK](https://developers.openai.com/api/reference/python)의 `base_url` 설정을 사용합니다.

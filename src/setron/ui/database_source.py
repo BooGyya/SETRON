@@ -383,6 +383,20 @@ def sql_exporter_from_env(environ=None):
     return exporter
 
 
+def sql_importer_from_env(environ=None):
+    """설정된 DB에서 SETRON SQL 파일을 비교하고 저장할 서비스를 만든다."""
+    import os
+    from functools import partial
+
+    from setron.features.db_import.service import SqlImportService
+    from setron.infrastructure.database import Database
+
+    values = os.environ if environ is None else environ
+    if not values.get("SETRON_DB_NAME"):
+        return None
+    return SqlImportService(partial(Database.from_env, values))
+
+
 def data_exporter_from_env(environ=None):
     """``SETRON_DB_*`` 설정이 있으면 ``path``를 받아 관리 데이터를 .xlsx로 저장하는 함수를, 없으면 None을 돌려준다.
 

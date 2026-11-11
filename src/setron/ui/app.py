@@ -18,7 +18,9 @@ from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource, family_name, model_name
 from setron.ui.dashboard_demo import demo_dashboard_source
-from setron.ui.database_source import dashboard_source_from_env, sql_exporter_from_env, data_exporter_from_env
+from setron.ui.database_source import (
+    dashboard_source_from_env, data_exporter_from_env, sql_exporter_from_env, sql_importer_from_env,
+)
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.heatmap_data import EquipmentSelection
 from setron.ui.equipment import EquipmentPage
@@ -63,7 +65,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
                   db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None,
                   rule_extractor=None, chat_enabled: bool = False, import_comparison_loader=None,
-                  import_delete_gateway=None) -> MainWindow:
+                  import_delete_gateway=None, sql_importer=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -82,6 +84,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - management_gateway: 워커에서 관리 기록 조회·묶음 저장·XLSX 출력을 실행하는 공급자.
     - import_comparison_loader: 확인된 동일 범위의 직전 저장본 비교를 제공하는 선택적 읽기 공급자.
     - import_delete_gateway: 삭제 목록·원자적 삭제를 제공하는 선택적 서비스. 기본 미연결이며 UI에서 SQL을 실행하지 않음.
+    - sql_importer: SETRON SQL 파일의 병합 미리보기·저장을 제공하는 선택적 서비스.
 
     return
     - 실제 DB 연결을 자동 생성하지 않는 MainWindow.
@@ -244,7 +247,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         extractor = example_extractor
     importer = ImportPage(excel, extractor, import_saver, refresh_context_provider=release_refresh_context,
                           sheet_extractor=sheet_extractor, rule_extractor=rule_extractor,
-                          comparison_loader=import_comparison_loader, delete_gateway=import_delete_gateway)
+                          comparison_loader=import_comparison_loader, delete_gateway=import_delete_gateway,
+                          sql_importer=sql_importer)
     def configure_import_choices():
         importer.configure_choices(dates=source.dates, sites=(s.label for s in source.catalog.sites),
                                    families=(family_name(source, key) for key in source.families))
@@ -266,7 +270,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 저장 자료 삭제로 옮긴다 (같은 객체·연결 유지).
     data_page.attach_deletion(importer.deletion)
     importer.tabs.setTabVisible(1, False)
-    importer.tab_strip.hide()      # 탭이 '가져오기' 하나만 남아 탭 줄을 통째로 숨긴다 (11-10 2차 7-1)
     versions.configure(management_gateway, release_refresh_context, edit_allowed=lambda: (
         not management.busy and not management.locked and management.state not in {"review", "saving"}
         and not management.pending and not management.pending_applicability))
@@ -1030,6 +1033,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     management.saved.connect(data_page.invalidate)
     importer.saved.connect(data_page.invalidate)
     importer.deletion.deleted.connect(data_page.invalidate)
+    importer.sql_page.saved.connect(data_page.invalidate)
     management.saved.connect(after_management_save)
     management.save_uncertain.connect(uncertain_management_save)
     management.save_failed.connect(lambda: after_management_save(None))
@@ -1054,7 +1058,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                                  and not settings.operation.busy
                                  and not reports.saving
                                  and not versions.history_panel.read_request.busy and importer.state != "saving"
-                                 and importer.deletion.phase != "deleting")
+                                 and importer.deletion.phase != "deleting" and not importer.sql_page.busy)
 
     def invalidate_saved_results(receipt):
         """DB 저장 후 이전 판정·대기 중 AI 요청을 폐기하고 N 재확인을 안내한다.
@@ -1102,16 +1106,25 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         configure_import_choices()
         window.management_progress.set_operation(None)
 
-    def after_import_delete(result):
+    def refresh_after_data_change(message, *, background):
         cancel_management_refresh()
         dashboard.invalidate()
         heatmap.invalidate()
         replay.invalidate()
-        equipment.clear("저장 자료 삭제 · 조회 조건을 다시 선택해 주세요.")
+        equipment.clear(message)
         ai.invalidate_data()
         list_action.setEnabled(False)
-        read_saved_catalog(finish_import_catalog, background=importer.progress_dialog.isVisible())
+        read_saved_catalog(finish_import_catalog, background=background)
+
+    def after_import_delete(_result):
+        refresh_after_data_change("저장 자료 삭제 · 조회 조건을 다시 선택해 주세요.",
+                                  background=importer.progress_dialog.isVisible())
+
+    def after_sql_import(_result):
+        refresh_after_data_change("SQL 자료 저장 완료 · 조회 조건을 다시 선택해 주세요.", background=True)
+
     importer.deletion.deleted.connect(after_import_delete)
+    importer.sql_page.saved.connect(after_sql_import)
     return window
 
 
@@ -1143,6 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
     app.aboutToQuit.connect(ai.close)
     window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
                            import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
+                           sql_importer=sql_importer_from_env() if source is not None else None,
                            management_gateway=gateway_from_env() if source is not None else None,
                            data_exporter=data_exporter_from_env(), extractor=ai.extractor,
                            ai_client=ai.client,
