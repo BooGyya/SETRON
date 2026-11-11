@@ -357,18 +357,17 @@ def test_confirmed_save_failure_retains_draft_and_reloads_known_old_values(app, 
         sheet = page.sheet_panel
         sheet.open_batch(snapshot.batch_id)
         window.navigate("data")
-        wait_for(app, lambda: not sheet.request.busy and sheet.grid is not None
-                 and sheet.grid.batch_id == snapshot.batch_id)
-        address = next(address for address, binding in sheet.grid.bindings.items()
-                       if binding.table == "equipment_snapshot" and binding.key == {"snapshot_id": snapshot.snapshot_id}
-                       and binding.field == "line")
-        sheet.items[address].setText("저장 실패 초안")
+        wait_for(app, lambda: not sheet.request.busy and sheet.data is not None
+                 and sheet.data.batch_id == snapshot.batch_id)
+        row = next(r for r, (kind, entry) in enumerate(sheet.view)
+                   if kind == "row" and entry.snapshot_id == snapshot.snapshot_id)
+        sheet.table.item(row, 1).setText("저장 실패 초안")  # Line 칸 (DB 값 기준 현황표, 11-11 6차)
         assert sheet.pending and sheet.save()
         wait_for_save(window, app)
         wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
         assert not page.saving and sheet.save_button.isEnabled()
-        assert sheet.pending and sheet.edits[address] == "저장 실패 초안"
-        assert sheet.items[address].text() == "저장 실패 초안" and "저장하지 못했습니다" in sheet.notice.text()
+        assert sheet.pending and sheet.edits[("line", snapshot.snapshot_id)] == "저장 실패 초안"
+        assert sheet.table.item(row, 1).text() == "저장 실패 초안" and "저장하지 못했습니다" in sheet.notice.text()
         assert all_rows(file_storage, "equipment_snapshot")[0]["line"] == "1라인"
         assert window.pages["dashboard"].snapshot.selected_records[0].line == "1라인"
         assert calls == []

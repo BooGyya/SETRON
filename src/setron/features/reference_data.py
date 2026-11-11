@@ -90,6 +90,23 @@ FOUNDRY_FAMILY_MODELS = {"M-C3", "M-C4", "M-O2"}
 FOUNDRY_SUFFIX = " (파운드리)"
 
 
+# 데이터 관리에서 등록한 라인의 메모리/파운드리 (11-11 6차). 장소표보다 먼저 본다. DB 관리 설정(registered_lines.v1)을
+# 읽어 :func:`use_registered_lines`로 채운다 (앱 시작 · 조회 선택지 다시 읽기 · 데이터 관리에서 라인을 바꿀 때).
+REGISTERED_AREAS: dict[tuple[str, str], str] = {}
+
+
+def _clean_line(line) -> str:
+    cleaned = re.sub(r"\s+", " ", str(line)).strip()
+    return re.sub(r"\(\s*\d+\s*F\s*\)|\(\s*\d+\s*\)", "", cleaned).strip()
+
+
+def use_registered_lines(entries) -> None:
+    """등록 라인 [{"site", "line", "fab"}]을 판정에 쓴다. 새 dict로 바꿔 끼워 다른 스레드가 읽는 중에도 안전하다."""
+    global REGISTERED_AREAS
+    REGISTERED_AREAS = {(str(e["site"]).strip(), _clean_line(e["line"])): e["fab"] for e in entries
+                        if e.get("fab") in {"MEMORY", "FOUNDRY"}}
+
+
 def default_area(site: str | None, line: str | None, sheet_name: str | None = None) -> str | None:
     """사이트·라인(·시트명)으로 메모리/파운드리 기본값을 정한다. 모르면 None.
 
@@ -105,9 +122,8 @@ def default_area(site: str | None, line: str | None, sheet_name: str | None = No
         return name.upper()
     if not site or not line:
         return None
-    cleaned = re.sub(r"\s+", " ", str(line)).strip()
-    cleaned = re.sub(r"\(\s*\d+\s*F\s*\)|\(\s*\d+\s*\)", "", cleaned).strip()
-    return LINE_AREAS.get((site.strip(), cleaned))
+    cleaned = _clean_line(line)
+    return REGISTERED_AREAS.get((site.strip(), cleaned)) or LINE_AREAS.get((site.strip(), cleaned))
 
 
 def _foundry_named(text: str | None) -> bool:
