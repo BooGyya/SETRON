@@ -873,7 +873,7 @@ class DashboardPage(QWidget):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
         total_row = data.rows[-1]
-        columns = (("Site / 원본 구역", total_row.cells[-1]), *((cell.label, cell) for cell in total_row.cells))
+        columns = (("Site / 설비군", total_row.cells[-1]), *((cell.label, cell) for cell in total_row.cells))
         for column, (title, cell) in enumerate(columns):
             heading = label(title, 13, medium=True)
             heading.setObjectName("dashboardMatrixHeading")
@@ -1046,7 +1046,7 @@ class DashboardPage(QWidget):
             headers = ("상태", "설비·계열 건수", "구성비")
             rows = [(name, str(value), f"{value / total:.1%}" if total else "—") for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)]
         elif mode == 2:
-            headers = ("Site / 원본 구역", "설비군", "목표 N 이상 적용률", "N 이상/판단 가능", "판단 불가", "설비 대수")
+            headers = ("Site / 설비군", "설비군", "목표 N 이상 적용률", "N 이상/판단 가능", "판단 불가", "설비 대수")
             areas, groups = bar_plot(data)
             rows = [(area, label, f"{point.counts.rate:.1%}" if point.counts.rate is not None else
                      "계산 불가" if point.equipment_ids else "데이터 없음",

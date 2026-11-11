@@ -16,7 +16,7 @@ from setron.features.version.schemas import CompareStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource, GroupBinding, family_name
 from setron.ui.equipment_data import EquipmentDetail
 from setron.ui.heatmap_data import EquipmentTile, record_tiles
-from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups
+from setron.ui.heatmap_grouping import GROUPING_MODES, _position, build_heatmap_groups
 from setron.ui.observation_interval import INTERVALS, interval_days
 from setron.ui.query_state import AppliedQuery, QueryState, TargetN
 from setron.ui.target_data import target_map, target_pairs, validate_targets
@@ -147,18 +147,28 @@ def replay_trends(data, frames=None, visible_groups=None, *, grouping="group"):
     for key, node in nodes.items():
         title = node.title
         if counts[title] > 1:
-            if grouping == "fab":
-                title += f" ({key[1] or '분류 미지정'})"
+            tile = node.tiles[0]
+            position = _position(tile)
+            if grouping == "site":
+                title += f" ({position.site_key or '사업장 미지정'})"
+            elif grouping == "fab":
+                title += f" ({position.fab_key or '분류 미지정'})"
             else:
-                tile = node.tiles[0]
                 site = tile.site_label or tile.site_key or "사업장 미지정"
-                fab = {"MEMORY": "Memory", "FOUNDRY": "Foundry"}.get(key[2], key[2] or "미지정")
+                fab = position.fab_label or "미지정"
                 title += f" ({site} · {fab})"
         labels[key] = title
     duplicates = Counter(labels.values())
-    return tuple(ReplayTrend(key, labels[key] if duplicates[labels[key]] == 1 else f"{labels[key]} [{key[1]}]",
+    ordered_nodes = nodes.items()
+    if grouping == "site":
+        sites = {key: index for index, key in enumerate(site_order)}
+        ordered_nodes = sorted(ordered_nodes, key=lambda item: (
+            sites.get(item[1].tiles[0].site_key, sites.get(item[1].tiles[0].site_label, len(sites))),
+            item[1].title.casefold(), item[0]))
+    return tuple(ReplayTrend(key, labels[key] if duplicates[labels[key]] == 1 else
+                             f"{labels[key]} [{node.tiles[0].site_key or repr(key)}]",
                              tuple(snapshot.get(key) for snapshot in snapshots))
-                 for key in nodes)
+                 for key, node in ordered_nodes)
 
 
 def freeze_source(source):

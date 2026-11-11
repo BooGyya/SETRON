@@ -1062,7 +1062,7 @@ class ItemsPage(QWidget):
         jira = self.data.jira([e.item.item_id for e in self.visible_entries]) if self.data else {}
         self.visible_jira = jira
         version_width = jira_width = None
-        previous_release = object()
+        previous_release = None
         for row, entry in enumerate(self.visible_entries):
             if row == len(self.row_pool):
                 control = _ItemResultButton()
@@ -1082,7 +1082,8 @@ class ItemsPage(QWidget):
                                            for j in jira.values()), default=0))
             included = releases.get(entry.item.item_id, ())
             representative = included[0].release_version_id if included else None
-            show_version = representative != previous_release
+            # 페이지 첫 행은 항상 버전을 보이고, 현재 페이지 안의 연속 중복만 생략한다.
+            show_version = row == 0 or representative != previous_release
             previous_release = representative
             content = entry.item.content
             caption = content
@@ -1288,8 +1289,8 @@ class ItemsPage(QWidget):
             e.record.model_name, e.label,
             "\n".join(_pm_text(p.pm, p.pm.version_raw or "버전 미확인") for p in e.pms)
             or "버전 미확인",
-            "\n".join(_pm_text(p.pm, f"{APPLICATION_LABELS[p.application]} ({BASIS_LABELS[p.basis]})") for p in e.pms)
-            or "PM/SW 관측 없음 · 업무 규칙상 대상 외") for e in rows), tuple(e.record.equipment_id for e in rows),
+            "\n".join(_pm_text(p.pm, BASIS_LABELS[p.basis]) for p in e.pms)
+            or "PM/SW 관측 없음") for e in rows), tuple(e.record.equipment_id for e in rows),
             tuple(APPLICATION_TONES[e.application] for e in rows))
         if self.selected_equipment_id in self.equipment_model.ids:
             self.equipment_table.setCurrentIndex(self.equipment_model.index(self.equipment_model.ids.index(self.selected_equipment_id), 0))

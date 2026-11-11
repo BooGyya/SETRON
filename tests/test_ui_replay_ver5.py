@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtCore import QDate, QPoint, QPointF, QSignalBlocker, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QToolTip
+from PySide6.QtWidgets import QLabel, QToolTip
 
 from setron.features.version.groups import Slot, VersionGroups
 from setron.ui.app import create_window
@@ -17,8 +17,9 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.heatmap_data import GoalState, Tier
+from setron.ui.heatmap_grouping import GROUPING_MODES
 from setron.ui.observation_interval import interval_days
-from setron.ui.query_state import QuerySelection, QueryState, VersionFilter
+from setron.ui.query_state import QuerySelection, VersionFilter
 from setron.ui.replay_data import load_replay
 from setron.ui.replay_widgets import CURRENT_MARKER, CURRENT_SUFFIX, FUTURE_SUFFIX, POINT_SUFFIX, ReplayChart
 from setron.ui.replay_page import ReplayPage
@@ -46,12 +47,19 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert len(page.data.frames) == len(page.frames) == 6 and page.step is None
     assert page.index == 5 and page.frame.day == date(2026, 10, 21)
     assert page.play_button.isEnabled() and not page.pause_button.isEnabled()
-    assert len(page.legend_buttons) == 9 and len(page.chart.values) == 9
+    assert len(page.legend_buttons) == 9 and page.legend_host.isHidden()
+    assert page.grouping_mode == page.heatmap.grouping_mode == "site"
+    assert [page.grouping_tabs.tabText(i) for i in range(page.grouping_tabs.count())] == [caption for _, caption in GROUPING_MODES]
+    assert set(page.chart.values) == {("site", tile.site_key) for frame in page.frames for tile in frame.tiles}
+    assert page.heatmap.view is None and page.heatmap.visible_ids == ()  # 숨은 보기는 처음 열 때 만든다.
     assert set(page.query_panel.combos) == {"site_key", "fab_key", "line_key", "group_key"}
     assert [b.text() for b in page.legend_tools] == ["전체 해제"]  # 버튼 하나로 선택·해제 전환
     # 요청 2-1: 날짜 칩 대신 재생 간격
     assert [b.text() for b in page.interval_buttons.values()] == ["저장일마다", "1주", "1개월", "3개월"]
     assert page.interval_buttons[None].isChecked()
+    assert [page.view_controls.row_body.itemAt(i).widget() for i in range(3)] == [
+        page.view_tabs, page.grouping_tabs, page.timeline]
+    assert page.timeline.caption_label.isHidden()
     # 요청 3-3: 재생 버튼은 기호, 이름은 그대로
     assert [(b.text(), b.accessibleName()) for b in (page.play_button, page.pause_button, page.restart_button)] == [
         ("▶", "재생"), ("‖", "일시정지"), ("↺", "처음부터")]
@@ -60,12 +68,17 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert all(metrics.inFontUcs4(ord(b.text())) for b in (page.play_button, page.pause_button, page.restart_button))
     assert page.start.text() == "2026-05-21" and page.end.text() == "2026-10-21"
     assert page.query_panel.applied_summary.isHidden()
-    assert page.heatmap.visible_ids and len(page.heatmap.group_cards) == 9
     assert page.version_button.text() == "조회 버전 설정"
-    card = page.heatmap.group_cards[0].layout()
-    for index, size in ((0, 18), (1, 14)):
-        heading = card.itemAt(index).widget()
-        assert " / " in heading.text() and heading.text().endswith("대") and heading.font().pixelSize() == size
+    page.view_tabs.setCurrentIndex(1)
+    assert page.heatmap.visible_ids
+    assert {tuple(card.property("groupKey")) for card in page.heatmap.group_cards} == {
+        ("site", tile.site_key) for tile in page.frame.tiles}
+    first_card = page.heatmap.group_cards[0]
+    heading = first_card.findChild(QLabel, "heatmapGroupHeading")
+    site_key = tuple(first_card.property("groupKey"))[1]
+    assert heading.text() == next(tile.site_label for tile in page.frame.tiles if tile.site_key == site_key)
+    assert heading.alignment() == Qt.AlignmentFlag.AlignCenter and heading.font().pixelSize() == 18
+    assert " / " not in heading.text() and not heading.text().endswith("대")
     assert all(t.data.observation_date <= page.frame.day for t in page.heatmap.tile_occurrences)
     # R-02: 범례는 타일과 같은 5단계 색 + 위험 후보 테두리
     legend = [item.accessibleName() for item in page.heatmap.legend.items]
@@ -132,7 +145,10 @@ def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_butt
     전체 선택·해제는 버튼 하나: 모두 골라져 있으면 누를 때 전체 해제, 아니면 전체 선택 (11-10 요청).
     """
     page = replay_page(own)
+    page.set_grouping("group")
+    page.view_tabs.setCurrentIndex(1)
     full = page.achievement.text(), page.heatmap.visible_ids
+    page.view_tabs.setCurrentIndex(0)
     toggle = page.toggle_all_button
     group = page.legend_buttons["c3"]
     assert toggle.text() == "전체 해제" and toggle.isChecked()
@@ -141,22 +157,30 @@ def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_butt
     assert toggle.text() == "전체 선택" and not toggle.isChecked()
     assert not any(b.isChecked() for b in page.legend_buttons.values())
     assert group.grab().toImage().pixelColor(8, group.height() // 2) != filled
-    assert page.chart.values == {} and page.heatmap.group_cards == [] and page.heatmap.visible_ids == ()
+    assert page.chart.values == {} and page.heatmap.visible_ids == full[1]  # 숨은 히트맵은 갱신하지 않는다.
+    page.view_tabs.setCurrentIndex(1)
+    assert page.heatmap.group_cards == [] and page.heatmap.visible_ids == ()
+    page.view_tabs.setCurrentIndex(0)
     assert page.achievement.text() == "적용률 —" and page.progress.value() == 0
     assert "하나 이상" in page.achievement.toolTip()
     page.legend_buttons["c3"].click()
     cell = next(g for g in page.frame.snapshot.groups if g.group_keys == ("c3",))
-    assert set(page.chart.values) == {"c3"} and len(page.heatmap.group_cards) == 1
+    assert set(page.chart.values) == {"c3"}
+    page.view_tabs.setCurrentIndex(1)
+    assert len(page.heatmap.group_cards) == 1
     assert set(page.heatmap.visible_ids) == set(cell.equipment_ids)
     assert page.achievement.text() == f"적용률 {cell.summary.rate:.1%}"
     assert (f"등록 SW 목표 달성 {cell.summary.compliant} / "
             f"{cell.summary.compliant + cell.summary.below}건") in page.achievement.toolTip()
     assert "HPA" not in page.achievement.toolTip()
     assert toggle.text() == "전체 선택"  # 일부만 골라져 있으면 누를 때 전체 선택
+    page.view_tabs.setCurrentIndex(0)
     toggle.click()
     assert toggle.text() == "전체 해제" and toggle.isChecked()
     assert all(b.isChecked() for b in page.legend_buttons.values())
-    assert (page.achievement.text(), page.heatmap.visible_ids) == full and len(page.chart.values) == 9
+    assert len(page.chart.values) == 9
+    page.view_tabs.setCurrentIndex(1)
+    assert (page.achievement.text(), page.heatmap.visible_ids) == full
 
 
 def test_group_buttons_hide_absent_groups_and_bulk_only_changes_available_groups(own):
@@ -165,6 +189,7 @@ def test_group_buttons_hide_absent_groups_and_bulk_only_changes_available_groups
                            if source.locations[record.equipment_id].site_key != "hwaseong"
                            or not any(pm.group_id in source.bindings["c4"] for pm in record.pms))
     page = own(ReplayPage(source))
+    page.set_grouping("group")
     page.query_panel.select("site_key", "hwaseong")
     page.query_panel.search_button.click()
     until(lambda: not page.busy)
@@ -184,6 +209,7 @@ def test_group_buttons_hide_absent_groups_and_bulk_only_changes_available_groups
     assert page.data.request.query.selection.group_key == "o2"
     assert [frame.day for frame in page.frames] == [date(2026, m, 21) for m in (8, 9, 10)]
     assert set(page.legend_buttons) == set(page.chart.values) == {"o2"}
+    page.view_tabs.setCurrentIndex(1)
     assert page.heatmap.visible_ids == next(
         cell.equipment_ids for cell in page.frame.snapshot.groups if cell.group_keys == ("o2",)
     )
@@ -195,6 +221,7 @@ def test_group_buttons_match_dashboard_style_and_keep_their_height(own):
     window.navigate("replay")
     page = window.pages["replay"]
     until(lambda: not page.busy)
+    page.set_grouping("group")
     QTest.qWait(20)
     dashboard_button = window.pages["dashboard"].series_widgets[0]
     replay_button = page.legend_buttons["c3"]
@@ -270,6 +297,7 @@ def test_interval_too_long_for_period_is_disabled(own):
 
 def test_chart_line_and_points_show_dashboard_trend_hover(own):
     page = replay_page(own)
+    page.set_grouping("group")
     line = next(s for s in page.chart.chart().series() if s.name() == "C3")
     assert [p.x() for p in line.points()] == [0, 1, 2, 3, 4, 5]  # 시점마다 점 하나, 계단 모서리 없음
     cell = next(g for g in page.data.frames[2].snapshot.groups if g.group_keys == ("c3",))
@@ -355,13 +383,20 @@ def test_view_tabs_show_one_view_and_share_the_selected_frame(own):
     page = replay_page(own)
     assert [page.view_tabs.tabText(i) for i in range(page.view_tabs.count())] == ["달성률 추이", "히트맵"]
     assert page.chart.isVisibleTo(page) and not page.heatmap.isVisibleTo(page)
+    assert page.heatmap.view is None
+    chart, series = page.chart.chart(), tuple(page.chart.chart().series())
     page.select_date(2)
+    assert page.chart.chart() is chart and tuple(chart.series()) == series
     frame, data = page.frame, page.data
     page.view_tabs.setCurrentIndex(1)
     assert not page.chart.isVisibleTo(page) and page.heatmap.isVisibleTo(page)
     assert page.frame is frame and page.data is data and page.play_button.isEnabled()
+    assert page.heatmap.view.snapshot is frame.snapshot
+    page.select_date(3)
+    assert page.chart.current == 2 and page.heatmap.view.snapshot is page.frame.snapshot
     page.view_tabs.setCurrentIndex(0)
-    assert page.chart.isVisibleTo(page) and not page.heatmap.isVisibleTo(page) and page.chart.current == 2
+    assert page.chart.isVisibleTo(page) and not page.heatmap.isVisibleTo(page) and page.chart.current == 3
+    assert page.chart.chart() is chart and tuple(chart.series()) == series
 
 
 def test_version_popup_all_clear_cancel_confirm_and_reapply_without_changing_n(own):
@@ -403,10 +438,11 @@ def test_site_choices_close_and_reset_wait_for_search_and_preserve_targets(own):
     assert page.data is data and page.timer.isActive() and not page.busy
     assert popup.isVisible() and popup.checks["pyeongtaek"].isEnabled()
     popup.checks["pyeongtaek"].click()
-    assert page.state.draft.site_key == ("hwaseong", "pyeongtaek")
+    assert page.state.draft.site_key is None  # 팝업 안의 체크는 선택 완료 전까지 초안을 바꾸지 않는다.
     assert page.data is data and not page.busy
     assert popup.isVisible()
     popup.confirm_button.click()
+    assert page.state.draft.site_key == ("hwaseong", "pyeongtaek")
     assert page.data is data and not page.busy
     panel.search_button.click()
     assert not page.timer.isActive() and page.busy
@@ -524,12 +560,14 @@ def test_requery_uses_clicked_conditions_and_does_not_submit_edits_during_load(o
         for gate in gates:
             gate.set()
 
-    assert page.data.request is requests[1] and page.chart.chart() is not chart
-    assert page.chart.days[-1] == date(2026, 8, 21)
+    assert page.data.request is requests[1] and page.chart.chart() is chart  # 숨은 차트는 그대로 둔다.
     assert page.heatmap.tile_buttons is not tiles and page.legend_buttons is not legend
     assert all(tile.data.site_key == "hwaseong" for tile in page.heatmap.tile_buttons.values())
     assert "2026-08-21" in page.achievement.toolTip()
     assert page.view_tabs.isEnabled() and page.heatmap.isEnabled()
+    page.view_tabs.setCurrentIndex(0)
+    assert page.chart.chart() is not chart and page.chart.days[-1] == date(2026, 8, 21)
+    assert set(page.chart.values) == {("site", "hwaseong")}
 
 
 def test_slow_request_is_responsive_blocks_duplicate_and_ignores_late_result_after_exit(own):
@@ -582,6 +620,7 @@ def test_tile_opens_same_observation_readonly_drawer_without_navigation_or_write
     tile = next(control for control in page.heatmap.tile_occurrences
                 if control.data.equipment_id == 1 and control is not page.heatmap.tile_buttons[1])
     QTest.qWait(30)
+    next(card for card in page.heatmap.group_cards if card.isAncestorOf(tile)).scroll.ensureWidgetVisible(tile)
     window.scroll.ensureWidgetVisible(tile)
     QTest.qWait(30)
     before = page.data, page.index, page.state.draft
@@ -591,7 +630,9 @@ def test_tile_opens_same_observation_readonly_drawer_without_navigation_or_write
     assert page.drawer.request.equipment_id == 1
     assert page.drawer.detail.record.base_date == page.frame.day
     assert len(page.drawer.software_cards) == 3 and not hasattr(page.drawer, "edit_button")
-    assert [control for control in page.heatmap.tile_occurrences if control.isChecked()] == [tile]
+    assert {control for control in page.heatmap.tile_occurrences if control.isChecked()} == {
+        control for control in page.heatmap.tile_occurrences if control.data.equipment_id == 1}
+    assert tile.isChecked()
     window.back_shortcut.trigger()
     until(page.drawer.isHidden)
     assert window.route == "replay" and tile.hasFocus()
@@ -617,6 +658,8 @@ def test_tile_opens_same_observation_readonly_drawer_without_navigation_or_write
 
 def test_multisw_group_duplicates_do_not_inflate_unique_physical_count(own):
     page = replay_page(own)
+    page.set_grouping("group")
+    page.view_tabs.setCurrentIndex(1)
     occurrences = [control for control in page.heatmap.tile_occurrences if control.data.equipment_id == 1]
     assert len(occurrences) == 2
     assert page.heatmap.visible_ids.count(1) == 1
@@ -664,6 +707,7 @@ def test_initial_layout_has_no_expanded_chart_blank_and_buttons_keep_figma_heigh
     assert page.chart.mapTo(window, QPoint()).y() < 750
     assert all(b.height() == 30 for b in page.interval_buttons.values())
     assert all(b.height() == 40 for b in (page.play_button, page.pause_button, page.restart_button))
+    page.set_grouping("group")
     page.select_date(0)
     page.legend_buttons["c3"].click()
     QTest.qWait(20)
@@ -700,19 +744,21 @@ def test_chart_breaks_lines_at_unknown_dates_and_clear_removes_previous_values(o
     data = replace(data, frames=data.frames[:2] + (gap,) + data.frames[3:])
     chart = own(ReplayChart())
     chart.show_data(data, {"c3"})
+    chart_object, series = chart.chart(), tuple(chart.chart().series())
     assert chart.values["c3"][2] is None
-    dots = [s for s in chart.chart().series() if s.name() == "C3" + POINT_SUFFIX]
+    dots = [s for s in chart.chart().series() if s.isVisible() and s.name() == "C3" + POINT_SUFFIX]
     assert [[p.x() for p in series.points()] for series in dots] == [[0, 1], [3, 4, 5]]
-    assert not any(s.name().endswith(FUTURE_SUFFIX) for s in chart.chart().series())  # 기본은 마지막 날짜가 현재
+    assert not any(s.isVisible() and FUTURE_SUFFIX in s.name() for s in chart.chart().series())  # 기본은 마지막 날짜가 현재
     # 판단 불가인 날짜가 현재면 현재 점을 0%로 찍지 않는다.
     chart.show_data(data, {"c3"}, current=2)
-    assert not any(s.name().endswith(CURRENT_SUFFIX) for s in chart.chart().series())
+    assert chart.chart() is chart_object and tuple(chart_object.series()) == series
+    assert not any(s.isVisible() and s.name().endswith(CURRENT_SUFFIX) for s in chart.chart().series())
     chart.clear()
     assert chart.values == {} and chart.accessibleDescription() == "" and chart.current is None
 
 
 def chart_parts(page, label):
-    series = page.chart.chart().series()
+    series = [part for part in page.chart.chart().series() if part.isVisible()]
     marker = next(s for s in series if s.name() == CURRENT_MARKER)
     past = [p.x() for s in series if s.name() == label + POINT_SUFFIX for p in s.points()]
     future = [p.x() for s in series if s.name() == label + FUTURE_SUFFIX + POINT_SUFFIX for p in s.points()]
@@ -722,6 +768,8 @@ def chart_parts(page, label):
 
 def test_chart_moves_with_playback_solid_until_current_and_faded_after(own):
     page = replay_page(own)
+    page.set_grouping("group")
+    chart, series = page.chart.chart(), tuple(page.chart.chart().series())
     label = next(g.label for g in page.data.source.catalog.groups if g.key == "c3")
     marker, past, future, dot = chart_parts(page, label)
     assert marker == {5} and max(past) == 5 and future == [] and dot == [5]
@@ -733,10 +781,17 @@ def test_chart_moves_with_playback_solid_until_current_and_faded_after(own):
     marker, past, future, dot = chart_parts(page, label)
     assert page.index == 2 and marker == {2} and past == [0, 1, 2] and future == [2, 3, 4, 5] and dot == [2]
     assert page.chart.current == 2 and page.chart.accessibleDescription().startswith(f"현재 {page.frame.day}")
+    assert page.chart.chart() is chart and tuple(chart.series()) == series
+    past_line = next(part for part in chart.series() if part.isVisible() and part.name() == label)
+    future_line = next(part for part in chart.series() if part.isVisible() and part.name() == label + FUTURE_SUFFIX)
+    assert past_line.pen().style() == Qt.PenStyle.SolidLine and future_line.pen().style() == Qt.PenStyle.DashLine
+    assert past_line.pen().color().name() == future_line.pen().color().name()
+    assert future_line.pen().color().alpha() < past_line.pen().color().alpha()
 
 
 def test_selected_date_and_group_buttons_keep_chart_at_selected_date(own):
     page = replay_page(own)
+    page.set_grouping("group")
     page.select_date(1)
     assert chart_parts(page, "C3")[0] == {1}
     page.legend_buttons["c4"].click()  # 범례를 바꿔도 현재 날짜 위치는 그대로
@@ -772,11 +827,17 @@ def test_empty_period_clears_previous_achievement_tooltip(own):
 
 def test_heatmap_reuses_tiles_and_matches_version_heatmap_presentation(own):
     page = replay_page(own)
+    page.set_grouping("group")
+    page.view_tabs.setCurrentIndex(1)
     heatmap, data, frame = page.heatmap, page.data, page.frame
     before = list(heatmap.tile_occurrences)
-    group, areas = heatmap._plan(data, frame)[0]
-    reference = own(HeatmapPage(QueryState(data.source.catalog), data.source))
-    card = reference._group_card(group, [tile for _, items in areas for tile, _ in items], True, group)
+    reference = own(HeatmapPage(None, data.source, detail_connected=True, show_summary=False, show_grouping=False))
+    reference.set_grouping("group")
+    reference.present_snapshot(frame.snapshot, source=data.source, tiles=frame.tiles)
+    assert isinstance(heatmap.view, HeatmapPage)
+    assert [tuple(card.property("groupKey")) for card in heatmap.group_cards] == [
+        tuple(card.property("groupKey")) for card in reference.group_cards]
+    card = reference.group_cards[0]
     control = before[0]
     reference_tile = reference.tile_buttons[control.data.equipment_id]
     assert control.code_label.alignment() == reference_tile.code_label.alignment() == Qt.AlignmentFlag.AlignCenter
@@ -785,7 +846,6 @@ def test_heatmap_reuses_tiles_and_matches_version_heatmap_presentation(own):
     assert control.toolTip() == reference_tile.toolTip() == control.data.description
     assert heatmap.group_cards[0].styleSheet() == card.styleSheet()
     assert heatmap.group_cards[0].layout().spacing() == card.layout().spacing()
-    card.deleteLater()
     heatmap.show_frame(data, frame)
     assert heatmap.rebuilt_tiles == 0 and heatmap.tile_occurrences == before
     target = frame.tiles[0]
@@ -822,14 +882,14 @@ def test_version_popup_marks_raw_versions_with_spaces():
     assert choice_caption(" v3.53_1 ") == "v3.53_1  (앞·끝 공백 포함 원문)"
 
 
-def test_management_save_blocks_replay_and_completion_requires_new_read(own):
+def test_data_save_blocks_replay_and_completion_requires_new_read(own):
     window = own(create_window())
     window.navigate("replay")
     page = window.pages["replay"]
     until(lambda: not page.busy)
     page.play()
-    management = window.pages["management"]
-    management.save_started.emit()
+    assert "management" not in window.pages
+    window.pages["data"].save_started.emit()
     assert not page.isEnabled() and not page.timer.isActive() and page.data is None
     window.after_management_save(None)
     assert page.isEnabled() and page.data is None and "조회 조건을 다시 선택" in page.message.text()

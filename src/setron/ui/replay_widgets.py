@@ -3,9 +3,9 @@
 from functools import partial
 
 from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.appearance import ui_color
 from setron.ui.components import button, label
@@ -21,6 +21,63 @@ CURRENT_MARKER = "현재 시점"
 FUTURE_SUFFIX = " · 이후"
 CURRENT_SUFFIX = " · 현재"
 POINT_SUFFIX = " · 시점"  # 실제 시점마다 찍는 점. 누르기·마우스 올리기는 이 점에서 받는다.
+
+
+class ReplayViewControls(QScrollArea):
+    """보기·분류·간격을 한 행으로 유지하고 부족한 폭은 도구 안에서 스크롤한다."""
+
+    def __init__(self, tabs, grouping, interval):
+        super().__init__()
+        self.setObjectName("replayViewControls")
+        self.setStyleSheet("QScrollArea#replayViewControls {background:transparent;border:0;}")
+        self.viewport().setAutoFillBackground(False)
+        self.tabs, self.grouping, self.interval = tabs, grouping, interval
+        self._refreshing = False
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+        self.setAccessibleName("리플레이 보기·분류·데이터 간격")
+        self.row = QWidget()
+        self.row.setObjectName("replayViewControlsRow")
+        self.row.setStyleSheet("QWidget#replayViewControlsRow {background:transparent;}")
+        self.row_body = QHBoxLayout(self.row)
+        self.row_body.setContentsMargins(0, 0, 0, 0)
+        self.row_body.setSpacing(12)
+        for control in (tabs, grouping, interval):
+            self.row_body.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.row_body.addStretch()
+        self.setWidget(self.row)
+        self.row.setAutoFillBackground(False)  # QScrollArea.setWidget가 켠 배경 채우기를 해제한다.
+        self.horizontalScrollBar().rangeChanged.connect(self.refresh)
+        self.refresh()
+
+    def minimumSizeHint(self):
+        return QSize(0, self.height())
+
+    def refresh(self, *_):
+        if self._refreshing:
+            return
+        self._refreshing = True
+        try:
+            controls = self.tabs, self.grouping, self.interval
+            widths = self.tabs.sizeHint().width(), self.grouping.sizeHint().width(), self.interval.unwrapped_width()
+            height = max(control.sizeHint().height() for control in controls)
+            for control, width in zip(controls, widths):
+                control.setFixedSize(width, height)
+            self.row.setMinimumWidth(sum(widths) + 2 * self.row_body.spacing())
+            self.row.setFixedHeight(height)
+            scrollbar = self.horizontalScrollBar()
+            extra = scrollbar.sizeHint().height() if self.row.minimumWidth() > self.viewport().width() else 0
+            self.setFixedHeight(height + extra)
+        finally:
+            self._refreshing = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.refresh()
 
 
 class ReplayPlaybackControls(QFrame):
@@ -95,6 +152,10 @@ class ReplayChart(DashboardChart):
         self.available_trends = ()
         self._trend_key = self._trend_data = None
         self._trend_frames = ()
+        self._display_key = None
+        self._segment_slots, self._current_slots = [], {}
+        self._current_marker = None
+        self._values_description = ""
 
     def clear(self):
         super().clear()
@@ -104,11 +165,15 @@ class ReplayChart(DashboardChart):
         self.available_trends = ()
         self._trend_key = self._trend_data = None
         self._trend_frames = ()
+        self._display_key = None
+        self._segment_slots, self._current_slots = [], {}
+        self._current_marker = None
+        self._values_description = ""
         self.setAccessibleDescription("")
 
     def _hover(self, chart, series, label, days, summaries, points, position, hovered):
         text = ""
-        if hovered:
+        if hovered and points:
             index, _ = min(points, key=lambda point: abs(point[0] - position.x()))
             text = trend_tooltip(days[index], label, summaries[index])
         self._hover_tooltip(chart, series, text)
@@ -120,14 +185,10 @@ class ReplayChart(DashboardChart):
         실제 시점마다 점을 찍고, 점을 누르면 그 날짜로 가고 마우스를 올리면 대시보드와 같은 집계를 보인다.
         frames를 주지 않으면 실제 저장 날짜(data.frames)를 쓴다. current가 None이면 마지막 시점을 현재로 본다.
         hidden_series는 집계 후 표시할 선만 숨긴다. available_trends는 숨긴 선도 포함해 범례에서 다시 켤 수 있다.
+        같은 조회·간격·표시 선에서는 차트 객체를 유지하고 현재 시점의 좌표만 갱신한다.
         """
         frames = tuple(data.frames if frames is None else frames)
         visible_groups = None if visible_groups is None else frozenset(visible_groups)
-        chart = self._chart()
-        self.values, self.days = {}, ()
-        self.current = None
-        self.setAccessibleDescription("")
-        self.setAccessibleName(f"{dict(GROUPING_MODES).get(grouping, '분류')}별 목표 적용 추이 · 저장된 관측일의 달성률")
         cache_key = (id(data), tuple(id(frame) for frame in frames), grouping,
                      visible_groups if grouping == "group" else None)
         if cache_key != self._trend_key:
@@ -136,10 +197,27 @@ class ReplayChart(DashboardChart):
             self._trend_frames = frames
         hidden_series = frozenset(hidden_series)
         self.trends = tuple(trend for trend in self.available_trends if trend.key not in hidden_series)
+        display_key = cache_key, tuple(trend.key for trend in self.trends)
+        if display_key != self._display_key:
+            self._build_chart(frames, grouping)
+            self._display_key = display_key
         if not frames:
             return
         current = len(frames) - 1 if current is None else max(0, min(current, len(frames) - 1))
-        self.current = current
+        if current == self.current:
+            return
+        self._move_current(current)
+
+    def _build_chart(self, frames, grouping):
+        """관측·분류·표시 대상이 바뀔 때만 축과 단절 구간별 시리즈를 만든다."""
+        chart = self._chart()
+        self.values, self.days, self.current = {}, (), None
+        self._segment_slots, self._current_slots = [], {}
+        self._current_marker, self._values_description = None, ""
+        self.setAccessibleDescription("")
+        self.setAccessibleName(f"{dict(GROUPING_MODES).get(grouping, '분류')}별 목표 적용 추이 · 저장된 관측일의 달성률")
+        if not frames:
+            return
         days = self.days = tuple(frame.day for frame in frames)
         x, y = QBarCategoryAxis(), QValueAxis()
         pattern = "%Y-%m-%d" if days[0].year != days[-1].year else "%m-%d"
@@ -157,14 +235,22 @@ class ReplayChart(DashboardChart):
             series.attachAxis(x)
             series.attachAxis(y)
 
+        def slot(series, name, trend):
+            add(series)
+            series.setVisible(False)
+            points = []
+            series.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
+            # 이 목록은 시리즈 객체와 함께 보존하며 현재 시점이 움직일 때 내용을 바꾼다.
+            series.hovered.connect(partial(self._hover, chart, series, trend.label, days, trend.summaries, points))
+            return series, name, points
+
         # 현재 날짜 세로선. 선보다 먼저 넣어 선 아래에 깔린다.
         if self.trends:
             marker = QLineSeries()
             marker.setName(CURRENT_MARKER)
             marker.setPen(QPen(ui_color(SECONDARY), 1.5, Qt.PenStyle.DashLine))
-            marker.append(current, 0)
-            marker.append(current, 100)
             add(marker)
+            self._current_marker = marker
         for trend in self.trends:
             values, segments, segment = [], [], []
             summaries = trend.summaries
@@ -184,58 +270,70 @@ class ReplayChart(DashboardChart):
             faded = QColor(color)
             faded.setAlpha(90)
 
-            def connect(series, points):
-                series.clicked.connect(lambda point: self.date_selected.emit(round(point.x())))
-                series.hovered.connect(partial(self._hover, chart, series, trend.label, days, summaries, points))
-
             for points in segments:
-                past = [p for p in points if p[0] <= current]
-                future = [p for p in points if p[0] >= current]
-                # 현재 날짜 점은 실선 쪽에 이미 있으므로 이후 쪽이 그 점 하나뿐이면 그리지 않는다.
-                if len(future) == 1 and future[0][0] == current:
-                    future = []
-                for part, name, pen_color, width, style, size in (
-                        (past, trend.label, color, 2.5, Qt.PenStyle.SolidLine, 7),
-                        (future, f"{trend.label}{FUTURE_SUFFIX}", faded, 1.5, Qt.PenStyle.DashLine, 6)):
-                    if not part:
-                        continue
-                    if len(part) > 1:
+                parts = []
+                for name, pen_color, width, style, size in (
+                        (trend.label, color, 2.5, Qt.PenStyle.SolidLine, 7),
+                        (f"{trend.label}{FUTURE_SUFFIX}", faded, 1.5, Qt.PenStyle.DashLine, 6)):
+                    line_slot = None
+                    if len(points) > 1:
                         line = QLineSeries()
-                        line.setName(name)
                         line.setPen(QPen(pen_color, width, style))
-                        for px, py in part:
-                            line.append(px, py)
-                        add(line)
-                        connect(line, part)
+                        line_slot = slot(line, name, trend)
                     dots = QScatterSeries()
-                    dots.setName(name + POINT_SUFFIX)
                     dots.setColor(pen_color)
                     dots.setBorderColor(pen_color)
                     dots.setMarkerSize(size)
-                    for px, py in part:
-                        dots.append(px, py)
-                    add(dots)
-                    connect(dots, part)
-            # 현재 날짜 점을 크게 표시한다. 판단 불가인 날은 점을 찍지 않는다(0%로 그리지 않음).
-            if values[current] is not None:
-                dot = QScatterSeries()
-                dot.setName(f"{trend.label}{CURRENT_SUFFIX}")
-                dot.setColor(color)
-                dot.setBorderColor(ui_color("white"))
-                dot.setMarkerSize(12)
-                dot.append(current, values[current] * 100)
-                add(dot)
-                connect(dot, [(current, values[current] * 100)])
-        self.setAccessibleDescription(f"현재 {days[current]} · " + " · ".join(
+                    parts.append((line_slot, slot(dots, name + POINT_SUFFIX, trend)))
+                self._segment_slots.append((tuple(points), *parts))
+            dot = QScatterSeries()
+            dot.setColor(color)
+            dot.setBorderColor(ui_color("white"))
+            dot.setMarkerSize(12)
+            self._current_slots[trend.key] = slot(dot, f"{trend.label}{CURRENT_SUFFIX}", trend)
+        self._values_description = " · ".join(
             f"{trend.label}: " + ", ".join(f"{day} {'확인 필요' if value is None else f'{value:.1%}'}"
                                      for day, value in zip(days, values))
-            for trend in self.trends for values in (self.values[trend.key],)))
+            for trend in self.trends for values in (self.values[trend.key],))
+
+    @staticmethod
+    def _replace_slot(slot, points):
+        if slot is None:
+            return
+        series, name, current_points = slot
+        if current_points == points:
+            return
+        current_points[:] = points
+        series.replace([QPointF(x, y) for x, y in points])
+        series.setName(name if points else "")
+        series.setVisible(bool(points))
+
+    def _move_current(self, current):
+        """이미 존재하는 선·점의 좌표만 바꿔 재생 중 전체 차트 교체를 피한다."""
+        self._hide_hover_tooltip()
+        self.current = current
+        if self._current_marker is not None:
+            self._current_marker.replace([QPointF(current, 0), QPointF(current, 100)])
+        for points, past_slots, future_slots in self._segment_slots:
+            past = [point for point in points if point[0] <= current]
+            future = [point for point in points if point[0] >= current]
+            # 현재 날짜 점은 실선 쪽에 있으므로 그 점만 남은 미래 구간은 숨긴다.
+            if len(future) == 1 and future[0][0] == current:
+                future = []
+            for part, (line, dots) in ((past, past_slots), (future, future_slots)):
+                self._replace_slot(line, part if len(part) > 1 else [])
+                self._replace_slot(dots, part)
+        for key, slot in self._current_slots.items():
+            rate = self.values[key][current]
+            self._replace_slot(slot, [(current, rate * 100)] if rate is not None else [])
+        self.setAccessibleDescription(f"현재 {self.days[current]} · " + self._values_description)
 
 
 class ReplayHeatmap(QWidget):
     """버전 히트맵과 같은 콘텐츠를 고정된 재생 스냅샷에 연결한다."""
 
     equipment_selected = Signal(int, object)
+    controls_ready = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -243,7 +341,7 @@ class ReplayHeatmap(QWidget):
         self.body.setContentsMargins(0, 0, 0, 0)
         self.body.setSpacing(0)
         self.view = None
-        self.grouping_mode = "group"
+        self.grouping_mode = "site"
         self.selected_tile = None
 
     @property
@@ -301,8 +399,10 @@ class ReplayHeatmap(QWidget):
         self.select_equipment(equipment_id)
 
     def _open_equipment(self, selection):
-        tile = (self.list_table if self.view.layout_buttons.checkedId() == 1
-                else self.tile_buttons.get(selection.equipment_id))
+        tile = getattr(self.view, "selection_control", None)
+        if tile is None:
+            tile = (self.list_table if self.view.layout_buttons.checkedId() == 1
+                    else self.tile_buttons.get(selection.equipment_id))
         self.equipment_selected.emit(selection.equipment_id, tile)
 
     def show_frame(self, data, frame, selected=None):
@@ -314,6 +414,7 @@ class ReplayHeatmap(QWidget):
             self.view.set_grouping(self.grouping_mode)
             self.view.equipment_selected.connect(self._open_equipment)
             self.body.addWidget(self.view)
+            self.controls_ready.emit(self.view.controls_host)
         self.selected_tile = None
         self.view.present_snapshot(frame.snapshot, source=data.source, tiles=frame.tiles,
                                    selected_groups=selected)

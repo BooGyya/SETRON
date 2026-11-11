@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.ui.components import Card, button, label
-from setron.ui.dashboard import DashboardGrid, _DashboardViewControls
+from setron.ui.dashboard import DashboardGrid
 from setron.ui.dashboard_charts import series_button_style, series_color
 from setron.ui.dashboard_data import information_gap_reasons
 from setron.ui.equipment import ignore_width
@@ -18,7 +18,7 @@ from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.replay_data import ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
-from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls
+from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls, ReplayViewControls
 from setron.ui.theme import SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.view_controls import SegmentedControl, bulk_selection_toggle_button, set_bulk_selection_state
@@ -47,7 +47,8 @@ class ReplayPage(QWidget):
         self._hidden_groups = set()
         self._hidden_trends = {}
         self.trend_legend_buttons, self.trend_legend_tools = {}, ()
-        self.grouping_mode = "group"
+        self.grouping_mode = "site"
+        self.heatmap_controls = None
         self._trend_legend_key = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 88)
@@ -69,7 +70,7 @@ class ReplayPage(QWidget):
         self.content.body.setSpacing(12)
         self.content.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         # 날짜 칩 대신 재생 간격 (요청 2-1). 하나만 고르는 세그먼트 버튼. 바꾸면 다시 조회하지 않고 시점만 다시 만든다.
-        self.timeline = IntervalSelector(compact=True, custom_days=True, action="재생")
+        self.timeline = IntervalSelector(compact=True, custom_days=True, action="재생", show_caption=False)
         self.interval_group, self.interval_buttons, self.step = self.timeline.group, self.timeline.buttons, None
         self.timeline.set_saved_days()
         self.timeline.step_changed.connect(self.set_interval)
@@ -79,7 +80,6 @@ class ReplayPage(QWidget):
             self.grouping_tabs.addTab(caption)
         self.grouping_tabs.setCurrentIndex(next(i for i, (mode, _) in enumerate(GROUPING_MODES)
                                                if mode == self.grouping_mode))
-        self.content.body.addWidget(self.grouping_tabs, 0, Qt.AlignmentFlag.AlignLeft)
         self.legend_host = QWidget()
         self.legend_body = QVBoxLayout(self.legend_host)
         self.legend_body.setContentsMargins(0, 0, 0, 0)
@@ -112,13 +112,14 @@ class ReplayPage(QWidget):
         set_widget_font(self.view_tabs, font(14, medium=True))
         for caption in ("달성률 추이", "히트맵"):
             self.view_tabs.addTab(caption)
-        self.view_controls = _DashboardViewControls(self.view_tabs, self.timeline, self.timeline)
+        self.view_controls = ReplayViewControls(self.view_tabs, self.grouping_tabs, self.timeline)
         self.content.body.insertWidget(0, self.view_controls)
         self.chart = ReplayChart()
         self.chart.date_selected.connect(self.select_date)
         self.content.body.addWidget(self.chart)
         self.heatmap = ReplayHeatmap()
         self.heatmap.equipment_selected.connect(self.open_equipment)
+        self.heatmap.controls_ready.connect(self._attach_heatmap_controls)
         self.content.body.addWidget(self.heatmap)
         self.grouping_tabs.currentChanged.connect(lambda index: self.set_grouping(GROUPING_MODES[index][0]))
         self.view_tabs.currentChanged.connect(self._show_view)
@@ -194,10 +195,22 @@ class ReplayPage(QWidget):
     def _show_view(self, index):
         self.chart.setVisible(index == 0)
         self.heatmap.setVisible(index == 1)
+        if self.heatmap_controls is not None:
+            self.heatmap_controls.setVisible(index == 1)
         self.trend_legend_host.setVisible(index == 0 and self.grouping_mode != "group"
                                           and self.trend_legend_body.count() > 0)
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
+        if self.frame is not None:
+            self._render_frame()
+
+    def _attach_heatmap_controls(self, controls):
+        """히트맵과 같은 검색·필터 도구를 리플레이의 첫 행에 한 번만 배치한다."""
+        self.heatmap_controls = controls
+        self.heatmap.view.content.body.removeWidget(controls)
+        self.content.body.insertWidget(0, controls)
+        controls.setVisible(self.view_tabs.currentIndex() == 1)
+        controls.setEnabled(self.data is not None and not self.dirty and not self.busy)
 
     def set_grouping(self, mode):
         """추이와 히트맵에 같은 분류를 적용하며 조회 데이터는 그대로 사용한다."""
@@ -233,6 +246,8 @@ class ReplayPage(QWidget):
         self.view_tabs.setEnabled(not self.busy)
         self.grouping_tabs.setEnabled(ready)
         self.heatmap.setEnabled(ready)
+        if self.heatmap_controls is not None:
+            self.heatmap_controls.setEnabled(ready)
         self.chart.setEnabled(ready)
         self._position_playback()
 
@@ -488,11 +503,12 @@ class ReplayPage(QWidget):
     def _render_frame(self):
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
-        # 히트맵과 함께 그래프도 현재 날짜까지 실선·세로선으로 다시 그린다 (재생 시 그래프도 움직임).
-        self._draw_chart()
         frame = self.frame
         if frame is None:
             return
+        # 숨은 보기는 전환할 때 현재 시점을 표시한다. 재생 중에는 보이는 보기만 갱신한다.
+        if self.view_tabs.currentIndex() == 0:
+            self._draw_chart()
         groups = self.selected_groups() if self.grouping_mode == "group" else None
         summary, observed_count, carried_count = group_view(self.data, frame, groups)
         if summary is None:
@@ -521,7 +537,8 @@ class ReplayPage(QWidget):
             self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
             self.progress.setAccessibleDescription(value)
         self.progress.setToolTip(self.achievement.toolTip())
-        self.heatmap.show_frame(self.data, frame, groups)
+        if self.view_tabs.currentIndex() == 1:
+            self.heatmap.show_frame(self.data, frame, groups)
 
     def select_date(self, index):
         if self.data is None or self.dirty or not 0 <= index < len(self.frames):

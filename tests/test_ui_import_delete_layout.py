@@ -3,7 +3,7 @@
 from datetime import date
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLayout
 
@@ -83,17 +83,17 @@ def test_release_fields_are_adjacent_and_mode_notices_do_not_leak(own, width):
     assert page.family_box.isVisibleTo(page)
     assert page.family_box.y() == page.kind_box.y()
     assert 0 <= page.family_box.x() - page.kind_box.geometry().right() <= 17
-    assert page.listing_title.text() == "2. 삭제될 릴리즈 묶음 확인"
+    assert page.listing_title.text() == "2. 지울 릴리즈 묶음 선택"
     page.kind_combo.setCurrentIndex(0)
     QTest.qWait(20)
     assert page.quick_choices.isVisibleTo(page) and not page.kind_notice.isVisibleTo(page)
     assert page.start_box.isVisibleTo(page) and page.end_box.isVisibleTo(page)
     assert not page.family_box.isVisibleTo(page)
-    assert page.listing_title.text() == "2. 삭제될 기준일 확인"
+    assert page.listing_title.text() == "2. 지울 엑셀 선택"
 
 
 @pytest.mark.parametrize("width", [620, 1320])
-def test_quick_chips_and_separate_right_aligned_reload_match_figma(own, width):
+def test_quick_chips_match_figma_and_list_loads_without_reload_button(own, width):
     page = own(ImportDeletePage())
     page.resize(width, 1200)
     QTest.qWait(20)
@@ -101,12 +101,8 @@ def test_quick_chips_and_separate_right_aligned_reload_match_figma(own, width):
     assert [b.text() for b in page.quick_buttons] == ["가장 최근 기준일", "최근 1개월", "최근 3개월", "직접 선택"]
     assert all(b.height() == 32 and "border-radius:16px" in b.styleSheet() for b in page.quick_buttons)
     assert page.quick_buttons[-1].isChecked()
-    reload_top = page.reload_button.mapTo(page.filters_card, QPoint()).y()
-    quick_bottom = page.quick_choices.mapTo(page.filters_card, QPoint(0, page.quick_choices.height())).y()
-    assert reload_top >= quick_bottom
-    assert page.reload_button.geometry().right() == (page.filters_card.contentsRect().right()
-                                                     - page.filters_card.body.contentsMargins().right())
-    assert not page.reload_button.isCheckable()
+    assert not page.reload_button.isVisibleTo(page)  # 11-11: 목록은 화면에 들어올 때 읽는다
+    assert page.search_button.text() == "검색" and page.search_button.parentWidget() is page.quick_choices  # 직접 선택 오른쪽
     assert not page.reload() and page.catalog is None  # 배치 변경으로 외부 서비스가 연결되지 않는다.
 
 
@@ -122,6 +118,8 @@ def test_quick_date_buttons_use_catalog_ranges_and_manual_edit_changes_selection
     assert page.start.text() == "2026-07-21" and page.quick_buttons[2].isChecked()
     page.start.selectAll()
     QTest.keyClicks(page.start, "20260821")
+    page.search()
+    page.select_all.click()
     assert page.quick_buttons[-1].isChecked() and page.plan().start == date(2026, 8, 21)
     page.quick_buttons[-1].click()
     assert page.start.hasFocus()
@@ -138,6 +136,8 @@ def test_impact_groups_and_backup_tip_match_source_data_without_inventing_counts
     assert page.impact_stats.accessibleName() == page.counts.text()
     page.kind_combo.setCurrentIndex(1)
     page.family_combo.setCurrentIndex(page.family_combo.findData("C4"))
+    page.search()
+    page.checks["release"].click()
     assert [v.text() for v in page.stat_values[:2]] == ["1개", "900행"]
     assert not page.stat_boxes[2].isVisibleTo(page)
     assert page.stat_titles[0].text() == "삭제할 릴리즈 묶음"

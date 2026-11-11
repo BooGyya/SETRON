@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QSignalBlocker, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import QPoint, QSignalBlocker, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLayout, QLineEdit, QPushButton,
@@ -200,6 +200,35 @@ class TileGrid(QWidget):
         super().resizeEvent(event)
 
 
+class HeatmapColumnHeading(QFrame):
+    """헤더 띠는 유지하고 글자만 현재 보이는 그룹 영역 중앙에 둔다."""
+
+    def __init__(self, text):
+        super().__init__()
+        self.setObjectName("heatmapColumnHeading")
+        self.setToolTip(text)
+        self.caption = label(text, 14, medium=True, wrap=True)
+        self.caption.setParent(self)
+        self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.caption.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._visible_range = None
+
+    def set_visible_range(self, left, right):
+        self._visible_range = left, right
+        self._position_caption()
+
+    def _position_caption(self):
+        left, right = self._visible_range if self._visible_range is not None else (0, self.width())
+        left = max(0, min(self.width(), left))
+        right = max(left, min(self.width(), right))
+        self.caption.setGeometry(left, 4, right - left, max(0, self.height() - 8))
+        self.caption.setVisible(right > left)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_caption()
+
+
 class HeatmapGroupScroll(QScrollArea):
     """최상위 제목 아래의 열만 가로로 이동하고 설비 높이는 모두 표시한다."""
 
@@ -214,8 +243,12 @@ class HeatmapGroupScroll(QScrollArea):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(0)
+        self._headers = content.findChildren(HeatmapColumnHeading)
         self.setWidget(content)
+        if content.layout() is not None:
+            content.layout().activate()
         self._sync_height()
+        self._sync_header_positions()
 
     def minimumSizeHint(self):
         return QSize(0, self.height())
@@ -239,6 +272,23 @@ class HeatmapGroupScroll(QScrollArea):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_height()
+        self._sync_header_positions()
+
+    def scrollContentsBy(self, dx, dy):
+        super().scrollContentsBy(dx, dy)
+        self._sync_header_positions()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_header_positions()
+        QTimer.singleShot(0, self, self._sync_header_positions)
+
+    def _sync_header_positions(self):
+        viewport = self.viewport()
+        for heading in getattr(self, "_headers", ()):
+            origin = heading.mapTo(viewport, QPoint(0, 0))
+            heading.set_visible_range(max(0, -origin.x()),
+                                      min(heading.width(), viewport.width() - origin.x()))
 
 
 class HeatmapLegend(QWidget):
@@ -308,7 +358,7 @@ class HeatmapPage(QWidget):
         self.tiles, self.tile_buttons, self.tile_grids, self.tile_occurrences = (), {}, [], []
         self.visible_ids = ()
         self.selected_id = None
-        self.grouping_mode = "group"
+        self.grouping_mode = "site"
         self._show_grouping = show_grouping
         self._query_bound = True
         self._display_groups = ()
@@ -356,8 +406,7 @@ class HeatmapPage(QWidget):
         set_widget_font(self.search, font(14))
         self.search.setFixedHeight(toolbar_height)
         self.search.setMinimumWidth(220)
-        self.search.setMaximumWidth(360)
-        self.search.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.search.setStyleSheet(f"QLineEdit#heatmapSearch {{background:white;border:1px solid {LINE};border-radius:10px;"
                                   "padding:0 10px;}"
                                   f"QLineEdit#heatmapSearch:focus {{border:2px solid {PRIMARY};}}")
@@ -366,9 +415,11 @@ class HeatmapPage(QWidget):
         self.view_toggle.setObjectName("heatmapView")
         self.view_toggle.setMinimumWidth(104)
         self.hpa_button = button("HPA 표시")
+        display_border = 1
+        display_content_height = toolbar_height - 2 * display_border
         display_style = (
-            f"QPushButton {{background:white;border:1px solid {LINE};border-radius:10px;"
-            "padding:0 10px;min-height:36px;max-height:36px;}"
+            f"QPushButton {{background:white;border:{display_border}px solid {LINE};border-radius:10px;"
+            f"padding:0 10px;min-height:{display_content_height}px;max-height:{display_content_height}px;}}"
             f"QPushButton:checked {{background:{PRIMARY};border-color:{PRIMARY};color:white;}}"
             f"QPushButton:focus {{border-color:{PRIMARY};}}"
             f"QPushButton:checked:focus {{border-color:{INK};}}")
@@ -431,6 +482,7 @@ class HeatmapPage(QWidget):
         display_row.addWidget(self.view_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
         display_row.addWidget(segmented, 0, Qt.AlignmentFlag.AlignVCenter)
         controls_host = QWidget()
+        self.controls_host = controls_host
         ignore_width(controls_host)
         self.controls = QGridLayout(controls_host)
         self.controls.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
@@ -470,15 +522,15 @@ class HeatmapPage(QWidget):
         self.tile_host = QWidget()
         self.tile_body = QVBoxLayout(self.tile_host)
         self.tile_body.setContentsMargins(0, 4, 0, 0)
-        self.tile_body.setSpacing(20)
+        self.tile_body.setSpacing(16)
         self.tile_body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.tile_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.content.body.addWidget(self.tile_host)
-        self.list_model = HeatmapListModel(("설비명", "Site / 원본 구역", "모델", "설비 버전", "SW N 판정", "위험 판정"),
+        self.list_model = HeatmapListModel(("설비명", "Site / 원본 구역", "모델", "버전", "목표 달성", "위험 판정"),
                                          numeric_columns=(3,), centered=True)
         self.list_table = HeatmapTreeView(self.list_model, "히트맵 설비 목록형", (220, 150, 190, 230, 120, 160))
         self._list_style = self.list_table.property("setronOriginalStyle") or self.list_table.styleSheet()
-        self._compact_list = False
+        self._compact_list = None
         self.list_table.activated.connect(self._select_row)
         self.list_table.clicked.connect(self._select_row)
         self.list_table.hide()
@@ -505,31 +557,27 @@ class HeatmapPage(QWidget):
         spacing = self.controls.horizontalSpacing()
         filter_width = self.filter_bar.minimumSizeHint().width()
         display_width = self.display_bar.minimumSizeHint().width()
-        rows = (1 if available >= 220 + filter_width + display_width + 3 * spacing else
+        rows = (1 if available >= 220 + filter_width + display_width + 2 * spacing else
                 2 if available >= 220 + filter_width + spacing else 3)
-        search_room = (available - filter_width - display_width - 3 * spacing if rows == 1 else
-                       available - filter_width - spacing if rows == 2 else available)
-        search_width = max(220, min(360, search_room))
-        self.search.setFixedWidth(search_width)
-        self.controls.setColumnMinimumWidth(0, search_width)
+        self.controls.setColumnMinimumWidth(0, 220)
         if self._control_rows == rows:
             return
         for widget in (self.search, self.filter_bar, self.display_bar):
             self.controls.removeWidget(widget)
         if rows == 1:
-            self.controls.addWidget(self.search, 0, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.filter_bar, 0, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.display_bar, 0, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.search, 0, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.filter_bar, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.display_bar, 0, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         elif rows == 2:
-            self.controls.addWidget(self.search, 0, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.filter_bar, 0, 2, 1, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.display_bar, 1, 0, 1, 4, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.search, 0, 0, 1, 2, Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.filter_bar, 0, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.display_bar, 1, 0, 1, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         else:
-            self.controls.addWidget(self.search, 0, 0, 1, 4, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.filter_bar, 1, 0, 1, 4, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.display_bar, 2, 0, 1, 4, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        for column in range(4):
-            self.controls.setColumnStretch(column, int(column == 1))
+            self.controls.addWidget(self.search, 0, 0, 1, 3, Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.filter_bar, 1, 0, 1, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.display_bar, 2, 0, 1, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        for column in range(3):
+            self.controls.setColumnStretch(column, int(column == 0))
         self._control_rows = rows
 
     def resizeEvent(self, event):
@@ -676,8 +724,6 @@ class HeatmapPage(QWidget):
         self.grouping_bar.setVisible(self._show_grouping)
         self.hpa_button.setVisible(not list_mode and any(t.goal is GoalState.EXCLUDED for t in self.tiles))
         self._reflow()
-        previous_cards = self._card_entries
-        self._card_entries = {}
         self.group_cards = []
         self.tile_buttons, self.tile_grids, self.tile_occurrences = {}, [], []
         self.rebuilt_tiles = self.restyled_tiles = 0
@@ -706,56 +752,65 @@ class HeatmapPage(QWidget):
             plan = build_heatmap_groups(filtered, self._display_groups, mode=self.grouping_mode,
                                         site_order=tuple(site.key for site in self.source.catalog.sites),
                                         show_hpa=list_mode or self.hpa_button.isChecked())
-        expanded = self.view_toggle.isChecked()
-        if not list_mode:
-            for node in plan:
-                signature = (expanded, self._group_signature(node))
-                previous = previous_cards.get(node.key)
-                if previous is not None and previous[0] == signature:
-                    _, card, controls, grids = previous
-                    for control, (tile, families) in zip(controls, self._group_entries(node)):
-                        visual = (replace(tile, observation_date=None, findings=()), families)
-                        control.set_data(tile)
-                        if control.visual != visual:
-                            control.update_appearance(families)
-                            self.restyled_tiles += 1
-                        control.setChecked(tile.equipment_id == self.selected_id)
-                    self.tile_occurrences.extend(controls)
-                    self.tile_grids.extend(grids)
-                    for control in controls:
-                        self.tile_buttons.setdefault(control.data.equipment_id, control)
-                else:
-                    start, grid_start = len(self.tile_occurrences), len(self.tile_grids)
-                    card = self._group_card(node, expanded)
-                    controls, grids = self.tile_occurrences[start:], self.tile_grids[grid_start:]
-                    self.rebuilt_tiles += len(controls)
-                self._card_entries[node.key] = (signature, card, controls, grids)
-                self.group_cards.append(card)
-                # 기존 캔버스를 지워도 재사용할 카드는 살려 둔다.
-                card.scroll_position = card.scroll.horizontalScrollBar().value()
-                card.setParent(None)
-        while self.tile_body.count():
-            widget = self.tile_body.takeAt(0).widget()
-            widget.hide()
-            widget.deleteLater()
         if list_mode:
+            if self.snapshot is None:
+                self._card_entries = {}
+                self._sync_card_rows(())
             self._render_list(filtered, plan)
             return
-        if not self.group_cards:
-            return
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        rows = QVBoxLayout(container)
-        rows.setContentsMargins(0, 0, 0, 0)
-        rows.setSpacing(16)
-        rows.setAlignment(Qt.AlignmentFlag.AlignTop)
-        for card in self.group_cards:
-            rows.addWidget(card)
-            card.show()
-            scroll, position = card.scroll, card.scroll_position
+        previous_cards = self._card_entries
+        self._card_entries = {}
+        restore_positions = []
+        expanded = self.view_toggle.isChecked()
+        for node in plan:
+            signature = (expanded, self._group_signature(node))
+            previous = previous_cards.get(node.key)
+            if previous is not None and previous[0] == signature:
+                _, card, controls, grids = previous
+                for control, (tile, families) in zip(controls, self._group_entries(node)):
+                    visual = (replace(tile, observation_date=None, findings=()), families)
+                    if control.data != tile:
+                        control.set_data(tile)
+                    if control.visual != visual:
+                        control.update_appearance(families)
+                        self.restyled_tiles += 1
+                    control.setChecked(tile.equipment_id == self.selected_id)
+                self.tile_occurrences.extend(controls)
+                self.tile_grids.extend(grids)
+                for control in controls:
+                    self.tile_buttons.setdefault(control.data.equipment_id, control)
+            else:
+                start, grid_start = len(self.tile_occurrences), len(self.tile_grids)
+                card = self._group_card(node, expanded)
+                controls, grids = self.tile_occurrences[start:], self.tile_grids[grid_start:]
+                self.rebuilt_tiles += len(controls)
+                if previous is not None:
+                    restore_positions.append((card.scroll, previous[1].scroll.horizontalScrollBar().value()))
+            self._card_entries[node.key] = (signature, card, controls, grids)
+            self.group_cards.append(card)
+        self._sync_card_rows(self.group_cards)
+        for scroll, position in restore_positions:
             QTimer.singleShot(0, scroll, lambda scroll=scroll, position=position:
                               scroll.horizontalScrollBar().setValue(position))
-        self.tile_body.addWidget(container)
+
+    def _sync_card_rows(self, cards):
+        """같은 카드는 부모·표시 상태를 유지하고 달라진 행만 삽입·제거한다."""
+        desired = set(cards)
+        for index in range(self.tile_body.count() - 1, -1, -1):
+            card = self.tile_body.itemAt(index).widget()
+            if card not in desired:
+                self.tile_body.takeAt(index)
+                card.hide()
+                card.deleteLater()
+        for index, card in enumerate(cards):
+            current = self.tile_body.indexOf(card)
+            if current == index:
+                continue
+            if current >= 0:
+                self.tile_body.removeWidget(card)
+            self.tile_body.insertWidget(index, card)
+            if card.isHidden():
+                card.show()
 
     @classmethod
     def _group_signature(cls, node):
@@ -780,7 +835,7 @@ class HeatmapPage(QWidget):
         card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         card.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         card.body.setContentsMargins(12, 4, 12, 12)
-        card.body.setSpacing(8)
+        card.body.setSpacing(0)
         card.body.takeAt(card.body.count() - 1)  # 셀 아래로 남는 공간을 늘리던 stretch 제거
         heading = card.body.itemAt(0).widget()
         heading.setObjectName("heatmapGroupHeading")
@@ -811,20 +866,21 @@ class HeatmapPage(QWidget):
         grid.setSpacing(0)
         grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         tile_height = 0
+        boundaries = {}
 
         def add_children(parent, row, column, inherited_group):
             nonlocal tile_height
             for child in parent.children:
                 span = leaf_count(child)
+                if column:
+                    boundaries[column] = min(boundaries.get(column, row), row)
                 rows = 1 if child.children else header_rows - row
-                heading = label(child.title, 14, medium=True, wrap=True)
-                heading.setObjectName("heatmapColumnHeading")
+                heading = HeatmapColumnHeading(child.title)
                 heading.setProperty("groupKey", child.key)
-                heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                heading.setToolTip(child.title)
                 heading.setFixedSize(span * HEATMAP_CELL_SIZE.width(), rows * header_height)
                 background = "#f7f9fc" if row % 2 == 0 else "#eef2f7"
-                heading.setStyleSheet(f"background:{background};border:0;border-bottom:1px solid {LINE};padding:4px 0;")
+                heading.setStyleSheet(f"QFrame#heatmapColumnHeading {{background:{background};border:0;"
+                                     f"border-bottom:1px solid {LINE};}}")
                 grid.addWidget(heading, row, column, rows, span, Qt.AlignmentFlag.AlignTop)
                 child_group = child.group_name or inherited_group
                 if child.children:
@@ -837,6 +893,14 @@ class HeatmapPage(QWidget):
 
         add_children(node, 0, 0, group_name)
         canvas.setFixedSize(leaf_count(node) * HEATMAP_CELL_SIZE.width(), header_rows * header_height + tile_height)
+        for column, row in boundaries.items():
+            divider = QFrame(canvas)
+            divider.setObjectName("heatmapGroupDivider")
+            divider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            divider.setStyleSheet(f"background:{LINE};border:0;")
+            y = row * header_height
+            divider.setGeometry(column * HEATMAP_CELL_SIZE.width(), y, 1, canvas.height() - y)
+            divider.raise_()
         return canvas
 
     def _tile_column(self, node, expanded, group_name):
@@ -846,7 +910,7 @@ class HeatmapPage(QWidget):
             size = HEATMAP_CELL_SIZE if expanded else HEATMAP_COMPACT_CELL_SIZE
             control = TileButton(tile, expanded=expanded, families=families, cell_size=size)
             control.setChecked(tile.equipment_id == self.selected_id)
-            control.clicked.connect(lambda checked=False, eid=tile.equipment_id: self._select(eid))
+            control.clicked.connect(lambda checked=False, eid=tile.equipment_id, origin=control: self._select(eid, origin))
             self.tile_buttons.setdefault(tile.equipment_id, control)
             self.tile_occurrences.append(control)
             buttons.append(control)
@@ -865,17 +929,19 @@ class HeatmapPage(QWidget):
         table.compact = compact
         table.setWordWrap(not compact)
         table.setTextElideMode(Qt.TextElideMode.ElideRight if compact else Qt.TextElideMode.ElideNone)
-        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff if compact
-                                          else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         table.setStyleSheet(self._list_style + ("QTreeView::item {padding:3px 8px;}" if compact else ""))
         header = table.header()
-        header.setStretchLastSection(not compact)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch if compact else QHeaderView.ResizeMode.Interactive)
-        for column in (2, 3):
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        if compact:
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        table.setColumnHidden(1, True)
+        table.setColumnHidden(3, False)
+        for column in (2, 5):
             table.setColumnHidden(column, compact)
         table.horizontalScrollBar().setValue(0)
-        if not compact:
-            table.resize_columns()
+        table.resize_columns()
 
     def _render_list(self, filtered, plan):
         compact = not self.view_toggle.isChecked()
@@ -884,7 +950,8 @@ class HeatmapPage(QWidget):
         def row_values(tile, group_name):
             families = group_families(tile, group_name)
             empty_version = "분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록"
-            versions = _version_text(tile, families, show_tier=False, separator="\n", empty=empty_version)
+            versions = _version_text(tile, families, show_tier=False,
+                                     separator=" / " if compact else "\n", empty=empty_version)
             models = dict.fromkeys(family.title.partition(" · 계열 ")[0] for family in families)
             names = group_name or tile.model_name or "\n".join(models) or "—"
             position = tile.site_label, tile.area or "구역 미확인"
@@ -904,9 +971,9 @@ class HeatmapPage(QWidget):
         if index.isValid():
             equipment_id = index.data(Qt.ItemDataRole.UserRole)
             if equipment_id is not None:
-                self._select(equipment_id)
+                self._select(equipment_id, self.list_table)
 
-    def _select(self, equipment_id):
+    def _select(self, equipment_id, origin=None):
         if (self.snapshot is None or equipment_id not in self.visible_ids
                 or self._query_bound and (self.state is None or not self.state.is_current(self.snapshot.query))):
             return
@@ -915,8 +982,14 @@ class HeatmapPage(QWidget):
         self.selection_notice.setText(f"선택: {tile.code} · {tile.goal.value} · {tile.risk_label}\n"
                                       + ("설비 상세로 이동합니다." if self.detail_connected else
                                          "설비 ID 전달 완료 · 목록·상세는 6번 작업에서 연결합니다."))
-        self.equipment_selected.emit(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id,
-                                                        tile.observation_date))
+        self.selection_control = (origin if origin is not None else
+                                  self.list_table if self.layout_buttons.checkedId() == 1 else
+                                  self.tile_buttons.get(equipment_id))
+        try:
+            self.equipment_selected.emit(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id,
+                                                            tile.observation_date))
+        finally:
+            self.selection_control = None
 
     def select_equipment(self, equipment_id):
         """카드·목록의 선택 표시를 맞춘다. 선택 신호나 조회는 발생시키지 않는다."""

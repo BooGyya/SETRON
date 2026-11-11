@@ -11,6 +11,8 @@ from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QScrollArea, QVBoxLayout, QWidget
 
 from setron.ui.interval_selector import IntervalSelector
+from setron.ui.heatmap_grouping import GROUPING_MODES
+from setron.ui.replay_widgets import ReplayViewControls
 from setron.ui.view_controls import SegmentedControl, bulk_selection_button
 
 
@@ -122,3 +124,37 @@ def test_bulk_selection_button_preserves_explicit_contrast(app):
     assert control.text() == "전체 선택"
     assert "background:#000000;color:#ffffff" in control.styleSheet()
     assert "background:#000000;color:#ffffff" in control._setron_color_style({})
+
+
+@pytest.mark.parametrize("width", [1400, 480])
+def test_replay_controls_keep_one_row_and_scroll_only_inside_the_toolbar(app, width):
+    views, grouping = SegmentedControl(), SegmentedControl()
+    for text in ("달성률 추이", "히트맵"):
+        views.addTab(text)
+    for _, text in GROUPING_MODES:
+        grouping.addTab(text)
+    interval = IntervalSelector(compact=True, custom_days=True, action="재생", show_caption=False)
+    interval.set_saved_days()
+    controls = ReplayViewControls(views, grouping, interval)
+    controls.resize(width, controls.height())
+    controls.show()
+    QTest.qWait(30)
+    try:
+        assert [controls.row_body.itemAt(i).widget() for i in range(3)] == [views, grouping, interval]
+        assert views.y() == grouping.y() == interval.y()
+        assert views.geometry().right() < grouping.x() and grouping.geometry().right() < interval.x()
+        assert interval.caption_label.isHidden() and interval.width() == interval.unwrapped_width()
+        assert interval.segment.parentWidget() is interval and interval.parentWidget() is controls.row
+        assert interval.segment.grid.rowCount() == 1
+        assert controls.width() == width and controls.minimumSizeHint().width() == 0
+        assert controls.verticalScrollBar().maximum() == 0
+        assert (controls.horizontalScrollBar().maximum() > 0) == (width == 480)
+        changed = QSignalSpy(interval.step_changed)
+        interval.buttons["week"].click()
+        assert changed.count() == 1 and changed.at(0) == ["week"]
+        interval.buttons[None].click()
+        assert interval.day_dialog.parentWidget() is controls.window()
+        interval.day_dialog.reject()
+        assert interval.buttons["week"].isChecked() and changed.count() == 1
+    finally:
+        controls.close()

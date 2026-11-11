@@ -8,7 +8,7 @@
 import argparse
 import sys
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
@@ -271,7 +271,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     risk_save = RiskRuleSaveController(management_gateway, context_provider=release_refresh_context, parent=window)
     # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 고치기·더하기·지우기는 바로 DB에 반영하고
     # 같은 관리 저장 흐름(after_management_save)으로 조회 선택지와 화면을 다시 읽는다. 위험 지정은 아이템 매니저에서만 한다 (11-11).
-    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context)
+    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context,
+                                   drawer_parent=window.centralWidget())  # 변경 이력 세부 정보는 대시보드처럼 창 오른쪽에서
     # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 가져온 엑셀 삭제로 옮긴다 (같은 객체·연결 유지).
     data_page.attach_deletion(importer.deletion)
     importer.tabs.setTabVisible(1, False)
@@ -811,7 +812,17 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.catalog_changed.connect(lambda *_: ai.refresh())
     window.query_panel.targets_changed.connect(lambda *_: ai.refresh())
     window.page_changed.connect(lambda key: ai.refresh() if key == "ai" else None)
-    ai.navigate_requested.connect(window.navigate)
+    def ai_navigate(route):
+        # AI 분석의 이동 버튼. "reports:<종류>:<시작>:<끝>"이면 보고서 메뉴를 열고 종류·기간을 채운다 (11/11).
+        key, _, rest = str(route).partition(":")
+        window.navigate(key)
+        if key == "reports" and rest:
+            kind, start, end = (rest.split(":") + ["", ""])[:3]
+            try:
+                reports.open_period(kind, date.fromisoformat(start), date.fromisoformat(end))
+            except ValueError:
+                pass
+    ai.navigate_requested.connect(ai_navigate)
     importer.requery_requested.connect(lambda: window.navigate("dashboard"))
 
     def show_import_result(day, site, route):
@@ -948,6 +959,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def finish_management_save(result, catalog, preserve_detail):
         reapplied = apply_saved_catalog(catalog, reapply=True)
+        if catalog is not None:
+            configure_import_choices()  # 데이터 관리에서 추가 · 이름 변경한 Site를 가져오기 선택 목록에도 (11-11 6차)
         window.management_saving = False
         sync_export_page()
         window.management_last_success = result is not None
