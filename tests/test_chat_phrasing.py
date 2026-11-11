@@ -66,11 +66,18 @@ def _classifier_calls(client):
     return [m for m in client.calls if "질문 분류기" in m[0].content]
 
 
-def test_rules_understood_or_smalltalk_never_call_the_classifier():
+def test_smalltalk_and_quick_questions_never_call_the_planner():
+    """11/11부터 직접 입력한 질문은 AI가 먼저 계획한다. 인사말·바로 분석·예시·추천 질문만 AI 없이 규칙으로 즉시."""
+    from setron.features.chat.answers import SUGGESTIONS
     client = FakeClient({"intent": "PRIORITY", "names": [], "verdict": None})
-    Service(client).ask("C3 현황 보여줘")
-    Service(client).ask("안녕하세요")
+    service = Service(client)
+    service.quick_questions.add("어디부터 업그레이드해야 해?")
+    service.ask("안녕하세요")
+    service.ask(SUGGESTIONS[0])
+    service.ask("어디부터 업그레이드해야 해?")
     assert _classifier_calls(client) == []
+    service.ask("C3 현황 보여줘")                                          # 직접 입력한 질문은 계획한다
+    assert len(_classifier_calls(client)) == 1
 
 
 def test_not_understood_question_is_classified_then_answered_from_db():

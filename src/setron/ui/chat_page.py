@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget, QProgressBar,
 )
 
-from setron.features.chat.classify import OUT_OF_SCOPE_TITLE
+from setron.features.chat.answers import PERIOD_TITLE, UNSUPPORTED_TITLE
+from setron.features.chat.classify import CLARIFY_TITLE, OUT_OF_SCOPE_TITLE
 from setron.features.chat.report import ReportPart
 from setron.features.chat.schemas import INTENT_LABELS, BarChart, ChatAnswer, Intent, LineChart, Table
 from setron.ui.appearance import ui_color
@@ -223,6 +224,8 @@ class AnswerCard(QWidget):
         unavailable = (bool(result.request.intents) and not empty_search and not result.equipment_ids
                        and not result.charts and not result.report and not result.cause
                        and (not result.tables or not any(t.rows for t in result.tables)))
+        guide = result.title in (CLARIFY_TITLE, UNSUPPORTED_TITLE, PERIOD_TITLE)     # 자료가 없어서가 아닌 안내
+        unavailable = unavailable or (result.request.understood and guide)
         self.empty_kind = "unrecognized" if not result.request.understood else "unavailable" if unavailable else None
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -240,7 +243,11 @@ class AnswerCard(QWidget):
                       else "조건 인식 실패 · 조건을 정확히 이해하지 못했어요")
             body.addWidget(_wrap(banner, 13, name="chatIssue"))
         elif self.empty_kind == "unavailable":
-            body.addWidget(_wrap("자료 없음 · 조건은 이해했지만 해당 자료가 없어요", 13, name="chatStale"))
+            banner = {CLARIFY_TITLE: "확인 질문 · 어떤 뜻인지 아래에서 골라 주세요",
+                      UNSUPPORTED_TITLE: "지원하지 않는 요청 · 대신 할 수 있는 것을 안내해요",
+                      PERIOD_TITLE: "기간 보고서 · 아래 버튼으로 만들 수 있어요"}.get(
+                result.title, "자료 없음 · 조건은 이해했지만 해당 자료가 없어요")
+            body.addWidget(_wrap(banner, 13, name="chatStale"))
         self.intent_tags = [_tag(INTENT_LABELS[i]) for i in result.request.intents]
         recognition = flow_row([label("요청 인식", 12, medium=True, color=SECONDARY), *self.intent_tags])
         recognition.setVisible(self.empty_kind is None)
@@ -273,7 +280,9 @@ class AnswerCard(QWidget):
             if note:
                 column.addWidget(_wrap(note, 11, SECONDARY))
             chart_cards.append(holder)
-        if self.charts:
+        if len(chart_cards) == 1:
+            body.addWidget(chart_cards[0])          # 하나면 전체 폭 (줄 배치의 '마지막 칸은 오른쪽에 작게' 규칙을 피함)
+        elif self.charts:
             body.addWidget(_WrapRow(chart_cards, 360, fields=True))
         if result.cause:
             title = QHBoxLayout()
@@ -299,8 +308,16 @@ class AnswerCard(QWidget):
             body.addWidget(self.basis_body)
         if result.suggestions:
             body.addWidget(_WrapRow([_chip(question, on_question) for question in result.suggestions], 240))
-        if (unavailable or result.issues) and result.request.understood and on_navigate is not None:
-            import_button = button("데이터 가져오기")
+        self.action_buttons = []
+        if result.actions and on_navigate is not None:          # 화면 이동 (예: 보고서 메뉴를 기간을 채워 열기)
+            for index, (text, route) in enumerate(result.actions):
+                action = button(text, primary=index == 0)
+                action.clicked.connect(lambda checked=False, r=route: on_navigate(r))
+                self.action_buttons.append(action)
+            body.addWidget(flow_row(self.action_buttons))
+        self.import_button = None
+        if (unavailable or result.issues) and result.request.understood and on_navigate is not None and not guide:
+            import_button = self.import_button = button("데이터 가져오기")      # 자료가 정말 없을 때만
             import_button.clicked.connect(lambda: on_navigate("import"))
             body.addWidget(import_button, 0, Qt.AlignmentFlag.AlignLeft)
         result_actions, file_actions = [], []
@@ -598,6 +615,10 @@ class ChatPage(QWidget):
     def __init__(self, service, *, analysis_allowed=None):
         super().__init__()
         self.service = service
+        quick = getattr(service, "quick_questions", None)
+        if isinstance(quick, set):                  # 바로 분석·예시 질문은 AI 계획 없이 규칙으로 즉시 답한다
+            quick.update(text for _, with_previous, alone in QUICK for text in (with_previous, alone))
+            quick.update(FAQ)
         self.analysis_allowed = analysis_allowed or (lambda: True)
         self.previous = None
         self._conversation_mode = False
