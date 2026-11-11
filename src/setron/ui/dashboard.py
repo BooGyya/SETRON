@@ -156,6 +156,49 @@ class SplitRow(QWidget):
         super().resizeEvent(event)
 
 
+class _DashboardViewControls(QWidget):
+    """보기 탭과 추이 간격을 한 줄에 두고, 폭이 부족하면 간격만 다음 줄로 보낸다."""
+
+    def __init__(self, tabs, interval_host, interval):
+        super().__init__()
+        self.tabs, self.interval_host, self.interval = tabs, interval_host, interval
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(16)
+        self.grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.stacked = None
+        self._arrange(False)
+
+    def minimumSizeHint(self):
+        return QSize(0, self.grid.minimumSize().height())
+
+    def _arrange(self, stacked):
+        if self.stacked == stacked:
+            return
+        self.grid.removeWidget(self.tabs)
+        self.grid.removeWidget(self.interval_host)
+        self.grid.addWidget(self.tabs, 0, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        if stacked:
+            self.grid.addWidget(self.interval_host, 1, 0, 1, 2)
+        else:
+            self.grid.addWidget(self.interval_host, 0, 1)
+        self.grid.setColumnStretch(1, 1)
+        self.stacked = stacked
+        self.updateGeometry()
+
+    def refresh(self):
+        needed = self.tabs.sizeHint().width() + self.grid.horizontalSpacing() + self.interval.unwrapped_width()
+        visible = not self.interval_host.isHidden()
+        stacked = visible and self.width() < needed
+        self.grid.setColumnMinimumWidth(1, self.interval.unwrapped_width() if visible and not stacked else 0)
+        self._arrange(stacked)
+
+    def resizeEvent(self, event):
+        self.refresh()
+        super().resizeEvent(event)
+
+
 class DashboardKpi(Card):
     """VER4 대시보드 상단의 간결한 지표 카드. 첫 카드(달성률)는 강조색으로 채운다."""
 
@@ -238,7 +281,6 @@ class DashboardPage(QWidget):
         self.tabs.setStyleSheet(TAB_STYLE)
         for title in ("히트맵", "원형 그래프", "막대 그래프", "꺾은선 그래프"):
             self.tabs.addTab(title)
-        self.content.body.addWidget(self.tabs, alignment=Qt.AlignmentFlag.AlignLeft)
         self.trend_filters = QWidget()
         period_body = QVBoxLayout(self.trend_filters)
         period_body.setContentsMargins(0, 0, 0, 0)
@@ -248,14 +290,15 @@ class DashboardPage(QWidget):
         for field in self._trend_date_fields:
             field.setParent(self.trend_filters)
             field.hide()
-        self.trend_interval = IntervalSelector("데이터 간격")
+        self.trend_interval = IntervalSelector("데이터 간격", compact=True)
         period_body.addWidget(self.trend_interval)
         for control in (self.trend_start, self.trend_end):
             control.dateChanged.connect(lambda _day, edit=control: self._change_trend_date(edit))
             control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
             control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
         self.trend_interval.step_changed.connect(self._set_trend_interval)
-        self.content.body.addWidget(self.trend_filters)
+        self.view_controls = _DashboardViewControls(self.tabs, self.trend_filters, self.trend_interval)
+        self.content.body.addWidget(self.view_controls)
         self.trend_notice = label("", 13, color=SECONDARY, wrap=True)
         self.trend_notice.hide()
         self.content.body.addWidget(self.trend_notice)
@@ -538,6 +581,7 @@ class DashboardPage(QWidget):
         has_data = data is not None and bool(data.equipment_ids)
         has_analysis = has_data and bool(data.summary.equipment_count)
         self.trend_filters.setVisible(mode == 3)
+        self.view_controls.refresh()
         self.trend_filters.setEnabled(data is not None)
         self.trend_notice.setVisible(mode == 3 and has_analysis and not has_trend)
         self.trend_notice.setText(trend_problem or "선택한 기간에 달성률을 계산할 수 있는 관측 자료가 없습니다.")

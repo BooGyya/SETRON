@@ -5,7 +5,7 @@ from dataclasses import replace
 from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QSizePolicy,
+    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu, QPushButton, QSizePolicy, QSpacerItem,
     QStyle, QStyledItemDelegate, QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
@@ -429,6 +429,7 @@ class ItemsPage(QWidget):
         for layout in (listing, detail):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(16)
+        detail.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         # SW 계열은 드롭다운으로 고른다. 계열 수가 늘어도 툴바 높이가 변하지 않는다.
         self.family_combo = ComboBox()
         set_widget_font(self.family_combo, font(14))
@@ -470,6 +471,8 @@ class ItemsPage(QWidget):
         card = Card(padding=24)
         self.results_card = card
         card.body.setContentsMargins(24, 20, 24, 20)
+        card.body.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        card.setMaximumHeight(16777215)
         self.count = label("검색 결과", 16, medium=True)
         set_widget_font(self.count, font(18, medium=True))
         self.count.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
@@ -501,7 +504,9 @@ class ItemsPage(QWidget):
         self.result_rows = QVBoxLayout(self.result_host)
         self.result_rows.setContentsMargins(0, 0, 0, 0)
         self.result_rows.setSpacing(0)
-        self.result_rows.addStretch(1)
+        self.result_rows.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.page_filler = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
+        self.result_rows.addSpacerItem(self.page_filler)
         card.body.addWidget(self.result_host)
         self.result_buttons = {}
         self.row_pool = []
@@ -543,6 +548,7 @@ class ItemsPage(QWidget):
         inline = QVBoxLayout(self.inline_box)
         inline.setContentsMargins(18, 16, 16, 14)
         inline.setSpacing(12)
+        inline.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         tones = {Application.APPLIED: "success", Application.NOT_APPLIED: "danger", Application.UNKNOWN: "warning"}
         self.summary_badges = {state: StatusBadge("", tones.get(state, "neutral")) for state in APPLICATION_LABELS}
@@ -579,6 +585,7 @@ class ItemsPage(QWidget):
         application_body = QVBoxLayout(self.application_details)
         application_body.setContentsMargins(0, 0, 0, 0)
         application_body.setSpacing(8)
+        application_body.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.full_detail.body.addWidget(self.application_details)
         application_body.addWidget(label("설비별 적용 현황", 16, medium=True))
         # 자료가 없을 때는 필터·집계 대신 이 안내 한 블록만 보인다.
@@ -648,10 +655,10 @@ class ItemsPage(QWidget):
 
     def _set_mode(self, mode):
         self.mode = mode
+        self.detail_view.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                       QSizePolicy.Policy.Minimum if mode == "detail" else QSizePolicy.Policy.Ignored)
         self._place_detail()
         self.detail_view.setVisible(mode == "detail")
-        self.detail_view.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                       QSizePolicy.Policy.Preferred if mode == "detail" else QSizePolicy.Policy.Ignored)
         self.mode_changed.emit(mode)
 
     def open_registered_rule(self, rule_id):
@@ -989,7 +996,11 @@ class ItemsPage(QWidget):
             control.hide()
             control.setChecked(False)
         row_height = self.row_pool[0].sizeHint().height() if self.row_pool else 0
-        self.result_host.setMinimumHeight(self.page_size * row_height if pages > 1 else 0)
+        # 짧은 마지막 페이지의 여백만 예약한다. 상세 높이는 실제 레이아웃에서 그대로 더한다.
+        missing_rows = self.page_size - len(self.visible_entries) if pages > 1 else 0
+        self.page_filler.changeSize(0, missing_rows * row_height,
+                                    QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
+        self.result_rows.invalidate()
         self.result_host.setVisible(bool(found))
         self._place_detail()
         no_release = bool(self.data and self.family_id is not None and family_name
