@@ -598,54 +598,93 @@ class DataAdminService:
         return created["batch_id"]
 
     # --- 릴리즈노트 추가 (11-11) -----------------------------------------------------------------
-    def add_release_version(self, family_id, version_raw, released_at=None) -> int:
-        """계열에 새 버전을 더한다. 순서는 맨 끝(기존 최대 + 10)이고, 같은 원문의 설비 SW 중 연결이 없는 것은 이 버전에 잇는다."""
-        from setron.features.release.schemas import ReleaseInput
+    def _release_service(self):
         from setron.features.release.service import ReleaseService
+
+        return ReleaseService(self.storage)
+
+    def _add_version_in(self, tx, family_id, version_raw, released_at=None, *, journal=True):
+        from setron.features.release.schemas import ReleaseInput
 
         version_raw = (version_raw or "").strip()
         require(bool(version_raw), "버전명을 적어 주세요.")
-        with self.storage.transaction() as tx:
-            current = self.rows.rows(tx, "release_version", family_id=family_id)
-            require(all(_text(r["version_raw"]) != version_raw for r in current), f"'{version_raw}'은(는) 이미 있는 버전입니다.")
-            orders = [r["version_order"] for r in current if r.get("version_order") is not None]
-            detail = ReleaseService(self.storage).register_release_in(tx, ReleaseInput(
-                family_id=family_id, version_raw=version_raw, released_at=released_at,
-                version_order=max(orders) + 10 if orders else None))
-            release_id = detail.release.current["release_version_id"]
-            for snapshot_version in self.rows.rows(tx, "equipment_version", family_id=family_id):
-                if snapshot_version.get("release_version_id") is None and _text(snapshot_version["version_raw"]) == version_raw:
-                    tx.update("equipment_version", {"equipment_version_id": snapshot_version["equipment_version_id"]},
-                              {"release_version_id": release_id})
+        current = self.rows.rows(tx, "release_version", family_id=family_id)
+        require(all(_text(r["version_raw"]) != version_raw for r in current), f"'{version_raw}'은(는) 이미 있는 버전입니다.")
+        orders = [r["version_order"] for r in current if r.get("version_order") is not None]
+        detail = self._release_service().register_release_in(tx, ReleaseInput(
+            family_id=family_id, version_raw=version_raw, released_at=released_at,
+            version_order=max(orders) + 10 if orders else None))
+        release_id = detail.release.current["release_version_id"]
+        self._relink(tx, family_id, version_raw, release_id)
+        if journal:
             tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_create": {
                 "table": "release_version", "values": {"label": version_raw, "release_version_id": release_id}}}})
         return release_id
 
-    def add_release_item(self, release_version_id, content, item_no=None, group_ids=None) -> int:
-        """버전에 새 Item을 더한다. 적용 모델을 적지 않으면 '전체 설비'로 둔다 (11-11 팀 결정과 같은 기본값)."""
-        from setron.features.release.schemas import ItemInput, ItemLinkInput
+    def _relink(self, tx, family_id, version_raw, release_id):
+        """같은 계열 · 같은 원문인데 릴리즈 연결이 없는 설비 SW를 이 버전에 잇는다."""
+        for snapshot_version in self.rows.rows(tx, "equipment_version", family_id=family_id):
+            if snapshot_version.get("release_version_id") is None and _text(snapshot_version["version_raw"]) == version_raw:
+                tx.update("equipment_version", {"equipment_version_id": snapshot_version["equipment_version_id"]},
+                          {"release_version_id": release_id})
+
+    def _add_item_in(self, tx, release_version_id, content, group_ids=None, item_no=None):
         from setron.features.item.schemas import ItemState, TargetScope
-        from setron.features.release.service import ReleaseService
+        from setron.features.release.schemas import ItemInput, ItemLinkInput
+        from setron.features.release.validation import prepare_record
 
         content = (content or "").strip()
         require(bool(content), "Item 내용을 적어 주세요.")
         if item_no is None:  # 번호는 적지 않고 그 버전의 맨 뒤 번호 다음 (순서는 끌어서 바꾼다)
-            with self.storage.transaction() as tx:
-                numbers = [tx.get("item", {"item_id": link["item_id"]}).get("item_no") for link in
-                           self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)]
+            numbers = [tx.get("item", {"item_id": link["item_id"]}).get("item_no") for link in
+                       self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)]
             item_no = max((n for n in numbers if isinstance(n, int)), default=0) + 1
-        service = ReleaseService(self.storage)
-        item = service.register_item(release_version_id, ItemInput(content=content, item_no=item_no))
-        item_id = item.current["item_id"]
+        service = self._release_service()
+        release = service.repository.get(tx, "release_version", {"release_version_id": release_version_id}, lock=True)
+        item = service._insert(tx, "item", prepare_record(ItemInput(content=content, item_no=item_no)), {})
         ids = tuple(group_ids or ())
-        service.save_item_links(release_version_id, (ItemLinkInput(
-            item_id=item_id, item_state=ItemState.APPLIED, target_scope=TargetScope.LISTED if ids else TargetScope.ALL,
-            target_group_ids=ids),))
+        service._link(tx, release, ItemLinkInput(item_id=item["item_id"], item_state=ItemState.APPLIED,
+                                                 target_scope=TargetScope.LISTED if ids else TargetScope.ALL,
+                                                 target_group_ids=ids))
+        tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_create": {
+            "table": "item", "values": {"label": content[:40], "item_id": item["item_id"],
+                                        "release_version_id": release_version_id}}}})
+        return item["item_id"]
+
+    def add_release_version(self, family_id, version_raw, released_at=None) -> int:
+        """계열에 새 버전을 더한다. 순서는 맨 끝(기존 최대 + 10)이고, 같은 원문의 설비 SW 중 연결이 없는 것은 이 버전에 잇는다."""
         with self.storage.transaction() as tx:
-            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_create": {
-                "table": "item", "values": {"label": content[:40], "item_id": item_id,
-                                            "release_version_id": release_version_id}}}})
-        return item_id
+            return self._add_version_in(tx, family_id, version_raw, released_at)
+
+    def add_release_item(self, release_version_id, content, item_no=None, group_ids=None) -> int:
+        """버전에 새 Item을 더한다. 적용 모델을 적지 않으면 '전체 설비'로 둔다 (11-11 팀 결정과 같은 기본값)."""
+        with self.storage.transaction() as tx:
+            return self._add_item_in(tx, release_version_id, content, group_ids, item_no)
+
+    def _delete_release_in(self, tx, release_version_id, item_id=None, *, undo=False):
+        """릴리즈 줄 하나를 지우고 되살릴 수 있게 지운 버전 · Item · 연결 전체를 기록에 남긴다. 기록 ID를 돌려준다."""
+        release = tx.get("release_version", {"release_version_id": release_version_id})
+        links = self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)
+        targets = [link for link in links if item_id is None or link["item_id"] == item_id]
+        require(bool(targets) or item_id is None, "이미 지운 Item입니다. 다시 읽어 주세요.")
+        removed = []
+        for link in targets:
+            item = tx.get("item", {"item_id": link["item_id"]})
+            tx.repository.delete(tx.session, "release_version_item",
+                                 {"release_version_id": release_version_id, "item_id": link["item_id"]})
+            shared = bool(self.rows.rows(tx, "release_version_item", item_id=link["item_id"]))
+            removed.append({"item_id": link["item_id"], "item_no": item.get("item_no"), "content": _text(item.get("content")),
+                            "item": _plain(item), "link": _plain(link), "kept": shared})
+            if not shared:
+                tx.delete_release_item(link["item_id"])
+        if item_id is None:
+            tx.delete_release_version(release_version_id)
+        label = _text(release["version_raw"]) + (f" · Item {removed[0]['content'][:30]}" if item_id is not None else "")
+        journal = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_delete_release": {
+            "release_version_id": release_version_id, "family_id": release["family_id"], "version_raw": _text(release["version_raw"]),
+            "item_id": item_id, "items": removed, "label": label, "release": _plain(release) if item_id is None else None,
+            **({"undo": True} if undo else {})}}})
+        return journal["batch_id"]
 
     def delete_release_rows(self, release_version_id, item_id=None) -> str:
         """릴리즈노트 줄 삭제. ``item_id``가 있으면 그 버전에서 Item 하나를, 없으면 버전과 그 Item 연결을 모두 지운다.
@@ -657,43 +696,115 @@ class DataAdminService:
         - 지운 줄 이름 (안내용).
         """
         with self.storage.transaction() as tx:
-            release = tx.get("release_version", {"release_version_id": release_version_id})
-            links = self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)
-            targets = [link for link in links if item_id is None or link["item_id"] == item_id]
-            require(bool(targets) or item_id is None, "이미 지운 Item입니다. 다시 읽어 주세요.")
-            removed = []
-            for link in targets:
-                item = tx.get("item", {"item_id": link["item_id"]})
-                removed.append({"item_id": link["item_id"], "item_no": item.get("item_no"), "content": _text(item.get("content"))})
-                tx.repository.delete(tx.session, "release_version_item",
-                                     {"release_version_id": release_version_id, "item_id": link["item_id"]})
-                if not self.rows.rows(tx, "release_version_item", item_id=link["item_id"]):
-                    tx.delete_release_item(link["item_id"])
-            if item_id is None:
-                tx.delete_release_version(release_version_id)
-            label = _text(release["version_raw"]) + (f" · Item {removed[0]['content'][:30]}" if item_id is not None else "")
-            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_delete_release": {
-                "release_version_id": release_version_id, "family_id": release["family_id"], "version_raw": _text(release["version_raw"]),
-                "item_id": item_id, "items": removed, "label": label}}})
-        return label
+            journal = self._delete_release_in(tx, release_version_id, item_id)
+            return _raw(tx.get("import_batch", {"batch_id": journal})["raw_data"])["management_delete_release"]["label"]
 
-    def reorder_items(self, release_version_id, item_ids) -> None:
-        """버전 안 Item 순서를 바꾼다 (끌어서 놓기). 주어진 순서대로 Item 번호를 1부터 다시 매긴다."""
+    def _restore_release_in(self, tx, journal_id):
+        """릴리즈 줄 삭제 기록 하나를 되살린다. 버전 · Item은 새 ID로 다시 넣고 같은 연결 상태 · 적용 모델을 잇는다.
+
+        위험 지정의 연결은 되살리지 않는다(삭제 때 '연결 미확인'으로 바뀐 그대로).
+        """
+        removed = _raw(tx.get("import_batch", {"batch_id": journal_id}).get("raw_data")).get("management_delete_release")
+        require(isinstance(removed, dict), "되살릴 릴리즈 삭제 기록이 아닙니다.")
+        require(all(value.get("batch_id") != journal_id for _, value in self._journals(tx, "management_restore_release")),
+                "이미 되살린 삭제입니다.")
+        release_id = removed["release_version_id"]
+        if removed.get("release"):
+            values = {k: v for k, v in removed["release"].items() if k != "release_version_id"}
+            if values.get("released_at"):
+                values["released_at"] = date.fromisoformat(values["released_at"][:10])
+            require(all(_text(r["version_raw"]) != values["version_raw"]
+                        for r in self.rows.rows(tx, "release_version", family_id=values["family_id"])),
+                    f"'{values['version_raw']}' 버전이 다시 생겨 되살릴 수 없습니다.")
+            release_id = tx.insert("release_version", values)["release_version_id"]
+            self._relink(tx, values["family_id"], values["version_raw"], release_id)
+        for entry in removed.get("items") or ():
+            item_id = entry["item_id"]
+            if not entry.get("kept"):
+                values = {k: v for k, v in entry["item"].items() if k != "item_id"}
+                item_id = tx.insert("item", values)["item_id"]
+            link = {k: v for k, v in entry["link"].items() if k not in ("release_version_id", "item_id")}
+            tx.insert("release_version_item", {"release_version_id": release_id, "item_id": item_id, **link})
+        tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_restore_release": {
+            "batch_id": journal_id, "label": removed.get("label"), "release_version_id": release_id}}})
+        return release_id
+
+    def _item_order(self, tx, release_version_id):
+        links = self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)
+        numbered = [(tx.get("item", {"item_id": link["item_id"]}).get("item_no"), link["item_id"]) for link in links]
+        return [item_id for _, item_id in sorted(numbered, key=lambda pair: (pair[0] is None, pair[0] or 0, pair[1]))]
+
+    def _reorder_in(self, tx, release_version_id, item_ids, *, journal=True):
         ids = [int(i) for i in item_ids]
-        with self.storage.transaction() as tx:
-            links = {link["item_id"] for link in self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)}
-            require(set(ids) == links and len(ids) == len(links), "Item 목록이 바뀌었습니다. 다시 읽어 주세요.")
-            before = []
-            for number, item_id in enumerate(ids, 1):
-                item = tx.get("item", {"item_id": item_id})
-                before.append((item.get("item_no"), _text(item.get("content"))[:20]))
-                if item.get("item_no") != number:
-                    tx.update("item", {"item_id": item_id}, {"item_no": number})
+        links = {link["item_id"] for link in self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)}
+        require(set(ids) == links and len(ids) == len(links), "Item 목록이 바뀌었습니다. 다시 읽어 주세요.")
+        before = []
+        for number, item_id in enumerate(ids, 1):
+            item = tx.get("item", {"item_id": item_id})
+            before.append((item.get("item_no"), _text(item.get("content"))[:20]))
+            if item.get("item_no") != number:
+                tx.update("item", {"item_id": item_id}, {"item_no": number})
+        if journal:
             release = tx.get("release_version", {"release_version_id": release_version_id})
             tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_reorder": {
                 "release_version_id": release_version_id, "version_raw": _text(release["version_raw"]),
                 "before": [f"{n}. {c}" for n, c in sorted(before, key=lambda pair: (pair[0] is None, pair[0] or 0))],
                 "after": [f"{i}. {c}" for i, (_, c) in enumerate(before, 1)]}}})
+
+    def reorder_items(self, release_version_id, item_ids) -> None:
+        """버전 안 Item 순서를 바꾼다 (끌어서 놓기). 주어진 순서대로 Item 번호를 1부터 다시 매긴다."""
+        with self.storage.transaction() as tx:
+            self._reorder_in(tx, release_version_id, item_ids)
+
+    def apply_release(self, family_id, plan) -> dict:
+        """릴리즈노트 [저장]의 버전 · Item 추가, Item 순서, 삭제를 한 트랜잭션으로 반영한다 (11-11 5차).
+
+        param
+        - plan: {"add_versions": [{"temp", "version_raw", "released_at"}], "add_items": [{"temp", "release", "content",
+          "group_ids"}] ("release"는 릴리즈 ID나 새 버전의 temp), "orders": {릴리즈 ID 또는 temp: [Item ID 또는 새 Item temp]},
+          "delete_items": [(릴리즈 ID, Item ID)], "delete_versions": [릴리즈 ID]}
+
+        return
+        - 되돌리기 정보 {"versions": [...], "items": [(릴리즈 ID, Item ID)], "journals": [...], "orders": {릴리즈 ID: 이전 순서}}
+        """
+        undo = {"versions": [], "items": [], "journals": [], "orders": {}}
+        with self.storage.transaction() as tx:
+            temps = {}
+            for version in plan.get("add_versions") or ():
+                released = version.get("released_at")
+                temps[version["temp"]] = self._add_version_in(
+                    tx, family_id, version["version_raw"], date.fromisoformat(released) if isinstance(released, str) and released
+                    else released or None)
+                undo["versions"].append(temps[version["temp"]])
+            for item in plan.get("add_items") or ():
+                release = temps.get(item["release"], item["release"])
+                temps[item["temp"]] = self._add_item_in(tx, release, item["content"], item.get("group_ids"))
+                if release not in undo["versions"]:
+                    undo["items"].append((release, temps[item["temp"]]))
+            for key, order in (plan.get("orders") or {}).items():
+                release = temps.get(key, key)
+                if release not in undo["versions"]:
+                    undo["orders"][release] = self._item_order(tx, release)
+                self._reorder_in(tx, release, [temps.get(i, i) for i in order])
+            for release, item_id in plan.get("delete_items") or ():
+                undo["journals"].append(self._delete_release_in(tx, release, item_id))
+            for release in plan.get("delete_versions") or ():
+                undo["journals"].append(self._delete_release_in(tx, release))
+        return undo
+
+    def undo_release(self, undo) -> None:
+        """:meth:`apply_release`로 반영한 추가 · 순서 · 삭제를 한 트랜잭션으로 되돌린다 (추가한 것은 지우고 지운 것은 되살린다)."""
+        with self.storage.transaction() as tx:
+            for release, item_id in undo.get("items") or ():
+                self._delete_release_in(tx, release, item_id, undo=True)
+            for release in undo.get("versions") or ():
+                self._delete_release_in(tx, release, undo=True)
+            for journal in reversed(undo.get("journals") or ()):
+                self._restore_release_in(tx, journal)
+            for release, order in (undo.get("orders") or {}).items():
+                current = set(self._item_order(tx, release))
+                if current and set(order) == current:  # 지웠다 되살린 Item(새 ID)이 섞였으면 번호 순서를 그대로 둔다
+                    self._reorder_in(tx, release, order, journal=False)
 
     # --- 설비·설비군 -------------------------------------------------------------------
     def equipment_overview(self) -> tuple[tuple[GroupRow, ...], tuple[EquipmentRow, ...]]:
@@ -911,8 +1022,12 @@ class DataAdminService:
                     batch["batch_id"], at, "삭제", "release_version_item" if dropped.get("item_id") else "release_version",
                     {}, _text(dropped.get("label")), "릴리즈 Item" if dropped.get("item_id") else "릴리즈 버전",
                     " · ".join(f"{i.get('item_no') or '-'}. {i.get('content', '')[:20]}" for i in items[:3])
-                    + (f" 외 {len(items) - 3}개" if len(items) > 3 else "") or _text(dropped.get("version_raw")), "삭제",
-                    None, None, None))
+                    + (f" 외 {len(items) - 3}개" if len(items) > 3 else "") or _text(dropped.get("version_raw")),
+                    "추가 취소" if dropped.get("undo") else "삭제", None, None, None))
+            revived = raw.get("management_restore_release")
+            if isinstance(revived, dict):
+                result.append(HistoryEntry(batch["batch_id"], at, "되돌리기", "release_version", {}, _text(revived.get("label")),
+                                           "릴리즈 줄", "삭제", "되살림", None, None, None))
             reordered = raw.get("management_reorder")
             if isinstance(reordered, dict):
                 result.append(HistoryEntry(

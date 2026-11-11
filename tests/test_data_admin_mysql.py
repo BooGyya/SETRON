@@ -226,3 +226,35 @@ def test_release_rows_newest_first_reorder_and_delete(storage):
     assert all(r.release_version_id != old for r in service.release_rows(family))
     kinds = [(e.kind, e.field) for e in service.history()[:4]]
     assert ("삭제", "릴리즈 버전") in kinds and ("삭제", "릴리즈 Item") in kinds and ("수정", "Item 순서") in kinds
+
+
+def test_apply_release_in_one_transaction_and_undo_release_brings_deleted_rows_back(storage):
+    service = DataAdminService(storage)
+    family = _c4_family(storage)
+    base = service.add_release_version(family, "v9.1.0.1", date(2026, 3, 1))
+    first = service.add_release_item(base, "남길 Item")
+    second = service.add_release_item(base, "지울 Item")
+    old = service.add_release_version(family, "v9.1.0.0", date(2026, 2, 1))
+    service.add_release_item(old, "버전과 함께 지울 Item")
+    undo = service.apply_release(family, {
+        "add_versions": [{"temp": "v", "version_raw": "v9.1.0.2", "released_at": "2026-04-01"}],
+        "add_items": [{"temp": "a", "release": "v", "content": "새 버전 Item", "group_ids": None},
+                      {"temp": "b", "release": base, "content": "기존 버전 새 Item", "group_ids": None}],
+        "orders": {base: ["b", first, second]}, "delete_items": [(base, second)], "delete_versions": [old]})
+    rows = service.release_rows(family)
+    assert [(r.item_no, r.content) for r in rows if r.release_version_id == base] == [("1", "기존 버전 새 Item"), ("2", "남길 Item")]
+    assert all(r.release_version_id != old for r in rows)
+    added = next(r.release_version_id for r in rows if r.version_raw == "v9.1.0.2")
+    assert undo["versions"] == [added] and len(undo["journals"]) == 2 and base in undo["orders"]
+    with pytest.raises(StorageValidationError):  # 한 트랜잭션: 틀린 요청은 아무것도 바꾸지 않는다
+        service.apply_release(family, {"add_versions": [{"temp": "x", "version_raw": "v9.1.0.3"}],
+                                       "delete_items": [(base, 999999)]})
+    assert all(r.version_raw != "v9.1.0.3" for r in service.release_rows(family))
+    service.undo_release(undo)
+    rows = service.release_rows(family)
+    assert all(r.version_raw != "v9.1.0.2" for r in rows)  # 추가한 버전은 지운다
+    restored = next(r.release_version_id for r in rows if r.version_raw == "v9.1.0.0")
+    assert [r.content for r in rows if r.release_version_id == restored] == ["버전과 함께 지울 Item"]  # 지운 버전은 되살린다
+    assert sorted(r.content for r in rows if r.release_version_id == base) == ["남길 Item", "지울 Item"]
+    kinds = [(e.kind, e.after) for e in service.history()[:6]]
+    assert ("되돌리기", "되살림") in kinds and ("삭제", "추가 취소") in kinds
