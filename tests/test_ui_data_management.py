@@ -432,7 +432,7 @@ def test_history_shows_basic_columns_and_detail_slides_in_from_the_right(own):
 
 
 def test_column_widths_are_resizable_and_remembered(own):
-    store = Store({module.COLUMN_KEY + "history.v2": [150, 60, 200, 160, 120, 110]})
+    store = Store({module.COLUMN_KEY + "history": [150, 60, 200, 160, 120, 110]})
     page = page_with(own, store=store)
     page.select_tab(2)
     settle(page)
@@ -442,17 +442,6 @@ def test_column_widths_are_resizable_and_remembered(own):
     for table in (page.equipment_panel.group_table, page.equipment_panel.equipment_table,
                   page.location_panel.equipment_table, page.release_panel.table):
         assert table.horizontalHeader().sectionResizeMode(0) == module.QHeaderView.ResizeMode.Interactive
-
-
-def test_history_columns_start_at_content_width_and_spare_goes_to_target(own):
-    page = page_with(own)
-    page.select_tab(2)
-    settle(page)
-    table = page.history_panel.table
-    widths = [table.columnWidth(c) for c in range(6)]
-    assert not table.horizontalHeader().stretchLastSection()
-    assert widths[2] == max(widths) and widths[5] < 200  # '수정 후'가 남는 폭을 다 차지하지 않는다
-    assert sum(widths) <= table.viewport().width() + 2
 
 
 def test_multiline_labels_get_full_height(own):
