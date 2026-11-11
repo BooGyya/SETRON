@@ -4,8 +4,9 @@
 DB 자료를 본다. '조회 적용'을 누를 때마다 DB를 다시 읽어 가져오기로 저장한 자료가 바로 반영된다.
 
 정한 규칙
-- 조회 선택지(Site·설비군)는 앱 시작 시의 VER3 선택지를 그대로 쓴다. Site는 이름이 같을 때만, 설비군은
-  :data:`GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않는 현황은 빼고 건수를 안내한다.
+- 조회 선택지(Site·설비군)는 VER3 선택지에 DB 자료를 더해 만든다. Site는 이름이 같을 때만, 설비군은
+  :data:`GROUP_MODELS`의 등록 모델 이름(개조형은 상위 설비군)으로 연결한다. 데이터 관리에서 등록한 새 설비군·Site는
+  선택지로 덧붙인다 (11-11). 연결되지 않는 현황은 빼고 건수를 안내한다.
 - HPA는 모델의 analysis_enabled = false로만 판단한다 (:func:`read_equipment_records`).
 - 목표 N은 조회 조건으로 유지하고, 모델별 적용 근거는 DB의 현재 릴리즈로 다시 확인한다.
   저장된 위험 지정을 현재 관측에 적용하며 기준이 없으면 미확인으로 표시한다.
@@ -20,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from threading import RLock
 
+from setron.features.data_admin.service import registered_sites
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.read import read_equipment_record
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
@@ -33,7 +35,7 @@ from setron.features.targets.service import TargetService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import DatabaseError
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, RiskRuleState, family_name, model_name
-from setron.ui.query_state import FabOption, LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
+from setron.ui.query_state import FabOption, GroupOption, LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
 from setron.ui.target_data import target_pairs
 from setron.ui.version_data import ItemEntry, ModelFamily, ReleaseEntry, SourceReference, VersionCatalog
 
@@ -45,31 +47,66 @@ GROUP_MODELS = {
 SOURCE_LABEL = "MySQL DB 저장 자료 · 조회 적용 시 목표 N·위험 기준 재확인"
 
 
-def database_catalog(snapshots, model_names=None) -> QueryCatalog:
+def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_sites=()) -> QueryCatalog:
     """저장된 현황의 실제 Site·Line으로 조회 선택지를 만든다.
 
-    - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site를 이름 그대로 덧붙인다.
+    - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site와 데이터 관리에서 등록한 Site(``extra_sites``)를
+      이름 그대로 덧붙인다. 등록만 하고 관측이 없는 Site도 선택지에 보인다 (11-11).
     - Fab: 저장된 production_area의 Memory/Foundry이며 Site 공통 선택지다.
     - Line: 관측된 (Site, Fab, Line) 조합. 생산 영역이 없는 기존 키는 유지한다.
     - 설비군: VER3 선택지 중 :data:`GROUP_MODELS`의 모델이 DB에 등록된 것만 둔다 (``model_names``).
       등록 모델이 없는 설비군(예: Inline Ox·Cluster Ox)은 골라도 항상 0대라 빼고, ``model_names``가 없으면 모두 둔다.
+      데이터 관리에서 등록한 새 기본형 설비군(``extra_groups``, :func:`registered_group_options`)은 같은 분류 뒤에 넣는다.
     """
     snapshots = tuple(snapshots)
     base = preview_catalog()
     known = {option.label for option in base.sites}
-    extra = sorted({value.site for value in snapshots if value.site and value.site not in known})
+    extra = sorted({value.site for value in snapshots if value.site and value.site not in known}
+                   | {name for name in extra_sites if name and name not in known})
     sites = (*base.sites, *(SiteOption(name, name) for name in extra))
     keys = {option.label: option.key for option in sites}
     lines = sorted({(keys[value.site], value.production_area, value.line) for value in snapshots
                     if value.site in keys and value.line}, key=lambda value: (value[0], value[1] or "", value[2]))
+    groups = [option for option in base.groups if model_names is None
+              or any(name in model_names for name in GROUP_MODELS.get(option.key, ()))]
+    for option in extra_groups:
+        same = [i for i, known_option in enumerate(groups) if known_option.category == option.category]
+        groups.insert(same[-1] + 1 if same else len(groups), option)
     return QueryCatalog(
         sites=sites,
         fabs=(FabOption("MEMORY", "Memory", None), FabOption("FOUNDRY", "Foundry", None)),
         lines=tuple(LineOption(_line_key(site, fab, line), line, site, fab) for site, fab, line in lines),
-        groups=tuple(option for option in base.groups if model_names is None
-                     or any(name in model_names for name in GROUP_MODELS.get(option.key, ()))),
+        groups=tuple(groups),
         source_label="DB 저장 현황의 Site·Fab(Memory/Foundry)·Line",
     )
+
+
+def group_keys(groups) -> dict:
+    """DB 설비군 ID → 조회 설비군 키.
+
+    :data:`GROUP_MODELS`에 이름이 있으면 그 키, 없으면 상위 설비군(개조형의 기본형)의 키를 따른다.
+    둘 다 없으면 데이터 관리에서 새로 등록한 기본형이므로 ``group-<ID>``로 따로 둔다 (11-11).
+    """
+    named = {name: key for key, names in GROUP_MODELS.items() for name in names}
+    by_id = {row["group_id"]: row for row in groups}
+
+    def key_of(row, seen):
+        if row["group_name"] in named:
+            return named[row["group_name"]]
+        parent = by_id.get(row.get("parent_group_id"))
+        if parent is not None and parent["group_id"] not in seen:
+            return key_of(parent, seen | {row["group_id"]})
+        return f"group-{row['group_id']}"
+
+    return {row["group_id"]: key_of(row, frozenset()) for row in groups}
+
+
+def registered_group_options(groups, keys) -> tuple[GroupOption, ...]:
+    """:data:`GROUP_MODELS`로 연결되지 않는 분석 대상 기본형 설비군(POLY·OXIDE·KCTC)의 조회 선택지."""
+    return tuple(GroupOption(keys[row["group_id"]], row["group_name"], row["category"]) for row in sorted(
+        groups, key=lambda row: row["group_id"])
+        if keys[row["group_id"]] == f"group-{row['group_id']}" and row["category"] in ("POLY", "OXIDE", "KCTC")
+        and row["analysis_enabled"])
 
 
 def _line_key(site, fab, line):
@@ -100,14 +137,14 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         target_catalog = TargetService(None).read_in(tx, pairs, {pair: None for pair in pairs})
         # 노후도 기간 기준 (BE-016). 저장값이 잘못되면 None이며 화면은 '기준 설정 오류'로 보인다.
         age_thresholds = thresholds_in(tx).thresholds
-    catalog = catalog or database_catalog(stored, {group["group_name"] for group in groups})
+        extra_sites = registered_sites(tx)
+    keys = group_keys(groups)
+    catalog = catalog or database_catalog(stored, {group["group_name"] for group in groups},
+                                          extra_groups=registered_group_options(groups, keys), extra_sites=extra_sites)
 
-    by_name = {}
-    for group in groups:
-        by_name.setdefault(group["group_name"], []).append(group["group_id"])
-    bindings = tuple(GroupBinding(option.key, tuple(sorted(
-        gid for name in GROUP_MODELS.get(option.key, ()) for gid in by_name.get(name, ()))))
-        for option in catalog.groups)
+    # 개조형은 상위 설비군의 선택지에 함께 묶는다 (데이터 관리에서 등록한 개조형 포함, 11-11).
+    bindings = tuple(GroupBinding(option.key, tuple(sorted(gid for gid, key in keys.items() if key == option.key)))
+                     for option in catalog.groups)
     bound = {gid for binding in bindings for gid in binding.model_ids}
     excluded = {g["group_id"] for g in groups if not g["analysis_enabled"]}
 
