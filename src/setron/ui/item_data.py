@@ -6,6 +6,7 @@ from datetime import date
 from setron.features.aggregation.schemas import EquipmentRecord
 from setron.features.item.schemas import Application, BASIS_LABELS, TargetScope
 from setron.features.item.service import ItemCatalog, search_items
+from setron.ui.item_original import jira_by_item
 from setron.ui.version_data import VersionCatalog
 
 
@@ -51,7 +52,20 @@ class ItemManagerData:
         found = search_items(items, query, match_words=True) if query.strip() else sorted(
             items, key=lambda i: (i.item_no is None, i.item_no or 0, i.item_id))
         by_id = {e.item.item_id: e for e in entries}
-        return tuple(by_id[i.item_id] for i in found)
+        result = [by_id[i.item_id] for i in found]
+        needle = "".join(query.split()).casefold()
+        if needle and self.versions.original_rows:
+            # 릴리즈노트 원본에 적힌 Jira 코드로도 찾는다. 원본에 없는 코드는 만들지 않는다.
+            matched = {e.item.item_id for e in result}
+            jira = jira_by_item(self.versions.original_rows, by_id)
+            result.extend(e for e in entries if e.item.item_id not in matched
+                          and any(needle in code.casefold() for code in jira[e.item.item_id].codes))
+        return tuple(result)
+
+    def jira(self, item_ids=None):
+        """Item별 원본 Jira 코드. 보관 원본이 없으면 미확인으로 돌려준다."""
+        ids = [e.item.item_id for e in self.versions.items] if item_ids is None else item_ids
+        return jira_by_item(self.versions.original_rows, ids)
 
     def catalog(self):
         return ItemCatalog(self.versions.families(), self.versions.version_items)

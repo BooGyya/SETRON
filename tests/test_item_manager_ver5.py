@@ -107,7 +107,7 @@ def test_query_candidates_and_rule_drilldown(app, data):
     page.refresh_after_save(preserve_detail=True)
     assert page.selected_id == 1 and page.site_filter.currentData() == "Site A"
     assert page.answer.item_ids == (1, 2) and page.equipment_model.ids == (2,)
-    assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건 ›"
+    assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건"
     assert page.result_buttons[2].rule_badge is None
     # 배지 툴팁은 기준명 하나만, 부모 행 툴팁에는 기준명을 겹쳐 넣지 않는다(툴팁 중복 방지).
     # 행 툴팁은 전체 제목 + 릴리즈 정보 하나(기준명은 배지 툴팁에만 둔다).
