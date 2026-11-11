@@ -13,6 +13,7 @@ from setron.ui.components import EmptyState, PageHeader, StatusBadge, button, la
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryCatalog, QueryState, preview_catalog
 from setron.ui.theme import ASSETS, INK, LINE, PRIMARY, SECONDARY, icon, svg_size
+from setron.ui.windows_icon import set_taskbar_icon
 
 
 @dataclass(frozen=True)
@@ -225,6 +226,11 @@ class _ContentCanvas(QWidget):
 class MainWindow(QMainWindow):
     page_changed = Signal(str)
     query_applied = Signal(object)
+
+    def showEvent(self, event):
+        # 첫 작업 표시줄 버튼이 만들어지기 전에 Windows 기본 클래스 아이콘도 바꾼다.
+        set_taskbar_icon(self)
+        super().showEvent(event)
 
     def __init__(self, *, query_catalog: QueryCatalog | None = None):
         super().__init__()

@@ -29,7 +29,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-setron = ["ui/assets/*.png", "ui/assets/*.svg", "ui/assets/*.txt", "ui/assets/fonts/*.ttf", "ui/assets/fonts/*.txt",
+setron = ["ui/assets/*.png", "ui/assets/*.svg", "ui/assets/*.ico", "ui/assets/*.txt", "ui/assets/fonts/*.ttf", "ui/assets/fonts/*.txt",
           "ui/assets/ai-ver5/*.svg",
           "ui/assets/import-ver5/*.svg",
           "ui/assets/replay-ver5/*.svg",
