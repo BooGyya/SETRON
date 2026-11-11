@@ -3,7 +3,7 @@
 from math import floor
 
 from PySide6.QtCore import QModelIndex, QRect, QSignalBlocker, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOption, QStyledItemDelegate, QTreeView
 
 from setron.ui.appearance import ui_color
@@ -25,6 +25,7 @@ class HeatmapListModel(QStandardItemModel):
         self.rows, self.ids, self.tones = (), (), ()
         self._equipment_items, self._group_items = {}, {}
         self._structure_signature, self._row_items = None, ()
+        self.name_changed = False
         self.setHorizontalHeaderLabels(self.headings)
 
     @classmethod
@@ -46,6 +47,7 @@ class HeatmapListModel(QStandardItemModel):
     def set_groups(self, nodes, row_factory):
         """구조가 같으면 기존 셀 중 달라진 값만 갱신한다. (재구성 여부, 글자가 바뀐 행)을 반환한다."""
         nodes = tuple(nodes)
+        self.name_changed = False
         signature = tuple(self._signature(node) for node in nodes)
         if signature == self._structure_signature:
             rows, ids, tones, changed_rows = [], [], [], []
@@ -56,6 +58,7 @@ class HeatmapListModel(QStandardItemModel):
                     if item.text() != value:
                         item.setText(value)
                         text_changed = True
+                        self.name_changed |= column == 0
                     tooltip = tooltips.get(column, value)
                     if item.toolTip() != tooltip:
                         item.setToolTip(tooltip)
@@ -112,6 +115,7 @@ class HeatmapListModel(QStandardItemModel):
             append(root, node)
         self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
         self._structure_signature, self._row_items = signature, tuple(row_items)
+        self.name_changed = True
         return True, ()
 
     def equipment_index(self, equipment_id, preferred_key=None):
@@ -189,14 +193,14 @@ class HeatmapTreeView(QTreeView):
         self.setVerticalScrollMode(QTreeView.ScrollMode.ScrollPerPixel)
         self.setHorizontalScrollMode(QTreeView.ScrollMode.ScrollPerPixel)
         self.header().setMinimumHeight(40)
-        self.header().setStretchLastSection(True)
+        self.header().setStretchLastSection(False)
         self.header().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.header().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         for column, width in enumerate(widths):
             self.setColumnWidth(column, width)
         self.setStyleSheet("QTreeView {background:white;border:0;selection-background-color:#edf0fd;selection-color:#18243c;}"
                            "QHeaderView::section {background:#f7f9fc;color:#5b6880;border:0;padding:8px;}"
-                           "QTreeView::item {padding:8px;border-bottom:1px solid #e9eef6;}"
+                           "QTreeView::item {padding:8px;border:0;}"
                            f"QTreeView:focus {{border:1px solid {PRIMARY};}}")
         self.collapsed.connect(lambda index: self._remember_expansion(index, False))
         self.expanded.connect(lambda index: self._remember_expansion(index, True))
@@ -293,7 +297,8 @@ class HeatmapTreeView(QTreeView):
                         self.setExpanded(index, False)
         if rebuilt:
             self.select_equipment(equipment_id, preferred_key=preferred_key, reveal=False)
-        resize = rebuilt or self.compact != self._last_compact
+        columns_changed = self.resize_columns() if rebuilt or self.model().name_changed else False
+        resize = rebuilt or columns_changed or self.compact != self._last_compact
         if not resize:
             for item in changed_rows:
                 index = self.model().indexFromItem(item)
@@ -328,14 +333,33 @@ class HeatmapTreeView(QTreeView):
         self.setCurrentIndex(index)
 
     def resize_columns(self):
+        name_width = 260
+        for items in self.model()._equipment_items.values():
+            for item in items:
+                index, depth = self.model().indexFromItem(item), int(self.rootIsDecorated())
+                parent = index.parent()
+                while parent.isValid():
+                    depth += 1
+                    parent = parent.parent()
+                text_width = QFontMetrics(index.data(Qt.ItemDataRole.FontRole)).horizontalAdvance(item.text())
+                name_width = max(name_width, text_width + depth * self.indentation() + 20)
+        name_width = min(340, name_width)
         if self.compact:
-            self.setColumnWidth(0, max(260, self.viewport().width() - 160 - 140))
-            self.setColumnWidth(3, 160)
-            self.setColumnWidth(4, 140)
-            return
-        ratio = max(1, self.viewport().width() / sum(self.base_widths))
-        for column, width in enumerate(self.base_widths):
-            self.setColumnWidth(column, int(width * ratio))
+            widths = {0: name_width, 3: 180, 4: 140}
+        else:
+            widths = {column: width for column, width in enumerate(self.base_widths) if not self.isColumnHidden(column)}
+            widths[0], widths[4] = name_width, 140
+            other_width = sum(width for column, width in widths.items() if column != 0)
+            extra = min(max(0, self.viewport().width() - sum(widths.values())), int(other_width * 0.15))
+            for column in widths:
+                if column != 0:
+                    widths[column] += int(extra * widths[column] / other_width) if other_width else 0
+        changed = False
+        for column, width in widths.items():
+            if self.columnWidth(column) != width:
+                self.setColumnWidth(column, width)
+                changed = True
+        return changed
 
     @staticmethod
     def _row_key(index):

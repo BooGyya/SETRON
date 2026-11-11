@@ -28,6 +28,9 @@ class ReplayViewControls(QScrollArea):
 
     def __init__(self, tabs, grouping, interval):
         super().__init__()
+        self.setObjectName("replayViewControls")
+        self.setStyleSheet("QScrollArea#replayViewControls {background:transparent;border:0;}")
+        self.viewport().setAutoFillBackground(False)
         self.tabs, self.grouping, self.interval = tabs, grouping, interval
         self._refreshing = False
         self.setFrameShape(QFrame.Shape.NoFrame)

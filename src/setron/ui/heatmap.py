@@ -406,8 +406,7 @@ class HeatmapPage(QWidget):
         set_widget_font(self.search, font(14))
         self.search.setFixedHeight(toolbar_height)
         self.search.setMinimumWidth(220)
-        self.search.setMaximumWidth(360)
-        self.search.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.search.setStyleSheet(f"QLineEdit#heatmapSearch {{background:white;border:1px solid {LINE};border-radius:10px;"
                                   "padding:0 10px;}"
                                   f"QLineEdit#heatmapSearch:focus {{border:2px solid {PRIMARY};}}")
@@ -418,7 +417,7 @@ class HeatmapPage(QWidget):
         self.hpa_button = button("HPA 표시")
         display_style = (
             f"QPushButton {{background:white;border:1px solid {LINE};border-radius:10px;"
-            "padding:0 10px;min-height:36px;max-height:36px;}"
+            "padding:0 10px;min-height:0;}"
             f"QPushButton:checked {{background:{PRIMARY};border-color:{PRIMARY};color:white;}}"
             f"QPushButton:focus {{border-color:{PRIMARY};}}"
             f"QPushButton:checked:focus {{border-color:{INK};}}")
@@ -556,31 +555,27 @@ class HeatmapPage(QWidget):
         spacing = self.controls.horizontalSpacing()
         filter_width = self.filter_bar.minimumSizeHint().width()
         display_width = self.display_bar.minimumSizeHint().width()
-        rows = (1 if available >= 220 + filter_width + display_width + 3 * spacing else
+        rows = (1 if available >= 220 + filter_width + display_width + 2 * spacing else
                 2 if available >= 220 + filter_width + spacing else 3)
-        search_room = (available - filter_width - display_width - 3 * spacing if rows == 1 else
-                       available - filter_width - spacing if rows == 2 else available)
-        search_width = max(220, min(360, search_room))
-        self.search.setFixedWidth(search_width)
-        self.controls.setColumnMinimumWidth(0, search_width)
+        self.controls.setColumnMinimumWidth(0, 220)
         if self._control_rows == rows:
             return
         for widget in (self.search, self.filter_bar, self.display_bar):
             self.controls.removeWidget(widget)
         if rows == 1:
-            self.controls.addWidget(self.search, 0, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.filter_bar, 0, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.display_bar, 0, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.search, 0, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.filter_bar, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.display_bar, 0, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         elif rows == 2:
-            self.controls.addWidget(self.search, 0, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.filter_bar, 0, 2, 1, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.display_bar, 1, 0, 1, 4, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.search, 0, 0, 1, 2, Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.filter_bar, 0, 2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.display_bar, 1, 0, 1, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         else:
-            self.controls.addWidget(self.search, 0, 0, 1, 4, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.filter_bar, 1, 0, 1, 4, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.controls.addWidget(self.display_bar, 2, 0, 1, 4, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        for column in range(4):
-            self.controls.setColumnStretch(column, int(column == 1))
+            self.controls.addWidget(self.search, 0, 0, 1, 3, Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.filter_bar, 1, 0, 1, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.controls.addWidget(self.display_bar, 2, 0, 1, 3, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        for column in range(3):
+            self.controls.setColumnStretch(column, int(column == 0))
         self._control_rows = rows
 
     def resizeEvent(self, event):
@@ -935,7 +930,7 @@ class HeatmapPage(QWidget):
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         table.setStyleSheet(self._list_style + ("QTreeView::item {padding:3px 8px;}" if compact else ""))
         header = table.header()
-        header.setStretchLastSection(not compact)
+        header.setStretchLastSection(False)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         if compact:
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
