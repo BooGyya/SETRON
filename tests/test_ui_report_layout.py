@@ -26,8 +26,12 @@ def test_report_controls_fit_and_no_current_time_is_displayed(own, tmp_path, wid
         assert p.type_note.isVisibleTo(p)
         assert not choice.toolTip()
         assert p.type_note.text() == description + (" · 답변이 없으면 수치표만 포함" if kind == "ai" else "")
-        for control in (p.query_panel.reset_button, choice, p.generate_button):
+        for control in (p.query_panel.reset_button, p.query_panel.search_button, choice, p.generate_button):
             assert control.mapTo(p, QPoint(control.width(), 0)).x() <= p.width()
+        reset, search = p.query_panel.reset_button, p.query_panel.search_button
+        assert reset.size() == search.size()
+        assert search.mapTo(p, QPoint(0, 0)).y() == reset.mapTo(p, QPoint(0, 0)).y()
+        assert search.mapTo(p, QPoint(0, 0)).x() > reset.mapTo(p, QPoint(reset.width(), 0)).x()
     until(lambda: not p.item_request.busy)
     assert p.minimumSizeHint().width() <= width
     assert not any("현재 시각" in label.text() for label in p.findChildren(QLabel))

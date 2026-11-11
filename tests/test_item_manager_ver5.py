@@ -232,6 +232,41 @@ def test_selected_item_and_preview_appear_without_search_or_preview_click(app, d
     dialog.reject()
 
 
+def test_changing_criterion_keeps_name_and_category_follows_criterion(app, data):
+    """판정 기준을 바꿔도 기준명이 비지 않고, 구분은 판정 기준에서 정한다 (11-11 점검)."""
+    calls = []
+    impact = SimpleNamespace(problems=(), base_date=data.base_date, newly_risky=0, hpa_excluded=0,
+                             saveable=True, count=lambda _: 0)
+    def preview(values, context):
+        calls.append(values)
+        return impact
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=preview), lambda: None,
+                            lambda _: False, family_id=10, item_id=2)
+    dialog.show()
+    assert not hasattr(dialog, "categories")   # 판정 기준과 겹치던 구분 칩은 없다
+    item_name = dialog.name.text()
+    assert item_name and dialog.values()["item_manager"]["category"] == "환경안전 필수"
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
+    version = dialog.start.currentText().split(" · ")[0]
+    assert "순서" not in dialog.start.currentText()   # 순서가 확인된 버전은 이름만 보인다 (11-11)
+    assert dialog.name.text() == f"{dialog.family.currentText()} {version} 사용 위험"
+    assert dialog.values()["item_manager"]["category"] == "결함 버전"
+    wait_until(lambda: dialog.preview_valid)
+    assert dialog.save_button.isEnabled() and calls[-1]["rule_type"] == "DIRECT_VERSION"
+    # 대상 버전을 바꾸면 제안한 이름도 따라 바뀐다.
+    dialog.start.setCurrentIndex(dialog.start.count() - 1)
+    assert dialog.start.currentText().split(" · ")[0] in dialog.name.text()
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DEFECT_ITEM"))
+    assert dialog.name.text() == item_name and dialog.values()["item_manager"]["category"] == "결함 버전"
+    wait_until(lambda: dialog.preview_valid)
+    assert dialog.save_button.isEnabled() and calls[-1]["rule_type"] == "DEFECT_ITEM"
+    # 직접 고친 이름은 판정 기준을 바꿔도 그대로 둔다.
+    dialog.name.setText("직접 정한 이름")
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
+    assert dialog.name.text() == "직접 정한 이름"
+    dialog.reject()
+
+
 def test_answer_navigation_applies_only_selected_family_and_leaves_global_sources_unchanged(app):
     from setron.ui.dashboard_demo import demo_dashboard_source
     from setron.ui.version_demo import demo_version_catalog

@@ -36,6 +36,7 @@ exe = EXE(
     exclude_binaries=True,
     name="SETRON",
     console=False,
+    icon=str(spec_dir.parent / "src" / "setron" / "ui" / "assets" / "setron-window-icon.ico"),
 )
 db_init = EXE(
     pyz,

@@ -59,7 +59,8 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     assert p.kind == "status" and p.result_card.isHidden()
     assert p.library_model.rowCount() == 0
     assert type(p.start) is type(replay.start) and type(p.end) is type(replay.end)
-    assert list(p.query_panel.combos) == list(replay.query_panel.combos) == ["site_key", "fab_key", "line_key"]
+    assert list(p.query_panel.combos) == ["site_key", "fab_key", "line_key"]
+    assert list(replay.query_panel.combos) == ["site_key", "fab_key", "line_key", "group_key"]
     assert not any("뒤로" in b.text() for b in p.findChildren(QPushButton))
     p.type_buttons["item"].click()
     until(lambda: not p.item_request.busy)
@@ -69,7 +70,10 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     p.query_panel.select("site_key", p.source.catalog.sites[0].key)
     p.start.setDate(QDate(2026, 10, 1))
     p.end.setDate(QDate(2026, 10, 22))
-    r = generated(p)
+    p.query_panel.search_button.click()
+    until(lambda: not p.request.busy)
+    r = p.result
+    assert r is not None, p.generation_status.text()
     assert r.request.start == date(2026, 10, 1)
     assert r.request.end == date(2026, 10, 22)
     assert r.request.base_date == date(2026, 10, 21)

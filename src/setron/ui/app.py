@@ -32,7 +32,7 @@ from setron.ui.group_dialog import VersionGroupDialog
 from setron.ui.target_dialog import TargetDialog
 from setron.ui.version_filter import version_options
 from setron.ui.version_filter_dialog import VersionFilterDialog
-from setron.ui.theme import install_theme
+from setron.ui.theme import icon, install_theme
 from setron.ui.version_data import catalog_from_dashboard
 from setron.ui.version_demo import demo_version_catalog
 from setron.ui.version_management import VersionManagementPage
@@ -1161,8 +1161,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.auto_close_ms < 0:
         parser.error("--auto-close-ms는 0 이상이어야 합니다.")
-    app = QApplication.instance() or QApplication(sys.argv[:1])
+    app = QApplication.instance()
+    if app is None:
+        if sys.platform == "win32":
+            from ctypes import windll
+
+            # Windows가 개발 실행도 Python과 별개의 작업 표시줄 앱으로 인식하게 한다.
+            windll.shell32.SetCurrentProcessExplicitAppUserModelID("SETRON.Desktop")
+        app = QApplication(sys.argv[:1])
     app.setApplicationName("SETRON")
+    app.setWindowIcon(icon("setron-window-icon.svg"))
     install_theme(app)
     # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
     source, problem = dashboard_source_from_env()

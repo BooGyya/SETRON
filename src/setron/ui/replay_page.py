@@ -252,8 +252,15 @@ class ReplayPage(QWidget):
         if step is not None and not can_replay(frames):
             self.interval_buttons[self.step].setChecked(True)
             return False
+        # 재생 중에 간격을 바꾸면 멈추지 않고, 보던 날짜(또는 그 전 가장 가까운 시점)부터 이어서 재생한다 (11-11 점검).
+        playing, current = self.timer.isActive(), self.frame.day if self.frame is not None else None
         self.timer.stop()
-        self.step, self.frames, self.index = step, frames, max(0, len(frames) - 1)
+        index = max(0, len(frames) - 1)
+        if playing and current is not None:
+            index = max((i for i, frame in enumerate(frames) if frame.day <= current), default=0)
+        self.step, self.frames, self.index = step, frames, index
+        if playing and index < len(frames) - 1:
+            self.timer.start()
         self._make_legend()
         self._render_frame()
         self._sync_controls()
@@ -365,7 +372,10 @@ class ReplayPage(QWidget):
         else:
             decided = summary.compliant + summary.below
             value = f"{summary.rate:.1%}" if summary.rate is not None else "계산 불가"
-            self.achievement.setText(f"등록 SW 목표 달성 {summary.compliant} / {decided}건 · {value}")
+            # 1주·1개월 간격 시점은 그 전 마지막 저장일 자료를 이어 쓴다. 화면이 몇 칸 그대로인 이유를 바로 보이게 한다.
+            carried = (f" · {frame.snapshot.base_date:%m-%d} 저장 기준"
+                       if frame.at is not None and frame.at != frame.snapshot.base_date else "")
+            self.achievement.setText(f"등록 SW 목표 달성 {summary.compliant} / {decided}건 · {value}{carried}")
             observed = f"이날 저장 {observed_count}대"
             if carried_count:
                 observed += f" · 이전 관측 이어받음 {carried_count}대"

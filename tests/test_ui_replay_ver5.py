@@ -219,9 +219,14 @@ def test_interval_buttons_rebuild_frames_without_reading_again(own):
     page.advance()
     assert page.index == 1 and page.frame.day == date(2026, 5, 28)
     assert "마지막 저장일 2026-05-21 기준" in page.achievement.toolTip()
+    # 저장일 자료를 이어 쓰는 시점은 달성률 줄에서도 바로 보인다 (11-11 점검).
+    assert page.achievement.text().endswith(" · 05-21 저장 기준")
+    # 재생 중 간격을 바꾸면 멈추지 않고, 보던 날짜(05-28) 전 가장 가까운 시점부터 이어서 재생한다.
     page.interval_buttons["quarter"].click()
     assert [f.day for f in page.frames] == [date(2026, 5, 21), date(2026, 8, 21), date(2026, 10, 21)]
-    assert not page.timer.isActive()
+    assert page.timer.isActive() and page.index == 0 and page.frame.day == date(2026, 5, 21)
+    assert "저장 기준" not in page.achievement.text()   # 저장일과 같은 시점은 붙이지 않는다
+    page.pause()
     page.interval_buttons[None].click()
     assert page.frames == page.data.frames and len(calls) == 1
 
