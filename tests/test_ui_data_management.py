@@ -1,7 +1,7 @@
 """데이터 관리 화면(11-10 개편, 11-11 2·3·6차 수정) 프론트 검증. DB 대신 가짜 게이트웨이를 쓴다.
 
 11-11 6차: 현황표는 DB에 들어간 값을 가져오기 3단계 항목(호기 · Line · 설비군 · 모델명 · 메모리/파운드리 · SW 버전)으로
-보이고, 고친 뒤 [저장]으로 한꺼번에 저장한다(설비군 변경은 regroup). 엑셀 원본은 [원본 보기]로 읽기 전용으로 본다.
+보이고, 고친 뒤 [저장]으로 한꺼번에 저장한다(설비군 변경은 regroup). [원본 보기]는 두지 않는다(11-11 요청).
 설비군 이름 변경 · 삭제 · 독립 보기, Site · 라인 등록과 메모리/파운드리 변경도 확인한다.
 """
 
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from PySide6.QtWidgets import QDialog, QLabel, QMessageBox
 
 from setron.features.data_admin import (
-    EquipmentRow, GroupRow, HistoryEntry, LineRow, ReleaseFamily, ReleaseRow, SheetGrid, SheetRow, SheetRows, StatusSheet,
+    EquipmentRow, GroupRow, HistoryEntry, LineRow, ReleaseFamily, ReleaseRow, SheetRow, SheetRows, StatusSheet,
 )
 from setron.ui import data_management_page as module
 from setron.ui.app import create_window
@@ -34,9 +34,6 @@ SHEET_ROWS = SheetRows(
      _row(11, 5, 21, "EC1", "13L", "v1.2", cells={"equipment_code": ("D4", "EC1"), "version_raw": ("E4", "v1.2")}),
      _row(14, 8, 24, "EC4", "17L", "v1.1", pm="PM1")),
     ((1, "M-C4", "POLY"), (2, "M-C4 DFB", "POLY"), (3, "M-O2", "OXIDE")), ("13L", "15L", "17L"))
-GRID = SheetGrid(7, "현황 2026-11-01", "마스터.xlsx",
-                 {"A1": "Line", "B1": "설비군", "C1": "호기", "A2": "15L", "B2": "M-C4", "C2": "EC2", "C3": "EC3"},
-                 {}, {}, {"C3": "삭제됨 · EC3"})
 GROUPS = (GroupRow(1, "M-C4", "POLY", None, None, 2), GroupRow(2, "M-C4 DFB", "POLY", 1, "M-C4", 1),
           GroupRow(4, "C7", "POLY", None, None, 0), GroupRow(3, "M-O2", "OXIDE", None, None, 1))
 EQUIPMENT = (EquipmentRow(5, "EC1", (1,), "M-C4", "M-C4", "화성", "13L", date(2026, 11, 1), 3),
@@ -76,7 +73,7 @@ class FakeGateway:
                    "undo_rows": None, "delete_release_rows": "v4.60.1.1", "reorder_items": None,
                    "apply_release": {"versions": [102]}, "undo_release": None,
                    "add_release_version": 102, "add_release_item": 502, "sites": tuple(self.sites),
-                   "status_sheets": (SHEET,), "sheet_rows": SHEET_ROWS, "sheet_grid": GRID,
+                   "status_sheets": (SHEET,), "sheet_rows": SHEET_ROWS,
                    "equipment_overview": (GROUPS, EQUIPMENT), "lines": LINES,
                    "rename_group": 0, "delete_group": None, "set_independent": None, "add_line": "P4",
                    "rename_site": 3, "rename_line": 2, "set_line_fab": 1, "delete_site": None, "delete_line": None,
@@ -162,8 +159,10 @@ def test_sheet_shows_db_values_in_import_columns_sorted_by_line_group_code(own):
     editable = module.Qt.ItemFlag.ItemIsEditable
     assert not cell(sheet, 2, 2).flags() & editable and not cell(sheet, 2, 5).flags() & editable  # PM 설비
     assert "버전 관리에서" in cell(sheet, 2, 5).toolTip() and cell(sheet, 2, 1).flags() & editable
-    assert [b.text() for b in (sheet.raw_button, sheet.undo_button, sheet.add_button, sheet.delete_button, sheet.save_button)] \
-        == ["원본 보기", "되돌리기", "＋ 행 추가", "선택 행 삭제", "저장"]
+    assert not hasattr(sheet, "raw_button") and not [b for b in sheet.findChildren(type(sheet.save_button))
+                                                     if b.text() == "원본 보기"]  # [원본 보기]는 두지 않는다 (11-11)
+    assert [b.text() for b in (sheet.undo_button, sheet.add_button, sheet.delete_button, sheet.save_button)] \
+        == ["되돌리기", "＋ 행 추가", "선택 행 삭제", "저장"]
     assert not sheet.save_button.isEnabled() and not sheet.undo_button.isEnabled() and sheet.add_button.isEnabled()
     assert sheet.table.horizontalHeader().sectionResizeMode(0) == module.QHeaderView.ResizeMode.Interactive
 
@@ -284,20 +283,6 @@ def test_failed_save_keeps_changes_and_reports_reason(own):
     settle(page)
     assert failed and "바뀌었습니다" in sheet.notice.text() and sheet.edits == {("version", 21): "v9"}
     assert sheet.save_button.isEnabled()
-
-
-def test_raw_view_shows_the_imported_sheet_read_only(own):
-    gateway = FakeGateway()
-    page, sheet = sheet_page(own, gateway)
-    assert sheet.show_raw()
-    until(lambda: getattr(sheet, "raw_dialog", None) is not None)
-    dialog = sheet.raw_dialog
-    assert gateway.calls[-1] == "sheet_grid" and "마스터.xlsx" in dialog.windowTitle()
-    table = dialog.table
-    assert table.rowCount() == 3 and table.item(1, 2).text() == "EC2" and table.columnSpan(0, 0) == 1
-    assert table.editTriggers() == module.QAbstractItemView.EditTrigger.NoEditTriggers
-    assert table.item(2, 2).foreground().color() == module.DELETED and "삭제됨" in table.item(2, 2).toolTip()
-    dialog.close()
 
 
 def test_equipment_groups_show_category_once_per_group_and_list_model_site_line(own, monkeypatch):

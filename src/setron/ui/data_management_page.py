@@ -3,7 +3,7 @@
 - 설비현황
   - 현황표: DB에 들어간 값을 가져오기 3단계와 같은 항목(호기 · Line · 설비군 · 모델명 · 메모리/파운드리 · SW 버전)으로
     보인다 (11-11 6차). 칸을 고친 뒤 [저장]으로 한꺼번에 저장하고, 행을 추가·삭제하며, [되돌리기]로 바로 앞 단계를
-    되돌린다. 가져온 엑셀 원본은 [원본 보기]로 읽기 전용으로 본다.
+    되돌린다.
   - 설비: 설비군 추가 · 위치: Site 추가 뒤 빈 현황표 만들기 · 가져온 엑셀 삭제: 데이터 가져오기에서 옮겨 온 삭제 화면.
 - 릴리즈노트: 계열 목록 · 버전 줄 아래 Item 줄이 붙은 엑셀형 표. 칸을 고치면 바로 저장하고, 버전·Item 줄을 추가한다.
   위험 지정은 아이템 매니저에서만 한다.
@@ -39,29 +39,10 @@ SAVING = QColor("#fff2c4")     # 고쳤지만 아직 저장하지 않은 칸 · 
 SAVED = QColor("#e3f4e8")      # 이번에 저장한 칸
 NEW_ROW = QColor("#fdecef")    # 새 행의 아직 비어 있는 필수 칸
 MUTED = QColor("#5d6678")      # DB와 연결되지 않은 원본 값
-DELETED = QColor("#a0a7b4")    # 지운 행
 DELETE_ROW = QColor("#f8d7da")  # 저장하면 지울 행 (삭제 예정)
 DANGER = "#ad344d"
 TABLE_STYLE = "QTableWidget {font-size:14px;} QHeaderView::section {font-size:13px;padding:4px 6px;}"
 COLUMN_KEY = "data_management/columns/"
-
-
-def _col(index):
-    name = ""
-    index += 1
-    while index:
-        index, rest = divmod(index - 1, 26)
-        name = chr(65 + rest) + name
-    return name
-
-
-def _split(address):
-    letters = "".join(c for c in address if c.isalpha()).upper()
-    digits = "".join(c for c in address if c.isdigit())
-    number = 0
-    for c in letters:
-        number = number * 26 + ord(c) - 64
-    return number - 1, int(digits or 0)
 
 
 def _text(value):
@@ -255,50 +236,11 @@ class _ChoiceDelegate(QStyledItemDelegate):
         model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
 
-class RawSheetDialog(QDialog):
-    """가져온 엑셀 원본 시트를 읽기 전용으로 보인다 (11-11 6차 [원본 보기])."""
-
-    def __init__(self, parent, grid):
-        super().__init__(parent)
-        self.setWindowTitle(f"원본 보기 · {grid.workbook or '파일 이름 없음'} · {grid.sheet}")
-        self.resize(1100, 720)
-        body = QVBoxLayout(self)
-        body.addWidget(label("가져올 때 보관한 엑셀 원본입니다. 여기서는 고칠 수 없고, 앱에서 고친 값은 원본에 반영되지 않습니다.",
-                             12, color=SECONDARY, wrap=True))
-        self.table = QTableWidget(0, 0)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setStyleSheet(TABLE_STYLE)
-        body.addWidget(self.table, 1)
-        addresses = [a for a in grid.cells if _text(grid.cells.get(a)).strip()]
-        if addresses:
-            columns = max(_split(a)[0] for a in addresses) + 1
-            rows = sorted({_split(a)[1] for a in addresses})
-            self.table.setColumnCount(columns)
-            self.table.setRowCount(len(rows))
-            self.table.setHorizontalHeaderLabels([_col(c) for c in range(columns)])
-            self.table.setVerticalHeaderLabels([str(r) for r in rows])
-            for index, r in enumerate(rows):
-                for c in range(columns):
-                    address = f"{_col(c)}{r}"
-                    item = QTableWidgetItem(_text(grid.cells.get(address)))
-                    if address in grid.deleted:
-                        item.setForeground(QBrush(DELETED))
-                        item.setToolTip(grid.deleted[address])
-                    self.table.setItem(index, c, item)
-                # 제목처럼 첫 칸에만 값이 있는 줄은 한 줄로 펼친다 (첫 열이 제목 폭으로 넓어지지 않게)
-                if columns > 1 and not any(_text(grid.cells.get(f"{_col(c)}{r}")).strip() for c in range(1, columns)):
-                    self.table.setSpan(index, 0, 1, columns)
-            self.table.resizeColumnsToContents()
-        close = button("닫기")
-        close.clicked.connect(self.accept)
-        body.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
-
-
 class SheetPanel(_Panel):
     """현황표를 DB에 들어간 값 기준으로 보이고 고친다 (11-11 6차): 설비 × SW 한 줄, 가져오기 3단계와 같은 항목.
 
     칸 수정 · 행 추가 · 행 삭제 · 설비군 변경을 모아 두었다가 [저장]으로 한꺼번에 반영하고, [되돌리기]는 바로 앞 단계
-    하나(또는 마지막 저장 전체)를 되돌린다. 가져온 엑셀 원본은 [원본 보기]로 본다. SW 계열은 보이지 않는다(VOC 1).
+    하나(또는 마지막 저장 전체)를 되돌린다. SW 계열은 보이지 않는다(VOC 1).
     """
 
     def __init__(self, page):
@@ -306,8 +248,6 @@ class SheetPanel(_Panel):
         self.sheets, self.data, self.view = (), None, []
         self.edits, self.new_rows, self.deletes, self.steps, self.sort = {}, [], {}, [], None
         self.pending_batch, self._current, self._temp = None, None, 0
-        self.raw_request = ReadRequest(self)
-        self.raw_request.completed.connect(self._raw_loaded)
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         card = Card(padding=20)
@@ -318,8 +258,6 @@ class SheetPanel(_Panel):
         self.sheet_combo.setMinimumWidth(360)
         self.sheet_combo.currentIndexChanged.connect(self._sheet_changed)
         self.source = label("", 12, color=SECONDARY, wrap=True)
-        self.raw_button = button("원본 보기")
-        self.raw_button.setToolTip("가져온 엑셀 원본 시트를 읽기 전용으로 봅니다.")
         self.undo_button = button("되돌리기")
         self.undo_button.setToolTip("바로 앞 단계 하나를 되돌립니다 (저장 전 수정 · 새 행 · 삭제 표시, 또는 마지막 저장).")
         self.add_button = button("＋ 행 추가")
@@ -329,14 +267,13 @@ class SheetPanel(_Panel):
         self.delete_button.setToolTip("고른 줄의 설비를 '삭제 예정'으로 표시합니다. [저장]을 누르면 지워집니다.")
         self.save_button = button("저장", primary=True)
         self.save_button.setMinimumWidth(120)
-        self.raw_button.clicked.connect(self.show_raw)
         self.undo_button.clicked.connect(self.undo)
         self.add_button.clicked.connect(self.add_row)
         self.delete_button.clicked.connect(self.delete_selected)
         self.save_button.clicked.connect(self.save)
         row.addWidget(self.sheet_combo)
         row.addStretch()
-        for widget in (self.raw_button, self.undo_button, self.add_button, self.delete_button, self.save_button):
+        for widget in (self.undo_button, self.add_button, self.delete_button, self.save_button):
             row.addWidget(widget)
         card.body.addLayout(row)
         card.body.addWidget(self.source)
@@ -372,8 +309,8 @@ class SheetPanel(_Panel):
         card.body.addWidget(label("DB에 들어간 값을 가져오기 3단계와 같은 항목으로 보여 줍니다. 칸을 두 번 눌러 고치고(설비군 · Line · "
                                   "메모리/파운드리는 목록에서 고름), [＋ 행 추가]로 설비를 더하고, 줄을 고른 뒤 [선택 행 삭제]로 지울 행을 "
                                   "표시합니다. [저장]을 눌러야 한꺼번에 DB에 반영되고 변경 이력에 남습니다 (노란색 수정 · 분홍색 새 행의 "
-                                  "빈 필수 칸 · 빨간 칸 삭제 예정). 설비군을 바꾸면 SW 계열은 자동으로 맞춥니다. 칸에 마우스를 올리면 원본 셀이 "
-                                  "보이고, 엑셀 원본은 [원본 보기]로 봅니다. Site · 기준일은 바꿀 수 없습니다.", 12, color=SECONDARY, wrap=True))
+                                  "빈 필수 칸 · 빨간 칸 삭제 예정). 설비군을 바꾸면 SW 계열은 자동으로 맞춥니다. 칸에 마우스를 올리면 가져온 "
+                                  "원본 셀이 보입니다. Site · 기준일은 바꿀 수 없습니다.", 12, color=SECONDARY, wrap=True))
         card.body.addWidget(self.notice)
         self._sync()
 
@@ -828,20 +765,6 @@ class SheetPanel(_Panel):
         self.saved_note = "마지막 저장을 되돌렸습니다 (수정 · 추가 · 삭제 모두). "
         self.reload()
 
-    # 원본 보기 ---------------------------------------------------------------------------------
-    def show_raw(self):
-        if self.data is None or self.raw_request.busy or self.page.gateway is None:
-            return False
-        batch_id = self.data.batch_id
-        return self.raw_request.start(BackgroundRead(lambda: self.page.gateway.data_admin("sheet_grid", batch_id)))
-
-    def _raw_loaded(self, grid, error):
-        if error is not None:
-            self.say("원본 시트를 읽지 못했습니다. 이 현황표에는 원본이 없을 수 있습니다.", error=True)
-            return
-        self.raw_dialog = RawSheetDialog(self, grid)
-        self.raw_dialog.open()
-
     def _sync(self):
         busy = self.page.saving
         count = self._count()
@@ -849,7 +772,6 @@ class SheetPanel(_Panel):
         self.save_button.setEnabled(bool(count) and not busy)
         self.undo_button.setEnabled(bool(self.steps) and not busy)
         self.add_button.setEnabled(self.data is not None and bool(self.data.site) and not busy)
-        self.raw_button.setEnabled(self.data is not None and not busy)
         self.delete_button.setEnabled(bool(self.selected_rows() or any(k == "new" for k, _ in self._selected_lines()))
                                       and not busy)
         self.sheet_combo.setEnabled(not busy)
