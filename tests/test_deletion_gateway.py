@@ -50,6 +50,7 @@ def test_delete_screen_removes_only_february(own):
     page.site_combo.setCurrentIndex(page.site_combo.findData("화성"))
     page.start.setText("2026-02-01")
     page.end.setText("2026-02-28")
+    page.select_all.click()  # 11-11: 조건에 맞는 파일만 보이고, 지울 것은 직접 고른다
     page.open_dialog = approve
     assert page.confirm_delete()
     end = monotonic() + 5

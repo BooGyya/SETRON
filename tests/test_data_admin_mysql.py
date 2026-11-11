@@ -77,7 +77,8 @@ def test_delete_rows_removes_one_equipment_observation_and_leaves_marks_and_hist
     grid = service.sheet_grid(receipt.batch_id)
     sid = grid.owners["D3"]
     assert grid.owners["B3"] == grid.owners["C3"] == sid  # 같은 행의 칸은 같은 설비 현황
-    assert service.delete_rows(receipt.batch_id, [sid]) == 1
+    journal = service.delete_rows(receipt.batch_id, [sid])
+    assert isinstance(journal, int)
     after = service.sheet_grid(receipt.batch_id)
     assert "D3" not in after.bindings and after.deleted["D3"] == "삭제됨 · QA-DA-DEL"
     assert after.cells["D3"] == "v4.56.6.43"  # 가져온 원본 칸은 남는다
@@ -114,3 +115,71 @@ def test_registered_site_and_new_group_appear_in_query_choices(storage):
     assert categories == sorted(categories, key=["POLY", "OXIDE", "KCTC"].index)  # 같은 분류 뒤에 들어간다
     bindings = source.bindings
     assert base.group_id in bindings[option.key] and variant.group_id in bindings["c4"]  # 개조형은 상위 설비군에 묶인다
+
+
+def test_restore_rows_brings_back_a_deleted_row_once(storage):
+    receipt = _save(storage, "QA-DA-RES")
+    service = DataAdminService(storage)
+    sid = service.sheet_grid(receipt.batch_id).owners["D3"]
+    journal = service.delete_rows(receipt.batch_id, [sid])
+    assert service.restore_rows(journal) == 1
+    grid = service.sheet_grid(receipt.batch_id)
+    assert grid.bindings["D3"].current == "v4.56.6.43" and "D3" not in grid.deleted  # 되살리면 '삭제됨' 표시도 없어진다
+    with pytest.raises(StorageValidationError, match="이미 되살린"):
+        service.restore_rows(journal)
+    assert next(e for e in service.history() if e.kind == "되돌리기").target == "QA-DA-RES"
+
+
+def test_sheet_without_model_column_has_no_add_row_columns(storage):
+    receipt = _save(storage, "QA-DA-ADD0")
+    grid = DataAdminService(storage).sheet_grid(receipt.batch_id)
+    assert grid.columns == {}  # 설비군(모델) 열을 알 수 없는 시트는 행 추가를 막는다 (화면의 [＋ 행 추가] 꺼짐)
+
+
+def test_empty_sheet_then_add_row_and_release_version_item(storage):
+    from setron.features.data_admin.service import SHEET_KEY
+
+    service = DataAdminService(storage)
+    service.add_site("QA빈현황")
+    batch = service.create_sheet("QA빈현황", date(2026, 11, 2))
+    sheet = next(s for s in service.status_sheets() if s.batch_id == batch)
+    assert (sheet.site, sheet.base_date, sheet.equipment_count) == ("QA빈현황", date(2026, 11, 2), 0)
+    with pytest.raises(StorageValidationError, match="이미 있습니다"):
+        service.create_sheet("QA빈현황", date(2026, 11, 2))
+    grid = service.sheet_grid(batch)
+    assert grid.columns == {"B": "line", "C": "model_name", "D": "equipment_code", "E": "version_raw"}
+    assert grid.cells["D1"] == "설비호기" and SHEET_KEY not in grid.sheet
+    with pytest.raises(StorageValidationError, match="없습니다"):
+        service.add_row(batch, {"model_name": "없는설비군", "equipment_code": "QA-E1", "version_raw": "v1"}, 2)
+    sid = service.add_row(batch, {"line": "L1", "model_name": "M-C4", "equipment_code": "QA-E1", "version_raw": "v9.9.9"}, 2)
+    grid = service.sheet_grid(batch)
+    assert grid.owners["D2"] == sid and grid.bindings["E2"].current == "v9.9.9" and grid.bindings["B2"].current == "L1"
+    assert next(s for s in service.status_sheets() if s.batch_id == batch).equipment_count == 1
+    entry = next(e for e in service.history() if e.kind == "추가")
+    assert (entry.target, entry.cell) == ("QA-E1", "B2~E2") and "QA빈현황" in entry.after
+    with pytest.raises(StorageValidationError, match="이미 있습니다"):
+        service.add_row(batch, {"model_name": "M-C4", "equipment_code": "QA-E1", "version_raw": "v1"}, 3)
+    extra = service.add_row(batch, {"model_name": "M-C4", "equipment_code": "QA-E2", "version_raw": "v1"}, 3)
+    service.delete_rows(batch, [extra], undo_add=True)  # 추가 취소는 '삭제됨' 표시를 남기지 않는다
+    assert not service.sheet_grid(batch).deleted
+
+    family = next(f for f in service.release_families() if f.family_id == _c4_family(storage))
+    release = service.add_release_version(family.family_id, "v9.9.9", date(2026, 11, 3))
+    with pytest.raises(StorageValidationError, match="이미 있는 버전"):
+        service.add_release_version(family.family_id, "v9.9.9")
+    with storage.transaction() as tx:
+        linked = tx.get("equipment_version", {"equipment_version_id": grid.bindings["E2"].key["equipment_version_id"]})
+    assert linked["release_version_id"] == release  # 같은 원문의 설비 SW를 새 버전에 잇는다
+    item = service.add_release_item(release, "QA 새 Item", 1)
+    rows = [r for r in service.release_rows(family.family_id) if r.release_version_id == release]
+    assert [(r.item_id, r.content, r.applied_models, r.released_at) for r in rows] == [(item, "QA 새 Item", "전체", "2026-11-03")]
+
+
+def _c4_family(storage):
+    from setron.features.equipment.repository import EquipmentRepository
+
+    repository = EquipmentRepository()
+    with storage.transaction() as tx:
+        group = next(g for g in repository.rows(tx, "equipment_group") if g["group_name"] == "M-C4")
+        families = repository.rows(tx, "version_family", group_id=group["group_id"])
+    return next(f["family_id"] for f in families if "파운드리" not in f["family_name"])

@@ -5,7 +5,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import timedelta
+
 from setron.features.ai.schemas import ExtractKind
+from setron.features.data_admin.service import clock_offset
 from setron.features.deletion import SnapshotDeletionService
 from setron.ui.import_delete import DeletionBatch, DeletionCatalog, DeletionResult
 
@@ -26,6 +30,11 @@ class ImportDeleteGateway:
 
     def list_batches(self) -> DeletionCatalog:
         revision, snapshots, releases = self.service.catalog()
+        # 저장일은 DB 서버 시계(개발용 Docker는 UTC) 기준이라 이 PC 시각으로 바꿔 보인다 (11-11).
+        storage = getattr(self.service, "storage", None)
+        offset = clock_offset(storage) if storage is not None else timedelta(0)
+        snapshots = tuple(replace(b, imported_at=b.imported_at + offset) if b.imported_at else b for b in snapshots)
+        releases = tuple(replace(b, imported_at=b.imported_at + offset) if b.imported_at else b for b in releases)
         equipment_batches = tuple(DeletionBatch(
             key=b.key, kind=ExtractKind.EQUIPMENT_STATUS, day=b.base_date, site=b.site, family=None, sheet=b.sheet,
             equipment_count=b.equipment_count, row_count=b.row_count,
