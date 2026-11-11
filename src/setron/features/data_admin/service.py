@@ -268,6 +268,7 @@ class SheetRows:
     rows: tuple
     groups: tuple  # (설비군 ID, 이름, 분류) — POLY · OXIDE · KCTC
     lines: tuple  # 이 Site의 라인 (관측 + 등록)
+    elsewhere: dict = field(default_factory=dict)  # 이 Site에 없는 라인(소문자) → 그 라인이 있는 다른 Site들. 잘못 넣기 안내용
 
 
 @dataclass(frozen=True)
@@ -746,12 +747,19 @@ class DataAdminService:
                         _text(version["version_raw"]) if version else "", families.get(version["family_id"], "") if version else "",
                         ", ".join(pm_names.get(version["equipment_version_id"], [])) if version else "", bool(pms),
                         {k: v for k, v in sources.items() if v}, {k: _text(cells.get(v)) for k, v in sources.items() if v}))
-            lines = sorted({r["line"] for r in registered_lines(tx) if r["site"] == site}
-                           | {_text(s.get("line")) for s in self.rows.rows(tx, "equipment_snapshot") if _text(s.get("site")) == site
-                              and s.get("line")}, key=_natural_key)
+            placed = {(r["site"], r["line"]) for r in registered_lines(tx)} | {
+                (_text(s.get("site")), _text(s.get("line"))) for s in self.rows.rows(tx, "equipment_snapshot")
+                if s.get("site") and s.get("line")}
+            lines = sorted({line for where, line in placed if where == site}, key=_natural_key)
+            own = {line.casefold() for line in lines}
+            elsewhere = defaultdict(set)
+            for where, line in placed:
+                if where != site and line.casefold() not in own:
+                    elsewhere[line.casefold()].add(where)
             choices = tuple((g["group_id"], names[g["group_id"]], _text(g["category"])) for g in sorted(
                 groups, key=lambda g: names[g["group_id"]]) if _text(g["category"]) in CATEGORIES)
-        return SheetRows(batch_id, sheet, _workbook(raw), site, base_date, tuple(rows), choices, tuple(lines))
+        return SheetRows(batch_id, sheet, _workbook(raw), site, base_date, tuple(rows), choices, tuple(lines),
+                         {line: tuple(sorted(sites)) for line, sites in elsewhere.items()})
 
     def _sheet_place_or_empty(self, tx, batch_id):
         raw = _raw(tx.get("import_batch", {"batch_id": batch_id}).get("raw_data"))
