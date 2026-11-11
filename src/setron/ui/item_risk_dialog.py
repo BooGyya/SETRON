@@ -383,8 +383,11 @@ class ItemRiskDialog(PopupDialog):
             combo.clear()
         self.end.addItem("해제 버전 없음", None)
         for release in sorted(releases, key=lambda r: (r.version_order is None, r.version_order or 0, r.release_version_id)):
+            # 버전 이름만 보인다. 순서 값은 사용자가 이미 아는 정보라 뺐다 (11-11 점검).
+            # 순서를 모르는 버전만 표시를 남긴다: 결함 범위 판정이 '미확인'이 될 수 있다.
+            text = release.version_raw if release.version_order is not None else f"{release.version_raw} · 순서 미확인"
             for combo in (self.start, self.end):
-                combo.addItem(f"{release.version_raw} · 순서 {release.version_order if release.version_order is not None else '미확인'}", release.release_version_id)
+                combo.addItem(text, release.release_version_id)
         self.model_menu.clear()
         self.model_actions = []
         models = {p.model_id: p.model_name for p in self.data.versions.pairs if p.family_id == fid}
