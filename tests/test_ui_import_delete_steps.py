@@ -42,7 +42,7 @@ def test_unavailable_notice_is_removed_without_faking_empty_database_or_enabling
     page.kind_combo.setCurrentIndex(page.kind_combo.findData(kind.value))
     assert not page.reload()
     assert not page.notice.text() and not page.notice.isVisibleTo(page)
-    assert page.empty.text() == "가져온 엑셀 목록을 읽고 있습니다."
+    assert "[검색]" in page.empty.text()
     assert page.catalog is None and page.table.rowCount() == 0
     assert not page.selected and "—" in page.counts.text()
     assert not page.delete_button.isEnabled() and not page.backup_button.isEnabled()

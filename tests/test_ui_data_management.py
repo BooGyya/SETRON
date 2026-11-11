@@ -72,6 +72,9 @@ class FakeGateway:
             self.created.append(args)
             return GroupRow(9, args[0], args[1], args[2], None, 0)
         results = {"delete_rows": 900, "restore_rows": 1, "add_row": 77, "create_sheet": 8, "add_site": args[0] if args else None,
+                   "apply_rows": {"added": [77] if len(args) > 2 and args[1] else [],
+                                  "journal": 900 if len(args) > 2 and args[2] else None},
+                   "undo_rows": None, "delete_release_rows": "v4.60.1.1", "reorder_items": None,
                    "add_release_version": 102, "add_release_item": 502, "sites": tuple(self.sites),
                    "status_sheets": (SHEET,), "sheet_grid": GRID, "equipment_overview": (GROUPS, EQUIPMENT),
                    "release_families": FAMILIES, "release_rows": ROWS, "history": HISTORY}
@@ -147,99 +150,103 @@ def test_sheet_hides_empty_rows_sorts_data_rows_and_marks_header_and_deleted(own
     assert not sheet.save_button.isEnabled() and not sheet.undo_button.isEnabled() and sheet.add_button.isEnabled()
 
 
-def test_edits_are_kept_until_save_then_saved_together_without_questions(own, monkeypatch):
+def test_edits_adds_and_deletes_wait_for_save_then_go_together(own, monkeypatch):
     asked = answer(monkeypatch)
     gateway = FakeGateway()
     saved = []
     page, sheet = sheet_page(own, gateway)
     page.saved.connect(saved.append)
-    sheet.items["E4"].setText("v1.2a")
-    sheet.items["B4"].setText("14L")
-    assert not gateway.saved and sheet.save_button.text() == "저장 (2칸)"  # 고치기만 해서는 저장하지 않는다
-    assert sheet.items["E4"].background().color() == module.SAVING
+    sheet.items["E4"].setText("v1.2a")              # 칸 수정
+    sheet.table.selectRow(2)                        # 3행 EC2 삭제 표시
+    assert sheet.delete_selected()
+    assert sheet.items["D3"].font().strikeOut() and "삭제 예정" in sheet.items["D3"].toolTip()
+    assert sheet.add_row()                          # 새 행
+    for address, value in (("B6", "19L"), ("C6", "M-O2"), ("D6", "EC9"), ("E6", "v2.0")):
+        sheet.items[address].setText(value)
+    assert not gateway.saved and "apply_rows" not in gateway.calls  # 저장 전에는 DB에 아무것도 쓰지 않는다
+    assert sheet.save_button.text() == "저장 (3건)"
     assert sheet.save()
     settle(page)
-    assert asked == [] and len(gateway.saved) == 1  # 한꺼번에 한 번 저장, 확인 창 없음
-    edits, context = gateway.saved[0]
-    assert all(isinstance(e, RecordEdit) for e in edits) and context == {"n": 1}
-    by_table = {e.table: e for e in edits}
-    assert by_table["equipment_version"].changes == {"version_raw": "v1.2a", "release_version_id": None}
-    assert by_table["equipment_snapshot"].changes == {"line": "14L"}
-    assert not sheet.edits and sheet.originals["E4"] == "v1.2a" and sheet.items["E4"].background().color() == module.SAVED
-    assert saved and "2칸을 저장했습니다" in sheet.notice.text() and sheet.steps[-1][0] == "saved"
-    assert not page.history_panel.loaded
+    assert len(asked) == 1 and "EC2" in asked[0]    # 행 삭제만 한 번 묻는다
+    assert gateway.saved[0][0][0].changes == {"version_raw": "v1.2a", "release_version_id": None}
+    assert gateway.done["apply_rows"] == [((7, [({"line": "19L", "model_name": "M-O2", "equipment_code": "EC9",
+                                                   "version_raw": "v2.0"}, 6)], (12,)), {})]
+    assert sheet.steps == [("saved", {"olds": {"E4": "v1.2"}, "added": [77], "journal": 900})]
+    assert not sheet.pending and saved and "1칸 수정 · 1행 추가 · 1행 삭제" in sheet.notice.text()
 
 
-def test_undo_goes_back_one_step_at_a_time(own, monkeypatch):
+def test_edit_on_a_row_marked_for_delete_is_not_saved(own, monkeypatch):
+    answer(monkeypatch)
+    gateway = FakeGateway()
+    page, sheet = sheet_page(own, gateway)
+    sheet.items["E3"].setText("v9")
+    sheet.table.selectRow(2)
+    sheet.delete_selected()
+    sheet.save()
+    settle(page)
+    assert not gateway.saved and gateway.done["apply_rows"][0][0][2] == (12,)
+
+
+def test_undo_goes_back_one_step_then_undoes_the_whole_last_save(own, monkeypatch):
     answer(monkeypatch)
     gateway = FakeGateway()
     page, sheet = sheet_page(own, gateway)
     sheet.items["E4"].setText("v9")
     sheet.items["E4"].setText("v10")
-    assert sheet.undo()
-    assert sheet.items["E4"].text() == "v9" and sheet.edits == {"E4": "v9"}   # 바로 앞 단계만
-    assert sheet.undo()
-    assert sheet.items["E4"].text() == "v1.2" and not sheet.edits and not sheet.undo_button.isEnabled()
-    sheet.items["E4"].setText("v9")
+    assert sheet.undo() and sheet.items["E4"].text() == "v9" and sheet.edits == {"E4": "v9"}
+    sheet.table.selectRow(2)
+    sheet.delete_selected()
+    assert sheet.undo() and not sheet.deletes and not sheet.items["D3"].font().strikeOut()  # 삭제 표시 풀기
+    sheet.add_row()
+    sheet.items["D6"].setText("EC9")
+    assert sheet.undo() and sheet.new_rows[0]["values"]["equipment_code"] == ""
+    assert sheet.undo() and not sheet.new_rows and sheet.table.rowCount() == 4
+    sheet.add_row()
+    for address, value in (("C6", "M-C4"), ("D6", "EC9"), ("E6", "v2.0")):
+        sheet.items[address].setText(value)
     sheet.save()
     settle(page)
-    assert sheet.undo()           # 저장한 수정 되돌리기 = 저장 전 값으로 다시 저장
+    assert sheet.undo()        # 마지막 저장 전체(수정 · 추가)를 되돌린다
     settle(page)
+    assert gateway.done["undo_rows"] == [((7, [77], None), {})]
     assert gateway.saved[-1][0][0].changes == {"version_raw": "v1.2", "release_version_id": None}
-    assert sheet.items["E4"].text() == "v1.2" and sheet.originals["E4"] == "v1.2" and not sheet.steps
-    sheet.table.selectRow(1)      # 4행 EC1 삭제 → 되돌리면 되살린다
-    assert sheet.delete_selected()
-    settle(page)
-    assert gateway.done["delete_rows"][-1] == ((7, (11,)), {}) and sheet.steps[-1] == ("delete", 900, ["EC1"])
-    assert sheet.undo()
-    settle(page)
-    assert gateway.done["restore_rows"] == [((900,), {})] and not sheet.steps and "되살렸습니다" in sheet.notice.text()
+    assert not sheet.steps and "마지막 저장을 되돌렸습니다" in sheet.notice.text()
 
 
-def test_delete_selected_rows_asks_once(own, monkeypatch):
-    asked = answer(monkeypatch, QMessageBox.StandardButton.No)
-    gateway = FakeGateway()
-    page, sheet = sheet_page(own, gateway)
-    sheet.table.selectRow(1)          # 4행 (EC1)
-    assert sheet.selected_rows() == {11: "EC1"} and sheet.delete_button.isEnabled()
-    assert not sheet.delete_selected() and "delete_rows" not in gateway.calls and "EC1" in asked[0]
-    sheet.items["E3"].setText("v7")   # 저장하지 않은 수정이 있으면 행을 지우지 않는다
-    assert not sheet.delete_button.isEnabled()
-
-
-def test_add_row_saves_when_required_cells_are_filled_and_registers_new_group(own, monkeypatch):
+def test_new_row_needs_required_cells_and_unknown_group_is_registered_on_save(own, monkeypatch):
     asked = answer(monkeypatch)
     monkeypatch.setattr(module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("OXIDE", True)))
     gateway = FakeGateway()
     page, sheet = sheet_page(own, gateway)
     assert sheet.add_row()
-    assert sheet.table.rowCount() == 5 and sheet.table.verticalHeaderItem(4).text() == "＋6"
-    assert set(sheet.new_row["cells"]) == {"B6", "C6", "D6", "E6"} and not sheet.add_button.isEnabled()
-    assert sheet.items["D6"].background().color() == module.NEW_ROW  # 비어 있는 필수 칸
-    sheet.items["B6"].setText("19L")
-    sheet.items["C6"].setText("C8")      # 없는 설비군
+    assert sheet.table.verticalHeaderItem(4).text() == "＋6" and sheet.items["D6"].background().color() == module.NEW_ROW
     sheet.items["D6"].setText("EC9")
-    assert "add_row" not in gateway.calls  # 필수 칸이 아직 비어 있다
+    assert not sheet.save() and "필수 칸" in sheet.notice.text()
+    sheet.items["C6"].setText("C8")
     sheet.items["E6"].setText("v2.0")
+    assert sheet.save()
     settle(page)
-    assert "C8" in asked[-1] and gateway.created == [("C8", "OXIDE", None)]
-    assert gateway.done["add_row"] == [((7, {"line": "19L", "model_name": "C8", "equipment_code": "EC9",
-                                              "version_raw": "v2.0"}, 6), {})]
-    assert sheet.steps[-1] == ("add", 77, "EC9") and sheet.new_row is None and "새 설비군 'C8' 등록" in sheet.notice.text()
-    assert sheet.undo()                  # 추가한 행 되돌리기 = 그 행 지우기 ('삭제됨' 표시 없이)
-    settle(page)
-    assert gateway.done["delete_rows"][-1] == ((7, (77,)), {"undo_add": True})
+    assert "C8" in asked[0] and gateway.created == [("C8", "OXIDE", None)] and "새 설비군 C8 등록" in sheet.notice.text()
 
 
-def test_new_row_can_be_undone_before_it_is_saved(own):
+def test_sort_follows_header_clicks_and_no_column_is_hidden(own):
     page, sheet = sheet_page(own)
-    sheet.add_row()
-    sheet.items["D6"].setText("EC9")
-    assert sheet.undo() and sheet.items["D6"].text() == "" and sheet.new_row is not None
-    assert sheet.undo() and sheet.new_row is None and sheet.table.rowCount() == 4
+    assert sheet.table.isColumnHidden(0)  # 원본 엑셀 순번(No)은 DB에 없는 값이라 숨긴다
+    assert "Line → 설비군 → 호기" in sheet.sort_label.text() and not sheet.sort_reset.isVisibleTo(sheet)
+
+    def rows():
+        return [sheet.table.verticalHeaderItem(r).text() for r in range(sheet.table.rowCount())]
+
+    sheet._header_clicked(4)   # E열(SW 버전) 오름차순
+    assert rows() == ["2", "4", "3", "5"] and "E열 · SW 버전 오름차순" in sheet.sort_label.text()
+    assert sheet.table.horizontalHeaderItem(4).text() == "E ▲"
+    sheet._header_clicked(4)   # 내림차순
+    assert rows() == ["2", "5", "3", "4"] and sheet.sort_reset.isVisibleTo(sheet)
+    sheet._header_clicked(4)   # 기본 정렬로
+    assert rows() == ["2", "4", "3", "5"] and sheet.sort is None
 
 
-def test_failed_save_keeps_edits_and_reports_reason(own):
+def test_failed_save_keeps_changes_and_reports_reason(own):
     gateway = FakeGateway()
     gateway.save = lambda edits, context=None: (_ for _ in ()).throw(ValueError("검토 후 자료가 바뀌었습니다"))
     failed = []
@@ -310,7 +317,7 @@ def test_site_added_then_empty_sheet_is_created_and_opened(own, monkeypatch):
     assert page.status_stack.currentIndex() == 0 and "빈 현황표를 만들었습니다" in page.sheet_panel.notice.text()
 
 
-def test_release_has_no_risk_saves_edits_right_away_and_adds_version_and_item(own, monkeypatch):
+def test_release_numbers_rows_from_one_adds_deletes_and_reorders_items(own, monkeypatch):
     asked = answer(monkeypatch)
     gateway = FakeGateway()
     page = page_with(own, gateway)
@@ -320,18 +327,17 @@ def test_release_has_no_risk_saves_edits_right_away_and_adds_version_and_item(ow
     assert not hasattr(panel, "risk_button") and "위험" not in module.RELEASE_COLUMNS
     panel.tree.setCurrentItem(panel.tree.topLevelItem(0).child(0))
     settle(page)
-    assert panel.family_title.text() == "C4 · M-C4 DFB" and panel.table.rowCount() == 3
+    assert [panel.table.verticalHeaderItem(r).text() for r in range(3)] == ["1", "2", "3"]  # 줄 번호는 1부터
     assert panel.table.item(1, 3).font().bold() and not panel.table.item(0, 3).font().bold()  # 개조형 적용 Item 강조
-    panel._toggle_version(0, 0)
-    assert panel.table.isRowHidden(1) and panel.table.item(0, 0).text() == "▶ v4.60.1.1"
-    panel._toggle_version(0, 0)
-    panel.table.item(1, 3).setText("보호동작 오류 수정")
-    settle(page)
+    assert not panel.table.item(0, 2).flags() & module.Qt.ItemFlag.ItemIsEditable  # No는 끌어서 바꾼다
     panel.table.item(1, 4).setText("전체")
     settle(page)
-    assert asked == [] and [e[0][0].changes for e in gateway.saved] == [
-        {"content": "보호동작 오류 수정"}, {"target_scope": "ALL", "target_group_ids": None}]
-    forms = iter([("v4.60.1.3", "2026-06-01"), ("3", "새 기능", "M-C4")])
+    assert asked == [] and gateway.saved[0][0][0].changes == {"target_scope": "ALL", "target_group_ids": None}
+    assert panel.move_item(1, 0)       # 2번 Item을 1번 자리로
+    settle(page)
+    assert gateway.done["reorder_items"] == [((100, [501, 500]), {})]
+    assert not panel.move_item(2, 0) and "같은 버전" in panel.notice.text()
+    forms = iter([("v4.60.1.3", "2026-06-01"), ("새 기능", "M-C4")])
 
     class Form:
         def __init__(self, *_):
@@ -348,9 +354,16 @@ def test_release_has_no_risk_saves_edits_right_away_and_adds_version_and_item(ow
     settle(page)
     assert gateway.done["add_release_version"] == [((10, "v4.60.1.3", date(2026, 6, 1)), {})]
     panel.table.selectRow(2)
-    assert panel.add_item_button.isEnabled() and panel.add_item()
+    assert panel.add_item()
     settle(page)
-    assert gateway.done["add_release_item"] == [((101, "새 기능", 3, [1]), {})]
+    assert gateway.done["add_release_item"] == [((101, "새 기능", None, [1]), {})]  # 번호는 적지 않는다 (맨 뒤)
+    panel.table.selectRow(1)
+    assert panel.delete_item()
+    settle(page)
+    panel.table.selectRow(2)
+    assert not panel.delete_item_button.isEnabled() and panel.delete_version()
+    settle(page)
+    assert gateway.done["delete_release_rows"] == [((100, 501), {}), ((101,), {})] and len(asked) == 2
 
 
 def test_release_bad_model_name_or_date_is_rejected_and_restored(own):
@@ -369,35 +382,35 @@ def test_release_bad_model_name_or_date_is_rejected_and_restored(own):
     assert not gateway.saved
 
 
-def test_history_list_with_detail_panel_rereads_on_every_visit(own):
+def test_history_shows_basic_columns_and_detail_slides_in_from_the_right(own):
     gateway = FakeGateway()
     page = page_with(own, gateway)
     page.select_tab(2)
     settle(page)
     panel = page.history_panel
-    assert [panel.table.horizontalHeaderItem(c).text() for c in range(8)] == list(panel.COLUMNS)
-    assert [panel.table.item(0, c).text() for c in range(8)] == [
-        module.HistoryPanel._when(datetime(2026, 11, 10, 14, 2)), "수정", "마스터.xlsx", "현황 2026-11-01 · D3", "EC1",
-        "SW Ver", "v1.1", "v1.2"]
+    assert [panel.table.horizontalHeaderItem(c).text() for c in range(panel.table.columnCount())] == [
+        "수정 일시", "구분", "대상", "항목", "수정 전", "수정 후"]
+    assert [panel.table.item(0, c).text() for c in range(6)] == [
+        module.HistoryPanel._when(datetime(2026, 11, 10, 14, 2)), "수정", "EC1", "SW Ver", "v1.1", "v1.2"]
     assert module.HistoryPanel._when(datetime(datetime.now().year, 11, 10, 14, 2)) == "11-10 14:02"  # 올해는 짧게
-    assert panel.table.item(1, 2).text() == "—" and panel.count.text() == "3건"
+    assert panel.count.text() == "3건" and not panel.drawer.is_open
     assert not [b for b in panel.findChildren(type(page.sheet_panel.save_button)) if b.text() == "새로 읽기"]
-    assert panel.detail_title.text() == "변경을 고르세요" and not panel.after_value.isVisibleTo(panel)
     panel.table.selectRow(0)
-    assert panel.detail_title.text() == "EC1 · SW Ver" and "D3" in panel.detail.text() and "마스터.xlsx" in panel.detail.text()
-    assert "2026-11-10 14:02" in panel.detail.text()  # 세부 정보에는 전체 일시
+    assert panel.drawer.is_open and panel.detail_title.text() == "EC1 · SW Ver"
+    assert "D3" in panel.detail.text() and "마스터.xlsx" in panel.detail.text() and "2026-11-10 14:02" in panel.detail.text()
     assert panel.before_value.text() == "v1.1" and panel.after_value.text() == "v1.2"
-    panel.kind.setCurrentIndex(panel.kind.findText("설비군"))
-    assert panel.table.rowCount() == 1 and panel.table.item(0, 4).text() == "M-C7"
-    reads = gateway.calls.count("history")
     page.select_tab(0)
+    assert not panel.drawer.is_open  # 다른 탭으로 가면 닫힌다
+    reads = gateway.calls.count("history")
     page.select_tab(2)
     settle(page)
     assert gateway.calls.count("history") == reads + 1  # 탭에 들어올 때마다 다시 읽는다
+    panel.kind.setCurrentIndex(panel.kind.findText("설비군"))
+    assert panel.table.rowCount() == 1 and panel.table.item(0, 2).text() == "M-C7"
 
 
 def test_column_widths_are_resizable_and_remembered(own):
-    store = Store({module.COLUMN_KEY + "history": [150, 60, 200, 160, 120, 90, 110, 110]})
+    store = Store({module.COLUMN_KEY + "history": [150, 60, 200, 160, 120, 110]})
     page = page_with(own, store=store)
     page.select_tab(2)
     settle(page)

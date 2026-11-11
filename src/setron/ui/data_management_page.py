@@ -260,14 +260,22 @@ class _SheetTable(QTableWidget):
 
 
 # --- 설비현황 › 현황표 ---------------------------------------------------------------------
+HIDDEN_HEADERS = {"no", "no.", "번호", "순번"}  # 원본 엑셀의 순번 열. DB에 저장하지 않는 값이라 숨긴다 (11-11 4차)
+
+
 class SheetPanel(_Panel):
-    """가져온 엑셀 시트. 칸을 고치고 [저장]으로 한꺼번에 저장한다. 행 추가·삭제와 바로 앞 단계 되돌리기 (11-11)."""
+    """가져온 엑셀 시트. 칸 수정 · 행 추가 · 행 삭제를 모아 두었다가 [저장]으로 한꺼번에 반영한다 (11-11 4차).
+
+    [되돌리기]는 바로 앞 단계 하나(저장 전 수정 · 새 행 · 삭제 표시, 또는 마지막 저장 전체)를 되돌린다.
+    데이터 행은 Line → 설비군 → 호기 순으로 정렬해 보이고, 열 제목을 누르면 그 열로 정렬한다.
+    """
 
     def __init__(self, page):
         super().__init__(page)
         self.sheets, self.grid, self.originals, self.edits, self.items = (), None, {}, {}, {}
-        self.shown, self.steps, self.new_row, self.first_row = {}, [], None, 0
-        self.pending_batch = None  # 다른 화면(위치)에서 만든 현황표를 열 때
+        self.new_rows, self.deletes, self.steps, self.sort = [], {}, [], None
+        self.first_row, self.pending_batch, self._current = 0, None, None
+        self.letters = {}  # 열 글자 → 표 열 번호
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         card = Card(padding=20)
@@ -279,12 +287,11 @@ class SheetPanel(_Panel):
         self.sheet_combo.currentIndexChanged.connect(self._sheet_changed)
         self.source = label("", 12, color=SECONDARY, wrap=True)
         self.undo_button = button("되돌리기")
-        self.undo_button.setToolTip("바로 앞 단계 하나를 되돌립니다 (칸 수정 · 저장 · 행 추가 · 행 삭제).")
+        self.undo_button.setToolTip("바로 앞 단계 하나를 되돌립니다 (저장 전 수정 · 새 행 · 삭제 표시, 또는 마지막 저장).")
         self.add_button = button("＋ 행 추가")
-        self.add_button.setToolTip("표 맨 아래에 새 행을 만듭니다. 호기 · 설비군 · SW 버전을 다 적으면 저장되고 정렬됩니다.")
         self.delete_button = button("선택 행 삭제")
         self.delete_button.setAccessibleName("고른 설비의 현황표 행 삭제")
-        self.delete_button.setToolTip("고른 칸이 속한 설비의 이 현황표 행(설비 현황·SW 버전)을 DB에서 지웁니다.")
+        self.delete_button.setToolTip("고른 칸이 속한 설비의 행을 '삭제 예정'으로 표시합니다. [저장]을 누르면 지워집니다.")
         self.save_button = button("저장", primary=True)
         self.save_button.setMinimumWidth(120)
         self.undo_button.clicked.connect(self.undo)
@@ -297,6 +304,15 @@ class SheetPanel(_Panel):
             row.addWidget(widget)
         card.body.addLayout(row)
         card.body.addWidget(self.source)  # 원본 파일 안내는 버튼 줄 아래 (긴 파일 이름이 화면 폭을 늘리지 않게)
+        sort_row = QHBoxLayout()
+        self.sort_label = label("", 12, medium=True, color=PRIMARY)
+        self.sort_reset = button("기본 정렬로")
+        self.sort_reset.setStyleSheet("QPushButton {padding:0 10px;min-height:26px;max-height:26px;font-size:12px;}")
+        self.sort_reset.clicked.connect(lambda: self.sort_by(None))
+        sort_row.addWidget(self.sort_label)
+        sort_row.addWidget(self.sort_reset)
+        sort_row.addStretch()
+        card.body.addLayout(sort_row)
         self.table = _SheetTable()
         self.table.setAccessibleName("현황표 · 엑셀 시트 그대로")
         self.table.setStyleSheet(TABLE_STYLE)
@@ -307,13 +323,13 @@ class SheetPanel(_Panel):
                                    | QAbstractItemView.EditTrigger.AnyKeyPressed)
         self.table.itemChanged.connect(self._cell_changed)
         self.table.itemSelectionChanged.connect(self._sync)
+        self.table.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.page.columns.attach(self.table, "sheet")
         card.body.addWidget(self.table)
-        card.body.addWidget(label("가져온 엑셀 시트를 원래 열·행 번호로 보여 주고, 데이터 행은 Line → 설비군 → 호기 순으로 정렬합니다. "
-                                  "DB 값과 연결된 칸을 두 번 눌러 고친 뒤 [저장]을 누르면 한꺼번에 저장되고 변경 이력에 남습니다 "
-                                  "(고친 칸 노란색 → 저장됨 초록색). [＋ 행 추가]로 설비를 더하고, 행을 지우려면 그 설비의 칸이나 "
-                                  "왼쪽 행 번호를 고른 뒤 [선택 행 삭제]를 누릅니다. Site · 기준일은 바꿀 수 없습니다.",
-                                  12, color=SECONDARY, wrap=True))
+        card.body.addWidget(label("가져온 엑셀 시트를 원래 열·행 번호로 보여 줍니다. DB 값과 연결된 칸을 두 번 눌러 고치고, [＋ 행 추가]로 "
+                                  "설비를 더하고, 칸이나 왼쪽 행 번호를 고른 뒤 [선택 행 삭제]로 지울 행을 표시합니다. 바뀐 내용은 "
+                                  "[저장]을 눌러야 한꺼번에 DB에 반영되고 변경 이력에 남습니다 (노란색 수정 · 분홍색 새 행 빈 필수 칸 · "
+                                  "회색 취소선 삭제 예정). Site · 기준일은 바꿀 수 없습니다.", 12, color=SECONDARY, wrap=True))
         card.body.addWidget(self.notice)
         self._sync()
 
@@ -334,8 +350,7 @@ class SheetPanel(_Panel):
         self.sheet_combo.clear()
         for sheet in self.sheets:
             self.sheet_combo.addItem(f"{sheet.label} · {sheet.equipment_count}대", sheet.batch_id)
-        index = max(0, self.sheet_combo.findData(previous))
-        self.sheet_combo.setCurrentIndex(index)
+        self.sheet_combo.setCurrentIndex(max(0, self.sheet_combo.findData(previous)))
         self.sheet_combo.blockSignals(False)
         self._current = self.sheet_combo.currentData()
         if not self.sheets:
@@ -351,9 +366,14 @@ class SheetPanel(_Panel):
         self.pending_batch = batch_id
         self.loaded = False
 
+    @property
+    def pending(self):
+        """저장하지 않은 바뀐 내용이 있는가 (수정 · 새 행 · 삭제 표시)."""
+        return bool(self.edits or self.new_rows or self.deletes)
+
     def _sheet_changed(self, *_):
         batch_id = self.sheet_combo.currentData()
-        if batch_id is None or batch_id == getattr(self, "_current", None):
+        if batch_id is None or batch_id == self._current:
             return
         if not self._leave_ok():
             self.sheet_combo.blockSignals(True)
@@ -365,11 +385,11 @@ class SheetPanel(_Panel):
         self._read_grid(batch_id)
 
     def _leave_ok(self):
-        """저장하지 않은 수정이 있으면 저장 · 버리기 · 취소를 묻는다. 계속 가도 되면 True."""
-        if not self.edits:
+        """저장하지 않은 바뀐 내용이 있으면 저장 · 버리기 · 취소를 묻는다. 계속 가도 되면 True."""
+        if not self.pending:
             return True
-        box = QMessageBox(QMessageBox.Icon.Question, "저장하지 않은 수정",
-                          f"저장하지 않은 수정이 {len(self.edits)}칸 있습니다. 어떻게 할까요?", parent=self)
+        box = QMessageBox(QMessageBox.Icon.Question, "저장하지 않은 변경",
+                          f"저장하지 않은 변경이 {self._count()}건 있습니다. 어떻게 할까요?", parent=self)
         save = box.addButton("저장", QMessageBox.ButtonRole.AcceptRole)
         discard = box.addButton("버리기", QMessageBox.ButtonRole.DestructiveRole)
         box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
@@ -378,7 +398,7 @@ class SheetPanel(_Panel):
             self.save()
             return False  # 저장이 끝난 뒤 다시 고르게 한다
         if box.clickedButton() is discard:
-            self.edits.clear()
+            self.edits, self.new_rows, self.deletes = {}, [], {}
             return True
         return False
 
@@ -391,13 +411,13 @@ class SheetPanel(_Panel):
             self.say("시트를 읽지 못했습니다. 다시 시도해 주세요.", error=True)
             return
         if self.grid is None or self.grid.batch_id != grid.batch_id:
-            self.steps = []
+            self.steps, self.sort = [], None
         self._show(grid)
         sheet = next((s for s in self.sheets if s.batch_id == grid.batch_id), None)
         self.source.setText(f"원본 파일: {grid.workbook or '파일 이름 없음'} · 시트 {grid.sheet}"
                             + (f" · 가져온 시각 {_text(sheet.imported_at)[:16]}" if sheet and sheet.imported_at else ""))
         note, self.saved_note = self.saved_note, ""
-        self.say(note + f"고칠 수 있는 칸 {sum(b.editable for b in grid.bindings.values())}개 · 고친 뒤 [저장]을 누릅니다.")
+        self.say(note + f"고칠 수 있는 칸 {sum(b.editable for b in grid.bindings.values())}개 · 바꾼 뒤 [저장]을 누릅니다.")
 
     # 표 그리기 --------------------------------------------------------------------------------
     def _value(self, grid, address):
@@ -405,56 +425,89 @@ class SheetPanel(_Panel):
         return binding.current if binding else _text(grid.cells.get(address))
 
     def _show(self, grid):
-        self.grid, self.edits, self.originals, self.items, self.shown, self.new_row = grid, {}, {}, {}, {}, None
+        self.grid, self.edits, self.originals, self.new_rows, self.deletes = grid, {}, {}, [], {}
+        if grid is not None:
+            self.originals = {a: b.current for a, b in grid.bindings.items() if b.editable}
+        self._render()
+
+    def _sort_key(self, grid, row):
+        if self.sort is not None:
+            letter, _ = self.sort
+            return [_natural(self.edits.get(f"{letter}{row}", self._value(grid, f"{letter}{row}"))), row]
+        letters = {name: letter for letter, name in grid.columns.items()}
+        return [_natural(self.edits.get(f"{letters[n]}{row}", self._value(grid, f"{letters[n]}{row}"))) if n in letters else []
+                for n in ("line", "model_name", "equipment_code")] + [row]
+
+    def _render(self):
+        """현재 시트와 저장 전 변경(수정 · 새 행 · 삭제 표시)으로 표를 다시 그린다."""
+        grid = self.grid
+        self.items = {}
         self.table.blockSignals(True)
         self.table.clear()
         self.table.clearSpans()
         addresses = (*grid.cells, *grid.bindings, *grid.deleted) if grid is not None else ()
         filled = [a for a in addresses if a in grid.bindings or a in grid.deleted or _text(grid.cells.get(a)).strip()]
         if not filled:
-            columns = len(grid.columns) + 1 if grid is not None and grid.columns else 0
             self.table.setRowCount(0)
-            self.table.setColumnCount(max(columns, max((_split(a)[0] + 1 for a in addresses), default=0)))
-            self.table.setHorizontalHeaderLabels([_col(c) for c in range(self.table.columnCount())])
+            self.table.setColumnCount(0)
             self.table.natural = []
             self.table.blockSignals(False)
+            self._sync_sort()
             self._sync()
             return
-        positions = [_split(a) for a in addresses]
-        columns = max(c for c, _ in positions) + 1
-        # 값이 하나도 없는 행(엑셀의 빈 줄)은 보이지 않는다. 행 번호는 엑셀 그대로 둔다.
+        columns = max(_split(a)[0] for a in addresses) + 1
         rows = sorted({_split(a)[1] for a in filled})
         data_start = min((_split(a)[1] for a in grid.bindings), default=rows[-1] + 1)
         header_rows = [r for r in rows if r < data_start]
-        data_rows = [r for r in rows if r >= data_start]
-        letters = {name: letter for letter, name in grid.columns.items()}
-        if {"line", "model_name", "equipment_code"} & set(letters):
-            data_rows.sort(key=lambda r: [_natural(self._value(grid, f"{letters[n]}{r}")) if n in letters else []
-                                          for n in ("line", "model_name", "equipment_code")] + [r])
-        rows = header_rows + data_rows
-        self.first_row = rows[0]
+        data_rows = sorted((r for r in rows if r >= data_start), key=lambda r: self._sort_key(grid, r))
+        if self.sort is not None and self.sort[1]:
+            data_rows.reverse()
+        new_numbers = [n["number"] for n in self.new_rows]
+        shown = header_rows + data_rows + new_numbers
+        self.first_row = shown[0]
         self.table.setColumnCount(columns)
-        self.table.setRowCount(len(rows))
-        self.table.setHorizontalHeaderLabels([_col(c) for c in range(columns)])
-        self.table.setVerticalHeaderLabels([str(r) for r in rows])
+        self.table.setRowCount(len(shown))
+        self.letters = {_col(c): c for c in range(columns)}
+        labels = []
+        for c in range(columns):
+            arrow = ""
+            if self.sort is not None and self.sort[0] == _col(c):
+                arrow = " ▼" if self.sort[1] else " ▲"
+            labels.append(_col(c) + arrow)
+        self.table.setHorizontalHeaderLabels(labels)
+        self.table.setVerticalHeaderLabels([str(r) for r in header_rows + data_rows] + [f"＋{n}" for n in new_numbers])
         bold = QFont(self.table.font())
         bold.setBold(True)
         texts = {}
-        for index, r in enumerate(rows):
+        hidden = set()
+        deleting = {a for a, sid in grid.owners.items() if sid in self.deletes}
+        for index, r in enumerate(header_rows + data_rows):
             header = r < data_start
             values = []
             for c in range(columns):
                 address = f"{_col(c)}{r}"
                 binding = grid.bindings.get(address)
-                value = self._value(grid, address)
+                value = self.edits.get(address, self._value(grid, address))
                 values.append(value)
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, address)
                 self.items[address] = item
-                self.shown[address] = value
-                if binding is not None and binding.editable:
-                    item.setToolTip(f"{binding.label} · 두 번 눌러 고친 뒤 [저장]")
-                    self.originals[address] = value
+                if header and value.strip().casefold() in HIDDEN_HEADERS and not any(
+                        _split(a)[0] == c for a in grid.bindings):
+                    hidden.add(c)
+                if address in deleting:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    font = QFont(self.table.font())
+                    font.setStrikeOut(True)
+                    item.setFont(font)
+                    item.setForeground(QBrush(QColor(DANGER)))
+                    item.setToolTip("삭제 예정 · [저장]을 누르면 지워집니다. [되돌리기]로 표시를 풉니다.")
+                elif binding is not None and binding.editable:
+                    edited = address in self.edits
+                    if edited:
+                        item.setBackground(QBrush(SAVING))
+                    item.setToolTip(f"{binding.label}: {self.originals[address] or '(빈칸)'} → {value or '(빈칸)'} · 저장 전"
+                                    if edited else f"{binding.label} · 두 번 눌러 고친 뒤 [저장]")
                 else:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     if address in grid.deleted:
@@ -471,7 +524,7 @@ class SheetPanel(_Panel):
                     else:
                         item.setToolTip(f"{binding.label} · 고칠 수 없음")
                 self.table.setItem(index, c, item)
-            # 제목처럼 첫 칸에만 값이 있는 머리글 줄은 한 줄로 펼쳐 긴 제목이 첫 열을 넓히지 않게 한다.
+            # 제목처럼 첫 칸에만 값이 있는 머리글 줄은 한 줄로 펼친다.
             if header and columns > 1 and values[0] and not any(values[1:]):
                 self.table.setSpan(index, 0, 1, columns)
                 continue
@@ -479,56 +532,167 @@ class SheetPanel(_Panel):
                 if value:
                     key = (c, header)
                     texts[key] = max(texts.get(key, ""), value, key=len)
+        start = len(header_rows) + len(data_rows)
+        for offset, new in enumerate(self.new_rows):
+            for c in range(columns):
+                letter = _col(c)
+                address = f"{letter}{new['number']}"
+                name = grid.columns.get(letter)
+                item = QTableWidgetItem(new["values"].get(name, "") if name else "")
+                item.setData(Qt.ItemDataRole.UserRole, address)
+                if name is None:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                else:
+                    empty = not new["values"].get(name)
+                    item.setBackground(QBrush(NEW_ROW if empty and name in REQUIRED else SAVING))
+                    item.setToolTip(f"새 행 · {FIELD_NAMES[name]}" + (" (필수)" if name in REQUIRED else "") + " · 저장 전")
+                self.items[address] = item
+                self.table.setItem(start + offset, c, item)
+        for c in range(columns):
+            self.table.setColumnHidden(c, c in hidden)
         self.table.measure(texts, self.page.columns)
         self.table.blockSignals(False)
+        self._sync_sort()
         self._sync()
 
-    def _paint(self, address, state):
-        """칸 상태: None(원래 값) · 'edited'(저장 전) · 'saving' · 'saved'."""
-        item, binding = self.items.get(address), self.grid.bindings.get(address) if self.grid else None
-        if item is None or binding is None:
+    # 정렬 ------------------------------------------------------------------------------------
+    def _header_clicked(self, column):
+        """열 제목을 누르면 그 열로 오름차순 → 내림차순 → 기본 정렬 순으로 바뀐다."""
+        if self.grid is None:
             return
-        self.table.blockSignals(True)
-        if state is None:
-            item.setBackground(QBrush())
-            item.setToolTip(f"{binding.label} · 두 번 눌러 고친 뒤 [저장]")
+        letter = _col(column)
+        if self.sort is None or self.sort[0] != letter:
+            self.sort_by((letter, False))
+        elif not self.sort[1]:
+            self.sort_by((letter, True))
         else:
-            item.setBackground(QBrush(SAVED if state == "saved" else SAVING))
-            note = {"edited": "저장 전", "saving": "저장 중", "saved": "저장됨"}[state]
-            item.setToolTip(f"{binding.label}: {getattr(item, 'before', '') or '(빈칸)'} → {item.text() or '(빈칸)'} · {note}")
-        self.table.blockSignals(False)
+            self.sort_by(None)
 
-    def _set_text(self, address, text):
-        self.table.blockSignals(True)
-        self.items[address].setText(text)
-        self.table.blockSignals(False)
-        self.shown[address] = text
+    def sort_by(self, sort):
+        self.sort = sort
+        self._render()
 
-    # 칸 수정 · 저장 ---------------------------------------------------------------------------
+    def _sync_sort(self):
+        names = {"line": "Line", "model_name": "설비군", "equipment_code": "호기", "version_raw": "SW 버전"}
+        if self.sort is None:
+            order = " → ".join(names[n] for n in ("line", "model_name", "equipment_code")
+                               if self.grid is not None and n in self.grid.columns.values())
+            self.sort_label.setText(f"정렬: {order or '엑셀 순서'} (기본) · 열 제목을 누르면 그 열로 정렬합니다")
+        else:
+            letter, descending = self.sort
+            field = names.get(self.grid.columns.get(letter, ""), "") if self.grid is not None else ""
+            self.sort_label.setText(f"정렬: {letter}열{(' · ' + field) if field else ''} {'내림차순' if descending else '오름차순'}"
+                                    " · 한 번 더 누르면 바뀝니다")
+        self.sort_reset.setVisible(self.sort is not None)
+
+    # 칸 수정 ----------------------------------------------------------------------------------
+    def _new_row_of(self, address):
+        number = _split(address)[1]
+        return next((n for n in self.new_rows if n["number"] == number), None)
+
     def _cell_changed(self, item):
         address = item.data(Qt.ItemDataRole.UserRole)
-        if self.new_row is not None and address in self.new_row["cells"]:
-            self._new_cell_changed(address, item)
+        value = item.text().strip()
+        new = self._new_row_of(address)
+        if new is not None:
+            name = self.grid.columns.get(_col(_split(address)[0]))
+            previous = new["values"].get(name, "")
+            if name is None or value == previous:
+                return
+            self.steps.append(("new", new["number"], name, previous))
+            new["values"][name] = value
+            self._paint_cell(address)
+            self._sync()
             return
         if address not in self.originals:
             return
-        value, previous = item.text().strip(), self.shown.get(address, "")
+        previous = self.edits.get(address, self.originals[address])
         if value == previous:
             return
         self.steps.append(("cell", address, previous))
-        self._apply_edit(address, value)
-
-    def _apply_edit(self, address, value):
-        self.shown[address] = value
-        if value == self.originals[address]:
-            self.edits.pop(address, None)
-            self._paint(address, None)
-        else:
-            self.edits[address] = value
-            self.items[address].before = self.originals[address]
-            self._paint(address, "edited")
+        self._set_edit(address, value)
+        self._paint_cell(address)
         self._sync()
 
+    def _paint_cell(self, address):
+        """칸 하나의 색 · 안내만 다시 칠한다 (편집 신호 안에서 표 전체를 다시 그리지 않는다)."""
+        item = self.items.get(address)
+        if item is None:
+            return
+        self.table.blockSignals(True)
+        new = self._new_row_of(address)
+        if new is not None:
+            name = self.grid.columns.get(_col(_split(address)[0]))
+            empty = not new["values"].get(name)
+            item.setBackground(QBrush(NEW_ROW if empty and name in REQUIRED else SAVING))
+        elif address in self.originals:
+            binding = self.grid.bindings[address]
+            if address in self.edits:
+                item.setBackground(QBrush(SAVING))
+                item.setToolTip(f"{binding.label}: {self.originals[address] or '(빈칸)'} → {self.edits[address] or '(빈칸)'} · 저장 전")
+            else:
+                item.setBackground(QBrush())
+                item.setToolTip(f"{binding.label} · 두 번 눌러 고친 뒤 [저장]")
+        self.table.blockSignals(False)
+
+    def _set_edit(self, address, value):
+        if value == self.originals[address]:
+            self.edits.pop(address, None)
+        else:
+            self.edits[address] = value
+
+    def _count(self):
+        return len(self.edits) + len(self.new_rows) + len(self.deletes)
+
+    # 행 추가 · 삭제 표시 --------------------------------------------------------------------------
+    def add_row(self):
+        """표 맨 아래에 새 행을 만든다. [저장]을 누르면 다른 변경과 함께 저장된다."""
+        if self.grid is None or not self.grid.columns or self.page.saving:
+            return False
+        used = [_split(a)[1] for a in (*self.grid.cells, *self.grid.bindings, *self.grid.deleted)]
+        number = max([*used, *(n["number"] for n in self.new_rows)], default=1) + 1
+        self.new_rows.append({"number": number, "values": dict.fromkeys(self.grid.columns.values(), "")})
+        self.steps.append(("new_row", number))
+        self._render()
+        self.table.scrollToBottom()
+        first = next((f"{letter}{number}" for letter, name in self.grid.columns.items() if name == "equipment_code"), None)
+        if first in self.items:
+            self.table.setCurrentItem(self.items[first])
+        self.say("새 행을 만들었습니다 · 호기 · 설비군 · SW 버전(필수)을 적은 뒤 [저장]을 누릅니다.")
+        return True
+
+    def selected_rows(self):
+        """고른 칸이 속한 설비 현황 {snapshot_id: 호기} (이미 삭제 예정인 행은 뺀다)."""
+        if self.grid is None:
+            return {}
+        chosen = {}
+        for item in self.table.selectedItems():
+            address = item.data(Qt.ItemDataRole.UserRole)
+            sid = self.grid.owners.get(address)
+            if sid is not None and sid not in self.deletes:
+                chosen.setdefault(sid, self.grid.bindings[address].label.split(" · ")[0])
+        return chosen
+
+    def _selected_new_rows(self):
+        numbers = {_split(i.data(Qt.ItemDataRole.UserRole))[1] for i in self.table.selectedItems()}
+        return [n for n in self.new_rows if n["number"] in numbers]
+
+    def delete_selected(self):
+        """고른 행을 '삭제 예정'으로 표시한다 (저장 전 새 행은 바로 없앤다). [저장]을 누르면 지운다."""
+        chosen, news = self.selected_rows(), self._selected_new_rows()
+        if (not chosen and not news) or self.grid is None or self.page.saving:
+            return False
+        if chosen:
+            self.deletes.update(chosen)
+            self.steps.append(("mark", tuple(chosen)))
+        for new in news:
+            self.new_rows.remove(new)
+            self.steps = [s for s in self.steps if not (s[0] in ("new_row", "new") and s[1] == new["number"])]
+        self._render()
+        self.say(f"설비 {len(chosen)}대를 삭제 예정으로 표시했습니다 · [저장]을 누르면 지워집니다." if chosen else "새 행을 지웠습니다.")
+        return True
+
+    # 저장 ------------------------------------------------------------------------------------
     def changes(self, edits=None):
         """고친 칸을 기록별 변경으로 묶는다. SW 버전을 바꾸면 릴리즈 연결은 비워 다시 판정한다."""
         grouped = defaultdict(dict)
@@ -541,33 +705,56 @@ class SheetPanel(_Panel):
         return [(table, dict(key), changes) for (table, key), changes in grouped.items()]
 
     def save(self):
-        """고친 칸을 한꺼번에 저장한다 (확인 창 없음)."""
-        if not self.edits or self.grid is None or self.page.saving:
+        """수정 · 새 행 · 삭제 표시를 한꺼번에 저장한다. 없는 설비군과 행 삭제만 한 번 묻는다."""
+        if not self.pending or self.grid is None or self.page.saving:
             return False
-        batch, grid = dict(self.edits), self.grid
-        for address in batch:
-            self._paint(address, "saving")
-        return self.page.save_changes(self.changes(batch), self, done=lambda _: self._stored(grid, batch),
-                                      failed=lambda _: self._sync())
+        incomplete = [n for n in self.new_rows if not all(n["values"].get(f) for f in REQUIRED if f in n["values"])]
+        if incomplete:
+            self.say(f"새 행 {len(incomplete)}개의 필수 칸(호기 · 설비군 · SW 버전)을 채운 뒤 저장해 주세요.", error=True)
+            return False
+        known = {name.casefold() for name in self.grid.groups}
+        creates = []
+        for model in dict.fromkeys(n["values"].get("model_name", "") for n in self.new_rows):
+            if model and model.casefold() not in known:
+                if QMessageBox.question(self, "새 설비군", f"설비군 '{model}'이(가) 없습니다. 새 설비군으로 등록할까요?") \
+                        != QMessageBox.StandardButton.Yes:
+                    self.say(f"설비군 '{model}'을(를) 등록하지 않았습니다. 새 행의 설비군 칸을 고쳐 주세요.", error=True)
+                    return False
+                category, ok = QInputDialog.getItem(self, "새 설비군", f"'{model}'의 분류", ["POLY", "OXIDE", "KCTC"], 0, False)
+                if not ok:
+                    return False
+                creates.append((model, category))
+        if self.deletes and QMessageBox.question(
+                self, "현황표 행 삭제", f"설비 {len(self.deletes)}대의 행({', '.join(list(self.deletes.values())[:6])}"
+                f"{' …' if len(self.deletes) > 6 else ''})을 지우고 저장할까요?\n[되돌리기]로 저장 전으로 돌릴 수 있습니다.") \
+                != QMessageBox.StandardButton.Yes:
+            return False
+        grid, batch_id, gateway = self.grid, self.grid.batch_id, self.page.gateway
+        edits = {a: v for a, v in self.edits.items() if grid.owners.get(a) not in self.deletes}
+        olds = {a: self.originals[a] for a in edits}
+        adds = [(dict(n["values"]), n["number"]) for n in self.new_rows]
+        deletes = tuple(self.deletes)
+        save_edits = self.page.edit_work(self.changes(edits)) if edits else None
 
-    def _stored(self, grid, batch, *, undoing=False):
-        if grid is not self.grid:
-            return
-        olds = {address: self.originals[address] for address in batch}
-        for address, value in batch.items():
-            self.originals[address] = value
-            if self.edits.get(address) == value:
-                self.edits.pop(address)
-            self.items[address].before = olds[address]
-            self._paint(address, "saved")
-        if not undoing:
-            # 저장한 칸 수정은 '저장' 한 단계로 묶는다 (되돌리면 저장 전 값으로 다시 저장).
-            self.steps = [s for s in self.steps if not (s[0] == "cell" and s[1] in batch)]
-            self.steps.append(("saved", olds))
-        labels = [grid.bindings[a].label for a in batch]
-        self.say(("되돌렸습니다" if undoing else f"{len(batch)}칸을 저장했습니다") + " · "
-                 + ", ".join(labels[:4]) + (" …" if len(labels) > 4 else "") + " · 변경 이력에 기록했습니다.")
-        self._sync()
+        def work():
+            for model, category in creates:
+                gateway.data_admin("create_group", model, category, None)
+            saved = save_edits() if save_edits else None  # 검토 지문 충돌이 가장 잦으므로 칸 수정을 먼저 저장한다
+            rows = gateway.data_admin("apply_rows", batch_id, adds, deletes) if (adds or deletes) else {"added": [], "journal": None}
+            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None), rows=rows)
+
+        counts = (len(edits), len(adds), len(deletes))
+        return self.page.change(work, self, message="저장하고 있습니다…",
+                                done=lambda result: self._saved_all(result, olds, counts, creates))
+
+    def _saved_all(self, result, olds, counts, creates):
+        self.steps = [s for s in self.steps if s[0] == "saved"]
+        self.steps.append(("saved", {"olds": olds, "added": list(result.rows["added"]), "journal": result.rows["journal"]}))
+        self.edits, self.new_rows, self.deletes = {}, [], {}
+        parts = [f"{n}{unit}" for n, unit in zip(counts, ("칸 수정", "행 추가", "행 삭제")) if n]
+        self.saved_note = ("저장했습니다 · " + " · ".join(parts)
+                           + (f" (새 설비군 {', '.join(m for m, _ in creates)} 등록)" if creates else "") + ". ")
+        self.reload()
 
     # 되돌리기 ----------------------------------------------------------------------------------
     def undo(self):
@@ -575,204 +762,62 @@ class SheetPanel(_Panel):
         if not self.steps or self.page.saving or self.grid is None:
             return False
         kind, *rest = self.steps[-1]
-        if kind == "cell":
+        if kind != "saved":
             self.steps.pop()
-            address, previous = rest
-            self._set_text(address, previous)
-            self._apply_edit(address, previous)
-            self.say("수정 한 칸을 되돌렸습니다.")
+            if kind == "cell":
+                address, previous = rest
+                self._set_edit(address, previous)
+                self.say("수정 한 칸을 되돌렸습니다.")
+            elif kind == "new":
+                number, name, previous = rest
+                new = next((n for n in self.new_rows if n["number"] == number), None)
+                if new is not None:
+                    new["values"][name] = previous
+            elif kind == "new_row":
+                (number,) = rest
+                self.new_rows = [n for n in self.new_rows if n["number"] != number]
+                self.steps = [s for s in self.steps if not (s[0] == "new" and s[1] == number)]
+                self.say("새 행을 지웠습니다.")
+            elif kind == "mark":
+                (sids,) = rest
+                for sid in sids:
+                    self.deletes.pop(sid, None)
+                self.say("삭제 표시를 풀었습니다.")
+            self._render()
             return True
-        if kind == "new":
-            self.steps.pop()
-            address, previous = rest
-            self._set_text(address, previous)
-            self.new_row["values"][self.new_row["cells"][address]] = previous
-            self._paint_new_row()
-            return True
-        if kind == "new_row":
-            self.steps.pop()
-            self._drop_new_row()
-            self.say("새 행을 지웠습니다.")
-            return True
-        if self.edits or self.new_row is not None:
-            self.say("저장하지 않은 수정이나 새 행을 먼저 저장하거나 되돌려 주세요.", error=True)
+        if self.pending:
+            self.say("저장하지 않은 변경을 먼저 저장하거나 되돌려 주세요.", error=True)
             return False
-        grid = self.grid
-        if kind == "saved":
-            (olds,) = rest
-            return self.page.save_changes(self.changes(olds), self,
-                                          done=lambda _: (self.steps.pop(), self._restore_saved(grid, olds)))
-        if kind == "delete":
-            journal, codes = rest
-            return self.page.change(lambda: self.page.gateway.data_admin("restore_rows", journal), self,
-                                    message="지운 행을 되살리고 있습니다…",
-                                    done=lambda _: self._after_undo(f"지운 행을 되살렸습니다 ({', '.join(codes[:4])})."))
-        if kind == "add":
-            sid, code = rest
-            batch_id = grid.batch_id
-            return self.page.change(lambda: self.page.gateway.data_admin("delete_rows", batch_id, (sid,), undo_add=True),
-                                    self, message="추가한 행을 지우고 있습니다…",
-                                    done=lambda _: self._after_undo(f"추가한 행({code})을 지웠습니다."))
-        return False
-
-    def _restore_saved(self, grid, olds):
-        if grid is not self.grid:
-            return
-        for address, value in olds.items():
-            self._set_text(address, value)
-        self._stored(grid, olds, undoing=True)
-
-    def _after_undo(self, note):
-        self.steps.pop()
-        self.saved_note = note + " "
-        self.reload()
-
-    # 행 추가 ----------------------------------------------------------------------------------
-    def add_row(self):
-        """표 맨 아래에 새 행을 만든다. 필수 칸(호기 · 설비군 · SW 버전)을 다 적으면 저장한다."""
-        if self.grid is None or not self.grid.columns or self.new_row is not None or self.edits or self.page.saving:
-            return False
-        used = [_split(a)[1] for a in (*self.grid.cells, *self.grid.bindings, *self.grid.deleted)]
-        number = max(used, default=1) + 1
-        index = self.table.rowCount()
-        self.table.blockSignals(True)
-        self.table.insertRow(index)
-        self.table.setVerticalHeaderItem(index, QTableWidgetItem(f"＋{number}"))
-        cells = {}
-        for c in range(self.table.columnCount()):
-            letter = _col(c)
-            address = f"{letter}{number}"
-            item = QTableWidgetItem("")
-            item.setData(Qt.ItemDataRole.UserRole, address)
-            name = self.grid.columns.get(letter)
-            if name is None:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            else:
-                cells[address] = name
-            self.items[address] = item
-            self.table.setItem(index, c, item)
-        self.table.blockSignals(False)
-        self.new_row = {"number": number, "index": index, "cells": cells, "values": dict.fromkeys(cells.values(), "")}
-        self.steps.append(("new_row",))
-        self._paint_new_row()
-        self.table.scrollToBottom()
-        first = next((a for a, n in cells.items() if n == "equipment_code"), next(iter(cells), None))
-        if first is not None:
-            self.table.setCurrentItem(self.items[first])
-        self.say("새 행: " + " · ".join(FIELD_NAMES[n] + ("(필수)" if n in REQUIRED else "") for n in cells.values())
-                 + "을 적으면 저장됩니다.")
-        self._sync()
-        return True
-
-    def _paint_new_row(self):
-        self.table.blockSignals(True)
-        for address, name in self.new_row["cells"].items():
-            item = self.items[address]
-            empty = not self.new_row["values"].get(name)
-            item.setBackground(QBrush(NEW_ROW if empty and name in REQUIRED else SAVING))
-            item.setToolTip(f"새 행 · {FIELD_NAMES[name]}" + (" (필수)" if name in REQUIRED else ""))
-        self.table.blockSignals(False)
-
-    def _drop_new_row(self):
-        if self.new_row is None:
-            return
-        self.table.removeRow(self.new_row["index"])
-        for address in self.new_row["cells"]:
-            self.items.pop(address, None)
-        self.new_row = None
-        self.steps = [s for s in self.steps if s[0] not in ("new", "new_row")]
-        self._sync()
-
-    def _new_cell_changed(self, address, item):
-        name, value = self.new_row["cells"][address], item.text().strip()
-        previous = self.new_row["values"].get(name, "")
-        if value == previous:
-            return
-        self.steps.append(("new", address, previous))
-        self.new_row["values"][name] = value
-        self._paint_new_row()
-        if all(self.new_row["values"].get(n) for n in REQUIRED if n in self.new_row["values"]):
-            self._commit_new_row()
-
-    def _commit_new_row(self):
-        values, number, batch_id = dict(self.new_row["values"]), self.new_row["number"], self.grid.batch_id
-        model = values.get("model_name", "")
-        gateway = self.page.gateway
-        known = {name.casefold() for name in self.grid.groups}
-        create = None
-        if model.casefold() not in known:
-            if QMessageBox.question(self, "새 설비군", f"설비군 '{model}'이(가) 없습니다. 새 설비군으로 등록할까요?") \
-                    != QMessageBox.StandardButton.Yes:
-                self.say(f"설비군 '{model}'을(를) 등록하지 않았습니다. 설비군 칸을 고쳐 주세요.", error=True)
-                return False
-            category, ok = QInputDialog.getItem(self, "새 설비군", f"'{model}'의 분류", ["POLY", "OXIDE", "KCTC"], 0, False)
-            if not ok:
-                return False
-            create = (model, category)
+        (info,) = rest
+        batch_id, gateway = self.grid.batch_id, self.page.gateway
+        save_back = self.page.edit_work(self.changes(info["olds"])) if info["olds"] else None
 
         def work():
-            if create is not None:
-                gateway.data_admin("create_group", create[0], create[1], None)
-            return gateway.data_admin("add_row", batch_id, values, number)
+            if info["added"] or info["journal"] is not None:
+                gateway.data_admin("undo_rows", batch_id, info["added"], info["journal"])
+            saved = save_back() if save_back else None
+            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None))
 
-        return self.page.change(work, self, message="새 행을 저장하고 있습니다…",
-                                done=lambda sid: self._row_added(sid, values, create))
+        return self.page.change(work, self, message="마지막 저장을 되돌리고 있습니다…", done=lambda _: self._undone())
 
-    def _row_added(self, sid, values, create):
-        self.steps = [s for s in self.steps if s[0] not in ("new", "new_row")]
-        self.steps.append(("add", sid, values.get("equipment_code", "")))
-        self.new_row = None
-        self.saved_note = (f"'{values.get('equipment_code')}' 행을 추가했습니다"
-                           + (f" (새 설비군 '{create[0]}' 등록)" if create else "") + " · 정렬했습니다. ")
-        self.reload()
-
-    # 행 삭제 ----------------------------------------------------------------------------------
-    def selected_rows(self):
-        """고른 칸이 속한 설비 현황 {snapshot_id: 호기}."""
-        if self.grid is None:
-            return {}
-        chosen = {}
-        for item in self.table.selectedItems():
-            address = item.data(Qt.ItemDataRole.UserRole)
-            sid = self.grid.owners.get(address)
-            if sid is not None:
-                chosen.setdefault(sid, self.grid.bindings[address].label.split(" · ")[0])
-        return chosen
-
-    def delete_selected(self):
-        chosen = self.selected_rows()
-        if not chosen or self.grid is None or self.page.saving or self.edits or self.new_row is not None:
-            return False
-        codes = list(chosen.values())
-        sheet = next((s for s in self.sheets if s.batch_id == self.grid.batch_id), None)
-        where = sheet.label if sheet else self.grid.sheet
-        shown = ", ".join(codes[:8]) + (f" 외 {len(codes) - 8}대" if len(codes) > 8 else "")
-        if QMessageBox.question(self, "현황표 행 삭제",
-                                f"{where}에서 설비 {len(codes)}대의 행을 DB에서 지울까요?\n\n{shown}\n\n"
-                                "그 설비의 이 기준일 현황·SW 버전이 지워집니다. [되돌리기]로 바로 되살릴 수 있고, "
-                                "가져온 엑셀 원본 칸은 '삭제됨'으로 보입니다.") != QMessageBox.StandardButton.Yes:
-            return False
-        batch_id, ids = self.grid.batch_id, tuple(chosen)
-        return self.page.change(lambda: self.page.gateway.data_admin("delete_rows", batch_id, ids), self,
-                                message="행을 지우고 있습니다…", done=lambda journal: self._deleted(journal, codes))
-
-    def _deleted(self, journal, codes):
-        self.steps.append(("delete", journal, codes))
-        self.saved_note = f"설비 {len(codes)}대의 행을 지웠습니다 ({', '.join(codes[:4])}{' …' if len(codes) > 4 else ''}). "
+    def _undone(self):
+        self.steps.pop()
+        self.saved_note = "마지막 저장을 되돌렸습니다 (수정 · 추가 · 삭제 모두). "
         self.reload()
 
     def _sync(self):
         busy = self.page.saving
-        clean = not self.edits and self.new_row is None
-        self.save_button.setText(f"저장 ({len(self.edits)}칸)" if self.edits else "저장")
-        self.save_button.setEnabled(bool(self.edits) and not busy)
+        count = self._count()
+        self.save_button.setText(f"저장 ({count}건)" if count else "저장")
+        self.save_button.setEnabled(bool(count) and not busy)
         self.undo_button.setEnabled(bool(self.steps) and not busy)
-        self.add_button.setEnabled(self.grid is not None and bool(self.grid.columns) and clean and not busy)
-        self.add_button.setToolTip("표 맨 아래에 새 행을 만듭니다. 호기 · 설비군 · SW 버전을 다 적으면 저장되고 정렬됩니다."
-                                   if self.grid is None or self.grid.columns else
+        can_add = self.grid is not None and bool(self.grid.columns)
+        self.add_button.setEnabled(can_add and not busy)
+        self.add_button.setToolTip("표 맨 아래에 새 행을 만듭니다. [저장]을 누르면 Line → 설비군 → 호기 순으로 정렬해 보입니다."
+                                   if can_add or self.grid is None else
                                    "이 시트는 열 구성을 알 수 없어 행을 추가할 수 없습니다. 데이터 가져오기로 넣어 주세요.")
-        self.delete_button.setEnabled(bool(self.selected_rows()) and clean and not busy)
-        self.sheet_combo.setEnabled(not busy and self.new_row is None)
+        self.delete_button.setEnabled(bool(self.selected_rows() or self._selected_new_rows()) and not busy)
+        self.sheet_combo.setEnabled(not busy)
 
 
 # --- 설비현황 › 설비 ------------------------------------------------------------------------
@@ -1102,8 +1147,32 @@ RELEASE_FIELDS = {0: ("release_version", "version_raw"), 1: ("release_version", 
                   2: ("item", "item_no"), 3: ("item", "content"), 4: ("release_version_item", "target_group_ids")}
 
 
+class _ReleaseTable(QTableWidget):
+    """Item 줄을 끌어 같은 버전 안에서 순서를 바꾸는 표. 놓으면 (원래 줄, 놓은 줄)을 알린다."""
+
+    moved = Signal(int, int)
+
+    def __init__(self, columns):
+        super().__init__(0, columns)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDropIndicatorShown(True)
+
+    def dropEvent(self, event):
+        target = self.indexAt(event.position().toPoint()).row()
+        source = self.currentRow()
+        event.setDropAction(Qt.DropAction.IgnoreAction)  # 칸을 옮기지 않고 순서 저장 뒤 다시 그린다
+        event.accept()
+        if source >= 0 and target >= 0 and source != target:
+            self.moved.emit(source, target)
+
+
 class ReleasePanel(_Panel):
-    """릴리즈노트 엑셀형 표. 칸을 고치면 바로 저장하고, 버전·Item 줄을 추가한다. 위험 지정은 아이템 매니저에서 한다."""
+    """릴리즈노트 엑셀형 표 (최신 버전이 위). 칸을 고치면 바로 저장하고, 버전 · Item을 추가 · 삭제하며,
+    Item 줄을 끌어 같은 버전 안의 순서(No)를 바꾼다. 위험 지정은 아이템 매니저에서 한다 (11-11 4차)."""
 
     def __init__(self, page):
         super().__init__(page)
@@ -1127,32 +1196,43 @@ class ReleasePanel(_Panel):
         head = QHBoxLayout()
         self.family_title = label("계열을 고르세요", 20, medium=True)
         self.family_info = label("", 12, color=SECONDARY)
-        self.add_version_button = button("＋ 버전 추가")
-        self.add_item_button = button("＋ Item 추가")
-        self.add_item_button.setToolTip("고른 줄의 버전에 새 Item을 추가합니다.")
-        self.add_version_button.clicked.connect(self.add_version)
-        self.add_item_button.clicked.connect(self.add_item)
         head.addWidget(self.family_title)
         head.addWidget(self.family_info)
         head.addStretch()
-        head.addWidget(self.add_version_button)
-        head.addWidget(self.add_item_button)
         middle.body.addLayout(head)
-        self.table = QTableWidget(0, len(RELEASE_COLUMNS))
+        actions = QHBoxLayout()
+        self.add_version_button = button("＋ 버전 추가")
+        self.add_item_button = button("＋ Item 추가")
+        self.add_item_button.setToolTip("고른 줄의 버전 맨 뒤에 새 Item을 추가합니다. 순서는 줄을 끌어서 바꿉니다.")
+        self.delete_item_button = button("선택 Item 삭제")
+        self.delete_version_button = button("선택 버전 삭제")
+        self.add_version_button.clicked.connect(self.add_version)
+        self.add_item_button.clicked.connect(self.add_item)
+        self.delete_item_button.clicked.connect(self.delete_item)
+        self.delete_version_button.clicked.connect(self.delete_version)
+        actions.addStretch()
+        for widget in (self.add_version_button, self.add_item_button, self.delete_item_button, self.delete_version_button):
+            actions.addWidget(widget)
+        middle.body.addLayout(actions)
+        self.table = _ReleaseTable(len(RELEASE_COLUMNS))
         self.table.setHorizontalHeaderLabels(RELEASE_COLUMNS)
         self.table.setAccessibleName("릴리즈노트 · 버전 줄 아래 Item 줄")
         self.table.setStyleSheet(TABLE_STYLE)
         self.table.setMinimumHeight(520)
         self.table.verticalHeader().setDefaultSectionSize(34)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
         self.table.itemChanged.connect(self._cell_changed)
         self.table.cellClicked.connect(self._toggle_version)
         self.table.itemSelectionChanged.connect(self._sync)
+        self.table.moved.connect(self.move_item)
         self.page.columns.attach(self.table, "release")
         middle.body.addWidget(self.table)
-        middle.body.addWidget(label("엑셀 시트처럼 보여 주고, 칸을 두 번 눌러 고치면 바로 저장됩니다. 버전 칸(▼/▶)을 누르면 그 버전의 "
-                                    "Item 줄을 접거나 펼칩니다. 날짜는 YYYY-MM-DD, 적용 모델은 설비군 이름을 쉼표로 적습니다. "
-                                    "새 버전은 순서 맨 끝에 들어갑니다. 위험 지정은 아이템 매니저에서 합니다.", 12, color=SECONDARY, wrap=True))
+        middle.body.addWidget(label("최신 버전이 위에 옵니다. 칸을 두 번 눌러 고치면 바로 저장되고, Item 줄을 끌어 같은 버전 안에 놓으면 "
+                                    "순서(No)가 바뀝니다. 버전 칸(▼/▶)을 누르면 Item 줄을 접거나 펼칩니다. 날짜는 YYYY-MM-DD, 적용 모델은 "
+                                    "설비군 이름을 쉼표로('전체'는 전체 설비) 적습니다. 위험 지정은 아이템 매니저에서 합니다.",
+                                    12, color=SECONDARY, wrap=True))
         middle.body.addWidget(self.notice)
         self._sync()
 
@@ -1211,22 +1291,24 @@ class ReleasePanel(_Panel):
         variant = next((n for g, n in (family.variants if family else ()) if g == self.variant), None)
         self.family_title.setText((family.name if family else "계열") + (f" · {variant}" if variant else ""))
         versions = len({r.release_version_id for r in self.rows})
-        self.family_info.setText(f"버전 {versions} · Item {sum(r.item_id is not None for r in self.rows)}"
+        self.family_info.setText(f"버전 {versions} · Item {sum(r.item_id is not None for r in self.rows)} · 최신 버전이 위"
                                  + (f" · {variant} 적용 Item 굵게" if variant else ""))
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.rows))
-        self.table.setVerticalHeaderLabels([str(r.row_number or "") for r in self.rows])
+        self.table.setVerticalHeaderLabels([str(i) for i in range(1, len(self.rows) + 1)])  # 줄 번호는 1부터
         for i, row in enumerate(self.rows):
             values = (row.version_raw if row.first_of_version else "", row.released_at if row.first_of_version else "",
                       row.item_no, row.content, row.applied_models)
             for c, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
-                editable = (c in (0, 1) and row.first_of_version) or (c in (2, 3, 4) and row.item_id is not None)
+                editable = (c in (0, 1) and row.first_of_version) or (c in (3, 4) and row.item_id is not None)
                 if not editable:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 else:
                     self.originals[(i, c)] = value
+                if c == 2 and row.item_id is not None:
+                    item.setToolTip("순서는 줄을 끌어서 바꿉니다.")
                 if self.variant is not None and self.variant in row.target_group_ids:
                     font = item.font()
                     font.setBold(True)
@@ -1342,6 +1424,7 @@ class ReleasePanel(_Panel):
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
         return self.rows[rows[0].row()] if rows and self.rows else None
 
+    # 추가 · 삭제 · 순서 ---------------------------------------------------------------------------
     def add_version(self):
         if self.family_id is None or self.page.saving:
             return False
@@ -1360,39 +1443,82 @@ class ReleasePanel(_Panel):
         family_id = self.family_id
         return self.page.change(lambda: self.page.gateway.data_admin("add_release_version", family_id, version, released),
                                 self, message=f"버전 '{version}'을 추가하고 있습니다…",
-                                done=lambda _: self._added(f"버전 '{version}'을 추가했습니다 (순서 맨 끝). "))
+                                done=lambda _: self._changed(f"버전 '{version}'을 추가했습니다 (맨 위 · 최신). "))
 
     def add_item(self):
         row = self.selected_row()
         if row is None or self.page.saving:
             return False
-        dialog = _FormDialog(self, f"Item 추가 · {row.version_raw}",
-                             (("No (선택, 숫자)", ""), ("Item 내용", ""), ("적용 모델 (쉼표, 비우면 전체)", "")))
+        dialog = _FormDialog(self, f"Item 추가 · {row.version_raw}", (("Item 내용", ""), ("적용 모델 (쉼표, 비우면 전체)", "")))
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
-        number, content, models = dialog.values()
+        content, models = dialog.values()
         try:
-            item_no = int(number) if number else None
             ids = self._models(models)["target_group_ids"]
         except ValueError as error:
-            self.say(f"{error if 'invalid literal' not in str(error) else 'No는 숫자로 적어 주세요'}.", error=True)
+            self.say(f"{error}.", error=True)
             return False
         if not content:
             self.say("Item 내용을 적어 주세요.", error=True)
             return False
         release_id = row.release_version_id
-        return self.page.change(lambda: self.page.gateway.data_admin("add_release_item", release_id, content, item_no, ids),
+        return self.page.change(lambda: self.page.gateway.data_admin("add_release_item", release_id, content, None, ids),
                                 self, message="Item을 추가하고 있습니다…",
-                                done=lambda _: self._added(f"{row.version_raw}에 Item을 추가했습니다. "))
+                                done=lambda _: self._changed(f"{row.version_raw} 맨 뒤에 Item을 추가했습니다 · 순서는 끌어서 바꿉니다. "))
 
-    def _added(self, note):
+    def delete_item(self):
+        row = self.selected_row()
+        if row is None or row.item_id is None or self.page.saving:
+            return False
+        if QMessageBox.question(self, "Item 삭제", f"{row.version_raw}에서 Item '{row.content[:40]}'을(를) 지울까요?\n"
+                                "다른 버전에 쓰이지 않는 Item이면 Item 자체도 지워지고 되돌릴 수 없습니다. 이 Item을 가리키던 "
+                                "위험 지정은 '연결 미확인'으로 바뀝니다.") != QMessageBox.StandardButton.Yes:
+            return False
+        release_id, item_id = row.release_version_id, row.item_id
+        return self.page.change(lambda: self.page.gateway.data_admin("delete_release_rows", release_id, item_id), self,
+                                message="Item을 지우고 있습니다…", done=lambda name: self._changed(f"'{name}'을(를) 지웠습니다. "))
+
+    def delete_version(self):
+        row = self.selected_row()
+        if row is None or self.page.saving:
+            return False
+        count = sum(r.release_version_id == row.release_version_id and r.item_id is not None for r in self.rows)
+        if QMessageBox.question(self, "버전 삭제", f"버전 {row.version_raw}과 그 Item {count}개를 지울까요?\n"
+                                "되돌릴 수 없습니다. 이 버전으로 정한 목표 N은 다시 정해야 하고, 이 버전을 쓰는 설비 SW는 "
+                                "'릴리즈 노트에 없는 버전'이 됩니다.") != QMessageBox.StandardButton.Yes:
+            return False
+        release_id = row.release_version_id
+        return self.page.change(lambda: self.page.gateway.data_admin("delete_release_rows", release_id), self,
+                                message="버전을 지우고 있습니다…", done=lambda name: self._changed(f"버전 {name}을(를) 지웠습니다. "))
+
+    def move_item(self, source, target):
+        """Item 줄을 같은 버전 안의 다른 줄 자리로 옮기고 순서(No)를 1부터 다시 매겨 저장한다."""
+        if self.page.saving or not (0 <= source < len(self.rows) and 0 <= target < len(self.rows)):
+            return False
+        moving, place = self.rows[source], self.rows[target]
+        if moving.item_id is None or moving.release_version_id != place.release_version_id:
+            self.say("Item 순서는 같은 버전 안에서만 바꿀 수 있습니다.", error=True)
+            return False
+        order = [r.item_id for r in self.rows if r.release_version_id == moving.release_version_id and r.item_id is not None]
+        position = order.index(place.item_id) if place.item_id is not None else 0  # 버전만 있는 줄에 놓으면 맨 앞
+        order.remove(moving.item_id)
+        order.insert(position, moving.item_id)
+        release_id = moving.release_version_id
+        return self.page.change(lambda: self.page.gateway.data_admin("reorder_items", release_id, order), self,
+                                message="Item 순서를 바꾸고 있습니다…",
+                                done=lambda _: self._changed(f"{moving.version_raw}의 Item 순서를 바꿨습니다. "))
+
+    def _changed(self, note):
         self.saved_note = note  # 계열 목록(버전 수)과 표를 함께 다시 읽는다
         self.reload()
 
     def _sync(self):
         busy = self.page.saving
+        row = self.selected_row()
         self.add_version_button.setEnabled(self.family_id is not None and not busy)
-        self.add_item_button.setEnabled(self.selected_row() is not None and not busy)
+        self.add_item_button.setEnabled(row is not None and not busy)
+        self.delete_item_button.setEnabled(row is not None and row.item_id is not None and not busy)
+        self.delete_version_button.setEnabled(row is not None and not busy)
 
 
 class _FormDialog(QDialog):
@@ -1424,27 +1550,24 @@ class _FormDialog(QDialog):
 
 # --- 변경 이력 -------------------------------------------------------------------------------
 class HistoryPanel(_Panel):
-    """왼쪽 목록(수정 일시 · 구분 · 파일 · 셀 · 대상 · 항목 · 수정 전 · 수정 후) · 오른쪽 세부 정보 (11-11).
+    """기본 열(수정 일시 · 구분 · 대상 · 항목 · 수정 전 · 수정 후)만 보이고, 줄을 누르면 오른쪽에서 세부 정보가 나온다 (11-11 4차).
 
-    탭에 들어올 때마다 DB에서 다시 읽으므로 [새로 읽기] 버튼은 두지 않는다.
+    대시보드 설비 상세와 같은 오른쪽 패널(SideDrawer)을 쓴다. 탭에 들어올 때마다 DB에서 다시 읽는다.
     """
 
     PERIODS = (("최근 7일", 7), ("최근 30일", 30), ("전체", None))
     KINDS = (("대상 전체", None), ("설비 현황", ("equipment", "equipment_snapshot", "equipment_version", "equipment_pm")),
              ("릴리즈노트", ("release_version", "item", "release_version_item")), ("설비군", ("equipment_group",)),
              ("Site · 현황표", ("site", "status_sheet")), ("위험 지정", ("risk_rule",)))
-    COLUMNS = ("수정 일시", "구분", "수정 파일", "시트 · 셀", "대상", "항목", "수정 전", "수정 후")
+    COLUMNS = ("수정 일시", "구분", "대상", "항목", "수정 전", "수정 후")
 
     def __init__(self, page):
         super().__init__(page)
-        self.entries, self._shown = (), []
-        body = QHBoxLayout(self)
+        self.entries, self._shown, self.drawer = (), [], None
+        body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(18)
-        card, right = Card(padding=20), Card(padding=20)
-        right.setFixedWidth(320)
-        body.addWidget(card, 1)
-        body.addWidget(right)
+        card = Card(padding=20)
+        body.addWidget(card)
         filters = QHBoxLayout()
         self.period, self.kind = ComboBox(), ComboBox()
         for text, value in self.PERIODS:
@@ -1460,17 +1583,24 @@ class HistoryPanel(_Panel):
         filters.addWidget(self.count)
         filters.addStretch()
         card.body.addLayout(filters)
-        self.table = _table(self.COLUMNS, "변경 이력 (수정 일시 · 파일 · 셀 · 수정 전후)")
+        self.table = _table(self.COLUMNS, "변경 이력 (수정 일시 · 대상 · 수정 전후)")
         self.table.setMinimumHeight(560)
         self.table.setWordWrap(False)
         self.page.columns.attach(self.table, "history")
-        # '시트 · 셀'은 오른쪽 세부 정보에 보이므로 목록에서는 좁게 둔다 (열 경계를 끌면 다시 넓어진다)
-        self.table.itemSelectionChanged.connect(self._render_detail)
+        self.table.itemSelectionChanged.connect(self._open_detail)
         card.body.addWidget(self.table)
-        card.body.addWidget(label("수정 전 값은 회색, 수정 후 값은 노란 칸입니다. 줄을 누르면 오른쪽에 세부 정보가 보이고, "
+        card.body.addWidget(label("줄을 누르면 오른쪽에서 수정 파일 · 시트 · 셀과 수정 전 → 후 전체가 나옵니다. "
                                   "열 경계를 끌어 폭을 바꿀 수 있습니다.", 12, color=SECONDARY, wrap=True))
         card.body.addWidget(self.notice)
-        self.detail_title = label("변경을 고르세요", 20, medium=True, wrap=True)
+
+    def attach_drawer(self, parent):
+        """대시보드처럼 창 오른쪽에서 나오는 세부 정보 패널을 만든다."""
+        from setron.ui.drawer import SideDrawer
+
+        self.drawer = SideDrawer(parent, object_name="historyDetail", accessible_name="변경 세부 정보", panel_width=420)
+        layout = self.drawer.panel_layout
+        layout.addLayout(self.drawer.header)
+        self.detail_title = label("", 20, medium=True, wrap=True)
         self.detail = label("", 13, color=SECONDARY, wrap=True)
         self.detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.before_title, self.after_title = label("수정 전", 13, medium=True), label("수정 후", 13, medium=True)
@@ -1478,9 +1608,10 @@ class HistoryPanel(_Panel):
         self.before_value.setStyleSheet(f"color:{MUTED.name()};background:#f4f5f8;border-radius:8px;padding:10px;")
         self.after_value.setStyleSheet("background:#fff2c4;border-radius:8px;padding:10px;")
         for widget in (self.detail_title, self.detail, self.before_title, self.before_value, self.after_title, self.after_value):
-            right.body.addWidget(widget)
-        right.body.addStretch()
-        self._render_detail()
+            widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            layout.addWidget(widget)
+        layout.addStretch()
+        self.drawer.panel_hidden.connect(self.table.clearSelection)
 
     def reload(self):
         self.say("변경 이력을 읽고 있습니다…")
@@ -1505,12 +1636,10 @@ class HistoryPanel(_Panel):
         rows = self.visible()
         self._shown = rows
         self.table.blockSignals(True)
-        _fill(self.table, [(self._when(e.at), e.kind,
-                            e.workbook or ("파일 이름 없음" if e.sheet else "—"),
-                            " · ".join(v for v in (e.sheet, e.cell) if v) or "—", e.target, e.field, e.before or "—",
-                            e.after) for e in rows], list(range(len(rows))))
+        _fill(self.table, [(self._when(e.at), e.kind, e.target, e.field, e.before or "—", e.after) for e in rows],
+              list(range(len(rows))))
         for r, entry in enumerate(rows):
-            before, after = self.table.item(r, 6), self.table.item(r, 7)
+            before, after = self.table.item(r, 4), self.table.item(r, 5)
             before.setForeground(QBrush(MUTED))
             after.setBackground(QBrush(SAVING))
             if entry.kind == "삭제":
@@ -1518,10 +1647,10 @@ class HistoryPanel(_Panel):
             font = after.font()
             font.setBold(True)
             after.setFont(font)
+        self.table.clearSelection()
         self.table.blockSignals(False)
-        self.page.columns.fit(self.table, cap=130, spread=False, fixed={1: 64, 3: 80})
+        self.page.columns.fit(self.table, cap=300)
         self.count.setText(f"{len(rows)}건")
-        self._render_detail()
 
     @staticmethod
     def _when(at):
@@ -1530,20 +1659,20 @@ class HistoryPanel(_Panel):
             return ""
         return at.strftime("%m-%d %H:%M") if at.year == datetime.now().year else at.strftime("%Y-%m-%d %H:%M")
 
-    def _render_detail(self):
+    def selected_entry(self):
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
-        entry = self._shown[rows[0].row()] if rows and rows[0].row() < len(self._shown) else None
-        for widget in (self.before_title, self.before_value, self.after_title, self.after_value):
-            widget.setVisible(entry is not None)
-        if entry is None:
-            self.detail_title.setText("변경을 고르세요")
-            self.detail.setText("왼쪽 목록에서 줄을 누르면 수정 일시 · 파일 · 셀과 수정 전 → 후가 여기에 보입니다.")
+        return self._shown[rows[0].row()] if rows and rows[0].row() < len(self._shown) else None
+
+    def _open_detail(self):
+        entry = self.selected_entry()
+        if entry is None or self.drawer is None:
             return
         self.detail_title.setText(f"{entry.target} · {entry.field}")
         self.detail.setText(f"구분  {entry.kind}\n수정 일시  {_text(entry.at)[:16].replace('T', ' ') or '—'}\n"
                             f"수정 파일  {entry.workbook or '—'}\n시트  {entry.sheet or '—'}\n셀  {entry.cell or '—'}")
         self.before_value.setText(entry.before or "(없음)")
         self.after_value.setText(entry.after or "(없음)")
+        self.drawer.show_panel()
 
 
 # --- 화면 ------------------------------------------------------------------------------------
@@ -1555,7 +1684,7 @@ class DataManagementPage(QWidget):
     save_failed = Signal()
     group_added = Signal(object)
 
-    def __init__(self, gateway, *, context_provider=lambda: None, column_store=None):
+    def __init__(self, gateway, *, context_provider=lambda: None, column_store=None, drawer_parent=None):
         super().__init__()
         self.gateway, self.context_provider = gateway, context_provider
         self.columns = ColumnMemory(column_store if column_store is not None else QSettings("SETRON", "SETRON"))
@@ -1604,6 +1733,8 @@ class DataManagementPage(QWidget):
         for widget in (status, self.release_panel, self.history_panel):
             self.stack.addWidget(widget)
         self.tabs.currentChanged.connect(self.select_tab)
+        # 변경 이력 세부 정보: 대시보드처럼 창 오른쪽에서 나온다 (앱은 창 중앙 영역을, 단독 실행은 이 화면을 쓴다)
+        self.history_panel.attach_drawer(drawer_parent if drawer_parent is not None else self)
         # 여러 줄 안내가 첫 줄만 보이지 않게, 줄바꿈 라벨은 폭을 무시하고 높이를 내용에 맞춘다 (다른 화면과 같은 방식).
         ignore_width(*(w for w in self.findChildren(QLabel) if w.wordWrap()))
 
@@ -1620,6 +1751,8 @@ class DataManagementPage(QWidget):
         if self.tabs.currentIndex() != index:
             self.tabs.setCurrentIndex(index)
             return
+        if index != 2 and self.history_panel.drawer is not None:
+            self.history_panel.drawer.hide_panel(animated=False)
         self.stack.setCurrentIndex(index)
         self._ensure_loaded()
 
@@ -1678,10 +1811,8 @@ class DataManagementPage(QWidget):
             self._ensure_loaded()
 
     # DB 반영 ----------------------------------------------------------------------------------
-    def save_changes(self, changes, owner, *, done=None, failed=None):
-        """[(table, key, {field: value})]를 저장 직전 검토 지문으로 묶어 관리 저장한다 (워커)."""
-        if not changes:
-            return False
+    def edit_work(self, changes):
+        """[(table, key, {field: value})]를 저장 직전 검토 지문으로 묶어 관리 저장하는 워커 작업을 만든다."""
         gateway, context, requested = self.gateway, deepcopy(self.context_provider()), list(changes)
 
         def work():
@@ -1689,7 +1820,13 @@ class DataManagementPage(QWidget):
             edits = tuple(RecordEdit(table, key, gateway.get(table, key).revision, values) for table, key, values in requested)
             return gateway.save(edits, context) if context is not None else gateway.save(edits)
 
-        return self.change(work, owner, done=done, failed=failed)
+        return work
+
+    def save_changes(self, changes, owner, *, done=None, failed=None):
+        """칸 수정만 관리 저장한다 (워커)."""
+        if not changes:
+            return False
+        return self.change(self.edit_work(changes), owner, done=done, failed=failed)
 
     def change(self, work, owner, *, message="저장하고 있습니다…", done=None, failed=None):
         """DB를 바꾸는 작업 하나를 워커에서 실행한다. 한 번에 하나만 하고, 끝나면 saved로 다른 화면에 알린다."""
