@@ -310,8 +310,13 @@ def test_line_of_another_site_is_warned_before_save(own, monkeypatch):
 
 def test_help_button_opens_guide_drawer_and_steps_jump_to_screens(own):
     page, sheet = sheet_page(own)
-    assert sheet.help_button.text() == "?" and sheet.help_button.toolTip()
-    assert sheet.show_guide() and sheet.guide.is_open
+    assert page.help_button.text() == "?" and page.help_button.toolTip()
+    for index in range(4):                    # 설비현황의 어느 하위 탭에서도 [?]가 보인다
+        page.select_status(index)
+        settle(page)
+        assert page.help_button.isVisibleTo(page)
+    page.help_button.click()                  # 가져온 엑셀 삭제 탭에서 연다
+    assert sheet.guide.is_open
     texts = [w.text() for w in sheet.guide.panel.findChildren(QLabel)]
     assert "새 위치에 설비 넣기" in texts and any("SW 버전" in t and "필수" in t for t in texts)
     assert set(sheet.guide_buttons) == {"location", "equipment", "create", "add"}
@@ -490,7 +495,7 @@ def test_add_group_dialog_requires_same_category_for_variant(own):
     assert "같은 분류" in dialog.error.text() and dialog.result() != QDialog.DialogCode.Accepted
 
 
-def test_site_added_then_empty_sheet_is_created_and_opened(own, monkeypatch):
+def test_site_added_then_empty_sheet_is_created_and_stays_on_location(own, monkeypatch):
     answer(monkeypatch)
     monkeypatch.setattr(module.QInputDialog, "getText", staticmethod(
         lambda *a, **k: ("용인", True) if a[1] == "Site 추가" else ("2026-11-15", True)))
@@ -502,7 +507,8 @@ def test_site_added_then_empty_sheet_is_created_and_opened(own, monkeypatch):
     settle(page)
     assert gateway.done["add_site"] == [(("용인",), {})]
     assert gateway.done["create_sheet"] == [(("용인", date(2026, 11, 15)), {})]
-    assert page.status_stack.currentIndex() == 0 and "빈 현황표를 만들었습니다" in page.sheet_panel.notice.text()
+    assert page.status_stack.currentIndex() == 2 and "빈 현황표를 만들었습니다" in page.location_panel.notice.text()  # 위치 탭에 머문다
+    assert page.sheet_panel.pending_batch == 8 and not page.sheet_panel.loaded  # 현황표 탭에 가면 만든 현황표를 고른다
 
 
 def test_release_changes_wait_for_save_then_go_together_and_undo(own, monkeypatch):
