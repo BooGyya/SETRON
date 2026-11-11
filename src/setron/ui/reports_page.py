@@ -62,9 +62,10 @@ class ReportsPage(QWidget):
         body.setSpacing(16)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.state = QueryState(source.catalog)
-        self.query_panel = QueryPanel(self.state, period=True, show_group=False, show_search=False)
+        self.query_panel = QueryPanel(self.state, period=True, show_group=False)
         self.query_panel.actions_row.hide()
         self.query_panel.reset_button.clicked.connect(self.reset_conditions)
+        self.query_panel.search_button.clicked.connect(self.generate)
         self.start, self.end = self.query_panel.start_date, self.query_panel.end_date
         body.addWidget(self.query_panel)
 
