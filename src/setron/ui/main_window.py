@@ -228,7 +228,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self, *, query_catalog: QueryCatalog | None = None):
         super().__init__()
-        self.setWindowTitle("SETRON · 공통 UI 미리보기")
+        self.setWindowTitle("SETRON")
+        self.setWindowIcon(icon("setron-window-icon.svg"))
         self.setMinimumSize(960, 600)
         self.resize(1440, 960)
         self.pages: dict[str, QWidget] = {}

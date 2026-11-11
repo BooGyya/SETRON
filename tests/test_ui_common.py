@@ -51,6 +51,17 @@ def test_shell_starts_without_business_pages(window):
     assert not hasattr(window, "filters")
 
 
+@pytest.mark.parametrize("size", [16, 24])
+def test_window_title_uses_blue_tile_s_at_native_icon_sizes(window, size):
+    assert window.windowTitle() == "SETRON"
+    image = window.windowIcon().pixmap(size, size).toImage()
+    assert (image.width(), image.height()) == (size, size)
+    assert image.pixelColor(0, 0).alpha() == 0
+    colors = {image.pixelColor(x, y).name() for y in range(size) for x in range(size)
+              if image.pixelColor(x, y).alpha() == 255}
+    assert {"#064786", "#ffffff"} <= colors
+
+
 def test_sidebar_removes_standalone_history_menu(window):
     assert "history" not in window.nav
     assert not any(menu.key == "history" for menu in MENUS)

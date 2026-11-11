@@ -681,3 +681,13 @@ def test_real_entrypoint_registers_dashboard_and_heatmap_and_does_not_auto_apply
     assert window.query_panel.goal_button.isEnabled()
     window.close()
     window.deleteLater()
+
+
+def test_real_entrypoint_uses_setron_window_title_and_icon(app):
+    window = create_window()
+    try:
+        assert window.windowTitle() == "SETRON"
+        assert not window.windowIcon().isNull()
+    finally:
+        window.close()
+        window.deleteLater()
