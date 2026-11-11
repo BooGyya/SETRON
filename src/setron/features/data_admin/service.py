@@ -564,12 +564,15 @@ class DataAdminService:
         require(bool(snapshots), "이 현황표의 Site · 기준일을 알 수 없습니다. 데이터 가져오기로 다시 넣어 주세요.")
         return names[0], _text(snapshots[0]["site"]), snapshots[0]["base_date"], raw
 
-    def _family_for(self, tx, batch_id, group, line):
-        """새 행의 SW 계열: 같은 현황표 · 같은 설비군 설비가 쓰는 계열 → 설비군(또는 상위 설비군)의 계열 하나.
+    def _family_for(self, tx, batch_id, group, area, *, exclude=None):
+        """새 행의 SW 계열: 같은 현황표 · 같은 설비군 · 같은 메모리/파운드리 설비가 쓰는 계열 → 설비군(또는 상위 설비군)의
+        계열 중 메모리/파운드리에 맞는 것 하나. ``area``는 그 설비의 생산 영역(MEMORY · FOUNDRY · None)이다.
 
         계열이 하나도 없는 새 설비군이면 설비군 이름으로 계열을 만든다 (릴리즈 노트가 없어 '정보 부족'으로 보인다).
         """
-        peers = [s for s in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id) if s.get("group_id") == group["group_id"]]
+        peers = [s for s in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id)
+                 if s.get("group_id") == group["group_id"] and s["snapshot_id"] != exclude
+                 and (area is None or s.get("production_area") in (area, None))]
         used = Counter(v["family_id"] for s in peers for v in self.rows.rows(tx, "equipment_version", snapshot_id=s["snapshot_id"]))
         if used:
             return used.most_common(1)[0][0]
@@ -578,9 +581,7 @@ class DataAdminService:
         if not families:
             return tx.insert("version_family", {"group_id": group["group_id"], "family_name": _text(group["group_name"])[:50],
                                                 "ui_type": None})["family_id"]
-        areas = {s.get("production_area") for s in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id)
-                 if _text(s.get("line")) == line and s.get("production_area")}
-        foundry = areas == {"FOUNDRY"}
+        foundry = area == "FOUNDRY"  # 파운드리 라인은 '(파운드리)' 계열 (11-11: 위치 탭 라인 등록값을 따른다)
         families = [f for f in families if ("(파운드리)" in _text(f["family_name"])) == foundry] or families
         if len(families) > 1:
             integrated = [f for f in families if f.get("ui_type") == "INTEGRATED"]  # UI 표기가 없으면 통합UI (멘토 10-28)
@@ -588,6 +589,22 @@ class DataAdminService:
         require(len(families) == 1, f"설비군 '{_text(group['group_name'])}'의 SW 계열을 하나로 정할 수 없습니다. "
                                     "같은 설비군 설비가 있는 현황표에서 추가하거나 데이터 가져오기로 넣어 주세요.")
         return families[0]["family_id"]
+
+    def _row_area(self, tx, batch_id, site, line, given):
+        """새 행의 메모리/파운드리: 적은 값 → 위치 탭에 등록한 라인 값 → 같은 현황표 같은 라인 설비 → 장소표 판정."""
+        if given in FABS:
+            return given
+        registered = next((e["fab"] for e in registered_lines(tx)
+                           if e["site"] == site and e["line"].casefold() == (line or "").casefold()), None)
+        if registered in FABS:
+            return registered
+        areas = {s.get("production_area") for s in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id)
+                 if _text(s.get("line")) == line and s.get("production_area")}
+        if len(areas) == 1:
+            return next(iter(areas))
+        from setron.features.reference_data import default_area
+
+        return default_area(site, line)
 
     def add_row(self, batch_id, values, row_number) -> int:
         """현황표에 설비 한 행을 더한다 (호기 · 설비군(모델) · SW 버전 필수, Line 선택).
@@ -618,16 +635,11 @@ class DataAdminService:
         equipment = found or tx.insert("equipment", {"equipment_code": code})
         require(not self.rows.rows(tx, "equipment_snapshot", equipment_id=equipment["equipment_id"], base_date=base_date),
                 f"'{code}'은(는) 이 기준일 현황에 이미 있습니다.")
-        family = self._family_for(tx, batch_id, group, line)
+        area = self._row_area(tx, batch_id, site, line, values.get("production_area"))
+        family = self._family_for(tx, batch_id, group, area)
         release = next((r["release_version_id"] for r in self.rows.rows(tx, "release_version", family_id=family)
                         if _text(r["version_raw"]) == version), None)
         refs = {name: {"sheet": sheet, "cells": [f"{columns[name]}{row_number}"]} for name in ROW_FIELDS if name in columns}
-        areas = {s.get("production_area") for s in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id)
-                 if _text(s.get("line")) == line and s.get("production_area")}
-        from setron.features.reference_data import default_area
-
-        area = values.get("production_area") if values.get("production_area") in FABS else (
-            next(iter(areas)) if len(areas) == 1 else default_area(site, line))
         snapshot = tx.insert("equipment_snapshot", {
             "equipment_id": equipment["equipment_id"], "base_date": base_date, "site": site, "line": line or None,
             "model_name": values.get("model_name") or _text(group["group_name"]), "group_id": group["group_id"],
@@ -664,7 +676,7 @@ class DataAdminService:
         for version in self.rows.rows(tx, "equipment_version", snapshot_id=snapshot_id):
             if version["family_id"] in owned:
                 continue
-            family = self._family_for(tx, batch_id, new, _text(snapshot.get("line")))
+            family = self._family_for(tx, batch_id, new, snapshot.get("production_area"), exclude=snapshot_id)
             release = next((r["release_version_id"] for r in self.rows.rows(tx, "release_version", family_id=family)
                             if _text(r["version_raw"]) == _text(version["version_raw"])), None)
             tx.update("equipment_version", {"equipment_version_id": version["equipment_version_id"]},
