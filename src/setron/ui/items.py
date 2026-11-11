@@ -6,14 +6,15 @@ from html import escape
 from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QSizePolicy,
+    QApplication, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QSizePolicy,
     QStyle, QStyledItemDelegate, QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 from setron.infrastructure.excel_reader import open_source_cell
 from setron.features.item.schemas import APPLICATION_LABELS, Application, Basis, ItemState
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
-from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
+from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, filter_checkbox, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_data import (
     BASIS_LABELS, ItemEquipmentSelection, ItemManagerData, selected_application,
@@ -26,7 +27,7 @@ from setron.ui.item_risk_dialog import _ClampLabel, warning_icon
 from setron.ui.item_risk_page import ItemRiskPage
 from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, category, repeats_item
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, PRIMARY, SECONDARY, TONES, font, set_widget_font
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, set_widget_font
 from setron.ui.versions import VersionsPage, _fit
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.version_data import family_display_name
@@ -260,22 +261,22 @@ class _PageBar(QWidget):
         self.last.setEnabled(self.current + 1 < self.total)
 
 
-class _DimmedItemDelegate(QStyledItemDelegate):
-    """자료 없는 계열 항목을 보조색으로 그린다. 스타일시트의 항목 색이 ForegroundRole을 덮어서 직접 적용한다.
-    키보드 하이라이트·선택 상태에서는 기본 색을 유지해 대비를 지킨다."""
+class _FamilyItemDelegate(QStyledItemDelegate):
+    """계열 항목을 같은 위치와 글꼴로 그리며, 자료가 없는 항목의 글자색을 구분한다."""
 
     def paint(self, painter, option, index):
-        brush = index.data(Qt.ItemDataRole.ForegroundRole)
-        if brush is None or option.state & (QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_MouseOver):
-            return super().paint(painter, option, index)
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
-        text, opt.text = opt.text, ""
         style = opt.widget.style() if opt.widget else QApplication.style()
-        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
         rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget).adjusted(2, 0, -2, 0)
+        text = opt.fontMetrics.elidedText(opt.text, opt.textElideMode, max(0, rect.width()))
+        opt.text = ""
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+        brush = index.data(Qt.ItemDataRole.ForegroundRole)
+        selected = opt.state & (QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_MouseOver)
+        color = brush.color().name() if brush is not None else (PRIMARY if selected else INK)
         painter.save()
-        painter.setPen(brush.color())
+        painter.setPen(ui_color(color))
         painter.setFont(opt.font)
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text)
         painter.restore()
@@ -386,36 +387,24 @@ class ItemsPage(QWidget):
         caret = (ASSETS / "caret-down.svg").as_posix()
         self.family_combo.setStyleSheet("QComboBox {padding-right:28px;} QComboBox::drop-down {border:0;width:28px;}"
                                         f"QComboBox::down-arrow {{image:url({caret});width:12px;height:12px;}}")
-        self.family_combo.setItemDelegate(_DimmedItemDelegate(self.family_combo))
+        self.family_combo.setItemDelegate(_FamilyItemDelegate(self.family_combo))
         self.family_title.setBuddy(self.family_combo)
         self.family_combo.currentIndexChanged.connect(self._family_combo_changed)
-        # 검색창은 툴바 오른쪽에 작게 둔다(폭 고정). 엔터 또는 검색 버튼으로 실행한다.
-        bar = QFrame()
-        bar.setObjectName("itemSearchBar")
-        bar.setFixedWidth(280)
-        bar.setStyleSheet("QFrame#itemSearchBar {background:#f9fafb;border:1px solid #d5d7da;border-radius:8px;}")
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(12, 3, 3, 3)
-        bar.setFixedHeight(40)
-        row.setSpacing(6)
+        # 돋보기 또는 Enter로 검색 분석을 실행한다.
         self.search = QLineEdit()
+        self.search.setObjectName("itemSearchBar")
         self.search.setAccessibleName("Item 검색")
         self.search.setPlaceholderText(self.SEARCH_PLACEHOLDER)
-        self.search.setFixedHeight(32)
-        self.search.setMinimumWidth(0)
-        set_widget_font(self.search, font(13))
-        self.search.setStyleSheet("QLineEdit {background:transparent;border:0;padding:0;}")
-        row.addWidget(self.search, 1)
-        self.ai_search = button("검색", primary=True)
-        # 박스(반경 8, 테두리 1) 안쪽 여백 3px과 동심이 되도록 버튼 반경은 4px로 둔다. 테마 기본 패딩은 글자를 자르므로 0으로 덮는다.
-        self.ai_search.setFixedSize(60, 32)
-        self.ai_search.setStyleSheet("QPushButton {padding:0;min-height:0;border-radius:4px;}")
+        self.search.setFixedSize(280, 38)
+        set_widget_font(self.search, font(14))
+        self.search.setStyleSheet(f"QLineEdit {{background:white;border:1px solid {LINE};border-radius:10px;padding:0 10px;}}"
+                                  f"QLineEdit:focus {{border:2px solid {PRIMARY};}}")
+        self.ai_search = self.search.addAction(icon("b2c35.svg"), QLineEdit.ActionPosition.LeadingPosition)
+        self.ai_search.setText("검색")
         self.ai_search.setToolTip("관련 Item을 찾고 저장된 릴리즈·설비 관측으로 적용 현황을 계산합니다.")
-        self.ai_search.clicked.connect(self.search_answer)
+        self.ai_search.triggered.connect(self.search_answer)
         self.search.returnPressed.connect(self.search_answer)
-        row.addWidget(self.ai_search)
         self.setFocusProxy(self.search)
-        bar.setFocusProxy(self.search)
         self.search.setClearButtonEnabled(True)
         self.answer_card = ItemAnswerCard()
         self.answer_card.navigate_requested.connect(self.answer_navigation)
@@ -430,9 +419,7 @@ class ItemsPage(QWidget):
         card.body.setContentsMargins(24, 20, 24, 20)
         self.count = label("검색 결과", 16, medium=True)
         set_widget_font(self.count, font(18, medium=True))
-        self.registered_only = QCheckBox("위험 기준 등록된 Item만 보기")
-        self.registered_only.setAccessibleName("위험 기준 등록된 Item만 보기")
-        self.registered_only.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.registered_only = filter_checkbox("위험 등록된 Item")
         self.registered_only.toggled.connect(self._registered_filter_changed)
         # 한 줄 툴바: [SW 계열 ▾ · 위험 기준 등록 필터] ····· [검색]. 그 아래에 결과 제목을 둔다.
         leading = QWidget()
@@ -444,7 +431,7 @@ class ItemsPage(QWidget):
         leading_row.addSpacing(8)
         leading_row.addWidget(self.registered_only, 0, Qt.AlignmentFlag.AlignVCenter)
         leading_row.addStretch()
-        self.toolbar = _Toolbar(leading, bar)
+        self.toolbar = _Toolbar(leading, self.search)
         self.toolbar.setObjectName("itemToolbar")
         card.body.addWidget(self.toolbar)
         card.body.addSpacing(4)
@@ -453,7 +440,6 @@ class ItemsPage(QWidget):
         setTabOrder = QWidget.setTabOrder
         setTabOrder(self.family_combo, self.registered_only)
         setTabOrder(self.registered_only, self.search)
-        setTabOrder(self.search, self.ai_search)
         # 선택한 계열에 릴리즈노트가 없으면 결과 자리에 이 안내 한 블록만 두고 검색·필터는 끈다.
         self.family_notice = QFrame()
         self.family_notice.setObjectName("familyNotice")
@@ -514,23 +500,25 @@ class ItemsPage(QWidget):
         inline.setSpacing(12)
 
         def metric(name):
-            """두 지표가 같은 3단(라벨·값·보조) 구조라 라벨과 값의 세로 위치가 항상 맞는다."""
             frame = QFrame()
             frame.setObjectName("inlineMetric")
             frame.setStyleSheet("QFrame#inlineMetric {background:white;border:1px solid #e5eaf3;border-radius:8px;}")
-            frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             column = QVBoxLayout(frame)
             column.setContentsMargins(16, 12, 16, 12)
             column.setSpacing(2)
-            value, note = label("", 20, medium=True), label("", 12, color=SECONDARY)
-            for widget in (label(name, 12, medium=True, color=SECONDARY), value, note):
-                column.addWidget(widget)
-            return frame, value, note
+            column.setAlignment(Qt.AlignmentFlag.AlignTop)
+            column.addWidget(label(name, 12, medium=True, color=SECONDARY))
+            value = label("", 20, medium=True)
+            column.addWidget(value)
+            return frame, value, column
 
         facts = QHBoxLayout()
         facts.setSpacing(12)
-        first_card, self.first_value, self.first_note = metric("최초 포함 버전")
-        missing_card, self.missing_value, self.inline_date = metric("미적용 설비")
+        first_card, self.first_value, first_column = metric("최초 포함 버전")
+        self.first_note = label("", 12, color=SECONDARY, wrap=True)
+        first_column.addWidget(self.first_note)
+        missing_card, self.missing_value, _ = metric("미적용 설비")
         facts.addWidget(first_card, 1)
         facts.addWidget(missing_card, 1)
         inline.addLayout(facts)
@@ -556,14 +544,12 @@ class ItemsPage(QWidget):
         rules_row.addStretch(0)
         self.rules_box.hide()
         inline.addWidget(self.rules_box)
-        divider = QFrame()
-        divider.setFixedHeight(1)
-        divider.setStyleSheet("background:#dbe1ed;border:0;")
-        inline.addWidget(divider)
         self.inline_equipment = label("", 14, wrap=True)
         self.inline_equipment.setTextFormat(Qt.TextFormat.RichText)
         self.inline_equipment.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         inline.addWidget(self.inline_equipment)
+        self.inline_date = label("", 12, color=SECONDARY)
+        inline.addWidget(self.inline_date)
         links = QHBoxLayout()
         links.setSpacing(8)
         self.more_button = button("전체 적용 현황")
@@ -1138,7 +1124,8 @@ class ItemsPage(QWidget):
         family_label = names.get(self.family_id, '계열 미확인')
         included = self._release_caption(item.item_id)[0]
         # 최초 포함 버전을 모를 때는 행의 '포함 릴리즈'와 충돌하지 않게 이유와 이미 아는 포함 릴리즈를 함께 보여 준다.
-        self.first_note.setText(f"{family_label} 계열 기준" if first else
+        self.first_note.setVisible(first is None)
+        self.first_note.setText("" if first else
                                 f"{family_label} 계열 · 버전 순서 미확정" + (f" · 포함 릴리즈 {included}" if included else ""))
         enabled_rules = [r for r in rules if r.is_enabled and r.family_id == self.family_id]
         self.rules_box.setVisible(bool(enabled_rules))
@@ -1154,7 +1141,7 @@ class ItemsPage(QWidget):
                 self.rules_kinds_row.addWidget(StatusBadge(kind, "info"))
             if any(r.memo.strip() for r in enabled_rules):
                 self.rules_kinds_row.addWidget(StatusBadge("메모 있음"))
-        self.inline_date.setText(f"{self.data.base_date} 관측" if self.data.observations_connected else "관측 미연결")
+        self.inline_date.setText(f"{self.data.base_date} 기준" if self.data.observations_connected else "관측 미연결")
         self.missing_value.setText(f"{len(missing)}대" if summary else "미확인")
         quiet = f"color:{SECONDARY};"
         lines = []
@@ -1175,11 +1162,10 @@ class ItemsPage(QWidget):
             lines.append("<br>".join(block))
         if len(missing) > 3:
             lines.append(f'<span style="{quiet}font-size:12px;">외 {len(missing) - 3}대 · 전체 적용 현황에서 확인하세요.</span>')
-        if summary and summary.counts()[Application.UNKNOWN]:
-            lines.append(f'<span style="{quiet}font-size:12px;">판정 불가 {summary.counts()[Application.UNKNOWN]}대</span>')
-        self.inline_equipment.setText("<br><br>".join(lines) if lines else
-                                      f'<span style="{quiet}">미적용으로 확인된 설비가 없습니다.</span>' if summary else
-                                      f'<span style="{quiet}">관측 자료 또는 릴리즈 연결이 필요합니다.</span>')
+        if summary is None:
+            lines.append(f'<span style="{quiet}">관측 자료 또는 릴리즈 연결이 필요합니다.</span>')
+        self.inline_equipment.setText("<br><br>".join(lines))
+        self.inline_equipment.setVisible(bool(lines))
         self.observation_note.setText(f"{self.data.base_date} 관측")
         self.observation_note.setToolTip(observation_description(self.data))
         self.observation_note.setVisible(summary is not None)

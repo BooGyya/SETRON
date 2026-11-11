@@ -185,7 +185,7 @@ class ReplayHeatmap(QWidget):
 
     def _tile(self, tile, families):
         control = TileButton(tile, expanded=True, families=families)
-        control.clicked.connect(lambda checked=False, eid=tile.equipment_id: self.equipment_selected.emit(eid))
+        control.clicked.connect(lambda: self.equipment_selected.emit(control.data.equipment_id))
         # 타일에 보이는 내용만 비교한다. 관측일·위험 근거는 상세에서만 쓰므로 바뀌어도 다시 그리지 않는다.
         control.visual = (replace(tile, observation_date=None, findings=()), families)
         self.rebuilt_tiles += 1

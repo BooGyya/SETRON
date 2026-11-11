@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QSpinBox, QWidget,
 )
 
-from setron.ui.appearance import contrast_ratio, contrasting, manager, surface_edge, ui_color
+from setron.ui.appearance import contrast_ratio, contrasting, manager, ui_color
 from setron.ui.appearance_data import (
     ACCENTS, DASHBOARD_COLOR_VISION, DASHBOARD_KEYS, HEATMAP_KEYS, HEATMAP_STANDARD, HEATMAP_TIERS,
     Appearance, PersonalSettings,
@@ -259,9 +259,7 @@ def test_saved_palette_has_readable_text_in_existing_dashboard_and_heatmap(own, 
     unknown = next(cell for cell in dashboard.matrix_buttons.values() if "background:#111111" in cell.styleSheet())
     unknown_ink = unknown.findChild(QLabel).palette().color(QPalette.ColorRole.WindowText).name()
     assert contrast_ratio(unknown_ink, "#111111") >= 4.5
-    edge = surface_edge("#111111", "#111111", "#111111")
-    assert contrast_ratio(edge, "#111111") >= 3
-    assert f"border:1px solid {edge}" in unknown.styleSheet()
+    assert "border:none" in unknown.styleSheet()
     rate_ink = dashboard.metrics["rate"].value.palette().color(QPalette.ColorRole.WindowText).name()
     assert contrast_ratio(rate_ink, current.tokens["selected"]) >= 4.5
 

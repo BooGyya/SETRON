@@ -257,7 +257,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         applied = window.query_state.applied
         return (applied.targets if applied is not None and applied.targets is not None else
                 initial_targets(source))
-    replay = ReplayPage(source, targets_provider=replay_targets)
+    replay = ReplayPage(source, targets_provider=replay_targets, drawer_parent=window.centralWidget())
     replay.query_panel.goal_button.setEnabled(True)
     replay.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
     replay.query_panel.goal_button.clicked.connect(open_groups)
@@ -511,9 +511,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         showing_equipment_result = (window.route == "equipment" and equipment.snapshot is not None
                                     and equipment.item_request is None)
         window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
-        # 데이터 가져오기 화면은 '합성 예시' 안내 박스를 숨긴다. DB 접속 실패 경고는 그대로 보인다.
-        warning = window.data_warning.text()
-        window.data_warning.setVisible(bool(warning) and not (window.route == "import" and warning.startswith("DB 접속 설정이 없어")))
         # 데이터 가져오기 화면도 머리 줄 '설비 목록' 버튼을 숨긴다 (11-10 2차 3-1).
         window.header.toolbar.setVisible(window.route not in {"import", "export", "items", "replay", "versions", "data", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap", "ai"))
@@ -1153,31 +1150,68 @@ def main(argv: list[str] | None = None) -> int:
     source, problem = dashboard_source_from_env()
     ai = ai_providers_from_env()
     app.aboutToQuit.connect(ai.close)
-    window = create_window(source, excel=DemoExcel() if args.demo_excel else None,
-                           import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
-                           sql_importer=sql_importer_from_env() if source is not None else None,
-                           management_gateway=gateway_from_env() if source is not None else None,
-                           data_exporter=data_exporter_from_env(), extractor=ai.extractor,
-                           ai_client=ai.client,
-                           # 실제 Excel이면 정해진 양식은 규칙으로 먼저 읽는다. 합성 통합문서(--demo-excel)는 예제 흐름 유지.
-                           rule_extractor=None if args.demo_excel else rule_extractor,
-                           import_delete_gateway=None if args.demo_excel else ImportDeleteGateway.from_env(),
-                           chat_enabled=True)
-    if problem or ai.problem:
-        window.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
-    # 화면마다 공통 안내 칸의 표시 여부가 달라 접속 실패와 예시 모드는 별도의 공통 경고로 표시한다.
-    window.set_data_warning(startup_warning(problem, ai.problem, demo_without_db=source is None and problem is None))
+
+    def build_window(source, problem):
+        current = create_window(source, excel=DemoExcel() if args.demo_excel else None,
+                                import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
+                                sql_importer=sql_importer_from_env() if source is not None else None,
+                                management_gateway=gateway_from_env() if source is not None else None,
+                                data_exporter=data_exporter_from_env(), extractor=ai.extractor,
+                                ai_client=ai.client,
+                                rule_extractor=None if args.demo_excel else rule_extractor,
+                                import_delete_gateway=None if args.demo_excel else ImportDeleteGateway.from_env(),
+                                chat_enabled=True)
+        if problem or ai.problem:
+            current.notice.setText(" / ".join(p for p in (problem, ai.problem) if p))
+        current.set_data_warning(
+            startup_warning(problem, ai.problem, demo_without_db=source is None and problem is None),
+            reconnect=bool(problem),
+        )
+        if source is not None and not source.dates:
+            current.notice.setText("저장된 설비 현황이 없습니다. ‘데이터 가져오기’에서 첫 현황표를 저장해 주세요."
+                                   + (f" · {ai.problem}" if ai.problem else ""))
+        else:
+            if source is not None:
+                current.query_panel.set_as_of(max(source.analysis_dates or source.dates))
+            QTimer.singleShot(0, current, current.query_panel.apply_draft)
+        return current
+
+    window = build_window(source, problem)
+    if problem:
+        reconnect = ReadRequest(window)
+
+        def retry_database():
+            if reconnect.start(BackgroundRead(dashboard_source_from_env)):
+                window.db_reconnect_button.setEnabled(False)
+                window.db_reconnect_button.setText("DB 연결 중…")
+
+        def finish_reconnect(result, error):
+            nonlocal window
+            if not window.isVisible():
+                return
+            window.db_reconnect_button.setEnabled(True)
+            window.db_reconnect_button.setText("DB 재연결")
+            if error is not None or result[0] is None:
+                window.set_data_warning("DB에 다시 연결하지 못했습니다. MySQL 실행 상태와 접속 설정을 확인해주세요.",
+                                        reconnect=True)
+                return
+            if not window.close_guard():
+                window.set_data_warning("데이터 처리 중입니다. 완료 후 DB 재연결을 눌러 주세요.", reconnect=True)
+                return
+            # DB를 쓰는 모든 화면과 저장 서비스가 같은 공급자로 시작하도록 창을 다시 구성한다.
+            replacement = build_window(result[0], None)
+            replacement.restoreGeometry(window.saveGeometry())
+            replacement.show()
+            window.close()
+            window.deleteLater()
+            window = replacement
+
+        window.db_reconnect_button.clicked.connect(retry_database)
+        reconnect.completed.connect(finish_reconnect)
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
     window.show()
-    if source is None or source.dates:
-        if source is not None:
-            window.query_panel.set_as_of(max(source.analysis_dates or source.dates))
-        QTimer.singleShot(0, window.query_panel.apply_draft)
-    else:
-        window.notice.setText("저장된 설비 현황이 없습니다. ‘데이터 가져오기’에서 첫 현황표를 저장해 주세요."
-                              + (f" · {ai.problem}" if ai.problem else ""))
     if args.auto_close_ms:
-        QTimer.singleShot(args.auto_close_ms, window.close)
+        QTimer.singleShot(args.auto_close_ms, lambda: window.close())
     return app.exec()

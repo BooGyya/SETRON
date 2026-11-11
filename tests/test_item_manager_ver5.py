@@ -63,7 +63,8 @@ def test_async_search_tab_original_and_stale_answer(app, data):
     assert not hasattr(page, "tabs") and page.manager.isHidden()  # 위험 기준 관리 탭은 없고 필터로 대체됐다.
     original_query = window.query_state.applied
     page.search.setText("다른")
-    assert page.search_answer()
+    page.ai_search.trigger()
+    assert page.answer_request.busy
     wait_until(lambda: not page.answer_request.busy)
     assert page.answer.item_ids == (2,)
     assert window.query_state.applied == original_query  # 검색만으로 전역 조건은 바뀌지 않는다.
@@ -121,7 +122,7 @@ def test_query_candidates_and_rule_drilldown(app, data):
     assert page.selected_id == 1 and page.more_button.isChecked()
     assert "필수 기능" in page.content_rules.text() and "위험 규칙" not in page.content.text()
     assert "필수 기능" in page.inline_rules.text() and not page.inline_rules.isHidden()
-    # '위험 기준 등록된 Item만 보기' 필터
+    # '위험 등록된 Item' 필터
     page.registered_only.setChecked(True)
     assert tuple(page.result_buttons) == (1,) and "검색 결과 1건 · 위험 기준 등록만" == page.count.text()
     page.registered_only.setChecked(False)

@@ -6,13 +6,13 @@ from PySide6.QtWidgets import (
 )
 
 from setron.ui.components import Card, button, label
-from setron.ui.dashboard import TAB_STYLE
+from setron.ui.dashboard import DashboardGrid, TAB_STYLE
 from setron.ui.dashboard_charts import series_button_style, series_color
 from setron.ui.dashboard_data import information_gap_reasons
 from setron.ui.equipment import ignore_width
 from setron.ui.equipment_drawer import EquipmentDrawer
 from setron.ui.heatmap_data import EquipmentSelection
-from setron.ui.query_panel import QueryPanel, _WrapRow
+from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.replay_data import INTERVALS, ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
@@ -22,20 +22,21 @@ from setron.ui.version_filter_dialog import VersionFilterDialog
 
 
 class ReplayPage(QWidget):
-    def __init__(self, source, *, loader=None, targets_provider=lambda: None):
+    def __init__(self, source, *, loader=None, targets_provider=lambda: None, drawer_parent=None):
         super().__init__()
         self.source, self.loader, self.targets_provider = source, loader, targets_provider
         self.state = QueryState(source.catalog)  # 공통 조회 초안·적용 N과 독립적인 조회 상태.
         self.data, self.pending_request = None, None
         self.index, self.epoch, self.dirty = 0, 0, True
         self.version_dialog, self.drawer = None, None
+        self.drawer_parent = drawer_parent
         self.read_request = ReadRequest(self)
         self.read_request.completed.connect(self._loaded)
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.advance)
         self.legend_buttons, self.legend_tools, self.frames = {}, (), ()  # frames: 지금 재생 간격의 시점들
-        self._legend_available = set()
+        self._hidden_groups = set()
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
@@ -143,6 +144,7 @@ class ReplayPage(QWidget):
         body.addWidget(self.content)
         self.query_panel.confirmed.connect(self._confirm_filters)
         self.reset_button.clicked.connect(self.reset_filters)
+        self.query_panel.search_button.clicked.connect(self.apply_query)
         self.version_button.clicked.connect(self.open_versions)
         self.play_button.clicked.connect(self.play)
         self.pause_button.clicked.connect(self.pause)
@@ -159,8 +161,8 @@ class ReplayPage(QWidget):
 
     def selected_groups(self):
         """조회 범위에 설비가 있는 설비군을 모두 골랐으면 None(전체)."""
-        chosen = {key for key in self._legend_available if self.legend_buttons[key].isChecked()}
-        return None if chosen == self._legend_available else chosen
+        chosen = {key for key, control in self.legend_buttons.items() if control.isChecked()}
+        return None if len(chosen) == len(self.legend_buttons) else chosen
 
     def _show_view(self, index):
         self.chart.setVisible(index == 0)
@@ -185,10 +187,10 @@ class ReplayPage(QWidget):
         for step, control in self.interval_buttons.items():
             # 간격이 기간보다 길어 시점이 2개 미만이면 그 간격은 고를 수 없다. 저장일마다는 항상 고를 수 있다.
             control.setEnabled(ready and (step is None or can_replay(self.data.frames_for(step))))
-        for key, control in self.legend_buttons.items():
-            control.setEnabled(ready and key in self._legend_available)
+        for control in self.legend_buttons.values():
+            control.setEnabled(ready)
         for control in self.legend_tools:
-            control.setEnabled(ready and bool(self._legend_available))
+            control.setEnabled(ready)
         self.heatmap.setEnabled(ready)
         self.chart.setEnabled(ready)
 
@@ -271,6 +273,7 @@ class ReplayPage(QWidget):
             return False
         self.timer.stop()
         self.step, self.frames, self.index = step, frames, max(0, len(frames) - 1)
+        self._make_legend()
         self._render_frame()
         self._sync_controls()
         return True
@@ -282,14 +285,19 @@ class ReplayPage(QWidget):
             widget.hide()
             widget.deleteLater()
 
-    def _make_legend(self):
-        """대시보드와 같은 색으로 설비군을 표시하고, 자료가 없는 설비군은 비활성화한다."""
-        previous = {key: self.legend_buttons[key].isChecked() for key in self._legend_available}
+    def _clear_legend(self):
         self._empty_layout(self.legend_body)
         self.legend_buttons = {}
-        known = self.data.frames + ((self.data.seed,) if self.data.seed else ())
-        self._legend_available = {cell.group_keys[0] for frame in known for cell in frame.snapshot.groups
-                                  if len(cell.group_keys) == 1 and cell.equipment_ids}
+        self.legend_tools = ()
+        self.legend_host.hide()
+
+    def _make_legend(self):
+        """조회 기간과 재생 간격에 따라 표시할 설비군 칩을 구성한다."""
+        self._clear_legend()
+        available = {cell.group_keys[0] for frame in self.frames for cell in frame.snapshot.groups
+                     if len(cell.group_keys) == 1 and cell.equipment_ids}
+        if not available:
+            return
         self.toggle_all_button = button("전체 해제")
         self.toggle_all_button.setCheckable(True)
         self.toggle_all_button.setMinimumWidth(96)
@@ -298,25 +306,24 @@ class ReplayPage(QWidget):
         self.toggle_all_button.clicked.connect(self.toggle_all_groups)
         self.legend_tools = (self.toggle_all_button,)
         for group in self.data.source.catalog.groups:
-            available = group.key in self._legend_available
+            if group.key not in available:
+                continue
             control = button(group.label)
             control.setCheckable(True)
-            control.setChecked(available and previous.get(group.key, True))
-            control.setEnabled(available)
-            control.setMinimumWidth(120)
+            control.setChecked(group.key not in self._hidden_groups)
             set_widget_font(control, font(13, medium=True))
             control.setStyleSheet(series_button_style(series_color(group.key)))
             control.setAccessibleName(f"설비군 {group.label} 보기")
             control.toggled.connect(self._groups_changed)
             self.legend_buttons[group.key] = control
-        widgets = [*self.legend_tools, *self.legend_buttons.values()] if self.legend_buttons else []
-        self.legend_body.addWidget(_WrapRow(widgets, 120) if widgets else QWidget())
+        widgets = (*self.legend_tools, *self.legend_buttons.values())
+        self.legend_body.addWidget(DashboardGrid(widgets, minimum_width=96, maximum_columns=9, spacing=8))
         self._update_bulk_toggle()
+        self.legend_host.show()
 
     def set_all_groups(self, checked):
         """설비군 버튼 전체 선택·해제. 화면은 한 번만 다시 그린다."""
-        for key in self._legend_available:
-            control = self.legend_buttons[key]
+        for control in self.legend_buttons.values():
             blocked = control.blockSignals(True)
             control.setChecked(checked)
             control.blockSignals(blocked)
@@ -328,13 +335,15 @@ class ReplayPage(QWidget):
 
     def _groups_changed(self, *_):
         """고른 설비군이 바뀌면 그래프 선·달성률·히트맵을 같은 설비군으로 다시 그린다 (요청 2-2)."""
+        self._hidden_groups.difference_update(self.legend_buttons)
+        self._hidden_groups.update(key for key, control in self.legend_buttons.items() if not control.isChecked())
         self._update_bulk_toggle()
         if self.data is not None and not self.dirty:
             self._render_frame()
 
     def _update_bulk_toggle(self):
         if self.legend_tools:
-            all_selected = bool(self._legend_available) and self.selected_groups() is None
+            all_selected = self.selected_groups() is None
             self.toggle_all_button.setChecked(all_selected)
             self.toggle_all_button.setText("전체 해제" if all_selected else "전체 선택")
             self.toggle_all_button.setAccessibleName("설비군 " + self.toggle_all_button.text())
@@ -342,10 +351,11 @@ class ReplayPage(QWidget):
     def _draw_chart(self, *_):
         if self.data is not None:
             groups = self.selected_groups()
-            self.chart.show_data(self.data, self._legend_available if groups is None else groups,
+            self.chart.show_data(self.data, self.legend_buttons.keys() if groups is None else groups,
                                  current=self.index, frames=self.frames)
 
     def _clear_display(self):
+        self._clear_legend()
         self.chart.clear()
         self.heatmap.clear()
         self.achievement.setText("등록 SW 목표 달성 —")
@@ -462,7 +472,7 @@ class ReplayPage(QWidget):
         dialog.open()
 
     def open_equipment(self, equipment_id):
-        if self.data is None or self.frame is None or self.dirty:
+        if self.data is None or self.frame is None or self.dirty or equipment_id not in self.heatmap.visible_ids:
             return False
         self.pause()
         try:
@@ -470,7 +480,7 @@ class ReplayPage(QWidget):
         except (ValueError, StopIteration):
             return False
         if self.drawer is None:
-            self.drawer = EquipmentDrawer(self.window())
+            self.drawer = EquipmentDrawer(self.drawer_parent or self.window(), object_name="replayEquipmentDrawer")
         snapshot = self.frame.snapshot
         request = EquipmentSelection(snapshot.query, snapshot.base_date, equipment_id, detail.record.base_date)
         self.drawer.open_detail(request, detail, rows,

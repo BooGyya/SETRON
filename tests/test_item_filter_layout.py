@@ -65,14 +65,16 @@ def test_toolbar_is_one_row_with_search_on_the_right(window, width):
     window.resize(width, 900)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    bar = page.search.parentWidget()
-    assert bar.width() == 280 and page.ai_search.isVisible()
+    bar = page.search
+    assert bar.width() == 280 and bar.isVisible()
+    assert page.ai_search in bar.actions() and not page.ai_search.icon().isNull()
     origin = lambda w: w.mapTo(page.results_card, QPoint())
     mid = lambda w: origin(w).y() + w.height() // 2
     assert abs(mid(page.family_combo) - mid(bar)) <= 4 and abs(mid(page.registered_only) - mid(bar)) <= 4
     assert origin(page.family_combo).x() < origin(page.registered_only).x() < origin(bar).x()
     assert origin(page.count).y() > origin(bar).y() + bar.height()  # 결과 제목은 툴바 아래
-    assert page.registered_only.text() == "위험 기준 등록된 Item만 보기"
+    assert page.registered_only.text() == "위험 등록된 Item"
+    assert page.registered_only.styleSheet() == window.pages["heatmap"].below_filter.styleSheet()
     assert page.manager.isHidden()
 
 
@@ -83,7 +85,7 @@ def test_toolbar_wraps_search_below_on_narrow_width_without_clipping(app, data):
         window.resize(800, 900)
         QTest.qWait(60)
         assert window.scroll.horizontalScrollBar().maximum() == 0
-        bar = page.search.parentWidget()
+        bar = page.search
         assert page.toolbar.stacked
         assert bar.mapTo(page.toolbar, QPoint()).y() >= page.family_combo.mapTo(page.toolbar, QPoint()).y() + page.family_combo.height()
         for widget in (page.family_combo, page.registered_only, bar):

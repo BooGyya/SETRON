@@ -2,20 +2,20 @@
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLayout, QLineEdit, QPushButton,
+    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLayout, QLineEdit, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from setron.features.risk.schemas import RiskStatus
 from setron.ui.appearance import readable_color, set_color_style, surface_edge
 from setron.ui.appearance_data import HEATMAP_FIELDS, HEATMAP_STANDARD, HEATMAP_TIERS, Appearance
-from setron.ui.components import Card, StatusBadge, button, label
+from setron.ui.components import Card, StatusBadge, button, filter_checkbox, label
 from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import RiskRuleState
 from setron.ui.equipment import FlowGrid, ReadTableModel, fit_rows, ignore_width, read_table
 from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
-from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, set_widget_font, svg_size
+from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
 
 
 # 타일 채움색은 5단계: 진초록 N+1 이상 · 연초록 N · 연분홍 N-1 · 진분홍 N-2 이하 · 회색 비교 불가·HPA.
@@ -259,44 +259,36 @@ class HeatmapPage(QWidget):
                                   f"QLineEdit#heatmapSearch:focus {{border:2px solid {PRIMARY};}}")
         self.search.textChanged.connect(self._render_tiles)
         self.view_toggle = button("간략히 보기")
-        self.view_toggle.setCheckable(True)
-        self.view_toggle.setChecked(True)
         self.view_toggle.setObjectName("heatmapView")
         self.view_toggle.setMinimumWidth(104)
-        self.view_toggle.setFixedHeight(38)
-        self.view_toggle.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.view_toggle.setStyleSheet(
-            f"QPushButton#heatmapView {{background:white;border:1px solid {LINE};border-radius:10px;"
+        self.hpa_button = button("HPA 표시")
+        display_style = (
+            f"QPushButton {{background:white;border:1px solid {LINE};border-radius:10px;"
             "padding:0 10px;min-height:36px;max-height:36px;}"
-            f"QPushButton#heatmapView:checked {{background:{PRIMARY};border-color:{PRIMARY};color:white;}}"
-            f"QPushButton#heatmapView:focus {{border-color:{PRIMARY};}}"
-            f"QPushButton#heatmapView:checked:focus {{border-color:{INK};}}")
+            f"QPushButton:checked {{background:{PRIMARY};border-color:{PRIMARY};color:white;}}"
+            f"QPushButton:focus {{border-color:{PRIMARY};}}"
+            f"QPushButton:checked:focus {{border-color:{INK};}}")
+        for control in (self.hpa_button, self.view_toggle):
+            control.setCheckable(True)
+            control.setFixedHeight(38)
+            control.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            control.setStyleSheet(display_style)
+        self.view_toggle.setChecked(True)
         self.view_toggle.toggled.connect(self._change_view)
+        self.hpa_button.setToolTip("분석에서 제외한 HPA 설비를 별도 묶음으로 함께 표시합니다.")
+        self.hpa_button.hide()
+        self.hpa_button.toggled.connect(self._render_tiles)
 
         self.filter_bar = QWidget()
-        filter_row = QHBoxLayout(self.filter_bar)
-        filter_row.setContentsMargins(0, 0, 0, 0)
-        filter_row.setSpacing(8)
-        self.risk_button = QCheckBox("위험 후보만")
-        self.risk_button.setIcon(icon("7880d.svg"))
-        self.risk_button.setIconSize(svg_size("7880d.svg"))
-        self.below_filter = QCheckBox("목표 미달만")
-        checkbox_style = (
-            "QCheckBox {spacing:6px;padding:0 4px;}"
-            f"QCheckBox::indicator {{width:14px;height:14px;border:1px solid {SECONDARY};border-radius:4px;background:white;}}"
-            "QCheckBox:disabled {color:#8b95a8;}"
-            f"QCheckBox::indicator:disabled {{background:{SOFT};border-color:{LINE};}}")
-        white_check = (ASSETS / "checkbox-tick.svg").as_posix()
-        for checkbox, checked_color, checked_image in (
-                (self.risk_button, PRIMARY, ""), (self.below_filter, "#3655c7", f"image:url({white_check});")):
-            set_widget_font(checkbox, font(13, medium=True))
-            checkbox.setFixedHeight(38)
-            checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
-            checkbox.setStyleSheet(checkbox_style + f"QCheckBox::indicator:checked {{"
-                                   f"background:{checked_color};border-color:{checked_color};{checked_image}}}")
+        filter_column = QVBoxLayout(self.filter_bar)
+        filter_column.setContentsMargins(0, 0, 0, 0)
+        filter_column.setSpacing(2)
+        self.risk_button = filter_checkbox("위험 후보만")
+        self.below_filter = filter_checkbox("목표 미달만")
+        for checkbox in (self.risk_button, self.below_filter):
             checkbox.setEnabled(False)
             checkbox.toggled.connect(self._render_tiles)
-            filter_row.addWidget(checkbox)
+            filter_column.addWidget(checkbox)
         segmented = QFrame()
         segmented.setObjectName("layoutSwitch")
         segmented.setFixedHeight(38)
@@ -326,6 +318,7 @@ class HeatmapPage(QWidget):
         display_row = QHBoxLayout(self.display_bar)
         display_row.setContentsMargins(0, 0, 0, 0)
         display_row.setSpacing(8)
+        display_row.addWidget(self.hpa_button)
         display_row.addWidget(self.view_toggle)
         display_row.addWidget(segmented)
         controls_host = QWidget()
@@ -367,19 +360,11 @@ class HeatmapPage(QWidget):
         self.message = label("날짜나 필터를 선택하면 결과가 표시됩니다.", color=SECONDARY, wrap=True)
         ignore_width(self.message)
         self.content.body.addWidget(self.message)
-        self.risk_footer = label("", 11, color=SECONDARY)
-        self.content.body.addWidget(self.risk_footer)
         self.selection_notice = label(self.selection_hint, 12, color=SECONDARY, wrap=True)
         ignore_width(self.selection_notice)
         self.selection_notice.hide()
         self.content.body.addWidget(self.selection_notice)
         body.addWidget(self.content)
-        self.hpa_button = button("특수 설비 HPA 표시")
-        self.hpa_button.setCheckable(True)
-        self.hpa_button.setFixedSize(280, 34)
-        self.hpa_button.setToolTip("분석에서 제외한 HPA 설비를 별도 묶음으로 함께 표시합니다.")
-        self.hpa_button.toggled.connect(self._render_tiles)
-        body.addWidget(self.hpa_button, 0, Qt.AlignmentFlag.AlignLeft)
         body.addStretch()
         self._reflow()
 
@@ -423,8 +408,8 @@ class HeatmapPage(QWidget):
         self.snapshot, self.tiles, self.selected_id = None, (), None
         self.risk_button.setEnabled(False)
         self.risk_button.setChecked(False)
-        self.risk_button.setText("위험 후보만")
-        self.risk_button.setAccessibleName("위험 후보만")
+        self.risk_button.setToolTip("")
+        self.risk_button.setAccessibleDescription("")
         for card in self.metrics.values():
             card.value.setText("—")
         self.selection_notice.setText(self.selection_hint)
@@ -456,19 +441,14 @@ class HeatmapPage(QWidget):
         self.message.setText("조회 조건을 다시 선택해 주세요.")
 
     @staticmethod
-    def _risk_filter_label(result):
+    def _risk_filter_disabled_reason(result):
         if result.risk_rule_state in (RiskRuleState.UNREGISTERED, RiskRuleState.ALL_DISABLED):
             return result.risk_rule_state.value
         if not result.summary.equipment_count:
             return "분석 대상 없음"
-        candidates, unknown = len(result.risky_ids), result.risk_unknown
+        unknown = result.risk_unknown
         if unknown == result.summary.equipment_count:
             return f"위험 미확인 {unknown}대"
-        if candidates:
-            label = f"위험 후보만 ({candidates}대)"
-            if unknown:
-                label += f" · 미확인 {unknown}대"
-            return label
         if unknown:
             return f"확인된 후보 0대 · 미확인 {unknown}대"
         return "위험 후보 0대"
@@ -485,9 +465,9 @@ class HeatmapPage(QWidget):
         self.result_status.set_tone("info")
         self.context.setText(f"적용 #{query.revision} · 일반 분석 기준일 {result.base_date} · {query.description}\n"
                              f"{result.source_label}\nHPA는 조건에 맞는 최신 자료와 기존 전달 범위의 관측이며 실제 관측일을 표시합니다.")
-        filter_label = self._risk_filter_label(result)
-        self.risk_button.setText(filter_label)
-        self.risk_button.setAccessibleName(filter_label)
+        disabled_reason = "" if result.risky_ids else self._risk_filter_disabled_reason(result)
+        self.risk_button.setToolTip(disabled_reason)
+        self.risk_button.setAccessibleDescription(disabled_reason)
         self.risk_button.setEnabled(bool(result.risky_ids))
         self.below_filter.setEnabled(bool(result.summary.equipment_count))
         if not result.risky_ids:
@@ -509,6 +489,8 @@ class HeatmapPage(QWidget):
         return not text or any(text in part.casefold() for part in (tile.code, tile.location, tile.description))
 
     def _render_tiles(self, *_):
+        list_mode = self.layout_buttons.checkedId() == 1
+        self.hpa_button.setVisible(not list_mode and any(t.goal is GoalState.EXCLUDED for t in self.tiles))
         self._reflow()
         while self.tile_body.count():
             widget = self.tile_body.takeAt(0).widget()
@@ -531,19 +513,13 @@ class HeatmapPage(QWidget):
                                  "목표 미달 설비가 없습니다." if not scoped else
                                  "위험 후보가 없습니다. '위험 후보만'을 해제해 주세요." if not risk_filtered else
                                  f"'{self.search.text().strip()}' 검색 결과가 없습니다. 검색어를 지우면 전체 설비가 보입니다.")
-        list_mode = self.layout_buttons.checkedId() == 1
         self.list_table.setVisible(list_mode and bool(filtered))
         self.tile_host.setVisible(not list_mode)
-        risky = [t for t in self.tiles if t.risk is RiskStatus.RISK]
-        self.risk_footer.setVisible(bool(filtered) and bool(risky))
-        self.risk_footer.setText(f"위험 후보 {len(risky)}대 · 달성 설비 "
-                                 f"{sum(t.goal is GoalState.MET for t in risky)}대 포함")
         if list_mode:
             self._render_list(filtered)
             return
         expanded = self.view_toggle.isChecked()
         has_tiles = bool(filtered)
-        self.hpa_button.setVisible(any(t.goal is GoalState.EXCLUDED for t in self.tiles))
         if not has_tiles:
             return
         cards = [self._group_card(title, members, expanded, name)
@@ -567,7 +543,7 @@ class HeatmapPage(QWidget):
             result.append(("설비군 미확인", rest, None))
         hpa = [t for t in filtered if t.goal is GoalState.EXCLUDED]
         if hpa and self.hpa_button.isChecked():
-            result.append(("HPA · 분석 제외", hpa, None))
+            result.append(("HPA", hpa, None))
         return result
 
     def _group_card(self, title, members, expanded, group_name):

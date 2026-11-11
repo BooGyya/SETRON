@@ -19,7 +19,6 @@ from setron.ui.dashboard_data import (
     DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, RiskRuleState, count_value,
     information_gap_reasons, missing_sw_count,
 )
-from setron.ui.query_state import matches_selection
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
 
 OUTLINE_BUTTON = (f"QPushButton {{background:white;border:1px solid {LINE};border-radius:8px;padding:0 16px;"
@@ -86,6 +85,7 @@ class DashboardGrid(QWidget):
                  alignment=Qt.AlignmentFlag(0), captions=None):
         super().__init__()
         self.widgets, self.minimum_width, self.maximum_columns = widgets, minimum_width, maximum_columns
+        self._visible_widgets = tuple(widgets)
         self.spacing = spacing
         self.alignment = alignment
         self.captions = captions or {}
@@ -99,14 +99,23 @@ class DashboardGrid(QWidget):
     def minimumSizeHint(self):
         return QSize(0, self.grid.minimumSize().height())
 
-    def _arrange(self, columns):
-        if columns == self.columns:
+    def set_visible_widgets(self, widgets):
+        visible = tuple(widgets)
+        if visible == self._visible_widgets:
+            return
+        self._visible_widgets = visible
+        for widget in self.widgets:
+            widget.setVisible(widget in visible)
+        self._arrange(self.columns, force=True)
+
+    def _arrange(self, columns, *, force=False):
+        if columns == self.columns and not force:
             return
         for widget in (*self.widgets, *self.captions.values()):
             self.grid.removeWidget(widget)
         for index in range(max(columns, self.columns)):
             self.grid.setColumnStretch(index, int(index < columns))
-        for index, widget in enumerate(self.widgets):
+        for index, widget in enumerate(self._visible_widgets):
             row, column = divmod(index, columns)
             if self.captions:
                 row *= 2
@@ -222,7 +231,7 @@ class DashboardPage(QWidget):
         self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
         set_widget_font(self.tabs, font(14, medium=True))
         self.tabs.setStyleSheet(TAB_STYLE)
-        for title in ("구역별 달성률", "판정 구성비", "설비 대수", "달성률 추이"):
+        for title in ("히트맵", "원형 그래프", "막대 그래프", "꺾은선 그래프"):
             self.tabs.addTab(title)
         self.content.body.addWidget(self.tabs, alignment=Qt.AlignmentFlag.AlignLeft)
         self.matrix_legend = QWidget()
@@ -243,23 +252,13 @@ class DashboardPage(QWidget):
             item.addWidget(label(text, 12, color=SECONDARY))
             legend_body.addLayout(item)
         self.content.body.addWidget(self.matrix_legend, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.description = label("", 12, color=SECONDARY, wrap=True)
-        self.risk_note = QWidget()
-        risk_body = QHBoxLayout(self.risk_note)
-        risk_body.setContentsMargins(0, 0, 0, 0)
-        risk_body.setSpacing(6)
-        risk_symbol = label("⚠", 13)
-        set_color_style(risk_symbol, lambda colors: (
-            f"color:{readable_color(colors['dashboard_risk_marker'], colors['surface'])};"))
-        risk_body.addWidget(risk_symbol)
-        risk_body.addWidget(self.description, 1)
-        self.content.body.addWidget(self.risk_note)
         self.series_widgets = []
         for group in source.catalog.groups:
             check = button(group.label)
             check.setCheckable(True)
             check.setChecked(True)
             set_widget_font(check, font(13, medium=True))
+            check.setStyleSheet(series_button_style(series_color(group.key)))
             check.setAccessibleName(group.label + " 차트 표시")
             check.toggled.connect(lambda checked, key=group.key, control=check:
                                   self._toggle_group(key, checked) if control.isEnabled() else None)
@@ -467,9 +466,6 @@ class DashboardPage(QWidget):
         bars = bar_plot(data) if has_analysis and mode == 2 else ((), {})
         self.matrix_scroll.setVisible(has_data and mode == 0)
         self.chart.setVisible(has_analysis and mode != 0)
-        self.series_grid.setVisible(has_analysis and mode in (2, 3))
-        for group, check in zip(self.source.catalog.groups, self.series_widgets):
-            check.setVisible(data is None or matches_selection(data.query.selection.group_key, group.key))
         # Figma: 수치표 보기·정의 설명·위험 후보 목록·관측 변화·Site 요약 없이 보기 카드 하나만 넓게 쓴다.
         self.data_toggle.hide()
         self.candidate_button.hide()
@@ -485,9 +481,6 @@ class DashboardPage(QWidget):
         self.site_button.setEnabled(has_data)
         self.message.setVisible(not has_data or (not has_analysis and mode != 0))
         self.data_table.setVisible(has_analysis and mode != 0 and self.data_toggle.isChecked())
-        self.description.setText(self._subtitle(mode))
-        self.risk_note.setVisible(has_analysis and mode != 0 and bool(self.description.text()))
-        self.risk_note.layout().itemAt(0).widget().setVisible(mode == 1)
         self._style_series(mode, bars[1])
         self._render_attention()
         self._render_observations()
@@ -512,27 +505,21 @@ class DashboardPage(QWidget):
             self.chart.trend(data, self.visible_groups)
         self._show_data_table()
 
-    def _subtitle(self, mode):
-        data = self.snapshot
-        if mode != 1 or data is None or not data.risky_ids:
-            return ""
-        statuses = {s.record.equipment_id: s for s in data.summary.equipment}
-        met = sum(_equipment_state(statuses.get(i))[0] == "달성" for i in data.risky_ids)
-        return f"안전·결함 위험 후보 {len(data.risky_ids)}대 · 목표 달성 {met}대와 중복"
-
     def _style_series(self, mode, bar_groups):
         """현재 차트에 그릴 값이 있는 설비군만 표시 여부를 선택할 수 있다."""
         trends = self.snapshot.trends if mode == 3 and self.snapshot is not None else ()
         available = bar_groups if mode == 2 else {group.group_key for group in trends
                                                  if any(trend_point_rate(point) is not None for point in group.points)}
+        visible = []
         for group, check in zip(self.source.catalog.groups, self.series_widgets):
-            enabled = mode not in (2, 3) or group.key in available
-            check.setEnabled(enabled)
+            present = group.key in available
+            if present:
+                visible.append(check)
+            check.setEnabled(present)
             with QSignalBlocker(check):
-                check.setChecked(enabled and group.key in self.visible_groups)
-            style = series_button_style(series_color(group.key))
-            if check.styleSheet() != style:
-                check.setStyleSheet(style)
+                check.setChecked(present and group.key in self.visible_groups)
+        self.series_grid.set_visible_widgets(visible)
+        self.series_grid.setVisible(bool(visible))
 
     def _render_composition_legend(self, data):
         _clear_layout(self.composition_rows)
@@ -547,8 +534,8 @@ class DashboardPage(QWidget):
             chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
             chip.setFixedSize(90, 30)
             set_color_style(chip, lambda colors, k=key, p=preferred: (
-                f"background:{colors[k]};color:{readable_color(colors[p], colors[k])};border-radius:4px;"
-                f"border:1px solid {surface_edge(colors[k], colors['surface'], colors[k])};"))
+                f"background:{colors[k]};color:{readable_color(colors[p], colors[k])};"
+                "border:none;border-radius:4px;"))
             row.addWidget(chip)
             share = f"{count / total:.1%}" if total else "—"
             count_label = label(f"{count}건", 12, color=INK)
@@ -802,13 +789,12 @@ class DashboardPage(QWidget):
         main.setObjectName("dashboardCell")
         def cell_style(colors):
             background, ink = dashboard_cell_colors(colors, color_key)
-            border = surface_edge(background, colors["surface"], background)
-            focus = readable_color(colors["accent"], background, 3)
-            return (f"QPushButton#dashboardCell {{background:{background};border:1px solid {border};"
+            active = readable_color(background, background, 1.2)
+            return (f"QPushButton#dashboardCell {{background:{background};border:none;"
                     "border-radius:6px;padding:0;min-height:54px;}"
                     f"QPushButton#dashboardCell QLabel {{color:{ink};}}"
-                    f"QPushButton#dashboardCell:hover:enabled {{border-color:{focus};}}"
-                    f"QPushButton#dashboardCell:focus {{border:2px solid {focus};}}")
+                    "QPushButton#dashboardCell:hover:enabled, QPushButton#dashboardCell:focus "
+                    f"{{background:{active};outline:none;}}")
         set_color_style(main, cell_style)
         main.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         main.setEnabled(bool(cell.equipment_ids))

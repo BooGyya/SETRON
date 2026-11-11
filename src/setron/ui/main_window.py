@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from setron.ui.components import EmptyState, PageHeader, StatusBadge, label
+from setron.ui.components import EmptyState, PageHeader, StatusBadge, button, label
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryCatalog, QueryState, preview_catalog
 from setron.ui.theme import ASSETS, INK, LINE, PRIMARY, SECONDARY, icon, svg_size
@@ -265,14 +265,21 @@ class MainWindow(QMainWindow):
         self.back_shortcut.triggered.connect(self.go_back)
         self.addAction(self.back_shortcut)
         self.body.addWidget(self.header)
-        # 실제 업무 자료가 아닐 때(DB 미연결로 합성 예시 자료 등)의 경고. 공통 안내 칸(notice)과 달리
-        # 화면별 숨김 규칙을 따르지 않고 모든 화면에 계속 보인다 (QA Q-03).
+        # DB 접속 실패와 합성 예시 안내를 페이지 공통 영역에 표시한다.
+        self.data_warning_row = QWidget()
+        warning_layout = QHBoxLayout(self.data_warning_row)
+        warning_layout.setContentsMargins(0, 0, 0, 0)
+        warning_layout.setSpacing(8)
         self.data_warning = StatusBadge("", "danger")
         self.data_warning.setObjectName("dataWarning")
         self.data_warning.setWordWrap(True)
         self.data_warning.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        self.data_warning.hide()
-        self.body.addWidget(self.data_warning)
+        warning_layout.addWidget(self.data_warning, 1)
+        self.db_reconnect_button = button("DB 재연결")
+        self.db_reconnect_button.hide()
+        warning_layout.addWidget(self.db_reconnect_button)
+        self.data_warning_row.hide()
+        self.body.addWidget(self.data_warning_row)
         self.notice = StatusBadge("작업 단위 3 · 공통 조회 조건 · 업무 데이터 미연결", "info")
         self.body.addWidget(self.notice)
         self.query_panel = QueryPanel(self.query_state)
@@ -338,12 +345,18 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.sidebar_scroll)
         return sidebar
 
-    def set_data_warning(self, text: str | None) -> None:
-        """실제 자료가 아님을 알리는 경고를 모든 화면에 계속 띄운다. 빈 문구면 숨긴다 (QA Q-03)."""
+    def set_data_warning(self, text: str | None, *, reconnect: bool = False) -> None:
+        """자료 경고와 DB 재연결 버튼을 갱신한다."""
         text = (text or "").strip()
         self.data_warning.setText(text)
         self.data_warning.setToolTip(text)
-        self.data_warning.setVisible(bool(text))
+        self.db_reconnect_button.setVisible(reconnect and bool(text))
+        self._sync_data_warning()
+
+    def _sync_data_warning(self) -> None:
+        warning = self.data_warning.text()
+        demo_import = self.route == "import" and warning.startswith("DB 접속 설정이 없어")
+        self.data_warning_row.setVisible(bool(warning) and not demo_import)
 
     def register_page(self, key: str, widget: QWidget, *, uses_query: bool | None = None) -> None:
         """담당 QWidget을 알려진 메뉴에 한 번 등록한다. 등록한 위젯의 소유자는 이 창이다."""
@@ -401,6 +414,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(current)
         self.stack.updateGeometry()
         self.route = key
+        self._sync_data_warning()
         # 펼침 행이 스크롤 임계점을 지나도 목록의 가로 폭을 유지한다.
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn if key == "items"
                                                else Qt.ScrollBarPolicy.ScrollBarAsNeeded)

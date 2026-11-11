@@ -47,7 +47,7 @@ class _WrapRow(QWidget):
         for index, widget in enumerate(self.widgets):
             self.grid.addWidget(widget, index // columns, index % columns)
         if self.fields:
-            # 고정 너비인 초기화 버튼 외에는 남는 폭을 나눠 쓴다.
+            # 고정 너비인 조회 도구 외에는 남는 폭을 나눠 쓴다.
             self.grid.setAlignment(self.widgets[-1], Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
             for index in range(columns):
                 fixed = all(w.maximumWidth() < 10000 for w in self.widgets[index::columns])
@@ -110,7 +110,7 @@ class QueryPanel(QWidget):
     catalog_changed = Signal(object)  # QueryCatalog
     targets_changed = Signal(object)  # 목표 초안 변경. 조회 적용과 별개
 
-    def __init__(self, state: QueryState, *, period=False):
+    def __init__(self, state: QueryState, *, period=False, show_group=True, show_search=True):
         super().__init__()
         self.state = state
         self.target_describer = None
@@ -163,8 +163,8 @@ class QueryPanel(QWidget):
             self.date_edit.calendarWidget().activated.connect(self._confirm_date)
             fields = [date_field]
         for key, caption in FILTER_CAPTIONS.items():
-            if period and key == "group_key":
-                continue  # 리플레이의 설비군 버튼은 조회한 기간 안에서 함께 반영한다.
+            if not show_group and key == "group_key":
+                continue
             field = QWidget()
             layout = QVBoxLayout(field)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -179,17 +179,23 @@ class QueryPanel(QWidget):
             fields.append(field)
         # 조건 초기화는 아이콘 버튼. Site~설비군은 전체로, 기준 날짜는 오늘로 되돌린다.
         self.reset_button = button("", asset="ver5/reset.svg")
-        self.reset_button.setText("")  # 공통 버튼이 아이콘 옆에 넣는 텍스트 여백을 없앤다.
-        self.reset_button.setStyleSheet("padding: 8px 0;")
-        self.reset_button.setAccessibleName("조건 초기화")
-        self.reset_button.setProperty("soft", True)
-        self.reset_button.setFixedSize(38, 38)
-        self.reset_button.setToolTip("조건 초기화")
+        query_buttons = [(self.reset_button, "조건 초기화")]
+        if show_search:
+            self.search_button = button("", asset="query-search.svg")
+            query_buttons.append((self.search_button, "조회"))
         actions = QWidget()
         actions_body = QHBoxLayout(actions)
         actions_body.setContentsMargins(0, 0, 0, 0)
-        actions_body.addWidget(self.reset_button, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
-        actions.setFixedWidth(38)
+        actions_body.setSpacing(8)
+        for control, caption in query_buttons:
+            control.setText("")
+            control.setStyleSheet("padding: 8px 0;")
+            control.setProperty("soft", True)
+            control.setFixedSize(38, 38)
+            control.setAccessibleName(caption)
+            control.setToolTip(caption)
+            actions_body.addWidget(control, 0, Qt.AlignmentFlag.AlignBottom)
+        actions.setFixedWidth(actions_body.sizeHint().width())
         fields.append(actions)
         self.fields_row = _WrapRow(fields, 128, fields=True)
         self.card.body.addWidget(self.fields_row)
@@ -226,6 +232,8 @@ class QueryPanel(QWidget):
         if not period:
             self.confirmed.connect(self.apply_draft)
             self.reset_button.clicked.connect(self._reset_and_apply)
+            if show_search:
+                self.search_button.clicked.connect(self.apply_draft)
         self._render()
 
     def _filter_options(self, field):

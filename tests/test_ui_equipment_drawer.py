@@ -142,7 +142,13 @@ def test_software_shows_current_and_target_on_separate_rows_without_verdict_or_c
                                          (5, GoalState.UNKNOWN, 0)])
 def test_representative_states_are_real_data_not_figma_demo(window, eid, goal, cards):
     drawer = open_tile(window, eid)
-    assert drawer.goal_badge.text() == goal.value
+    assert drawer.detail.whole.goal is goal
+    if goal is GoalState.EXCLUDED:
+        assert drawer.risk_badge is None and drawer.goal_badge is None
+        assert not any("SW 관측 없음" in label.text() for label in drawer.body_widget.findChildren(QLabel)
+                       if label.isVisibleTo(drawer.body_widget))
+    else:
+        assert drawer.goal_badge.text() == goal.value
     assert len(drawer.software_cards) == cards
     if eid == 2:
         assert "위험 후보" in drawer.risk_badge.text()  # 목표 달성 ≠ 위험 해제
@@ -150,8 +156,6 @@ def test_representative_states_are_real_data_not_figma_demo(window, eid, goal, c
         assert observation.current == observation.target == "v2"
     if eid == 3:
         assert drawer.software_cards[0].observation.current == "미입력"
-    if eid == 4:
-        assert "위험 분석 제외" in drawer.risk_badge.text()
     assert drawer.info_values["설비명"].text() == f"TEST-{eid}"
     assert not drawer.edit_button.isEnabled()  # 합성 공급자는 실제 DB 행을 편집할 수 없다.
 

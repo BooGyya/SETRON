@@ -76,6 +76,23 @@ def test_date_field_is_first_on_first_row_and_reset_returns_today(window):
     assert applied.count() == 2 and window.query_state.applied.selection == QuerySelection()
 
 
+def test_search_icon_applies_the_selected_conditions(window):
+    panel = window.query_panel
+    search = panel.search_button
+    reset = panel.reset_button
+    assert search.isVisible() and search.text() == "" and not search.icon().isNull()
+    assert search.size() == reset.size() and search.iconSize() == reset.iconSize()
+    assert search.y() == reset.y() and search.x() > reset.geometry().right()
+    panel.set_as_of(date(2026, 8, 30))
+    applied = QSignalSpy(window.query_applied)
+
+    QTest.mouseClick(search, Qt.MouseButton.LeftButton)
+
+    assert applied.count() == 1
+    assert window.query_state.applied.selection == panel.state.draft
+    assert window.pages["dashboard"].snapshot.base_date == date(2026, 8, 21)
+
+
 def test_calendar_day_click_applies_once_to_dashboard_and_heatmap(window):
     panel = window.query_panel
     panel.set_as_of(date(2026, 10, 21))

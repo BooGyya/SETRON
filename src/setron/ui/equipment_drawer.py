@@ -125,9 +125,8 @@ class EquipmentDrawer(SideDrawer):
             card = SoftwareCard(observation, title)
             self.software_cards.append(card)
             self.body.addWidget(card)
-        if not observations:
-            empty = label("HPA · SW 관측 없음 · 분석 제외" if detail.record.is_hpa else "SW 미등록 · 목표 비교 불가",
-                          14, wrap=True)
+        if not observations and not detail.record.is_hpa:
+            empty = label("SW 미등록 · 목표 비교 불가", 14, wrap=True)
             ignore_width(empty)
             self.body.addWidget(empty)
         self.edit_button = button("버전 정보 수정", primary=True)
@@ -152,16 +151,17 @@ class EquipmentDrawer(SideDrawer):
         card = QVBoxLayout(self.info_card)
         card.setContentsMargins(14, 12, 14, 12)
         card.setSpacing(12)
-        badges = QHBoxLayout()
-        badges.setSpacing(8)
-        risk_tone = ("neutral" if record.is_hpa else
-                     {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning"}.get(whole.risk, "neutral"))
-        self.risk_badge = StatusBadge(whole.risk_label, risk_tone)
-        self.goal_badge = StatusBadge(whole.goal.value, GOAL_TONES[whole.goal])
-        badges.addWidget(self.risk_badge)
-        badges.addWidget(self.goal_badge)
-        badges.addStretch()
-        card.addLayout(badges)
+        self.risk_badge = self.goal_badge = None
+        if not record.is_hpa:
+            badges = QHBoxLayout()
+            badges.setSpacing(8)
+            risk_tone = {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning"}.get(whole.risk, "neutral")
+            self.risk_badge = StatusBadge(whole.risk_label, risk_tone)
+            self.goal_badge = StatusBadge(whole.goal.value, GOAL_TONES[whole.goal])
+            badges.addWidget(self.risk_badge)
+            badges.addWidget(self.goal_badge)
+            badges.addStretch()
+            card.addLayout(badges)
         fields = QGridLayout()
         fields.setHorizontalSpacing(14)
         fields.setVerticalSpacing(8)

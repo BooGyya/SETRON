@@ -257,6 +257,7 @@ def test_kpi_and_matrix_use_the_same_snapshot_and_do_not_treat_risk_as_below(win
                and card.value.alignment() == Qt.AlignmentFlag.AlignCenter for card in page.metrics.values())
     assert page.metrics["risk"].value.text() == "2대"
     assert page.metrics["upgrade"].value.text() == "1대"
+    assert all("border:none" in cell.styleSheet() for cell in page.matrix_buttons.values())
     total = page.matrix_buttons[len(page.snapshot.rows), 4]
     assert total.layout().itemAt(0).widget().text() == "75%"
     assert total.toolTip() == "<qt>전체 / 전체 / 전체<br>N이상 3건<br>N미만 1건<br>정보 부족 1건</qt>"
@@ -372,6 +373,10 @@ def test_composition_labels_stay_centered_after_applying_another_site(window):
         window.query_panel.apply_draft()
         QTest.qWait(20)
 
+        chips = [page.composition_rows.itemAt(row).layout().itemAt(0).widget() for row in range(3)]
+        assert [chip.text() for chip in chips] == ["달성", "미달", "확인 필요"]
+        assert all("border:none" in chip.styleSheet() for chip in chips)
+        assert not any("대와 중복" in caption.text() for caption in page.content.findChildren(QLabel))
         chart = page.chart.chart()
         labels = {item.text(): item.mapRectToParent(item.boundingRect()) for item in chart.childItems()
                   if isinstance(item, QGraphicsSimpleTextItem)}
@@ -398,7 +403,7 @@ def test_chart_legend_only_changes_visibility_not_applied_scope_or_kpis(window):
     assert page.metrics["total"].value.text() == "4대"
 
 
-def test_series_legend_disables_missing_groups_without_losing_site_preferences(window):
+def test_series_legend_hides_missing_groups_without_losing_site_preferences(window):
     page, panel = window.pages["dashboard"], window.query_panel
     o2, o3, inline = page.series_widgets
     page.tabs.setCurrentIndex(3)
@@ -406,7 +411,7 @@ def test_series_legend_disables_missing_groups_without_losing_site_preferences(w
     panel.apply_draft()
     assert o2.isEnabled() and o2.isChecked()
     assert o3.isEnabled() and o3.isChecked()
-    assert not inline.isEnabled() and not inline.isChecked()
+    assert inline.isHidden() and not inline.isEnabled() and not inline.isChecked()
     inline.click()
     assert not inline.isChecked() and "inline-o2" in page.visible_groups
     o3.click()
@@ -414,9 +419,10 @@ def test_series_legend_disables_missing_groups_without_losing_site_preferences(w
 
     panel.select("site_key", "s2")
     panel.apply_draft()
-    assert not o2.isEnabled() and not o2.isChecked()
-    assert not o3.isEnabled() and not o3.isChecked()
-    assert inline.isEnabled() and inline.isChecked()
+    assert o2.isHidden() and not o2.isEnabled() and not o2.isChecked()
+    assert o3.isHidden() and not o3.isEnabled() and not o3.isChecked()
+    assert inline.isVisible() and inline.isEnabled() and inline.isChecked()
+    assert page.series_grid.grid.getItemPosition(page.series_grid.grid.indexOf(inline))[:2] == (0, 0)
     assert {series.name() for series in page.chart.chart().series()} == {"Inline O2"}
     trend_style = inline.styleSheet()
     page.tabs.setCurrentIndex(2)
@@ -456,11 +462,10 @@ def test_series_legend_uses_the_whole_painted_button_as_hit_area(window, mode):
     page.tabs.setCurrentIndex(mode)
     QTest.qWait(30)
     active, _, disabled = page.series_widgets
-    assert active.isChecked() and not disabled.isEnabled()
+    assert active.isChecked() and disabled.isHidden()
 
-    for control in (disabled, active):
-        edge = QPoint(control.width() - 5, control.height() // 2)
-        QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=control.mapTo(window, edge))
+    edge = QPoint(active.width() - 5, active.height() // 2)
+    QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=active.mapTo(window, edge))
     assert not active.isChecked() and "o2" not in page.visible_groups
     assert not disabled.isChecked() and "inline-o2" in page.visible_groups
 
@@ -487,6 +492,35 @@ def test_trend_legend_requires_a_plottable_point_on_any_observation_day(window, 
     assert {series.name() for series in page.chart.chart().series()} == {"O3", "Inline O2"}
     page.tabs.setCurrentIndex(2)
     assert o2.isEnabled() and o2.isChecked()  # 추이에서 표시할 점이 없어도 막대의 물리 대수는 있다.
+
+
+def test_search_applies_all_location_date_and_group_filters_to_every_view(app, source):
+    window = create_window(source)
+    window.show()
+    try:
+        page, panel = window.pages["dashboard"], window.query_panel
+        panel.set_as_of(DAY1)
+        for field, value in (("site_key", "s1"), ("fab_key", "f1"), ("line_key", "l1"), ("group_key", "o3")):
+            panel.select(field, value)
+        panel.search_button.click()
+
+        snapshot = page.snapshot
+        assert snapshot is window.pages["heatmap"].snapshot
+        assert snapshot.base_date == DAY1 and snapshot.equipment_ids == (1,)
+        assert snapshot.rows[0].cells[-1].equipment_ids == (1,) and page.matrix_scroll.isVisible()
+        page.tabs.setCurrentIndex(1)
+        assert page.chart.chart().series()[0].sum() == 1
+        page.tabs.setCurrentIndex(2)
+        bars = page.chart.chart().series()[0].barSets()
+        assert [bar.label() for bar in bars] == ["O3"] and bars[0].at(0) == 1
+        page.tabs.setCurrentIndex(3)
+        assert {series.name() for series in page.chart.chart().series()} == {"O3"}
+        assert [point.day for point in snapshot.observations] == [DAY1]
+        assert [control.isVisible() for control in page.series_widgets] == [False, True, False]
+    finally:
+        window.close()
+        window.deleteLater()
+        app.processEvents()
 
 
 def test_bar_click_does_not_inherit_global_or_risk_only_scope(window):
@@ -652,7 +686,7 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert window.scroll.widget().width() == window.scroll.viewport().width()
     assert [page.tabs.tabText(i) for i in range(page.tabs.count())] == [
-        "구역별 달성률", "판정 구성비", "설비 대수", "달성률 추이",
+        "히트맵", "원형 그래프", "막대 그래프", "꺾은선 그래프",
     ]
     assert page.content.body.itemAt(0).widget() is page.tabs
     removed_titles = {"목표 도달 상태 구성비", "원본 구역 · 설비군별 설비 대수", "설비군별 목표 적용 추이"}

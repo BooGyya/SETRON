@@ -52,6 +52,7 @@ def test_empty_family_is_dimmed_selectable_and_titled_without_count(window):
     assert page.family_item_counts == {10: 2, 99: 0}  # 릴리즈에 연결된 Item만 센다(연결 없는 Item 3 제외)
     assert combo.itemData(empty, Qt.ItemDataRole.ForegroundRole) is not None
     assert combo.itemData(full, Qt.ItemDataRole.ForegroundRole) is None
+    assert combo.view().sizeHintForRow(empty) == combo.view().sizeHintForRow(full)
     assert "건" not in combo.itemText(empty) and combo.itemText(empty) == "C4 (Foundry)"
     assert page.count.text() == "SW A 아이템 전체 2건"
     combo.setCurrentIndex(empty)
@@ -90,10 +91,13 @@ def test_summary_explains_unknown_first_version_without_contradicting_row(app, d
         _close(window)
 
 
-def test_summary_keeps_family_note_when_first_version_is_known(window):
+def test_summary_shows_the_observation_date_below_both_metrics(window):
     page = window.pages["items"]
     page.result_buttons[1].click()
-    assert page.first_value.text() != "미확인" and page.first_note.text().endswith("계열 기준")
+    assert page.first_value.text() != "미확인" and page.first_note.isHidden()
+    assert "판정 불가" not in page.inline_equipment.text()
+    assert page.inline_date.text() == f"{page.data.base_date} 기준"
+    assert page.inline_date.parentWidget() is page.inline_box
 
 
 def test_long_title_is_elided_in_one_line_and_keeps_badge_and_version(app, data):

@@ -46,8 +46,7 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert page.index == 5 and page.frame.day == date(2026, 10, 21)
     assert page.play_button.isEnabled() and not page.pause_button.isEnabled()
     assert len(page.legend_buttons) == 9 and len(page.chart.values) == 9
-    # 요청 1-1: 설비군은 조회 조건 드롭다운이 아니라 그래프 위 설비군 버튼으로 고른다.
-    assert set(page.query_panel.combos) == {"site_key", "fab_key", "line_key"}
+    assert set(page.query_panel.combos) == {"site_key", "fab_key", "line_key", "group_key"}
     assert [b.text() for b in page.legend_tools] == ["전체 해제"]  # 버튼 하나로 선택·해제 전환
     # 요청 2-1: 날짜 칩 대신 재생 간격
     assert [b.text() for b in page.interval_buttons.values()] == ["저장일마다", "1주", "1개월", "3개월"]
@@ -157,29 +156,34 @@ def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_butt
     assert (page.achievement.text(), page.heatmap.visible_ids) == full and len(page.chart.values) == 9
 
 
-def test_group_buttons_disable_absent_groups_and_bulk_only_changes_available_groups(own):
+def test_group_buttons_hide_absent_groups_and_bulk_only_changes_available_groups(own):
     source = demo_dashboard_source()
     source.records = tuple(record for record in source.records
                            if source.locations[record.equipment_id].site_key != "hwaseong"
                            or not any(pm.group_id in source.bindings["c4"] for pm in record.pms))
     page = own(ReplayPage(source))
     page.query_panel.select("site_key", "hwaseong")
-    assert page.apply_query()
+    page.query_panel.search_button.click()
     until(lambda: not page.busy)
     present = {cell.group_keys[0] for frame in page.data.frames for cell in frame.snapshot.groups
                if len(cell.group_keys) == 1 and cell.equipment_ids}
-    assert set(page.legend_buttons) == {group.key for group in source.catalog.groups}
-    assert {key for key, control in page.legend_buttons.items() if control.isEnabled()} == present and present
-    unavailable = page.legend_buttons["c4"]
-    QTest.qWait(20)
-    assert unavailable.isVisible() and not unavailable.isEnabled() and not unavailable.isChecked()
-    unavailable.click()
-    assert not unavailable.isChecked() and set(page.chart.values) == present
+    assert present and set(page.legend_buttons) == present and "c4" not in page.legend_buttons
+    assert set(page.chart.values) == present
     page.toggle_all_button.click()
     assert not any(control.isChecked() for control in page.legend_buttons.values())
     page.toggle_all_button.click()
     assert {key for key, control in page.legend_buttons.items() if control.isChecked()} == present
     assert all(t.site_key == "hwaseong" for f in page.data.frames for t in f.tiles)
+    page.query_panel.select("group_key", "o2")
+    set_period(page, "2026-08-21", "2026-10-21")
+    page.query_panel.search_button.click()
+    until(lambda: not page.busy)
+    assert page.data.request.query.selection.group_key == "o2"
+    assert [frame.day for frame in page.frames] == [date(2026, m, 21) for m in (8, 9, 10)]
+    assert set(page.legend_buttons) == set(page.chart.values) == {"o2"}
+    assert page.heatmap.visible_ids == next(
+        cell.equipment_ids for cell in page.frame.snapshot.groups if cell.group_keys == ("o2",)
+    )
 
 
 def test_group_buttons_match_dashboard_style_and_keep_their_height(own):
@@ -411,9 +415,15 @@ def test_tile_opens_same_observation_readonly_drawer_without_navigation_or_write
     page = window.pages["replay"]
     until(lambda: not page.busy)
     page.select_date(0)
+    page.view_tabs.setCurrentIndex(1)
+    tile = page.heatmap.tile_buttons[1]
+    window.scroll.ensureWidgetVisible(tile)
+    QTest.qWait(30)
     before = page.data, page.index, page.state.draft
-    assert page.open_equipment(1)
+    QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton, pos=tile.mapTo(window, tile.rect().center()))
     assert page.drawer.isVisibleTo(window) and window.route == "replay"
+    assert page.drawer.parentWidget() is window.centralWidget()
+    assert page.drawer.request.equipment_id == 1
     assert page.drawer.detail.record.base_date == page.frame.day
     assert len(page.drawer.software_cards) == 3 and not page.drawer.edit_available
     page.drawer.close_panel()
@@ -449,6 +459,8 @@ def test_replay_has_no_main_horizontal_overflow_and_header_layout_recovers(own, 
     assert window.scroll.horizontalScrollBar().maximum() == 0
     assert page.width() <= window.scroll.viewport().width()
     assert page.reset_button.iconSize() == window.query_panel.reset_button.iconSize()
+    assert page.query_panel.search_button.isVisible() and page.query_panel.search_button.text() == ""
+    assert page.query_panel.search_button.x() > page.reset_button.geometry().right()
     assert page.query_panel.card.property("outlined") is True
     window.navigate("dashboard")   # 데이터 가져오기는 머리 줄 툴바를 숨기므로(11-10 2차 3-1) 대시보드로 확인한다
     assert window.header.toolbar.isVisibleTo(window)

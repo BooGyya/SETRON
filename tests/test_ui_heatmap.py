@@ -21,7 +21,7 @@ from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBi
 from setron.ui.heatmap import RISK_FILL, RISK_LINE, TIER_FILL, TileButton
 from setron.ui.heatmap_data import GoalState, equipment_tiles
 from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
-from setron.ui.theme import TONES, install_theme, svg_size
+from setron.ui.theme import TONES, install_theme
 
 
 DAY = date(2026, 10, 21)
@@ -173,30 +173,30 @@ def test_candidate_filter_empty_message_does_not_hide_unknown_as_safe(window):
     page = window.pages["heatmap"]
     page.risk_button.click()
     assert not page.risk_button.isEnabled()
-    assert page.risk_button.text() == "위험 미확인 1대"
+    assert page.risk_button.text() == "위험 후보만"
+    assert page.risk_button.toolTip() == "위험 미확인 1대"
     assert tuple(page.tile_buttons) == (3, 4)
 
 
-@pytest.mark.parametrize("state,risks,filter_text", [
+@pytest.mark.parametrize("state,risks,disabled_reason", [
     (RiskRuleState.UNREGISTERED, {}, "위험 규칙 미등록"),
     (RiskRuleState.ALL_DISABLED, {}, "위험 규칙 모두 비활성"),
     (RiskRuleState.ACTIVE, {}, "위험 미확인 4대"),
     (RiskRuleState.ACTIVE, {1: RiskStatus.NO_RISK}, "확인된 후보 0대 · 미확인 3대"),
     (RiskRuleState.ACTIVE, dict.fromkeys((1, 2, 3, 5), RiskStatus.NO_RISK), "위험 후보 0대"),
 ])
-def test_risk_filter_after_requery(window, source, state, risks, filter_text):
+def test_risk_filter_after_requery(window, source, state, risks, disabled_reason):
     page = window.pages["heatmap"]
     window.query_panel.apply_draft()
     page.risk_button.click()
     assert page.risk_button.isChecked()
     page.layout_buttons.button(1).click()
-    assert page.risk_footer.isVisibleTo(page)
     source.risk_rule_state = state
     source.risks = risks
     window.query_panel.apply_draft()
-    assert not page.risk_footer.isVisibleTo(page)
     assert page.snapshot.risk_rule_state is state
-    assert page.risk_button.text() == page.risk_button.accessibleName() == filter_text
+    assert page.risk_button.text() == "위험 후보만"
+    assert page.risk_button.toolTip() == page.risk_button.accessibleDescription() == disabled_reason
     assert not page.risk_button.isEnabled() and not page.risk_button.isChecked()
     assert set(page.visible_ids) == {1, 2, 3, 4, 5}
 
@@ -223,7 +223,7 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     assert page.selected_id is None and not any(t.isChecked() for t in page.tile_buttons.values())
 
 
-def test_tiles_show_risk_border_and_tooltip_and_original_icon_size(window):
+def test_tiles_show_risk_border_and_tooltip_with_matching_filter_checks(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     # 위험 후보는 굵은 빨간 테두리로 표시하고 판정 설명은 툴팁으로 확인한다.
@@ -233,7 +233,9 @@ def test_tiles_show_risk_border_and_tooltip_and_original_icon_size(window):
     assert page.tile_buttons[2].data.risk is RiskStatus.RISK and page.tile_buttons[3].data.risk is RiskStatus.UNKNOWN
     assert "위험 후보" in page.tile_buttons[2].toolTip()
     assert page.tile_buttons[2].data.goal is GoalState.MET
-    assert page.risk_button.iconSize() == svg_size("7880d.svg")
+    assert page.risk_button.text() == "위험 후보만" and page.risk_button.icon().isNull()
+    assert page.risk_button.styleSheet() == page.below_filter.styleSheet()
+    assert "checkbox-tick.svg" in page.risk_button.styleSheet()
     tile = page.tile_buttons[1]
     assert tile.version_label.text() == "v99 / v2"
     assert set(tile.findChildren(QLabel)) == {tile.code_label, tile.version_label}
@@ -263,6 +265,9 @@ def test_hpa_is_hidden_until_special_equipment_toggle(window):
     assert hpa and not hpa & set(page.tile_buttons)
     page.hpa_button.setChecked(True)
     assert hpa <= set(page.tile_buttons)
+    QApplication.processEvents()
+    captions = [caption.text() for caption in page.tile_host.findChildren(QLabel) if caption.isVisibleTo(page.tile_host)]
+    assert f"HPA / {len(hpa)}대" in captions
 
 
 def test_empty_scope_has_no_stale_tiles_or_fake_success(window):
@@ -338,11 +343,12 @@ def test_responsive_tiles_have_no_main_horizontal_overflow(window, size, mode):
         assert len({(card.y(), card.height()) for card in row}) == 1
 
 
-def test_view_toggle_precedes_layout_buttons_at_wide_and_narrow_sizes(window):
+def test_stacked_filters_and_display_buttons_at_wide_and_narrow_sizes(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     viewport = window.scroll.viewport()
-    view, card_mode = page.view_toggle, page.layout_buttons.button(0)
+    hpa, view, card_mode = page.hpa_button, page.view_toggle, page.layout_buttons.button(0)
+    assert hpa.text() == "HPA 표시"
     page.search.setText("TEST-2")
     assert page.visible_ids == (2,)
     page.below_filter.click()
@@ -358,9 +364,10 @@ def test_view_toggle_precedes_layout_buttons_at_wide_and_narrow_sizes(window):
         card_left = card_mode.mapTo(viewport, QPoint(0, card_mode.height() // 2))
         assert 0 < card_left.x() - view_right.x() <= 16
         assert abs(card_left.y() - view_right.y()) <= 1
-        controls = (page.search, page.below_filter, page.risk_button, view)
+        assert hpa.geometry().right() < view.x() and hpa.y() == view.y()
+        controls = (page.search, page.below_filter, page.risk_button, hpa, view)
         layouts = page.layout_buttons.buttons()
-        assert all(control.height() == 38 for control in controls)
+        assert all(control.height() == 38 for control in (page.search, hpa, view))
         assert card_mode.parentWidget().height() == 38 and all(control.height() == 30 for control in layouts)
         for control in (*controls, *layouts):
             left = control.mapTo(viewport, QPoint(0, 0)).x()
@@ -368,7 +375,8 @@ def test_view_toggle_precedes_layout_buttons_at_wide_and_narrow_sizes(window):
             assert 13 <= control.font().pixelSize() <= 14
         assert page.search.width() >= page.search.minimumWidth()
         assert window.scroll.horizontalScrollBar().maximum() == 0
-        assert page.risk_button.geometry().right() < page.below_filter.x()
+        assert page.risk_button.x() == page.below_filter.x()
+        assert page.risk_button.geometry().bottom() < page.below_filter.y()
 
     page.below_filter.click()
     page.layout_buttons.button(1).click()

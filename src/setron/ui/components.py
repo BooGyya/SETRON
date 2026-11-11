@@ -3,11 +3,11 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QTransform
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 
-from setron.ui.theme import SECONDARY, TONES, font, icon, svg_size, set_widget_font
+from setron.ui.theme import ASSETS, LINE, SECONDARY, SOFT, TONES, font, icon, svg_size, set_widget_font
 
 
 def label(text: str, size: int = 14, *, medium: bool = False,
@@ -31,6 +31,22 @@ def button(text: str, *, primary: bool = False, asset: str | None = None) -> QPu
         result.setIconSize(svg_size(asset))
         result.setText(" " + text)
         result.setAccessibleName(text)
+    return result
+
+
+def filter_checkbox(text: str) -> QCheckBox:
+    result = QCheckBox(text)
+    result.setAccessibleName(text)
+    set_widget_font(result, font(13, medium=True))
+    result.setMinimumHeight(20)
+    result.setCursor(Qt.CursorShape.PointingHandCursor)
+    tick = (ASSETS / "checkbox-tick.svg").as_posix()
+    result.setStyleSheet(
+        "QCheckBox {spacing:6px;padding:0 4px;}"
+        f"QCheckBox::indicator {{width:14px;height:14px;border:1px solid {SECONDARY};border-radius:4px;background:white;}}"
+        "QCheckBox:disabled {color:#8b95a8;}"
+        f"QCheckBox::indicator:disabled {{background:{SOFT};border-color:{LINE};}}"
+        f"QCheckBox::indicator:checked {{background:#3655c7;border-color:#3655c7;image:url({tick});}}")
     return result
 
 
