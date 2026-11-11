@@ -213,7 +213,7 @@ def test_registration_enables_menu_and_updates_header(window, app):
     assert window.header.title.text() == "데이터 가져오기"
     assert window.nav["import"].isChecked()
     assert not window.nav["dashboard"].isChecked()
-    assert window.nav["import"].picture.property("assetFile") == "ver5/active-import.svg"
+    assert window.nav["import"].picture.property("assetFile") == "ver5/active-download.svg"
     assert window.nav["dashboard"].picture.property("assetFile") == "ver5/dashboard.svg"
     assert spy.count() == 1 and spy.at(0) == ["import"]
 
