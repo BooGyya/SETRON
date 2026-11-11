@@ -167,7 +167,7 @@ def test_popup_matches_figma_controls_cancels_and_blocks_zero(window):
     assert window.query_state.applied is applied
 
 
-def test_confirm_immediately_updates_shared_snapshot_and_list_not_targets(window):
+def test_confirm_stages_versions_until_search_updates_shared_snapshot_and_list(window):
     panel, state = window.query_panel, window.query_state
     panel.apply_draft()
     previous = window.pages["dashboard"].snapshot
@@ -179,6 +179,9 @@ def test_confirm_immediately_updates_shared_snapshot_and_list_not_targets(window
     assert state.draft.versions == VersionFilter(("v2",))
     assert state.target_draft == targets and "1개 선택" in panel.version_button.text()
     dashboard, heatmap = window.pages["dashboard"], window.pages["heatmap"]
+    assert dashboard.snapshot is heatmap.snapshot is previous
+    assert state.applied is previous.query and state.has_pending_changes
+    panel.search_button.click()
     filtered = dashboard.snapshot
     assert filtered is heatmap.snapshot and filtered.equipment_ids == (1, 2)
     assert state.applied is filtered.query and state.applied.revision == previous.query.revision + 1
@@ -192,7 +195,10 @@ def test_confirm_immediately_updates_shared_snapshot_and_list_not_targets(window
     dialog = open_filter(window)
     dialog.all_button.click()
     dialog.confirm_button.click()
-    assert state.draft.versions is None and state.applied.selection.versions is None
+    assert state.draft.versions is None and state.applied.selection.versions == VersionFilter(("v2",))
+    assert dashboard.snapshot is heatmap.snapshot is filtered
+    panel.search_button.click()
+    assert state.applied.selection.versions is None
     assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot is not filtered
     assert dashboard.snapshot.summary.equipment_count == 7
 

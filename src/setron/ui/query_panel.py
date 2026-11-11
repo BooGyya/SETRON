@@ -226,7 +226,7 @@ class QueryPanel(QWidget):
         self.card.body.addWidget(self.actions_row)
         self.version_pending = label("버전 선택 변경 · 다음 조회에 반영", 12, color=SECONDARY)
         self.card.body.addWidget(self.version_pending)
-        self.hint = label("날짜와 필터를 변경하면 바로 조회합니다.",
+        self.hint = label("날짜와 필터를 선택한 뒤 조회 버튼을 눌러 주세요.",
                           13, color=SECONDARY, wrap=True)
         self.card.body.addWidget(self.hint)
         self.card.body.addWidget(self.source_label)
@@ -244,8 +244,7 @@ class QueryPanel(QWidget):
         for hidden in (self.hint, self.source_label, self.status, self.applied_summary):
             hidden.hide()
         if not period:
-            self.confirmed.connect(self.apply_draft)
-            self.reset_button.clicked.connect(self._reset_and_apply)
+            self.reset_button.clicked.connect(self.reset_draft)
             if show_search:
                 self.search_button.clicked.connect(self.apply_draft)
         self._render()
@@ -279,7 +278,7 @@ class QueryPanel(QWidget):
         state = self.state
         expected, revision = state.draft, state.catalog_revision
         anchor = self.combos[field]
-        # 리플레이가 조회 중 카드를 잠가도 열린 팝업에서는 선택을 이어갈 수 있다.
+        # 선택 중인 조건만 바꾸고, 조회 버튼을 누르기 전의 결과는 유지한다.
         popup = QueryFilterPopup(FILTER_CAPTIONS[field], self._filter_options(field),
                                  selection_keys(getattr(expected, field)), parent=self, anchor=anchor,
                                  show_groups=field != "line_key")
@@ -393,8 +392,6 @@ class QueryPanel(QWidget):
 
     def _confirm_date(self, value):
         self.set_as_of(value.toPython())
-        if self.state.has_pending_changes:
-            self.apply_draft()
 
     def set_today(self):
         self.set_as_of(None)
@@ -422,10 +419,6 @@ class QueryPanel(QWidget):
 
     def reset_draft(self):
         self.set_draft(QuerySelection())
-
-    def _reset_and_apply(self):
-        self.reset_draft()
-        self.apply_draft()
 
     def set_version_filter(self, value):
         self.set_draft(replace(self.state.draft, versions=value))

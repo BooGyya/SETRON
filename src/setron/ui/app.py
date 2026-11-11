@@ -116,7 +116,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         def finish(result):
             if result == dialog.DialogCode.Accepted:
                 window.query_panel.set_version_filter(dialog.result_filter)
-                window.query_panel.apply_draft()
             if window.version_filter_dialog is dialog:
                 window.version_filter_dialog = None
             dialog.deleteLater()
@@ -125,7 +124,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dialog.open()
 
     window.query_panel.version_button.clicked.connect(open_version_filter)
-    window.query_panel.goal_button.setToolTip("모델·계열별 기준 버전을 설정합니다. 저장하면 바로 조회합니다.")
+    window.query_panel.goal_button.setToolTip("모델·계열별 기준 버전을 설정합니다. 저장 후 조회 버튼을 눌러 반영합니다.")
     window.target_dialog = None
 
     def open_targets():
@@ -192,12 +191,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                     except OSError:
                         pass  # 개인 설정을 저장하지 못해도 열린 창에서는 선택을 유지한다.
             dialog.deleteLater()
-            if result == VersionGroupDialog.DialogCode.Accepted:
-                window.query_panel.apply_draft()
-                if window.route == "replay":
-                    replay.apply_query()
-                elif replay.data is not None or replay.busy:
-                    replay.invalidate()
 
         dialog.finished.connect(finish)
         dialog.open()
@@ -211,8 +204,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_dashboard_date_mode(*_):
         if window.route == "dashboard" and dashboard.tabs.currentIndex() == 3 and dashboard.snapshot is not None:
-            window.query_panel.enable_date_range(dashboard.trend_start.date().toPython(),
-                                                dashboard.trend_end.date().toPython())
+            start, end = dashboard.trend_start.date().toPython(), dashboard.trend_end.date().toPython()
+            if start <= end:
+                window.query_panel.enable_date_range(start, end)
         else:
             window.query_panel.disable_date_range()
 

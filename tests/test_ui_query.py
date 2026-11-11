@@ -226,27 +226,30 @@ def choose(panel, field, *keys):
     assert panel.filter_popup is None
 
 
-def test_filter_change_applies_before_close_and_reset_applies(window):
+def test_filter_change_close_and_reset_wait_for_search(window):
     panel = window.query_panel
+    previous = panel.apply_draft()
     spy = QSignalSpy(window.query_applied)
     draft_spy = QSignalSpy(panel.draft_changed)
-    assert panel.status.text() == "미적용"
     popup = open_filter(panel, "site_key")
     assert all(check.isChecked() for check in popup.checks.values())
     check_only(popup, "s1")
+    assert spy.count() == 0 and draft_spy.count() == 1
+    assert popup.isVisible() and panel.state.draft.site_key == "s1"
+    assert panel.state.applied is previous and panel.state.has_pending_changes
+    QTest.keyClick(popup.search, Qt.Key.Key_Escape)
+    assert panel.filter_popup is None and spy.count() == 0
+    assert panel.combos["site_key"].caption == "테스트 Site A"
+    panel.search_button.click()
     applied = window.query_state.applied
-    assert spy.count() == draft_spy.count() == 1 and spy.at(0)[0] is applied
-    assert popup.isVisible() and applied.selection.site_key == "s1"
+    assert spy.count() == 1 and spy.at(0)[0] is applied
+    assert applied.selection.site_key == "s1"
     assert panel.status.text() == "조건 적용됨"
     assert "테스트 Site A" in panel.applied_summary.text()
-    QTest.keyClick(popup.search, Qt.Key.Key_Escape)
-    assert panel.filter_popup is None and spy.count() == draft_spy.count() == 1
-    assert panel.state.applied is applied and panel.combos["site_key"].caption == "테스트 Site A"
     panel.select("group_key", "g1")
-    panel.reset_draft()
-    assert panel.state.draft == QuerySelection() and panel.state.applied is applied and spy.count() == 1
-
     QTest.mouseClick(panel.reset_button, Qt.MouseButton.LeftButton)
+    assert panel.state.draft == QuerySelection() and panel.state.applied is applied and spy.count() == 1
+    panel.search_button.click()
     assert panel.state.applied.selection == panel.state.draft == QuerySelection()
     assert spy.count() == 2 and spy.at(1)[0] is panel.state.applied
     assert panel.status.text() == "조건 적용됨"
@@ -257,22 +260,24 @@ def test_cascading_controls_and_unassigned_line(window):
     panel.set_draft(QuerySelection("s1", "f1", "l1", "g1"))
     spy = QSignalSpy(panel.applied)
     choose(panel, "site_key", "s2")
-    assert panel.state.applied.selection == QuerySelection("s2", None, None, "g1")
+    assert panel.state.draft == QuerySelection("s2", None, None, "g1")
     line_popup = open_filter(panel, "line_key")
     assert tuple(line_popup.checks) == (UNASSIGNED, "l2")
     line_popup.search.setText("테스트 Fab B")
     assert line_popup.checks["l2"].isVisible() and not line_popup.checks[UNASSIGNED].isVisible()
     line_popup.reject()
-    assert spy.count() == 1
+    assert spy.count() == 0 and panel.state.applied is None
     choose(panel, "group_key", "g1", "g2")
-    assert panel.state.applied.selection.group_key == ("g1", "g2")
+    assert panel.state.draft.group_key == ("g1", "g2")
     assert panel.combos["group_key"].toolTip() == "O2, Inline O2"
     choose(panel, "site_key", "s1")
     choose(panel, "fab_key", UNASSIGNED)
     choose(panel, "line_key", "l3")
     assert panel.combos["fab_key"].caption == "미지정"
+    assert spy.count() == 0 and panel.state.applied is None
+    panel.search_button.click()
     assert panel.state.applied.selection == QuerySelection("s1", UNASSIGNED, "l3", ("g1", "g2"))
-    assert spy.count() == 6
+    assert spy.count() == 1
 
 
 def test_line_popup_has_no_site_headers_and_distinguishes_duplicate_names(window, catalog):
@@ -346,9 +351,12 @@ def test_keyboard_filter_labels_and_unavailable_features(window):
     other_site.setFocus()
     QTest.keyClick(other_site, Qt.Key.Key_Space)
     assert not other_site.isChecked() and panel.state.draft.site_key == "s1"
-    assert panel.state.applied.revision == 1 and panel.state.applied.selection.site_key == "s1"
+    assert panel.state.applied is None
     popup.confirm_button.setFocus()
     QTest.keyClick(popup.confirm_button, Qt.Key.Key_Space)
+    assert panel.state.applied is None
+    panel.search_button.setFocus()
+    QTest.keyClick(panel.search_button, Qt.Key.Key_Space)
     assert panel.state.applied.revision == 1 and panel.state.applied.selection.site_key == "s1"
     assert "DB" not in panel.status.text()
 
