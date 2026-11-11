@@ -32,8 +32,8 @@ def test_daily_range_updates_points_and_chips_only_in_trend_view(window, source)
     QTest.qWait(20)
 
     assert page.trend_filters.isVisible()
-    assert page.trend_step == 1 and page.trend_interval.day_input.isVisible()
-    assert page.trend_interval.day_input.value() == 1
+    assert page.trend_step == 1 and page.trend_interval.day_value == 1
+    assert page.trend_interval.day_dialog is None
     assert page.trend_start.date().toPython() == DAY1
     assert page.trend_end.date().toPython() == DAY2
     assert "Inline O2" in _visible_group_names(page)
@@ -173,7 +173,7 @@ def test_calendar_confirmation_and_global_reset_restore_full_daily_period(app, s
 
         assert applied.count() == 2 and window.query_state.draft == QuerySelection()
         assert page.trend_step == 1 and page.trend_interval.buttons[None].isChecked()
-        assert page.trend_interval.day_input.isVisible() and page.trend_interval.day_input.value() == 1
+        assert page.trend_interval.day_value == 1
         assert page.trend_start.date().toPython() == DAY1
         assert page.trend_end.date().toPython() == DAY2
         assert (panel.range_button.start, panel.range_button.end) == (DAY1, DAY2)
