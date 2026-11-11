@@ -4,8 +4,11 @@
   엑셀 표 모양으로 돌려준다. 값 수정은 기존 관리 저장(ManagementService.save)으로 한다.
 - 변경 이력: 관리 저장이 남기는 MANUAL 입력 작업(수정 전 값·수정 요청)을 일시·파일·시트·셀·전후 값으로 푼다.
 - 설비군 등록: equipment_group에 새 설비군(개조형이면 상위 설비군)을 넣고 같은 MANUAL 기록을 남긴다.
+- 현황표 행 삭제: 고른 설비의 그 현황표 관측(PM → SW → 설비 현황)을 지우고, 지운 칸 위치를 MANUAL 기록에 남긴다 (11-11).
+- Site 등록: Site 테이블이 없어 관리 설정(app_setting ``registered_sites.v1``)에 이름 목록으로 저장한다 (11-11).
+  조회 선택지는 저장된 관측의 Site에 이 목록을 더해 만든다 (:func:`registered_sites`).
 
-Site·Fab·Line은 DB 테이블이 없어 저장된 관측에서만 만든다 (Site 추가는 화면 표시 설정, 11-10 결정).
+DB 시각(imported_at)은 DB 서버 시계 기준이라, 화면에는 이 PC 시계와의 차이를 더해 보인다 (11-11).
 """
 
 from __future__ import annotations
@@ -13,8 +16,10 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+
+from sqlalchemy import text
 
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.storage.inputs import require
@@ -23,6 +28,7 @@ from setron.features.storage.inputs import require
 # 시트 이름과 겹치지 않는다 (11-10 결정: 앞으로 가져올 때 파일 이름 저장).
 WORKBOOK_KEY = "[파일]"
 CATEGORIES = ("POLY", "OXIDE", "KCTC")
+SITES_KEY = "registered_sites.v1"
 SNAPSHOT_TEXT = frozenset({"line", "model_name", "production_area", "structure_type", "geometry_type",
                           "modification_type"})
 FIELD_LABELS = {
@@ -37,7 +43,7 @@ FIELD_LABELS = {
 TABLE_LABELS = {
     "equipment": "설비", "equipment_snapshot": "설비 현황", "equipment_version": "설비 SW", "equipment_pm": "PM SW",
     "release_version": "릴리즈 버전", "item": "Item", "release_version_item": "버전 Item", "risk_rule": "위험 지정",
-    "app_setting": "설정", "equipment_group": "설비군",
+    "app_setting": "설정", "equipment_group": "설비군", "site": "Site",
 }
 RULE_LABELS = {"SAFETY_REQUIRED": "필수", "DEFECT_ITEM": "결함", "DIRECT_VERSION": "위험 버전"}
 
@@ -84,9 +90,40 @@ def _row_number(address):
     return int(match.group(1)) if match else None
 
 
-def _locations(row, field):
-    value = (row.get("source_reference") or {}).get(field)
+def _locations(row, name):
+    value = (row.get("source_reference") or {}).get(name)
     return value if isinstance(value, list) else [value] if isinstance(value, dict) else []
+
+
+def _cell_order(address):
+    column, row = re.match(r"([A-Za-z]*)(\d*)", address or "").groups()
+    return int(row or 0), len(column), column
+
+
+def registered_sites(tx) -> tuple[str, ...]:
+    """데이터 관리에서 등록한 Site 이름들 (관리 설정). 없거나 형식이 다르면 빈 목록."""
+    try:
+        value = tx.get("app_setting", {"setting_key": SITES_KEY})["setting_value"]
+    except LookupError:
+        return ()
+    names = value.get("sites") if isinstance(value, dict) else None
+    return tuple(str(n) for n in names if isinstance(n, str) and n.strip()) if isinstance(names, list) else ()
+
+
+def clock_offset(storage) -> timedelta:
+    """이 PC 시계 - DB 서버 시계 (15분 단위). DB가 UTC로 기록해도 화면은 PC 시각으로 보인다. 못 읽으면 0."""
+    try:
+        with storage.transaction() as tx:
+            now = tx.session.execute(text("SELECT NOW()")).scalar()
+    except Exception:  # noqa: BLE001 — SQLite 시험 저장소 등 NOW()가 없으면 보정하지 않는다
+        return timedelta(0)
+    if not isinstance(now, datetime):
+        return timedelta(0)
+    return timedelta(minutes=round((datetime.now() - now).total_seconds() / 900) * 15)
+
+
+def _shift(value, offset):
+    return value + offset if isinstance(value, datetime) else value
 
 
 @dataclass(frozen=True)
@@ -123,6 +160,8 @@ class SheetGrid:
     workbook: str | None
     cells: dict  # 주소 → 가져올 때의 원본 값
     bindings: dict  # 주소 → CellBinding (DB 값과 연결된 칸만)
+    owners: dict = field(default_factory=dict)  # 주소 → 그 칸을 만든 설비 현황(snapshot_id). 행 삭제에 쓴다
+    deleted: dict = field(default_factory=dict)  # 주소 → 안내 (데이터 관리에서 지운 행의 칸)
 
 
 @dataclass(frozen=True)
@@ -206,6 +245,7 @@ class DataAdminService:
 
     # --- 현황표 ---------------------------------------------------------------------
     def status_sheets(self) -> tuple[StatusSheet, ...]:
+        offset = clock_offset(self.storage)
         with self.storage.transaction() as tx:
             snapshots = self.rows.rows(tx, "equipment_snapshot")
             batches = {b["batch_id"]: b for b in self.rows.rows(tx, "import_batch")}
@@ -216,7 +256,7 @@ class DataAdminService:
             raw = _raw(batch.get("raw_data"))
             names = sheet_names(raw) or ("시트 미확인",)
             result.append(StatusSheet(batch_id, base_date, site, ", ".join(names), _workbook(raw),
-                                      batch.get("imported_at"), count))
+                                      _shift(batch.get("imported_at"), offset), count))
         return tuple(sorted(result, key=lambda s: (s.base_date, s.site, s.batch_id), reverse=True))
 
     def sheet_grid(self, batch_id) -> SheetGrid:
@@ -227,40 +267,101 @@ class DataAdminService:
             require(bool(names), "이 입력 작업에는 원본 시트가 없습니다.")
             sheet = names[0]
             cells = dict(raw.get(sheet) or {})
-            bindings = {}
+            bindings, owners = {}, {}
             equipment = {e["equipment_id"]: e for e in self.rows.rows(tx, "equipment")}
             for snapshot in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id):
                 code = _text(equipment.get(snapshot["equipment_id"], {}).get("equipment_code"))
                 sid = {"snapshot_id": snapshot["snapshot_id"]}
-                for field in (snapshot.get("source_reference") or {}):
-                    if field == "equipment_code":
+                bound = {}
+                for name in (snapshot.get("source_reference") or {}):
+                    if name == "equipment_code":
                         target = ("equipment", {"equipment_id": snapshot["equipment_id"]}, code, True)
                     else:
-                        target = ("equipment_snapshot", sid, _text(snapshot.get(field)), field in SNAPSHOT_TEXT)
-                    self._bind(bindings, snapshot, field, batch_id, sheet, code, *target)
+                        target = ("equipment_snapshot", sid, _text(snapshot.get(name)), name in SNAPSHOT_TEXT)
+                    self._bind(bound, snapshot, name, batch_id, sheet, code, *target)
                 versions = self.rows.rows(tx, "equipment_version", snapshot_id=snapshot["snapshot_id"])
                 pms = self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot["snapshot_id"])
                 with_pm = {pm["equipment_version_id"] for pm in pms}
                 for version in versions:
                     key = {"equipment_version_id": version["equipment_version_id"]}
-                    for field in (version.get("source_reference") or {}):
-                        editable = field == "version_raw" and version["equipment_version_id"] not in with_pm
-                        self._bind(bindings, version, field, batch_id, sheet, code, "equipment_version", key,
-                                   _text(version.get(field)), editable)
+                    for name in (version.get("source_reference") or {}):
+                        editable = name == "version_raw" and version["equipment_version_id"] not in with_pm
+                        self._bind(bound, version, name, batch_id, sheet, code, "equipment_version", key,
+                                   _text(version.get(name)), editable)
                 for pm in pms:
-                    for field in (pm.get("source_reference") or {}):
-                        self._bind(bindings, pm, field, batch_id, sheet, code, "equipment_pm", {"pm_id": pm["pm_id"]},
-                                   _text(pm.get(field)), field == "version_raw")
-        return SheetGrid(batch_id, sheet, _workbook(raw), cells, bindings)
+                    for name in (pm.get("source_reference") or {}):
+                        self._bind(bound, pm, name, batch_id, sheet, code, "equipment_pm", {"pm_id": pm["pm_id"]},
+                                   _text(pm.get(name)), name == "version_raw")
+                bindings.update(bound)
+                owners.update(dict.fromkeys(bound, snapshot["snapshot_id"]))
+            deleted = self._deleted_cells(tx, batch_id, sheet)
+        return SheetGrid(batch_id, sheet, _workbook(raw), cells, bindings, owners,
+                         {a: v for a, v in deleted.items() if a not in bindings})
 
     @staticmethod
-    def _bind(bindings, row, field, batch_id, sheet, code, table, key, current, editable):
-        for location in _locations(row, field):
+    def _bind(bindings, row, name, batch_id, sheet, code, table, key, current, editable):
+        if name not in row and name != "equipment_code":
+            return  # DB 칸이 없는 출처(예: 가져올 때 남긴 설비군 이름)는 원본 값을 그대로 보인다
+        for location in _locations(row, name):
             if location.get("sheet") != sheet or location.get("batch_id", row.get("batch_id")) != batch_id:
                 continue
             for address in location.get("cells") or ():
-                bindings[address] = CellBinding(table, dict(key), field, current, editable,
-                                                f"{code} · {FIELD_LABELS.get(field, field)}")
+                bindings[address] = CellBinding(table, dict(key), name, current, editable,
+                                                f"{code} · {FIELD_LABELS.get(name, name)}")
+
+    def _deleted_cells(self, tx, batch_id, sheet):
+        """데이터 관리에서 지운 행의 칸 → '삭제됨 · 호기'. 행 삭제 기록(management_delete)에서 읽는다."""
+        found = {}
+        for batch in self.rows.rows(tx, "import_batch", source_type="MANUAL"):
+            removed = _raw(batch.get("raw_data")).get("management_delete")
+            if not isinstance(removed, dict) or removed.get("batch_id") != batch_id or removed.get("sheet") != sheet:
+                continue
+            for row in removed.get("rows") or ():
+                for address in row.get("cells") or ():
+                    found[address] = f"삭제됨 · {row.get('equipment_code') or '설비'}"
+        return found
+
+    def delete_rows(self, batch_id, snapshot_ids) -> int:
+        """현황표의 고른 설비 행을 지운다: 그 관측의 PM → SW → 설비 현황 순서로 한 트랜잭션에서 지운다.
+
+        설비 호기(equipment)와 가져오기 원본(import_batch)은 남긴다 (다른 기준일 관측·감사 기록). 지운 칸 위치와
+        값은 MANUAL 기록(management_delete)으로 남겨 현황표·변경 이력에 보인다.
+        """
+        ids = tuple(dict.fromkeys(int(i) for i in snapshot_ids))
+        require(bool(ids), "지울 행을 골라 주세요.")
+        with self.storage.transaction() as tx:
+            batch = tx.get("import_batch", {"batch_id": batch_id})
+            sheet = (sheet_names(_raw(batch.get("raw_data"))) or ("",))[0]
+            equipment = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")}
+            removed = []
+            for sid in ids:
+                found = self.rows.rows(tx, "equipment_snapshot", snapshot_id=sid)
+                require(bool(found) and found[0].get("batch_id") == batch_id,
+                        "이미 지웠거나 이 현황표의 행이 아닙니다. 목록을 다시 읽어 주세요.")
+                snapshot = found[0]
+                versions = self.rows.rows(tx, "equipment_version", snapshot_id=sid)
+                pms = self.rows.rows(tx, "equipment_pm", snapshot_id=sid)
+                cells = {}
+                for row in (snapshot, *versions, *pms):
+                    for name in (row.get("source_reference") or {}):
+                        if name not in row and name != "equipment_code":
+                            continue  # 현황표에 보이지 않는 출처 칸(예: 설비군 이름)은 삭제 표시에서 뺀다
+                        for location in _locations(row, name):
+                            if location.get("sheet") == sheet and location.get("batch_id", row.get("batch_id")) == batch_id:
+                                cells.update(dict.fromkeys(location.get("cells") or ()))
+                code = equipment.get(snapshot["equipment_id"], "")
+                for pm in pms:
+                    tx.repository.delete(tx.session, "equipment_pm", {"pm_id": pm["pm_id"]})
+                for version in versions:
+                    tx.repository.delete(tx.session, "equipment_version", {"equipment_version_id": version["equipment_version_id"]})
+                tx.repository.delete(tx.session, "equipment_snapshot", {"snapshot_id": sid})
+                removed.append({"snapshot_id": sid, "equipment_code": code, "base_date": _text(snapshot.get("base_date")),
+                                "site": _text(snapshot.get("site")), "line": _text(snapshot.get("line")),
+                                "versions": [_text(v.get("version_raw")) for v in versions],
+                                "cells": sorted(cells, key=_cell_order)})
+            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_delete": {
+                "table": "equipment_snapshot", "batch_id": batch_id, "sheet": sheet, "rows": removed}}})
+        return len(removed)
 
     # --- 설비·설비군 -------------------------------------------------------------------
     def equipment_overview(self) -> tuple[tuple[GroupRow, ...], tuple[EquipmentRow, ...]]:
@@ -312,6 +413,32 @@ class DataAdminService:
             tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": journal})
         return GroupRow(created["group_id"], name, category, parent_id,
                         _text(parent["group_name"]) if parent else None, 0)
+
+    # --- 위치(Site) ----------------------------------------------------------------------
+    def sites(self) -> tuple[str, ...]:
+        """데이터 관리에서 등록한 Site (관측이 없어도 조회 선택지에 보인다)."""
+        with self.storage.transaction() as tx:
+            return registered_sites(tx)
+
+    def add_site(self, name) -> str:
+        """Site를 관리 설정에 등록한다. 관측된 Site나 이미 등록한 이름은 거부한다."""
+        name = (name or "").strip()
+        require(bool(name) and len(name) <= 50, "Site 이름을 50자 이내로 입력해 주세요.")
+        with self.storage.transaction() as tx:
+            current = registered_sites(tx)
+            known = {s.casefold() for s in current} | {
+                _text(s["site"]).casefold() for s in self.rows.rows(tx, "equipment_snapshot") if s.get("site")}
+            require(name.casefold() not in known, "이미 있는 Site입니다.")
+            key, value = {"setting_key": SITES_KEY}, {"sites": [*current, name]}
+            try:
+                tx.get("app_setting", key)
+            except LookupError:
+                tx.insert("app_setting", {**key, "setting_value": value})
+            else:
+                tx.update("app_setting", key, {"setting_value": value})
+            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {
+                "schema": 1, "management_create": {"table": "site", "values": {"site": name}}}})
+        return name
 
     # --- 릴리즈노트 --------------------------------------------------------------------
     def release_families(self) -> tuple[ReleaseFamily, ...]:
@@ -365,7 +492,8 @@ class DataAdminService:
 
     # --- 변경 이력 ---------------------------------------------------------------------
     def history(self, limit=300) -> tuple[HistoryEntry, ...]:
-        """관리 저장이 남긴 MANUAL 기록을 칸 단위 변경으로 푼다. 최신이 앞."""
+        """관리 저장이 남긴 MANUAL 기록을 칸 단위 변경으로 푼다. 최신이 앞. 시각은 이 PC 시계 기준."""
+        offset = clock_offset(self.storage)
         with self.storage.transaction() as tx:
             batches = self.rows.rows(tx, "import_batch")
             equipment = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")}
@@ -374,7 +502,7 @@ class DataAdminService:
             releases = {r["release_version_id"]: _text(r["version_raw"]) for r in self.rows.rows(tx, "release_version")}
             items = {i["item_id"]: _text(i.get("content")) for i in self.rows.rows(tx, "item")}
         raws = {b["batch_id"]: _raw(b.get("raw_data")) for b in batches}
-        imported = {b["batch_id"]: b.get("imported_at") for b in batches}
+        imported = {b["batch_id"]: _shift(b.get("imported_at"), offset) for b in batches}
         manual = sorted((b for b in batches if _text(b.get("source_type")) == "MANUAL"),
                         key=lambda b: b["batch_id"], reverse=True)
 
@@ -418,10 +546,23 @@ class DataAdminService:
             created = raw.get("management_create")
             if isinstance(created, dict):
                 table, values = created.get("table"), created.get("values") or {}
-                name = (_text(values.get("group_name")) if table == "equipment_group"
-                        else f"{RULE_LABELS.get(_text(values.get('rule_type')), '위험')} · {_text(values.get('risk_reason'))[:24]}")
+                name = (_text(values.get("group_name")) if table == "equipment_group" else _text(values.get("site"))
+                        if table == "site" else
+                        f"{RULE_LABELS.get(_text(values.get('rule_type')), '위험')} · {_text(values.get('risk_reason'))[:24]}")
                 result.append(HistoryEntry(batch["batch_id"], at, "등록", table, {}, name, TABLE_LABELS.get(table, table),
                                            "", "새로 등록", None, None, None))
+            removed = raw.get("management_delete")
+            if isinstance(removed, dict):
+                source = removed.get("batch_id")
+                for row in removed.get("rows") or ():
+                    cells = row.get("cells") or []
+                    before = " · ".join(v for v in (row.get("site"), row.get("line"), row.get("base_date"),
+                                                    ", ".join(x for x in row.get("versions") or () if x)) if v)
+                    result.append(HistoryEntry(
+                        batch["batch_id"], at, "삭제", "equipment_snapshot", {"snapshot_id": row.get("snapshot_id")},
+                        row.get("equipment_code") or "설비", "현황표 행", before, "삭제",
+                        _workbook(raws.get(source)), removed.get("sheet"),
+                        f"{cells[0]}~{cells[-1]}" if len(cells) > 1 else (cells[0] if cells else None)))
             if len(result) >= limit:
                 break
         return tuple(result[:limit])
