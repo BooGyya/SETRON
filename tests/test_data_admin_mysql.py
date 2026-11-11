@@ -271,6 +271,11 @@ def test_sheet_rows_show_db_values_with_source_cells_and_site_lines(storage):
     assert row.sources == {"equipment_code": "C3", "line": "B3", "version_raw": "D3"}
     assert row.source_values["version_raw"] == "v4.56.6.43" and not row.has_pm
     assert "13L" in data.lines and {"POLY", "OXIDE", "KCTC"} >= {c for _, _, c in data.groups}
+    service = DataAdminService(storage)
+    service.add_site("QA타지")
+    service.add_line("QA타지", "QT1", "MEMORY")
+    data = service.sheet_rows(receipt.batch_id)
+    assert data.elsewhere["qt1"] == ("QA타지",) and "13l" not in data.elsewhere  # 다른 Site에만 있는 라인 (잘못 넣기 안내)
 
 
 def test_apply_rows_regroups_with_family_and_undo_rows_puts_it_back(storage):

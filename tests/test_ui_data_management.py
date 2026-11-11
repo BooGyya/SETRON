@@ -260,6 +260,84 @@ def test_new_row_needs_required_cells_and_unknown_group_is_registered_on_save(ow
     assert "C8" in asked[0] and gateway.created == [("C8", "OXIDE", None)] and "새 설비군 C8 등록" in sheet.notice.text()
 
 
+def test_empty_sheet_is_created_from_sheet_tab_for_an_existing_site(own, monkeypatch):
+    gateway = FakeGateway()
+    gateway.sites = ["China"]
+    page, sheet = sheet_page(own, gateway)
+    assert sheet.create_button.text() == "＋ 빈 현황표" and sheet.create_button.isEnabled()
+    shown = []
+
+    class Accept:
+        def __init__(self, _parent, sites, site=None):
+            shown.append((sites, site))
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def values(self):
+            return "China", date(2026, 11, 12)
+
+    monkeypatch.setattr(module, "CreateSheetDialog", Accept)
+    assert sheet.create_sheet()
+    settle(page)
+    assert shown == [(["China", "화성"], "화성")]  # 등록 Site + 현황표가 있는 Site, 지금 보는 Site를 먼저 고름
+    assert gateway.done["create_sheet"] == [(("China", date(2026, 11, 12)), {})]
+    assert page.status_stack.currentIndex() == 0 and "China · 2026-11-12 빈 현황표를 만들었습니다" in sheet.notice.text()
+
+
+def test_line_of_another_site_is_warned_before_save(own, monkeypatch):
+    from dataclasses import replace
+
+    gateway = FakeGateway()
+    gateway.data_admin = (lambda original: lambda method, *a, **k: replace(SHEET_ROWS, elsewhere={"c4h": ("China",)})
+                          if method == "sheet_rows" else original(method, *a, **k))(gateway.data_admin)
+    page, sheet = sheet_page(own, gateway)
+    sheet.add_row()
+    for column, value in ((0, "CC4H101"), (1, "C4H"), (2, "M-C4"), (5, "v1.0")):
+        cell(sheet, 3, column).setText(value)
+    assert sheet.other_site_lines() == {"C4H": ("China",)}
+    asked = answer(monkeypatch, QMessageBox.StandardButton.No)
+    assert not sheet.save()
+    assert "China 라인" in asked[0] and "화성 설비로 저장" in asked[0] and "[＋ 빈 현황표]" in sheet.notice.text()
+    assert sheet.pending and "apply_rows" not in gateway.done
+    asked = answer(monkeypatch)
+    assert sheet.save()
+    settle(page)
+    assert len(asked) == 1 and gateway.done["apply_rows"][0][0][1][0][0]["line"] == "C4H"
+    cell(sheet, 0, 1).setText("15L")         # 이 Site의 라인으로 고치면 묻지 않는다
+    assert sheet.other_site_lines() == {}
+
+
+def test_help_button_opens_guide_drawer_and_steps_jump_to_screens(own):
+    page, sheet = sheet_page(own)
+    assert sheet.help_button.text() == "?" and sheet.help_button.toolTip()
+    assert sheet.show_guide() and sheet.guide.is_open
+    texts = [w.text() for w in sheet.guide.panel.findChildren(QLabel)]
+    assert "새 위치에 설비 넣기" in texts and any("SW 버전" in t and "필수" in t for t in texts)
+    assert set(sheet.guide_buttons) == {"location", "equipment", "create", "add"}
+    sheet.guide_buttons["location"].click()
+    assert not sheet.guide.is_open and page.status_stack.currentIndex() == 2
+    settle(page)
+    sheet.show_guide()
+    sheet.guide_buttons["add"].click()       # 현황표 탭으로 돌아가 새 행을 만든다
+    assert page.status_stack.currentIndex() == 0 and len(sheet.new_rows) == 1 and not sheet.guide.is_open
+    sheet.show_guide()
+    page.select_tab(1)                        # 다른 탭으로 가면 닫힌다
+    assert not sheet.guide.is_open
+
+
+def test_create_sheet_dialog_checks_the_date(own):
+    dialog = own(module.CreateSheetDialog(None, ["China", "화성"], "화성"))
+    assert dialog.site.currentData() == "화성"
+    dialog.base_date.setText("11월 12일")
+    dialog._accept()
+    assert "YYYY-MM-DD" in dialog.error.text() and dialog.result() != QDialog.DialogCode.Accepted
+    dialog.site.setCurrentIndex(0)
+    dialog.base_date.setText(" 2026-11-12 ")
+    dialog._accept()
+    assert dialog.values() == ("China", date(2026, 11, 12))
+
+
 def test_sort_follows_header_clicks(own):
     page, sheet = sheet_page(own)
     assert "Line → 설비군 → 설비 호기" in sheet.sort_label.text() and not sheet.sort_reset.isVisibleTo(sheet)

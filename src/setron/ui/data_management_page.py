@@ -20,17 +20,18 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
-from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtCore import QEvent, QSettings, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog, QFormLayout, QHBoxLayout, QHeaderView, QInputDialog,
-    QLabel, QLineEdit, QMessageBox, QStackedWidget, QStyledItemDelegate, QTabBar, QTableWidget, QTableWidgetItem, QTreeWidget,
+    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
+    QLabel, QLineEdit, QMessageBox, QScrollArea, QSizePolicy, QStackedWidget, QStyledItemDelegate, QTabBar, QTableWidget, QTableWidgetItem, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from setron.features.management.schemas import RecordEdit
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
+from setron.ui.theme import font, set_widget_font
 from setron.ui.equipment import ignore_width
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.theme import LINE, PRIMARY, SECONDARY
@@ -236,6 +237,33 @@ class _ChoiceDelegate(QStyledItemDelegate):
         model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
 
 
+# [?] 가이드: (제목, 언제, 설명, 버튼 동작, 버튼 글자)
+GUIDE_STEPS = (
+    ("Site 추가", "새 사업장일 때만", "위치 탭 > [＋ Site 추가]에 Site 이름(예: China)을 적습니다. 이미 있는 Site면 건너뜁니다.",
+     "location", "위치 탭 열기"),
+    ("라인 추가", "새 라인일 때만", "위치 탭 > [＋ 라인 추가]에서 Site · 메모리/파운드리 · 라인 이름(예: China · 메모리 · C4H)을 "
+     "정합니다. 여기서 정한 메모리/파운드리가 가져오기 · 대시보드 판정에 쓰입니다.", "location", "위치 탭 열기"),
+    ("설비군 확인", "처음 보는 설비군일 때만", "설비 탭 > [＋ 설비군 추가]에서 이름 · 분류(POLY · OXIDE · KCTC)를 정합니다. "
+     "개조형이면 상위 설비군을 고릅니다. 행 추가 때 없는 설비군을 적어도 저장할 때 등록할지 묻습니다.", "equipment", "설비 탭 열기"),
+    ("빈 현황표 만들기", "그 Site · 기준일 현황표가 없을 때", "현황표 탭 > [＋ 빈 현황표]에서 Site · 기준일을 고릅니다. 설비의 Site · "
+     "기준일은 행을 넣은 현황표가 정하므로, 꼭 그 Site의 현황표에 넣습니다.", "create", "빈 현황표 만들기"),
+    ("값 입력", "", "그 현황표를 고른 뒤 [＋ 행 추가]를 누르면 표 맨 아래에 새 줄(＋)이 생깁니다. 칸을 두 번 눌러 입력합니다. "
+     "분홍 칸은 아직 비어 있는 필수 칸입니다.", "add", "행 추가"),
+    ("저장 · 확인", "", "[저장]을 누르면 한꺼번에 DB에 들어가고 변경 이력에 남습니다. 위치 탭에서 그 Site · 라인의 설비 대수가 늘었는지 "
+     "확인합니다. 잘못 넣었으면 [되돌리기]로 마지막 저장을 되돌립니다.", "location", "위치 탭에서 확인"),
+)
+GUIDE_FIELDS = ("<table cellspacing='0' cellpadding='4' style='border-collapse:collapse'>"
+                + "".join(f"<tr><td><b>{name}</b></td><td style='color:{'#ad344d' if need == '필수' else '#5d6678'}'>{need}</td>"
+                          f"<td>{text}</td></tr>" for name, need, text in (
+                              ("설비 호기", "필수", "설비 ID (예: CC4H101)"),
+                              ("Line", "선택", "2단계 라인을 목록에서 고름"),
+                              ("설비군", "필수", "목록에서 고름 (없으면 저장 때 등록)"),
+                              ("모델명", "선택", "비우면 설비군 이름"),
+                              ("메모리/파운드리", "선택", "비우면 라인에 정한 값"),
+                              ("SW 버전", "필수", "예: v4.60.1.5 (SW 계열은 설비군에서 자동)")))
+                + "</table>")
+
+
 class SheetPanel(_Panel):
     """현황표를 DB에 들어간 값 기준으로 보이고 고친다 (11-11 6차): 설비 × SW 한 줄, 가져오기 3단계와 같은 항목.
 
@@ -271,7 +299,27 @@ class SheetPanel(_Panel):
         self.add_button.clicked.connect(self.add_row)
         self.delete_button.clicked.connect(self.delete_selected)
         self.save_button.clicked.connect(self.save)
+        self.create_button = button("＋ 빈 현황표")
+        self.create_button.setAccessibleName("빈 현황표 만들기")
+        self.create_button.setToolTip("Site · 기준일을 골라 빈 현황표를 만듭니다. 그 Site의 설비는 그 현황표에서 [＋ 행 추가]로 넣습니다. "
+                                      "목록에 없는 Site는 위치 탭에서 먼저 추가합니다.")
+        self.create_button.clicked.connect(self.create_sheet)
+        self.guide = None
+        self.help_button = button("?")
+        self.help_button.setAccessibleName("새 위치에 설비 넣기 가이드")
+        self.help_button.setToolTip("새 Site · 라인을 만들고 설비 값까지 입력하는 순서를 봅니다.")
+        self.help_button.setFixedSize(34, 34)
+        self.help_button.setStyleSheet(f"QPushButton {{background:white;border:1px solid {LINE};border-radius:17px;padding:0;"
+                                       "min-width:32px;max-width:32px;min-height:32px;max-height:32px;"
+                                       f"color:{PRIMARY};font-size:16px;font-weight:600;}}"
+                                       "QPushButton:hover {background:#e8ebfc;border-color:#9aa8f5;}")
+        self.help_button.clicked.connect(self.show_guide)
+        help_row = QHBoxLayout()
+        help_row.addStretch()
+        help_row.addWidget(self.help_button)
+        card.body.addLayout(help_row)  # [저장] 위 (11-11)
         row.addWidget(self.sheet_combo)
+        row.addWidget(self.create_button)
         row.addStretch()
         for widget in (self.undo_button, self.add_button, self.delete_button, self.save_button):
             row.addWidget(widget)
@@ -654,6 +702,8 @@ class SheetPanel(_Panel):
         if incomplete:
             self.say(f"새 행 {len(incomplete)}개의 필수 칸(설비 호기 · 설비군 · SW 버전)을 채운 뒤 저장해 주세요.", error=True)
             return False
+        if not self._other_site_lines_ok():
+            return False
         known = {name.casefold() for _, name, _ in self.data.groups}
         creates = []
         for name in dict.fromkeys(n["values"]["group"] for n in self.new_rows):
@@ -698,6 +748,30 @@ class SheetPanel(_Panel):
         counts = (len(edits) + len(regroup), len(adds), len(deletes))
         return self.page.change(work, self, message="저장하고 있습니다…",
                                 done=lambda result: self._saved_all(result, olds, counts, creates))
+
+    def other_site_lines(self):
+        """저장할 Line 값 중 이 Site에는 없고 다른 Site에만 있는 라인 {라인: (Site, …)} — 다른 현황표에 넣는 실수 안내."""
+        values = [n["values"].get("line", "") for n in self.new_rows]
+        values += [v for (kind, sid), v in self.edits.items() if kind == "line" and sid not in self.deletes]
+        own = {line.casefold() for line in self.data.lines}
+        elsewhere = getattr(self.data, "elsewhere", {}) or {}
+        return {v: elsewhere[v.casefold()] for v in dict.fromkeys(v.strip() for v in values if v and v.strip())
+                if v.casefold() not in own and v.casefold() in elsewhere}
+
+    def _other_site_lines_ok(self):
+        found = self.other_site_lines()
+        if not found:
+            return True
+        site = self.data.site
+        lines = "\n".join(f"· {line}: {', '.join(sites)} 라인" for line, sites in found.items())
+        targets = ", ".join(dict.fromkeys(s for sites in found.values() for s in sites))
+        if QMessageBox.question(self, "다른 Site의 라인", f"다음 라인은 이 Site({site})가 아니라 다른 Site에 있는 라인입니다.\n{lines}\n\n"
+                                f"이 현황표는 {site}라 그대로 저장하면 {site} 설비로 저장됩니다. 그대로 저장할까요?\n"
+                                f"{targets}에 넣으려면 [아니요]를 누르고 [＋ 빈 현황표]로 그 Site 현황표를 만들어 넣어 주세요.") \
+                == QMessageBox.StandardButton.Yes:
+            return True
+        self.say(f"저장하지 않았습니다 · {targets}에 넣을 설비는 [＋ 빈 현황표]로 그 Site 현황표를 만들어 넣어 주세요.", error=True)
+        return False
 
     def _original_of(self, key):
         for row in self.data.rows:
@@ -775,6 +849,169 @@ class SheetPanel(_Panel):
         self.delete_button.setEnabled(bool(self.selected_rows() or any(k == "new" for k, _ in self._selected_lines()))
                                       and not busy)
         self.sheet_combo.setEnabled(not busy)
+        self.create_button.setEnabled(self.page.gateway is not None and not busy)
+
+    # 가이드 --------------------------------------------------------------------------------
+    def attach_guide(self, parent):
+        """[?]로 여는 '새 위치에 설비 넣기' 가이드. 변경 이력 세부 정보와 같은 패널(SideDrawer)을 쓴다."""
+        from setron.ui.drawer import SideDrawer
+
+        self.guide = SideDrawer(parent, object_name="sheetGuide", accessible_name="새 위치에 설비 넣기 가이드", panel_width=480)
+        layout = self.guide.panel_layout
+        layout.addLayout(self.guide.header)
+        layout.addWidget(label("새 위치에 설비 넣기", 20, medium=True, wrap=True))
+        layout.addWidget(label("새 Site · 라인을 만들고 그 자리에 설비 값을 입력하기까지의 순서입니다. 단계의 버튼을 누르면 그 화면으로 갑니다.",
+                               13, color=SECONDARY, wrap=True))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        host = QWidget()
+        steps = QVBoxLayout(host)
+        steps.setContentsMargins(0, 0, 6, 0)
+        steps.setSpacing(10)
+        self.guide_buttons = {}
+        for number, (title, when, text, action, caption) in enumerate(GUIDE_STEPS, 1):
+            steps.addWidget(self._guide_step(number, title, when, text, action, caption))
+        warn = label("다른 Site의 현황표에 넣으면 그 Site 설비로 저장됩니다. 다른 Site에만 있는 라인을 적으면 [저장] 전에 알려 줍니다.",
+                     12, color=DANGER, wrap=True)
+        warn.setStyleSheet(f"color:{DANGER};background:#fdecef;border-radius:8px;padding:10px;")
+        steps.addWidget(warn)
+        steps.addStretch()
+        scroll.setWidget(host)
+        layout.addWidget(scroll, 1)
+        # 화면 전체에 거는 '줄바꿈 라벨 폭 무시'가 스크롤 안 라벨 높이를 한 줄로 자르지 않게 기본 크기 정책으로 둔다
+        self._guide_labels = [w for w in self.guide.panel.findChildren(QLabel) if w.wordWrap()]
+        for widget in self._guide_labels:
+            widget.installEventFilter(self)  # 스크롤 안 줄바꿈 라벨은 폭이 바뀔 때 높이를 직접 맞춘다
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Resize and watched in getattr(self, "_guide_labels", ()):
+            height = watched.heightForWidth(watched.width())
+            if height > 0 and watched.minimumHeight() != height:
+                watched.setMinimumHeight(height)
+        return super().eventFilter(watched, event)
+
+    def _guide_step(self, number, title, when, text, action, caption):
+        box = QFrame()
+        box.setObjectName("guideStep")
+        box.setStyleSheet(f"QFrame#guideStep {{background:white;border:1px solid {LINE};border-radius:10px;}}")
+        body = QVBoxLayout(box)
+        body.setContentsMargins(14, 12, 14, 12)
+        body.setSpacing(6)
+        head = QHBoxLayout()
+        badge = QLabel(str(number))
+        badge.setFixedSize(24, 24)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(f"background:{PRIMARY};color:white;border-radius:12px;font-size:12px;font-weight:600;")
+        head.addWidget(badge)
+        head.addWidget(label(title, 15, medium=True))
+        if when:
+            head.addWidget(label(when, 12, color=SECONDARY))
+        head.addStretch()
+        body.addLayout(head)
+        body.addWidget(label(text, 13, wrap=True))
+        if action == "add":
+            fields = QLabel(GUIDE_FIELDS)
+            fields.setTextFormat(Qt.TextFormat.RichText)
+            set_widget_font(fields, font(12))
+            body.addWidget(fields)
+        if caption:
+            control = button(caption)
+            control.setStyleSheet("QPushButton {padding:0 12px;min-height:30px;max-height:30px;font-size:13px;}")
+            control.clicked.connect(lambda _=False, key=action: self.guide_go(key))
+            self.guide_buttons[action] = control
+            body.addWidget(control, 0, Qt.AlignmentFlag.AlignLeft)
+        return box
+
+    def show_guide(self):
+        if self.guide is None:
+            return False
+        for widget in self._guide_labels:
+            widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.guide.show_panel()
+        return True
+
+    def guide_go(self, key):
+        """가이드 단계의 버튼: 가이드를 닫고 그 화면(이나 동작)으로 간다."""
+        if self.guide is not None:
+            self.guide.hide_panel(animated=False)
+        if key in ("location", "equipment"):
+            self.page.select_status(2 if key == "location" else 1)
+            return True
+        self.page.select_status(0)
+        if key == "create":
+            return self.create_sheet()
+        if key == "add":
+            if self.data is None or not self.data.site:
+                self.say("먼저 그 Site의 현황표를 고르거나 [＋ 빈 현황표]로 만들어 주세요.", error=True)
+                return False
+            return self.add_row()
+        return False
+
+    # 빈 현황표 --------------------------------------------------------------------------------
+    def create_sheet(self):
+        """Site · 기준일을 골라 빈 현황표를 만들고 연다. Site 목록은 등록 Site와 현황표가 있는 Site."""
+        if self.page.gateway is None or self.page.saving or self.request.busy or not self._leave_ok():
+            return False
+        return self.run(lambda: self.page.gateway.data_admin("sites"), self._sites_for_create)
+
+    def _sites_for_create(self, registered, error):
+        if error is not None:
+            self.say("Site 목록을 읽지 못했습니다. DB 연결을 확인해 주세요.", error=True)
+            return
+        sites = sorted({*registered, *(s.site for s in self.sheets if s.site)}, key=_natural)
+        if not sites:
+            self.say("Site가 없습니다. 위치 탭에서 Site를 먼저 추가해 주세요.", error=True)
+            return
+        dialog = CreateSheetDialog(self, sites, self.data.site if self.data is not None else None)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        site, base_date = dialog.values()
+        self.page.change(lambda: self.page.gateway.data_admin("create_sheet", site, base_date), self,
+                         message="빈 현황표를 만들고 있습니다…",
+                         done=lambda batch_id: self.page.open_sheet(
+                             batch_id, f"{site} · {base_date} 빈 현황표를 만들었습니다 · [＋ 행 추가]로 설비를 넣습니다. "))
+
+
+class CreateSheetDialog(QDialog):
+    """빈 현황표 만들기: Site · 기준일."""
+
+    def __init__(self, parent, sites, site=None):
+        super().__init__(parent)
+        self.setWindowTitle("빈 현황표 만들기")
+        form = QFormLayout(self)
+        self.site, self.base_date = ComboBox(), QLineEdit(date.today().isoformat())
+        for value in sites:
+            self.site.addItem(value, value)
+        self.site.setCurrentIndex(max(0, self.site.findData(site)))
+        self.site.setMinimumWidth(260)
+        self.base_date.setPlaceholderText("YYYY-MM-DD")
+        self.error = label("", 12, color=DANGER, wrap=True)
+        form.addRow("Site", self.site)
+        form.addRow("기준일", self.base_date)
+        form.addRow(label("목록에 없는 Site는 위치 탭에서 먼저 추가합니다. 같은 Site · 기준일 현황표가 있으면 만들지 않습니다.",
+                          12, color=SECONDARY, wrap=True))
+        form.addRow(self.error)
+        actions = QHBoxLayout()
+        cancel, ok = button("취소"), button("만들기", primary=True)
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self._accept)
+        actions.addStretch()
+        actions.addWidget(cancel)
+        actions.addWidget(ok)
+        form.addRow(actions)
+
+    def _accept(self):
+        try:
+            date.fromisoformat(self.base_date.text().strip())
+        except ValueError:
+            self.error.setText("기준일은 YYYY-MM-DD로 적어 주세요.")
+            return
+        self.accept()
+
+    def values(self):
+        return self.site.currentData(), date.fromisoformat(self.base_date.text().strip())
 
 
 # --- 설비현황 › 설비 ------------------------------------------------------------------------
@@ -2238,6 +2475,7 @@ class DataManagementPage(QWidget):
         self.tabs.currentChanged.connect(self.select_tab)
         # 변경 이력 세부 정보: 대시보드처럼 창 오른쪽에서 나온다 (앱은 창 중앙 영역을, 단독 실행은 이 화면을 쓴다)
         self.history_panel.attach_drawer(drawer_parent if drawer_parent is not None else self)
+        self.sheet_panel.attach_guide(drawer_parent if drawer_parent is not None else self)  # 현황표 [?] 가이드
         # 여러 줄 안내가 첫 줄만 보이지 않게, 줄바꿈 라벨은 폭을 무시하고 높이를 내용에 맞춘다 (다른 화면과 같은 방식).
         ignore_width(*(w for w in self.findChildren(QLabel) if w.wordWrap()))
 
@@ -2256,6 +2494,8 @@ class DataManagementPage(QWidget):
             return
         if index != 2 and self.history_panel.drawer is not None:
             self.history_panel.drawer.hide_panel(animated=False)
+        if index != 0 and self.sheet_panel.guide is not None:
+            self.sheet_panel.guide.hide_panel(animated=False)
         self.stack.setCurrentIndex(index)
         self._ensure_loaded()
 
