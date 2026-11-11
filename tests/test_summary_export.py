@@ -41,12 +41,12 @@ def test_saved_two_sheet_export_preserves_pms_versions_items_and_literal_text(re
         equipment = list(book["설비현황표"].iter_rows(min_row=2, values_only=True))
         assert any(row[0] == "EQ-1" and row[1].date() == snapshot.base_date for row in equipment)
         pm_rows = [row for row in equipment if row[0] == "PM-설비"]
-        assert [(row[10], row[11], row[13], row[14], row[15]) for row in pm_rows] == [
-            ("PM1", "M-O2", "O2", "v1", "v1"), ("PM2", "C3", "C3", "v3", "미등록")]
-        note = next(row for row in book["릴리즈노트"].iter_rows(min_row=2) if row[10].value == formula)
-        assert [cell.value for cell in note[:3]] == ["M-O2", "O2", "v1"]
-        assert [cell.value for cell in note[9:14]] == ["7", formula, "미적용", "전체 모델", None]
-        assert note[10].data_type == "s"
+        assert sorted((row[10], row[11], row[13], row[14]) for row in pm_rows) == [
+            ("PM1", "M-O2", "v1", "v1"), ("PM2", "C3", "v3", "미등록")]
+        note = next(row for row in book["릴리즈노트"].iter_rows(min_row=2) if row[9].value == formula)
+        assert [cell.value for cell in note[:2]] == ["M-O2", "v1"]
+        assert [cell.value for cell in note[8:13]] == ["7", formula, "미적용", "전체 모델", None]
+        assert note[9].data_type == "s"
         assert not any(cell.data_type == "f" for sheet in book for row in sheet for cell in row)
 
 
@@ -68,11 +68,11 @@ def test_release_notes_preserve_multiple_items_empty_releases_and_unlinked_items
     ))
     with closing(build_management_workbook(storage)) as book:
         rows = list(book["릴리즈노트"].iter_rows(min_row=2, values_only=True))
-        assert Counter(row[2] for row in rows) == {"v1": 1, "v2": 2, "v3": 1, "연결 없음": 1}
-        listed = next(row for row in rows if row[10] == "추가 Item")
-        assert listed[9:14] == ("8", "추가 Item", "미확인", "지정 모델", "M-O2, O2 Plus")
-        assert next(row for row in rows if row[2] == "v3")[9:] == ("", "", "", "", "", "")
-        assert next(row for row in rows if row[2] == "연결 없음")[9:11] == ("9", "아직 연결 전")
+        assert Counter(row[1] for row in rows) == {"v1": 1, "v2": 2, "v3": 1, "": 1}
+        listed = next(row for row in rows if row[9] == "추가 Item")
+        assert listed[8:13] == ("8", "추가 Item", "미확인", "지정 모델", "M-O2, O2 Plus")
+        assert next(row for row in rows if row[1] == "v3")[8:14] == ("", "", "", "", "", "")
+        assert next(row for row in rows if row[1] == "")[8:10] == ("9", "아직 연결 전")
 
 
 def test_export_reads_one_transaction_without_changing_saved_data(revision_storage):

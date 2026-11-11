@@ -19,7 +19,7 @@ from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import DashboardSource, family_name, model_name
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import (
-    dashboard_source_from_env, data_exporter_from_env, sql_exporter_from_env, sql_importer_from_env,
+    dashboard_source_from_env, data_exporter_from_env, export_files_from_env, sql_exporter_from_env, sql_importer_from_env,
 )
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.heatmap_data import EquipmentSelection
@@ -65,7 +65,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
                   db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None,
                   rule_extractor=None, chat_enabled: bool = False, import_comparison_loader=None,
-                  import_delete_gateway=None, sql_importer=None) -> MainWindow:
+                  import_delete_gateway=None, sql_importer=None, export_file_loader=None) -> MainWindow:
     """공통 화면과 명시적으로 전달된 공급자를 연결한다.
 
     param
@@ -85,6 +85,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     - import_comparison_loader: 확인된 동일 범위의 직전 저장본 비교를 제공하는 선택적 읽기 공급자.
     - import_delete_gateway: 삭제 목록·원자적 삭제를 제공하는 선택적 서비스. 기본 미연결이며 UI에서 SQL을 실행하지 않음.
     - sql_importer: SETRON SQL 파일의 병합 미리보기·저장을 제공하는 선택적 서비스.
+    - export_file_loader: 현재 관리값과 연결된 가져오기 파일 목록 공급자.
 
     return
     - 실제 DB 연결을 자동 생성하지 않는 MainWindow.
@@ -571,8 +572,16 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     if db_exporter is not None:
         importer.deletion.backup_requested.connect(export_sql)
     def export_data(path=None):
-        """현재 관리값을 원격 develop의 요약 Excel 형식으로 내보낸다."""
+        """현재 관리값을 선택한 생산 영역의 요약 Excel 형식으로 내보낸다."""
         interactive = path is None
+        scope = export_page.production_area.currentData() if window.route == "export" else None
+        batch_ids = export_page.selected_batch_ids() if window.route == "export" else None
+        if batch_ids == () or batch_ids is not None and window.export_files_request.busy:
+            result = export_failure(Path(path) if path is not None else Path("setron_data.xlsx"),
+                                    "파일 목록을 확인하고 내보낼 파일을 하나 이상 선택해 주세요.")
+            if interactive:
+                QMessageBox.warning(window, "관리 데이터 Excel 내보내기", result.message)
+            return result
         if interactive:
             default = Path.home() / f"setron_data_{datetime.now():%Y%m%d_%H%M}.xlsx"
             path, _ = QFileDialog.getSaveFileName(window, "관리 데이터 Excel 내보내기", str(default),
@@ -580,7 +589,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                                                   options=QFileDialog.Option.DontConfirmOverwrite)
             if not path:
                 return None
-        result = run_numbered_export(data_exporter, path, ".xlsx", interactive=interactive)
+        options = {}
+        if scope is not None:
+            options["production_area"] = scope
+        if batch_ids is not None:
+            options["batch_ids"] = batch_ids
+        exporter = data_exporter if not options else lambda destination: data_exporter(destination, **options)
+        result = run_numbered_export(exporter, path, ".xlsx", interactive=interactive)
         if result is None:
             return None
         if interactive:
@@ -593,7 +608,23 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.export_request = ReadRequest(window)
     window.export_title = None
     export_page = DataExportPage()
+    export_page.set_file_support(export_file_loader is not None)
     window.register_page("export", export_page, uses_query=False)
+    window.export_files_request = ReadRequest(window)
+
+    def load_export_files():
+        if export_file_loader is None or window.export_files_request.busy or window.management_saving:
+            return
+        export_page.set_files_loading()
+        window.export_files_request.start(export_file_loader)
+
+    def finish_export_files(files, error):
+        export_page.set_files(tuple(files or ()), error=error is not None)
+
+    window.export_files_request.completed.connect(finish_export_files)
+    export_page.files_requested.connect(load_export_files)
+    window.page_changed.connect(lambda route: load_export_files() if route == "export" and
+                                export_page.selected_files_button.isChecked() else None)
 
     def sync_export_page(*_):
         if window.route != "export":
@@ -1117,7 +1148,8 @@ def main(argv: list[str] | None = None) -> int:
                                 import_saver=saver_from_env(), db_exporter=sql_exporter_from_env(),
                                 sql_importer=sql_importer_from_env() if source is not None else None,
                                 management_gateway=gateway_from_env() if source is not None else None,
-                                data_exporter=data_exporter_from_env(), extractor=ai.extractor,
+                                data_exporter=data_exporter_from_env(), export_file_loader=export_files_from_env(),
+                                extractor=ai.extractor,
                                 ai_client=ai.client,
                                 rule_extractor=None if args.demo_excel else rule_extractor,
                                 import_delete_gateway=None if args.demo_excel else ImportDeleteGateway.from_env(),

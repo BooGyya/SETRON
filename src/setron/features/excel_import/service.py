@@ -492,6 +492,16 @@ def _workbook_site_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
                   row.row_id, "site", row.sources.get("site"), code="SITE_CONFLICT") for row in rows]
 
 
+def _management_workbook(draft):
+    """전체 DB 내보내기 표는 각 행의 명시된 사업장을 가진다. 일반 원본의 단일 사업장 규칙은 유지한다."""
+    from setron.features.management_format import EQUIPMENT_HEADERS
+
+    sheet = draft.sheet
+    headers = {sheet.cells.get(cell_address(sheet.first_row, sheet.first_col + column))
+               for column in range(sheet.col_count)}
+    return set(EQUIPMENT_HEADERS).issubset(headers)
+
+
 def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
     """같은 호기·날짜의 기준정보와 고정 PM 위치의 충돌을 검사한다.
 
@@ -879,7 +889,8 @@ def validate(draft: ImportDraft, reference: ReferenceData | None = None,
                 issues.extend(issue for issue in _row_issues(draft, row)
                               if issue.blocks_save and issue.field in REQUIRED[draft.kind])
     if draft.kind is ExtractKind.EQUIPMENT_STATUS:
-        issues.extend(_workbook_site_issues(rows))
+        if not _management_workbook(draft):
+            issues.extend(_workbook_site_issues(rows))
         issues.extend(_equipment_issues(rows))
     else:
         issues.extend(_release_issues(rows))
@@ -909,6 +920,7 @@ def validate_batch(drafts: tuple[ImportDraft, ...], reference: ReferenceData | N
     lookup = {}
     rows_by_kind = defaultdict(list)
     equipment_by_workbook = defaultdict(list)
+    management_by_workbook = {}
     for draft in drafts:
         for row in draft.active_rows:
             index = len(lookup) + 1
@@ -917,7 +929,10 @@ def validate_batch(drafts: tuple[ImportDraft, ...], reference: ReferenceData | N
             if draft.kind is ExtractKind.EQUIPMENT_STATUS:
                 workbook = ("id", draft.workbook_id) if draft.workbook_id is not None else ("name", draft.workbook_name)
                 equipment_by_workbook[workbook].append(replace(row, row_id=index))
-    for rows in equipment_by_workbook.values():
+                management_by_workbook[workbook] = management_by_workbook.get(workbook, True) and _management_workbook(draft)
+    for workbook, rows in equipment_by_workbook.items():
+        if management_by_workbook.get(workbook):
+            continue
         for issue in _workbook_site_issues(tuple(rows)):
             draft, row = lookup[issue.row_id]
             issues.append(replace(issue, row_id=row.row_id, workbook_name=draft.workbook_name,

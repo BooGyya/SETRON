@@ -5,7 +5,7 @@
 
 정한 규칙
 - 모든 표를 한 트랜잭션에서 읽어 같은 시점의 자료를 쓴다.
-- ID 대신 사람이 읽는 이름(모델·계열·버전 원문)을 함께 적는다. 원본 셀 위치·원문 셀 값은 넣지 않는다
+- ID 대신 모델·설비군·버전 원문을 적고 SW계열 열은 노출하지 않는다. 원본 셀 위치·원문 셀 값은 넣지 않는다
   (원문까지 옮기려면 DB 전체 SQL 내보내기를 쓴다).
 - `=`·`+`·`-`·`@`로 시작하는 글자는 Excel이 수식으로 읽지 않도록 글자 그대로 저장한다.
 - 원본 Excel 양식·서식은 복원하지 않는다 (REQ-023 비고).
@@ -22,8 +22,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.worksheet.worksheet import Worksheet
 
-from setron.features.equipment.repository import EquipmentRepository
+from setron.features.export.management_files import read_management_data, select_files
 from setron.features.export.schemas import ExportResult, ExportStatus
+from setron.features.management_format import EQUIPMENT_HEADERS, PRODUCTION_AREAS, RELEASE_HEADERS, equipment_group_name
+from setron.features.reference_data import FOUNDRY_FAMILY_MODELS, strip_foundry
 from setron.infrastructure.database import DatabaseError
 
 SHEETS = (
@@ -35,46 +37,63 @@ SCOPE_LABELS = {"ALL": "전체 모델", "LISTED": "지정 모델", "UNKNOWN": "�
 FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
-def build_management_workbook(storage, *, now=datetime.now) -> Workbook:
+def build_management_workbook(storage, *, now=datetime.now, production_area=None, batch_ids=None) -> Workbook:
     """같은 시점의 DB 자료로 설비현황표·릴리즈노트 통합문서를 만든다."""
-    rows = EquipmentRepository().rows
-    with storage.transaction() as tx:
-        data = {table: rows(tx, table) for table in (
-            "equipment_group", "version_family", "equipment", "equipment_snapshot", "equipment_version",
-            "equipment_pm", "release_version", "item", "release_version_item")}
+    if production_area not in PRODUCTION_AREAS:
+        raise ValueError("내보낼 분류는 전체·Memory·Foundry 중에서 선택해 주세요.")
+    data = read_management_data(storage)
     names = _Names(data)
+    data = select_files(data, batch_ids)
 
     book = Workbook()
     book.properties.created = now()
     book.active.title = "설비현황표"
     book.create_sheet("릴리즈노트")
-    _equipment(book["설비현황표"], data, names)
-    _releases(book["릴리즈노트"], data, names)
+    snapshots = [row for row in data["equipment_snapshot"]
+                 if production_area is None or row["production_area"] == production_area]
+    _equipment(book["설비현황표"], data, names, snapshots)
+    families = None
+    if production_area is not None:
+        snapshot_ids = {row["snapshot_id"] for row in snapshots}
+        families = {row["family_id"] for row in data["equipment_version"] if row["snapshot_id"] in snapshot_ids}
+        families.update(row["family_id"] for row in data["version_family"]
+                        if names.area(row["family_id"]) == production_area)
+    _releases(book["릴리즈노트"], data, names, families, production_area=production_area,
+              include_unlinked=production_area is None)
     return book
 
 
-def save_management_summary(storage, path: str | Path) -> ExportResult:
+def save_management_summary(storage, path: str | Path, *, production_area=None, batch_ids=None) -> ExportResult:
     """관리 데이터를 xlsx 파일로 저장한다. 실패해도 예외 대신 원인을 담은 결과를 돌려준다."""
     path = Path(path)
     if path.suffix.lower() != ".xlsx":
         return ExportResult(ExportStatus.FAILED, path, "파일 이름은 .xlsx로 끝나야 합니다.")
     try:
-        book = build_management_workbook(storage)
+        book = build_management_workbook(storage, production_area=production_area, batch_ids=batch_ids)
+        counts = {title: book[title].max_row - 1 for title, _ in SHEETS}
+        if not any(counts.values()) and (production_area is not None or batch_ids is not None):
+            if production_area is not None:
+                label = {"MEMORY": "Memory", "FOUNDRY": "Foundry"}[production_area]
+                message = (f"{label} 조건에 맞는 현재 저장 자료가 없습니다. "
+                           "분류를 ‘전체’로 바꾸거나 해당 분류의 자료가 있는 파일을 선택해 주세요. "
+                           "분류가 비어 있는 자료는 ‘전체’에서 내보낼 수 있습니다.")
+            else:
+                message = "선택한 파일에 현재 저장된 자료가 없습니다. 파일 목록을 새로고침한 뒤 다시 선택해 주세요."
+            return ExportResult(ExportStatus.FAILED, path, message)
         book.save(path)
     except DatabaseError as error:
         return ExportResult(ExportStatus.FAILED, path, f"DB 자료를 읽지 못했습니다: {error}")
     except PermissionError:
         message = "파일을 저장할 수 없습니다. 같은 이름의 파일이 Excel에서 열려 있는지, 폴더 쓰기 권한이 있는지 확인해 주세요."
         return ExportResult(ExportStatus.FAILED, path, message)
-    except OSError as error:
-        return ExportResult(ExportStatus.FAILED, path, f"파일을 저장하지 못했습니다: {error.strerror or error}")
-    counts = {title: book[title].max_row - 1 for title, _ in SHEETS}
+    except (OSError, ValueError) as error:
+        return ExportResult(ExportStatus.FAILED, path, f"파일을 저장하지 못했습니다: {getattr(error, 'strerror', None) or error}")
     return ExportResult(ExportStatus.SAVED, path, " · ".join(f"{t} {n}행" for t, n in counts.items()))
 
 
 # --- 시트 -----------------------------------------------------------------------
 
-def _equipment(sheet: Worksheet, data, names: _Names) -> None:
+def _equipment(sheet: Worksheet, data, names: _Names, snapshots) -> None:
     codes = {e["equipment_id"]: e["equipment_code"] for e in data["equipment"]}
     pms_by_version = {}
     for pm in data["equipment_pm"]:
@@ -83,55 +102,64 @@ def _equipment(sheet: Worksheet, data, names: _Names) -> None:
     for version in data["equipment_version"]:
         versions.setdefault(version["snapshot_id"], []).append(version)
     rows = []
-    for snapshot in sorted(data["equipment_snapshot"], key=lambda s: (codes[s["equipment_id"]], s["base_date"])):
+    for snapshot in snapshots:
         base = [codes[snapshot["equipment_id"]], snapshot["base_date"], snapshot["site"], snapshot["line"] or "",
                 snapshot["model_name"], names.group(snapshot["group_id"]) if snapshot["group_id"] else "혼합·미확인",
-                snapshot["production_area"] or "미확인", snapshot["structure_type"] or "",
+                snapshot["production_area"] or "", snapshot["structure_type"] or "",
                 snapshot["geometry_type"] or "", snapshot["modification_type"] or ""]
-        for version in versions.get(snapshot["snapshot_id"], []):
-            software = [names.family(version["family_id"]), version["version_raw"],
-                        names.release(version["release_version_id"]) if version["release_version_id"] else "미등록"]
-            for pm in pms_by_version.get(version["equipment_version_id"], []) or [None]:
+        # 버전이 없는 저장 설비도 출력한다. HPA를 분석 제외 조건으로 걸러내지 않는다.
+        for version in versions.get(snapshot["snapshot_id"], []) or [None]:
+            version = version or {}
+            family = names.families.get(version.get("family_id"), {})
+            software = [version.get("version_raw") or "", names.release(version["release_version_id"])
+                        if version.get("release_version_id") else "미등록"]
+            for pm in pms_by_version.get(version.get("equipment_version_id"), []) or [None]:
                 pm_cells = ([pm["pm_name"], names.group(pm["group_id"]), pm["model_name_raw"] or ""] if pm
                             else ["", "", ""])
-                rows.append([*base, *pm_cells, *software, snapshot["batch_id"]])
-    _rows(sheet, ["설비 호기", "기준일", "사업장", "라인", "모델명(원문)", "대표 모델", "생산 영역", "구조", "형상",
-                  "개조 유형", "PM", "PM 모델", "PM 모델명(원문)", "SW 계열", "SW 버전(원문)", "연결 릴리즈",
-                  "입력 작업"], rows)
+                model = pm_cells[1] if pm else base[5] if snapshot["group_id"] else base[4]
+                rows.append([*base, *pm_cells, *software, snapshot["batch_id"], family.get("ui_type") or "",
+                             equipment_group_name(model)])
+    rows.sort(key=lambda row: (row[6], row[17], row[2], row[3], row[0], row[1], row[10]))
+    _rows(sheet, EQUIPMENT_HEADERS, rows)
 
 
-def _releases(sheet: Worksheet, data, names: _Names) -> None:
+def _releases(sheet: Worksheet, data, names: _Names, families=None, *, production_area=None, include_unlinked=True) -> None:
     items = {i["item_id"]: i for i in data["item"]}
     links_by_release = {}
     for link in data["release_version_item"]:
         links_by_release.setdefault(link["release_version_id"], []).append(link)
-    linked = set()
+    linked = {link["item_id"] for link in data["release_version_item"]}
     rows = []
     releases = sorted(data["release_version"], key=lambda r: (r["family_id"], r["version_order"] is None,
                                                             r["version_order"] or 0, r["release_version_id"]))
     for release in releases:
-        base = [names.family_owner(release["family_id"]), names.family(release["family_id"]), release["version_raw"],
-                release["version_suffix"] or "", release["released_at"] or "미확인",
-                "미확인" if release["version_order"] is None else release["version_order"],
+        if families is not None and release["family_id"] not in families:
+            continue
+        family = names.families[release["family_id"]]
+        owner = names.family_owner(release["family_id"])
+        area = names.area(release["family_id"])
+        if area is None and production_area in ("MEMORY", "FOUNDRY"):
+            area = production_area  # 두 분류에서 함께 쓰는 노트는 선택한 관측 범위에 포함한다.
+        extra = [family.get("ui_type") or "", family.get("structure_type") or "", area or "", equipment_group_name(owner)]
+        base = [owner, release["version_raw"],
+                release["version_suffix"] or "", release["released_at"] or "",
+                "" if release["version_order"] is None else release["version_order"],
                 "확인됨" if release["item_mapping_status"] == "VERIFIED" else "미확인",
                 ", ".join(release["edited_fields"] or ()), release["batch_id"]]
         links = links_by_release.get(release["release_version_id"], [])
         if not links:
-            rows.append([*base, "", "", "", "", "", ""])
+            rows.append([*base, "", "", "", "", "", "", *extra])
         for link in links:
             item = items[link["item_id"]]
-            linked.add(item["item_id"])
             rows.append([*base, _item_no(item), item["content"],
                          STATE_LABELS.get(link["item_state"], link["item_state"]),
                          SCOPE_LABELS.get(link["target_scope"], link["target_scope"]),
                          ", ".join(names.group(g) for g in link["target_group_ids"] or ()),
-                         ", ".join(item["edited_fields"] or ())])
-    rows += [["", "", "연결 없음", "", "", "", "", "", i["batch_id"],
+                         ", ".join(item["edited_fields"] or ()), *extra])
+    rows += [["", "", "", "", "", "", "", i["batch_id"],
               _item_no(i), i["content"], "", "", "", ", ".join(i["edited_fields"] or ())]
-             for i in data["item"] if i["item_id"] not in linked]
-    _rows(sheet, ["관리 모델", "버전 계열", "버전(원문)", "접미사", "출시일", "확인된 순서", "Item 매핑",
-                  "직접 수정 항목", "입력 작업", "Item 번호", "내용", "적용 상태", "모델 범위", "지정 모델",
-                  "Item 직접 수정 항목"], rows)
+              + ["", "", "", ""] for i in data["item"] if include_unlinked and i["item_id"] not in linked]
+    _rows(sheet, RELEASE_HEADERS, rows)
 
 
 # --- 보조 -----------------------------------------------------------------------
@@ -143,6 +171,12 @@ class _Names:
         self.groups = {g["group_id"]: g for g in data["equipment_group"]}
         self.families = {f["family_id"]: f for f in data["version_family"]}
         self.releases = {r["release_version_id"]: r for r in data["release_version"]}
+        snapshots = {row["snapshot_id"]: row for row in data["equipment_snapshot"]}
+        self.areas = {}
+        for version in data["equipment_version"]:
+            area = snapshots[version["snapshot_id"]]["production_area"]
+            if area:
+                self.areas.setdefault(version["family_id"], set()).add(area)
 
     def group(self, group_id) -> str:
         return self.groups[group_id]["group_name"] if group_id in self.groups else f"모델 ID {group_id}"
@@ -157,12 +191,20 @@ class _Names:
     def release(self, release_id) -> str:
         return self.releases[release_id]["version_raw"] if release_id in self.releases else f"릴리즈 ID {release_id}"
 
+    def area(self, family_id) -> str | None:
+        if self.family_owner(family_id) in FOUNDRY_FAMILY_MODELS:
+            return "FOUNDRY" if strip_foundry(self.family(family_id))[1] else "MEMORY"
+        # HPA 등 공통 노트를 메모리로 단정하지 않는다. 저장된 관측 분류가 하나일 때만 적는다.
+        areas = self.areas.get(family_id, set())
+        return next(iter(areas)) if len(areas) == 1 else None
+
 
 def _item_no(item) -> str:
     return "" if item["item_no"] is None else str(item["item_no"])
 
 
 def _rows(sheet: Worksheet, header: Sequence[str], rows: Iterable[Sequence[Any]]) -> None:
+    sheet.freeze_panes = "A2"
     for column, title in enumerate(header, start=1):
         sheet.cell(1, column, title).font = Font(bold=True)
     for row_index, row in enumerate(rows, start=2):
@@ -170,3 +212,4 @@ def _rows(sheet: Worksheet, header: Sequence[str], rows: Iterable[Sequence[Any]]
             cell = sheet.cell(row_index, column, value)
             if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
                 cell.data_type = "s"  # 수식으로 실행하지 않고 글자 그대로 보존
+    sheet.auto_filter.ref = sheet.dimensions

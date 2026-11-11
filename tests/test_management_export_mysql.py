@@ -58,15 +58,15 @@ def test_sheets_follow_data_kinds(book):
 
 def test_equipment_has_one_row_per_pm_and_software_with_names(book):
     rows = [r for r in values(book["설비현황표"])[1:] if r[0] == "MG-1"]
-    assert [(r[10], r[11], r[13], r[14], r[15]) for r in rows] == [
-        ("PM1", "M-O2", "O2", "v1", "v1"), ("PM3", "M-O3", "O3", "v3", "미등록")]
+    assert sorted((r[10], r[11], r[13], r[14]) for r in rows) == [
+        ("PM1", "M-O2", "v1", "v1"), ("PM3", "M-O3", "v3", "미등록")]
     assert rows[0][5] == "혼합·미확인" and rows[0][2] == "화성"
 
 
 def test_release_notes_include_items_and_readable_names(book):
-    release = [r for r in values(book["릴리즈노트"])[1:] if r[1] == "O2"][0]
-    assert release[:7] == ["M-O2", "O2", "v1", "", date(2026, 9, 1), "미확인", "미확인"]
-    assert release[9:14] == ["7", FORMULA, "적용", "미확인", ""]
+    release = [r for r in values(book["릴리즈노트"])[1:] if r[0] == "M-O2"][0]
+    assert release[:6] == ["M-O2", "v1", "", date(2026, 9, 1), "", "미확인"]
+    assert release[8:13] == ["7", FORMULA, "적용", "미확인", ""]
 
 
 def test_saved_file_keeps_formula_like_text_as_text(storage, book, tmp_path):  # noqa: F811

@@ -15,6 +15,7 @@ from setron.infrastructure.ai_client import ResponseSource
 
 from .release_rules import parse_release
 from .status_rules import find_header_rows, parse_status
+from .management_rules import parse_management_sheet
 
 RULE_MESSAGE = "정해진 양식을 규칙으로 읽었습니다. 원본 셀과 대조한 결과를 검토해 주세요."
 SPARSE_LIMIT = 3            # 값이 이 개수 이하인 시트는 읽을 내용이 없다고 본다 (예: 'P1과 유사' 메모만 있는 시트)
@@ -37,6 +38,9 @@ def rule_extract(kind: ExtractKind, sheet) -> AIResult[ExtractResult] | None:
     return
     - 원본 셀 위치를 담은 추출 결과(출처 RULE). 아는 양식이 아니거나 읽은 행이 없으면 None.
     """
+    managed = parse_management_sheet(kind, sheet)
+    if managed is not None:
+        return AIResult(AITask.EXCEL_EXTRACT, AIStatus.OK, RULE_MESSAGE, managed, ResponseSource.RULE)
     rows = [list(row) for row in sheet.values]
     filled = sum(1 for row in rows for value in row if value is not None and str(value).strip())
     if filled <= SPARSE_LIMIT:
