@@ -142,13 +142,15 @@ def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_butt
     assert not any(b.isChecked() for b in page.legend_buttons.values())
     assert group.grab().toImage().pixelColor(8, group.height() // 2) != filled
     assert page.chart.values == {} and page.heatmap.group_cards == [] and page.heatmap.visible_ids == ()
-    assert "하나 이상" in page.achievement.text() and page.progress.value() == 0
+    assert page.achievement.text() == "적용률 —" and page.progress.value() == 0
+    assert "하나 이상" in page.achievement.toolTip()
     page.legend_buttons["c3"].click()
     cell = next(g for g in page.frame.snapshot.groups if g.group_keys == ("c3",))
     assert set(page.chart.values) == {"c3"} and len(page.heatmap.group_cards) == 1
     assert set(page.heatmap.visible_ids) == set(cell.equipment_ids)
-    assert page.achievement.text().startswith(f"등록 SW 목표 달성 {cell.summary.compliant} / "
-                                              f"{cell.summary.compliant + cell.summary.below}건")
+    assert page.achievement.text() == f"적용률 {cell.summary.rate:.1%}"
+    assert (f"등록 SW 목표 달성 {cell.summary.compliant} / "
+            f"{cell.summary.compliant + cell.summary.below}건") in page.achievement.toolTip()
     assert "HPA" not in page.achievement.toolTip()
     assert toggle.text() == "전체 선택"  # 일부만 골라져 있으면 누를 때 전체 선택
     toggle.click()
@@ -220,13 +222,13 @@ def test_interval_buttons_rebuild_frames_without_reading_again(own):
     page.advance()
     assert page.index == 1 and page.frame.day == date(2026, 5, 28)
     assert "마지막 저장일 2026-05-21 기준" in page.achievement.toolTip()
-    # 저장일 자료를 이어 쓰는 시점은 달성률 줄에서도 바로 보인다 (11-11 점검).
-    assert page.achievement.text().endswith(" · 05-21 저장 기준")
+    # 플로팅에는 적용률만 표시하고 저장 기준일은 툴팁에서 확인한다.
+    assert "05-21 저장 기준" in page.achievement.toolTip()
     # 재생 중 간격을 바꾸면 멈추지 않고, 보던 날짜(05-28) 전 가장 가까운 시점부터 이어서 재생한다.
     page.interval_buttons["quarter"].click()
     assert [f.day for f in page.frames] == [date(2026, 5, 21), date(2026, 8, 21), date(2026, 10, 21)]
     assert page.timer.isActive() and page.index == 0 and page.frame.day == date(2026, 5, 21)
-    assert "저장 기준" not in page.achievement.text()   # 저장일과 같은 시점은 붙이지 않는다
+    assert "저장 기준" not in page.achievement.toolTip()  # 저장일과 같은 시점은 붙이지 않는다.
     page.pause()
     page.interval_buttons[None].click()
     dialog = page.timeline.day_dialog
@@ -294,6 +296,9 @@ def test_playback_buttons_share_design_and_float_at_body_bottom(own):
     assert abs(controls.geometry().center().x() - page.rect().center().x()) <= 1
     assert page.height() - controls.geometry().bottom() == 17
     assert page.content.body.indexOf(controls) == -1
+    assert controls.isAncestorOf(page.achievement) and controls.isAncestorOf(page.progress)
+    assert page.content.body.indexOf(page.achievement) == page.content.body.indexOf(page.progress) == -1
+    assert page.progress.height() == 4 and y(page.progress) < y(page.play_button)
     assert page.play_button.styleSheet() == page.pause_button.styleSheet() == page.restart_button.styleSheet()
 
 
@@ -554,7 +559,7 @@ def test_tile_opens_same_observation_readonly_drawer_without_navigation_or_write
     assert page.drawer.parentWidget() is window.centralWidget()
     assert page.drawer.request.equipment_id == 1
     assert page.drawer.detail.record.base_date == page.frame.day
-    assert len(page.drawer.software_cards) == 3 and not page.drawer.edit_available
+    assert len(page.drawer.software_cards) == 3 and not hasattr(page.drawer, "edit_button")
     assert [control for control in page.heatmap.tile_occurrences if control.isChecked()] == [tile]
     window.back_shortcut.trigger()
     until(page.drawer.isHidden)

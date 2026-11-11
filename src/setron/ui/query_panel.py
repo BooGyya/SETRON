@@ -1,4 +1,4 @@
-"""공통 조회 패널. 날짜와 필터 선택이 바뀌면 조회를 요청한다."""
+"""공통 조회 패널. 날짜와 필터 초안은 조회 버튼에서 한 번에 적용한다."""
 
 from collections import Counter
 from dataclasses import replace
@@ -9,12 +9,13 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLayout, QPushButton, QS
 
 from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
 from setron.ui.calendar_widgets import DateEdit
+from setron.ui.date_range import DatePickerEdit
 from setron.ui.query_filter_popup import QueryFilterPopup
 from setron.ui.query_state import UNASSIGNED, QueryCatalog, QuerySelection, QueryState, selection_keys, version_filter_caption
 from setron.ui.theme import ASSETS, INK, LINE, PRIMARY, SECONDARY, SOFT, font
 
 
-FILTER_CAPTIONS = {"site_key": "Site", "fab_key": "Fab", "line_key": "Line", "group_key": "설비군"}
+FILTER_CAPTIONS = {"fab_key": "분류", "site_key": "사업장", "line_key": "라인", "group_key": "설비군"}
 
 
 class _WrapRow(QWidget):
@@ -109,7 +110,7 @@ class _FilterButton(QPushButton):
 
 class QueryPanel(QWidget):
     applied = Signal(object)  # AppliedQuery: 공통 조건 계약, 데이터 조회 완료 신호가 아님
-    confirmed = Signal()  # 유효한 필터 변경 또는 날짜 확정
+    confirmed = Signal()  # 팝업 선택·날짜 초안 확정. 조회는 별도의 applied 신호만 사용한다.
     draft_changed = Signal(object)  # QuerySelection
     catalog_changed = Signal(object)  # QueryCatalog
     targets_changed = Signal(object)  # 목표 초안 변경. 조회 적용과 별개
@@ -155,7 +156,7 @@ class QueryPanel(QWidget):
         self.card.body.addWidget(self.draft_summary)
         self.source_label = label("", 12, color=SECONDARY, wrap=True)
         if period:
-            date_field, normal_date = self._date_field("기준 날짜")
+            date_field, normal_date = self._date_field("기준날짜")
             normal_date.hide()
             normal_date.deleteLater()
             self.original_date_field = date_field
@@ -168,10 +169,10 @@ class QueryPanel(QWidget):
                 control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
                 control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
         else:
-            date_field, self.date_edit = self._date_field("기준 날짜")
+            date_field, self.date_edit = self._date_field("기준날짜")
             self.original_date_field = date_field
             self.date_edit.setObjectName("query_as_of")
-            self.date_edit.setToolTip("클릭하여 날짜를 선택합니다. 선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
+            self.date_edit.setToolTip("날짜를 선택한 뒤 조회 버튼을 누르면 해당 날짜까지 저장된 가장 최근 자료로 계산합니다.")
             self.date_edit.dateChanged.connect(self._choose_date)
             self.date_edit.calendarWidget().clicked.connect(self._confirm_date)
             self.date_edit.calendarWidget().activated.connect(self._confirm_date)
@@ -226,7 +227,7 @@ class QueryPanel(QWidget):
         self.card.body.addWidget(self.actions_row)
         self.version_pending = label("버전 선택 변경 · 다음 조회에 반영", 12, color=SECONDARY)
         self.card.body.addWidget(self.version_pending)
-        self.hint = label("날짜와 필터를 변경하면 바로 조회합니다.",
+        self.hint = label("날짜와 필터를 설정한 뒤 조회 버튼을 눌러 적용하세요.",
                           13, color=SECONDARY, wrap=True)
         self.card.body.addWidget(self.hint)
         self.card.body.addWidget(self.source_label)
@@ -244,8 +245,7 @@ class QueryPanel(QWidget):
         for hidden in (self.hint, self.source_label, self.status, self.applied_summary):
             hidden.hide()
         if not period:
-            self.confirmed.connect(self.apply_draft)
-            self.reset_button.clicked.connect(self._reset_and_apply)
+            self.reset_button.clicked.connect(self.reset_draft)
             if show_search:
                 self.search_button.clicked.connect(self.apply_draft)
         self._render()
@@ -286,21 +286,20 @@ class QueryPanel(QWidget):
         self.filter_popup = popup
         anchor.arrow.set_expanded(True)
 
-        def change(keys):
-            nonlocal expected
-            if state.draft != expected or state.catalog_revision != revision:
+        def confirm_selection():
+            if (self.filter_popup is not popup or state.draft != expected
+                    or state.catalog_revision != revision):
                 return
-            self.select(field, keys or None)
-            if state.draft != expected:
-                expected = state.draft
-                self.confirmed.emit()
+            self.select(field, popup.selected_keys or None)
+            self.confirmed.emit()
 
         def finish(_result):
-            self.filter_popup = None
+            if self.filter_popup is popup:
+                self.filter_popup = None
             anchor.arrow.set_expanded(False)
             popup.deleteLater()
 
-        popup.selection_changed.connect(change)
+        popup.accepted.connect(confirm_selection)
         popup.finished.connect(finish)
         popup.open()
 
@@ -311,7 +310,7 @@ class QueryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         title = label(caption, medium=True, color=INK)
-        control = DateEdit(open_on_click=True)
+        control = DatePickerEdit(open_on_click=True)
         control.setProperty("queryField", True)
         control.setAccessibleName(caption)
         calendar_icon = (ASSETS / "import-ver5/fdb91.svg").as_posix()
@@ -355,7 +354,7 @@ class QueryPanel(QWidget):
             from setron.ui.date_range import DateRangeButton
 
             self.range_button = DateRangeButton(self.original_date_field)
-            self.range_button.setAccessibleName("기준 날짜 기간")
+            self.range_button.setAccessibleName("기준날짜 기간")
             self.range_button.range_changed.connect(self._confirm_date_range)
             self.original_date_field.layout().addWidget(self.range_button)
         self.range_button.set_range(start, end, maximum=None if self.period else date.today())
@@ -393,8 +392,7 @@ class QueryPanel(QWidget):
 
     def _confirm_date(self, value):
         self.set_as_of(value.toPython())
-        if self.state.has_pending_changes:
-            self.apply_draft()
+        self.confirmed.emit()
 
     def set_today(self):
         self.set_as_of(None)
@@ -422,10 +420,6 @@ class QueryPanel(QWidget):
 
     def reset_draft(self):
         self.set_draft(QuerySelection())
-
-    def _reset_and_apply(self):
-        self.reset_draft()
-        self.apply_draft()
 
     def set_version_filter(self, value):
         self.set_draft(replace(self.state.draft, versions=value))
@@ -483,7 +477,7 @@ class QueryPanel(QWidget):
         applied = self.state.applied
         if applied is None:
             status, tone = "미적용", "info"
-            summary = "아직 적용된 조건이 없습니다. 날짜나 필터를 선택해 주세요."
+            summary = "아직 적용된 조건이 없습니다. 날짜와 필터를 설정한 뒤 조회 버튼을 눌러 주세요."
         else:
             if not self.state.applied_is_current:
                 status, tone = "선택지 변경 · 재적용 필요", "warning"

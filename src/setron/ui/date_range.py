@@ -1,4 +1,4 @@
-"""하나의 날짜 필드와 달력에서 기간을 선택하고 적용할 때만 확정한다."""
+"""기준일과 기간이 같은 달력 팝업을 공유하고 적용할 때만 확정한다."""
 
 from datetime import date
 
@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.ui.appearance import ui_color
-from setron.ui.calendar_widgets import CalendarWidget
+from setron.ui.calendar_widgets import CalendarWidget, DateEdit
 from setron.ui.components import button, label
 from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, font, icon, set_widget_font
 
@@ -48,27 +48,32 @@ class _RangeCalendar(CalendarWidget):
 
 
 class DateRangeDialog(QDialog):
-    def __init__(self, start, end, *, maximum=None, parent=None):
+    def __init__(self, start, end, *, maximum=None, minimum=None, single_day=False, parent=None):
         _validate(start, end, maximum)
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setObjectName("dateRangeDialog")
-        self.setWindowTitle("조회 기간 선택")
-        self.setAccessibleName("조회 기간 선택")
+        title = "기준 날짜 선택" if single_day else "조회 기간 선택"
+        self.setWindowTitle(title)
+        self.setAccessibleName(title)
         self.setStyleSheet(f"QDialog#dateRangeDialog {{background:white;border:1px solid {LINE};border-radius:10px;}}")
         self.start, self.end, self.maximum = start, end, maximum
+        self.single_day = single_day
         self.awaiting_end = False
         body = QVBoxLayout(self)
         body.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         body.setContentsMargins(12, 12, 12, 12)
         body.setSpacing(8)
-        body.addWidget(label("기간 선택", 15, medium=True))
-        self.caption = label("시작 날짜와 종료 날짜를 차례로 선택해 주세요.", 12, color=SECONDARY, wrap=True)
+        body.addWidget(label("기준 날짜 선택" if single_day else "기간 선택", 15, medium=True))
+        self.caption = label("조회할 기준 날짜를 선택해 주세요." if single_day else
+                             "시작 날짜와 종료 날짜를 차례로 선택해 주세요.", 12, color=SECONDARY, wrap=True)
         body.addWidget(self.caption)
         self.range_label = label("", 13, medium=True, color=PRIMARY, wrap=True)
-        self.range_label.setAccessibleName("선택 중인 조회 기간")
+        self.range_label.setAccessibleName("선택 중인 기준 날짜" if single_day else "선택 중인 조회 기간")
         body.addWidget(self.range_label)
         self.calendar = _RangeCalendar()
-        self.calendar.setAccessibleName("조회 기간 달력 · 시작 날짜와 종료 날짜 선택")
+        self.calendar.setAccessibleName("기준 날짜 달력" if single_day else "조회 기간 달력 · 시작 날짜와 종료 날짜 선택")
+        if minimum is not None:
+            self.calendar.setMinimumDate(_qdate(minimum))
         if maximum is not None:
             self.calendar.setMaximumDate(_qdate(maximum))
         self.calendar.setSelectedDate(_qdate(start))
@@ -97,14 +102,17 @@ class DateRangeDialog(QDialog):
 
     def _render_range(self):
         self.calendar.set_range(_qdate(self.start), _qdate(self.end) if self.end is not None else None)
-        self.range_label.setText(f"{self.start:%Y-%m-%d} ~ " + (f"{self.end:%Y-%m-%d}" if self.end else "종료 날짜"))
+        self.range_label.setText(f"{self.start:%Y-%m-%d}" if self.single_day else
+                                 f"{self.start:%Y-%m-%d} ~ " + (f"{self.end:%Y-%m-%d}" if self.end else "종료 날짜"))
         self.apply_button.setEnabled(not self.awaiting_end)
 
     def _choose_day(self, value):
         chosen = value.toPython()
-        if self.maximum is not None and chosen > self.maximum:
+        if not self.calendar.minimumDate() <= value <= self.calendar.maximumDate():
             return
-        if self.awaiting_end:
+        if self.single_day:
+            self.start = self.end = chosen
+        elif self.awaiting_end:
             self.start, self.end = sorted((self.start, chosen))
             self.awaiting_end = False
             self.caption.setText("선택한 기간을 확인한 뒤 적용해 주세요.")
@@ -118,7 +126,8 @@ class DateRangeDialog(QDialog):
                 and isinstance(watched, QWidget) and watched is not self and not self.isAncestorOf(watched)
                 and not self.frameGeometry().contains(event.globalPosition().toPoint())):
             self.reject()
-            return watched is self.parentWidget()
+            anchor = self.parentWidget()
+            return watched is anchor or (anchor is not None and anchor.isAncestorOf(watched))
         if (watched is self.calendar_view and event.type() == QEvent.Type.KeyPress
                 and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space)):
             self._choose_day(self.calendar.selectedDate())
@@ -155,6 +164,59 @@ class DateRangeDialog(QDialog):
         self.move(x, y)
         self.show()
         self.calendar_view.setFocus(Qt.FocusReason.PopupFocusReason)
+
+
+class DatePickerEdit(DateEdit):
+    """단일 기준일도 기간 선택과 동일한 팝업에서 적용·취소한다."""
+
+    def __init__(self, parent=None, *, open_on_click=True):
+        super().__init__(parent, open_on_click=open_on_click)
+        self.dialog = None
+
+    def open_calendar(self):
+        if not self.isEnabled() or self.isReadOnly() or not self.calendarPopup():
+            return
+        if self.dialog is not None:
+            if self.dialog.isVisible():
+                self.dialog.reject()
+                return
+            self.dialog.deleteLater()
+        day = self.date().toPython()
+        dialog = DateRangeDialog(day, day, minimum=self.minimumDate().toPython(),
+                                 maximum=self.maximumDate().toPython(), single_day=True, parent=self)
+        self.dialog = dialog
+        dialog.accepted.connect(lambda: self._apply_day(dialog))
+        dialog.open_at(self)
+
+    def _apply_day(self, dialog):
+        if dialog is not self.dialog:
+            return
+        day = _qdate(dialog.end)
+        if day != self.date():
+            self.setDate(day)
+        else:
+            self.calendarWidget().activated.emit(day)
+
+    def _open_from_click(self, event):
+        if (event.button() != Qt.MouseButton.LeftButton or not self.isEnabled()
+                or self.isReadOnly() or not self.calendarPopup()):
+            return False
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.open_calendar()
+        return True
+
+    def keyPressEvent(self, event):
+        if (event.key() == Qt.Key.Key_F4 or
+                event.key() == Qt.Key.Key_Down and event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            self.open_calendar()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def hideEvent(self, event):
+        if self.dialog is not None and self.dialog.isVisible():
+            self.dialog.reject()
+        super().hideEvent(event)
 
 
 class DateRangeButton(QPushButton):

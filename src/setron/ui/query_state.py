@@ -313,9 +313,9 @@ class QueryState:
     def describe(self, selection: QuerySelection) -> str:
         captions = []
         for name, value, options in (
-            ("Site", selection.site_key, self.catalog.sites),
-            ("Fab", selection.fab_key, self.catalog.fabs),
-            ("Line", selection.line_key, self.catalog.lines),
+            ("분류", selection.fab_key, self.catalog.fabs),
+            ("사업장", selection.site_key, self.catalog.sites),
+            ("라인", selection.line_key, self.catalog.lines),
             ("설비군", selection.group_key, self.catalog.groups),
         ):
             labels = {o.key: o.label for o in options}

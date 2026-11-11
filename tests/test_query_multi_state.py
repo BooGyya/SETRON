@@ -37,7 +37,7 @@ def test_canonical_selections_preserve_existing_scalar_and_missing_semantics(sta
     applied = state.apply()
     state.select("site_key", ("s2", "s1"))
     assert not state.has_pending_changes and state.applied is applied
-    assert applied.description == "Site 사업장 A, 사업장 B · Fab Fab A, 미지정 · Line Line A · 설비군 설비 A, 설비 B · 기준일 최신"
+    assert applied.description == "분류 Fab A, 미지정 · 사업장 사업장 A, 사업장 B · 라인 Line A · 설비군 설비 A, 설비 B · 기준일 최신"
 
 
 def test_parent_changes_retain_only_in_scope_children_without_applying(state):

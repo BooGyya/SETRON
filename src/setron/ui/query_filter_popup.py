@@ -10,7 +10,7 @@ from setron.ui.view_controls import bulk_selection_button
 
 
 class QueryFilterPopup(QDialog):
-    """하나 이상 체크된 선택을 즉시 알린다. 빈 결과 튜플은 전체 선택을 뜻한다."""
+    """체크 초안을 팝업 안에 보관하고 선택 완료 시 호출자가 반영한다."""
 
     selection_changed = Signal(object)
 
@@ -153,8 +153,8 @@ class QueryFilterPopup(QDialog):
         self.all_button.setEnabled(bool(self.checks))
         self.count.setText("하나 이상 선택해 주세요" if not count and self.checks else f"{count}개 선택 중")
         self.confirm_button.setEnabled(count > 0)
+        self.selected_keys = () if count == len(self.checks) else selected
         if selected:
-            self.selected_keys = () if count == len(self.checks) else selected
             self.selection_changed.emit(self.selected_keys)
 
     def accept(self):

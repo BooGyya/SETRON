@@ -1,19 +1,18 @@
 """VER5 2-1: 히트맵을 떠나지 않는 읽기 전용 설비 상세 패널.
 
-판정은 EquipmentPage가 사용하는 같은 관측·비교 결과를 표시한다. 이 뷰는 버전 순서나
-위험 규칙을 추론하지 않으며, 편집은 기존 관리 화면의 검토/저장 흐름에 위임한다.
+판정은 EquipmentPage가 사용하는 같은 관측·비교 결과를 읽기 전용으로 표시한다.
 """
 
 from collections import Counter
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QMenu, QScrollArea, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from setron.features.risk.schemas import RiskStatus
-from setron.ui.components import StatusBadge, button, label
+from setron.ui.components import StatusBadge, label
 from setron.ui.drawer import SideDrawer
 from setron.ui.equipment import ignore_width
 from setron.ui.heatmap_data import GoalState
@@ -80,15 +79,11 @@ class EquipmentDrawer(SideDrawer):
     """중앙 캔버스 위에 얹는 560px 패널. 화면 라우트/필터/스크롤은 바꾸지 않는다."""
 
     closed = Signal()
-    edit_requested = Signal()
-    record_requested = Signal(str, object)
 
     def __init__(self, parent, *, object_name="equipmentDrawer", accessible_name="설비 상세 패널"):
         super().__init__(parent, object_name=object_name, accessible_name=accessible_name)
         self.request, self.detail, self.return_focus = None, None, None
-        self.edit_available = False
         self.software_cards = []
-        self.edit_menu = None
         self.title = label("설비 정보", 24, medium=True, wrap=True)
         ignore_width(self.title)
         heading = QVBoxLayout()
@@ -109,11 +104,9 @@ class EquipmentDrawer(SideDrawer):
         self.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll.setWidget(self.body_widget)
 
-    def open_detail(self, request, detail, rows, *, return_focus=None, edit_available=False):
-        self.closed.emit()  # 같은 패널 재선택 시 이전 비동기 편집 조회도 취소한다.
+    def open_detail(self, request, detail, rows, *, return_focus=None):
         self._clear_body()
         self.request, self.detail, self.return_focus = request, detail, return_focus
-        self.edit_available = edit_available and bool(rows)
         self.title.setText("설비 정보")
         self._build_info(detail)
         observations = observed_software(detail, rows)
@@ -129,17 +122,6 @@ class EquipmentDrawer(SideDrawer):
             empty = label("SW 미등록 · 목표 비교 불가", 14, wrap=True)
             ignore_width(empty)
             self.body.addWidget(empty)
-        self.edit_button = button("버전 정보 수정", primary=True)
-        self.edit_button.setFixedHeight(40)
-        self.edit_button.setEnabled(self.edit_available)
-        self.edit_button.setToolTip("해당 관측의 SW를 선택해 관리 화면에서 검토·저장합니다." if self.edit_available else
-                                    "DB 관리 연결과 저장된 SW 관측이 있어야 수정할 수 있습니다.")
-        self.edit_button.clicked.connect(self.edit_requested)
-        self.body.addWidget(self.edit_button)
-        self.edit_notice = label("", 12, color=SECONDARY, wrap=True)
-        ignore_width(self.edit_notice)
-        self.edit_notice.hide()
-        self.body.addWidget(self.edit_notice)
         self.show_panel()
         self.scroll.verticalScrollBar().setValue(0)
 
@@ -178,36 +160,7 @@ class EquipmentDrawer(SideDrawer):
         card.addLayout(fields)
         self.body.addWidget(self.info_card)
 
-    def set_edit_loading(self, loading, message=""):
-        self.edit_button.setEnabled(self.edit_available and not loading)
-        self.edit_button.setText("수정할 SW 확인 중…" if loading else "버전 정보 수정")
-        self.edit_notice.setText(message)
-        self.edit_notice.setVisible(bool(message))
-
-    def choose_edit_record(self, choices):
-        """DB에서 확인한 실제 기본키만 전달한다. 화면 호기를 DB 행 ID로 추측하지 않는다."""
-        self.set_edit_loading(False)
-        if not choices:
-            self.set_edit_loading(False, "이 관측의 수정 가능한 SW 기록이 없습니다. 다시 조회해 주세요.")
-            return
-        if len(choices) == 1:
-            table, key, _ = choices[0]
-            self.record_requested.emit(table, key)
-            return
-        if self.edit_menu is not None:
-            self.edit_menu.close()
-            self.edit_menu.deleteLater()
-        self.edit_menu = QMenu(self)
-        for table, key, title in choices:
-            action = self.edit_menu.addAction(title)
-            action.triggered.connect(lambda checked=False, t=table, k=key: self.record_requested.emit(t, k))
-        self.edit_menu.popup(self.edit_button.mapToGlobal(QPoint(0, self.edit_button.height())))
-
     def _clear_body(self):
-        if self.edit_menu is not None:
-            self.edit_menu.close()
-            self.edit_menu.deleteLater()
-            self.edit_menu = None
         while self.body.count():
             item = self.body.takeAt(0)
             if item.widget():
@@ -222,8 +175,6 @@ class EquipmentDrawer(SideDrawer):
         self.software_cards = []
 
     def clear_detail(self):
-        if self.edit_menu is not None:
-            self.edit_menu.close()
         self.request, self.detail = None, None
 
     def close_panel(self, *, restore_focus=True):

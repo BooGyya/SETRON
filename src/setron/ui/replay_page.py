@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QProgressBar, QVBoxLayout, QWidget,
+    QDialog, QVBoxLayout, QWidget,
 )
 
 from setron.ui.components import Card, button, label
@@ -12,13 +12,14 @@ from setron.ui.dashboard_data import information_gap_reasons
 from setron.ui.equipment import ignore_width
 from setron.ui.equipment_drawer import EquipmentDrawer
 from setron.ui.heatmap_data import EquipmentSelection
+from setron.ui.heatmap_grouping import GROUPING_MODES
 from setron.ui.interval_selector import IntervalSelector
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.replay_data import ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
 from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls
-from setron.ui.theme import PRIMARY, SECONDARY, font, set_widget_font
+from setron.ui.theme import SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.view_controls import SegmentedControl, bulk_selection_toggle_button, set_bulk_selection_state
 
@@ -26,7 +27,7 @@ from setron.ui.view_controls import SegmentedControl, bulk_selection_toggle_butt
 class ReplayPage(QWidget):
     drawer_opened = Signal()
 
-    def __init__(self, source, *, loader=None, targets_provider=lambda: None, drawer_parent=None, edit_available=False):
+    def __init__(self, source, *, loader=None, targets_provider=lambda: None, drawer_parent=None):
         super().__init__()
         self.source, self.loader, self.targets_provider = source, loader, targets_provider
         self.state = QueryState(source.catalog)  # 공통 조회 초안·적용 N과 독립적인 조회 상태.
@@ -35,7 +36,6 @@ class ReplayPage(QWidget):
         self.version_dialog = None
         self.drawer = (EquipmentDrawer(drawer_parent, object_name="replayEquipmentDrawer")
                        if drawer_parent is not None else None)
-        self.edit_available = edit_available
         self.read_request = ReadRequest(self)
         self.read_request.completed.connect(self._loaded)
         self.timer = QTimer(self)
@@ -45,6 +45,8 @@ class ReplayPage(QWidget):
         self._playback_host = self
         self.legend_buttons, self.legend_tools, self.frames = {}, (), ()  # frames: 지금 재생 간격의 시점들
         self._hidden_groups = set()
+        self.grouping_mode = "group"
+        self._trend_legend_key = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 88)
         body.setSpacing(16)
@@ -65,16 +67,30 @@ class ReplayPage(QWidget):
         self.content.body.setSpacing(12)
         self.content.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         # 날짜 칩 대신 재생 간격 (요청 2-1). 하나만 고르는 세그먼트 버튼. 바꾸면 다시 조회하지 않고 시점만 다시 만든다.
-        self.timeline = IntervalSelector("재생 간격", compact=True, custom_days=True)
+        self.timeline = IntervalSelector(compact=True, custom_days=True, action="재생")
         self.interval_group, self.interval_buttons, self.step = self.timeline.group, self.timeline.buttons, None
         self.timeline.set_saved_days()
         self.timeline.step_changed.connect(self.set_interval)
+        self.grouping_tabs = SegmentedControl()
+        self.grouping_tabs.setAccessibleName("리플레이 분류")
+        for _, caption in GROUPING_MODES:
+            self.grouping_tabs.addTab(caption)
+        self.grouping_tabs.setCurrentIndex(next(i for i, (mode, _) in enumerate(GROUPING_MODES)
+                                               if mode == self.grouping_mode))
+        self.content.body.addWidget(self.grouping_tabs, 0, Qt.AlignmentFlag.AlignLeft)
         self.legend_host = QWidget()
         self.legend_body = QVBoxLayout(self.legend_host)
         self.legend_body.setContentsMargins(0, 0, 0, 0)
         self.content.body.addWidget(self.legend_host)
+        self.trend_legend_host = QWidget()
+        self.trend_legend_body = QVBoxLayout(self.trend_legend_host)
+        self.trend_legend_body.setContentsMargins(0, 0, 0, 0)
+        self.trend_legend_host.hide()
+        self.content.body.addWidget(self.trend_legend_host)
         # 두 보기에서 같은 재생 상태를 제어한다.
         self.playback_controls = ReplayPlaybackControls(self)
+        self.achievement = self.playback_controls.rate_label
+        self.progress = self.playback_controls.progress
         self.play_button = self.playback_controls.play_button
         self.pause_button = self.playback_controls.pause_button
         self.restart_button = self.playback_controls.restart_button
@@ -87,17 +103,6 @@ class ReplayPage(QWidget):
         self.installEventFilter(self)
         if self.drawer is not None:
             self.drawer.installEventFilter(self)
-        self.achievement = label("등록 SW 목표 달성 —", 20, medium=True, wrap=True)
-        self.content.body.addWidget(self.achievement)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 1000)
-        self.progress.setValue(0)
-        self.progress.setFixedHeight(24)
-        self.progress.setTextVisible(False)
-        self.progress.setAccessibleName("현재 관측일의 등록 SW 목표 달성률")
-        self.progress.setStyleSheet(f"QProgressBar {{background:#e8ebfc;border:0;border-radius:0;}}"
-                                   f"QProgressBar::chunk {{background:{PRIMARY};border-radius:0;}}")
-        self.content.body.addWidget(self.progress)
         self.view_tabs = SegmentedControl()
         self.view_tabs.setAccessibleName("리플레이 보기")
         self.view_tabs.setDrawBase(False)
@@ -113,10 +118,10 @@ class ReplayPage(QWidget):
         self.heatmap = ReplayHeatmap()
         self.heatmap.equipment_selected.connect(self.open_equipment)
         self.content.body.addWidget(self.heatmap)
+        self.grouping_tabs.currentChanged.connect(lambda index: self.set_grouping(GROUPING_MODES[index][0]))
         self.view_tabs.currentChanged.connect(self._show_view)
         self._show_view(self.view_tabs.currentIndex())
         body.addWidget(self.content)
-        self.query_panel.confirmed.connect(self._confirm_filters)
         self.reset_button.clicked.connect(self.reset_filters)
         self.query_panel.search_button.clicked.connect(self.apply_query)
         self.version_button.clicked.connect(self.open_versions)
@@ -145,6 +150,10 @@ class ReplayPage(QWidget):
         host, controls = self._playback_host, self.playback_controls
         controls.adjustSize()
         size = controls.size()
+        margins = self.layout().contentsMargins()
+        bottom = size.height() + 32
+        if margins.bottom() != bottom:
+            self.layout().setContentsMargins(margins.left(), margins.top(), margins.right(), bottom)
         controls.move(max(12, (host.width() - size.width()) // 2), max(12, host.height() - size.height() - 16))
         visible = self.isVisible() and not (self.drawer is not None and self.drawer.isVisible())
         controls.setVisible(visible)
@@ -183,17 +192,25 @@ class ReplayPage(QWidget):
     def _show_view(self, index):
         self.chart.setVisible(index == 0)
         self.heatmap.setVisible(index == 1)
+        self.trend_legend_host.setVisible(index == 0 and self.grouping_mode != "group"
+                                          and self.trend_legend_body.count() > 0)
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
 
-    def _matches_filters(self, request):
-        return (self.start.date().toPython(), self.end.date().toPython(), self.state.draft) == (
-            request.start, request.end, request.query.selection)
-
-    def _confirm_filters(self):
-        if self.data is not None and not self.dirty and self._matches_filters(self.data.request):
-            return
-        self.apply_query()
+    def set_grouping(self, mode):
+        """추이와 히트맵에 같은 분류를 적용하며 조회 데이터는 그대로 사용한다."""
+        if mode not in {key for key, _ in GROUPING_MODES}:
+            return False
+        self.grouping_mode = mode
+        with QSignalBlocker(self.grouping_tabs):
+            self.grouping_tabs.setCurrentIndex(next(i for i, (key, _) in enumerate(GROUPING_MODES) if key == mode))
+        self.heatmap.set_grouping(mode)
+        self.legend_host.setVisible(mode == "group" and bool(self.legend_buttons))
+        self.trend_legend_host.setVisible(self.view_tabs.currentIndex() == 0 and mode != "group"
+                                          and self.trend_legend_body.count() > 0)
+        if self.frame is not None:
+            self._render_frame()
+        return True
 
     def _sync_controls(self):
         ready = self.data is not None and not self.dirty and not self.busy
@@ -210,6 +227,7 @@ class ReplayPage(QWidget):
         for control in self.legend_tools:
             control.setEnabled(ready)
         self.view_tabs.setEnabled(not self.busy)
+        self.grouping_tabs.setEnabled(ready)
         self.heatmap.setEnabled(ready)
         self.chart.setEnabled(ready)
         self._position_playback()
@@ -261,9 +279,8 @@ class ReplayPage(QWidget):
         request, self.pending_request = self.pending_request, None
         if request is None:
             return
-        if not self._matches_filters(request):
-            # 팝업에서 계속 선택할 수 있으므로 읽기가 끝나면 가장 최근 선택으로 다시 조회한다.
-            self.apply_query()
+        if not self.state.is_current(request.query):
+            self._sync_controls()
             return
         if error is not None or not isinstance(data, ReplayData) or data.request != request:
             self._clear_display()
@@ -329,6 +346,9 @@ class ReplayPage(QWidget):
         self.legend_buttons = {}
         self.legend_tools = ()
         self.legend_host.hide()
+        self._empty_layout(self.trend_legend_body)
+        self.trend_legend_host.hide()
+        self._trend_legend_key = None
 
     def _make_legend(self):
         """조회 기간과 재생 간격에 따라 표시할 설비군 칩을 구성한다."""
@@ -354,7 +374,7 @@ class ReplayPage(QWidget):
         widgets = (*self.legend_tools, *self.legend_buttons.values())
         self.legend_body.addWidget(DashboardGrid(widgets, minimum_width=96, maximum_columns=9, spacing=8))
         self._update_bulk_toggle()
-        self.legend_host.show()
+        self.legend_host.setVisible(self.grouping_mode == "group")
 
     def set_all_groups(self, checked):
         """설비군 버튼 전체 선택·해제. 화면은 한 번만 다시 그린다."""
@@ -385,18 +405,42 @@ class ReplayPage(QWidget):
 
     def _draw_chart(self, *_):
         if self.data is not None:
-            groups = self.selected_groups()
-            self.chart.show_data(self.data, self.legend_buttons.keys() if groups is None else groups,
-                                 current=self.index, frames=self.frames)
+            groups = self.selected_groups() if self.grouping_mode == "group" else None
+            visible = self.legend_buttons.keys() if groups is None else groups
+            self.chart.show_data(self.data, visible, current=self.index, frames=self.frames,
+                                 grouping=self.grouping_mode)
+            self._update_trend_legend()
+
+    def _update_trend_legend(self):
+        """위치 분류의 색상 범례는 그래프가 사용한 집계 메타데이터를 공유한다."""
+        if self.grouping_mode == "group":
+            self.trend_legend_host.hide()
+            return
+        trends = self.chart.trends
+        key = (self.grouping_mode, tuple((trend.key, trend.label, trend.color_key) for trend in trends))
+        if key != self._trend_legend_key:
+            self._empty_layout(self.trend_legend_body)
+            chips = []
+            for trend in trends:
+                chip = label(trend.label, 13, medium=True)
+                chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                chip.setStyleSheet(f"color:{series_color(trend.color_key)};padding:6px 10px;"
+                                  "background:#f7f8fa;border:1px solid #e4e7ed;border-radius:8px;")
+                chips.append(chip)
+            if chips:
+                self.trend_legend_body.addWidget(DashboardGrid(chips, minimum_width=96, maximum_columns=9, spacing=8))
+            self._trend_legend_key = key
+        self.trend_legend_host.setVisible(self.view_tabs.currentIndex() == 0 and bool(trends))
 
     def _clear_display(self):
         self._clear_legend()
         self.chart.clear()
         self.heatmap.clear()
-        self.achievement.setText("등록 SW 목표 달성 —")
+        self.achievement.setText("적용률 —")
         self.achievement.setToolTip("")  # 이전 조회의 대수 설명이 남지 않게 한다 (QA R-06).
         self.progress.setValue(0)
         self.progress.setAccessibleDescription("")
+        self.progress.setToolTip("")
 
     def _render_frame(self):
         if self.drawer is not None:
@@ -406,11 +450,11 @@ class ReplayPage(QWidget):
         frame = self.frame
         if frame is None:
             return
-        groups = self.selected_groups()
+        groups = self.selected_groups() if self.grouping_mode == "group" else None
         summary, observed_count, carried_count = group_view(self.data, frame, groups)
         if summary is None:
-            self.achievement.setText("등록 SW 목표 달성 — · 설비군을 하나 이상 골라 주세요")
-            self.achievement.setToolTip("")
+            self.achievement.setText("적용률 —")
+            self.achievement.setToolTip("설비군을 하나 이상 골라 주세요.")
             self.progress.setValue(0)
             self.progress.setAccessibleDescription("설비군 선택 없음")
         else:
@@ -419,19 +463,21 @@ class ReplayPage(QWidget):
             # 1주·1개월 간격 시점은 그 전 마지막 저장일 자료를 이어 쓴다. 화면이 몇 칸 그대로인 이유를 바로 보이게 한다.
             carried = (f" · {frame.snapshot.base_date:%m-%d} 저장 기준"
                        if frame.at is not None and frame.at != frame.snapshot.base_date else "")
-            self.achievement.setText(f"등록 SW 목표 달성 {summary.compliant} / {decided}건 · {value}{carried}")
+            self.achievement.setText(f"적용률 {value}")
             observed = f"이날 저장 {observed_count}대"
             if carried_count:
                 observed += f" · 이전 관측 이어받음 {carried_count}대"
             if frame.at is not None and frame.at != frame.snapshot.base_date:
                 observed += f" · 마지막 저장일 {frame.snapshot.base_date} 기준"
             hpa = f" · HPA {summary.hpa_excluded}대 제외" if groups is None else ""
-            tooltip = (f"{frame.day} · 분석 {summary.equipment_count}대 ({observed}){hpa} · "
+            tooltip = (f"등록 SW 목표 달성 {summary.compliant} / {decided}건 · {value}{carried}\n"
+                       f"{frame.day} · 분석 {summary.equipment_count}대 ({observed}){hpa} · "
                        f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
             reasons = information_gap_reasons(summary)
             self.achievement.setToolTip(f"{tooltip}\n정보 부족 사유\n{reasons}" if reasons else tooltip)
             self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
             self.progress.setAccessibleDescription(value)
+        self.progress.setToolTip(self.achievement.toolTip())
         self.heatmap.show_frame(self.data, frame, groups)
 
     def select_date(self, index):
@@ -487,7 +533,7 @@ class ReplayPage(QWidget):
             return False
         self._reset_period()
         self.query_panel.reset_draft()
-        return self.apply_query()
+        return True
 
     def open_versions(self):
         if self.busy:
@@ -504,7 +550,6 @@ class ReplayPage(QWidget):
         def done(result):
             if result == QDialog.DialogCode.Accepted and self.epoch == epoch:
                 self.query_panel.set_version_filter(dialog.result_filter)
-                self._confirm_filters()
             self.version_dialog = None
             dialog.deleteLater()
         dialog.finished.connect(done)
@@ -520,10 +565,11 @@ class ReplayPage(QWidget):
         if frame is None or self.dirty or equipment_id not in self.heatmap.visible_ids:
             return False
         if tile is None:
-            tile = self.heatmap.tile_buttons[equipment_id]
-        elif tile not in self.heatmap.tile_occurrences or tile.data.equipment_id != equipment_id:
+            tile = self.heatmap.tile_buttons.get(equipment_id, self.heatmap.list_table)
+        elif tile is not self.heatmap.list_table and (tile not in self.heatmap.tile_occurrences
+                                                     or tile.data.equipment_id != equipment_id):
             return False
-        self.heatmap.select_tile(tile)
+        self.heatmap.select_equipment(equipment_id)
         self.pause()
         try:
             detail, rows, _ = replay_detail(self.data, frame, equipment_id)
@@ -534,7 +580,7 @@ class ReplayPage(QWidget):
             self.drawer.installEventFilter(self)
         snapshot = frame.snapshot
         request = EquipmentSelection(snapshot.query, snapshot.base_date, equipment_id, detail.record.base_date)
-        self.drawer.open_detail(request, detail, rows, return_focus=tile, edit_available=self.edit_available)
+        self.drawer.open_detail(request, detail, rows, return_focus=tile)
         self._position_playback()
         self.drawer_opened.emit()
         return True

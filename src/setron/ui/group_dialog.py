@@ -31,6 +31,7 @@ from setron.ui.version_filter_dialog import VersionChoice
 SLOT_CHOICES = (None, Slot.N_MINUS_2, Slot.N_MINUS_1, Slot.N, Slot.N_PLUS_1, Slot.N_PLUS_2)
 BLOCK_INK, WARN_INK = "#ad344d", "#8a6400"
 HISTORY_PAGE_SIZE = 10
+VERSION_PAGE_SIZE = 6
 
 
 class VersionGroupDialog(QDialog):
@@ -46,6 +47,8 @@ class VersionGroupDialog(QDialog):
                        else {p.key: p.current_id for p in self.pairs})
         self.drafts: dict[tuple[int, int], dict[int, Slot]] = {}  # 모델·계열 → 릴리즈 ID → 칸
         self.restore_drafts = {}  # 모델·계열 → 불러온 이력
+        self.version_pages: dict[tuple[int, int], int] = {}
+        self.version_page_count = 0
         self.history_pages: dict[tuple[int, int], GroupHistoryPage] = {}
         self.history_request = ReadRequest(self)
         self.history_request.completed.connect(self._history_loaded)
@@ -114,13 +117,6 @@ class VersionGroupDialog(QDialog):
         body.addLayout(selection)
         QWidget.setTabOrder(self.family_combo, self.pair_combo)
         QWidget.setTabOrder(self.pair_combo, self.details_button)
-        self.legend = QHBoxLayout()
-        self.legend.setSpacing(6)
-        self.legend.addStretch(1)
-        for tier, (background, ink) in TIER_COLORS.items():
-            self.legend.addWidget(self._chip(TIER_LABELS[tier], background, ink))
-        body.addLayout(self.legend)
-
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setMinimumHeight(140)
@@ -136,6 +132,28 @@ class VersionGroupDialog(QDialog):
         self.rows.setVerticalSpacing(6)
         self.rows.setColumnStretch(0, 1)
         self.rows_card.body.addLayout(self.rows)
+        self.version_pager = QWidget()
+        pager = QHBoxLayout(self.version_pager)
+        pager.setContentsMargins(0, 6, 0, 0)
+        pager.setSpacing(8)
+        pager.addStretch()
+        self.previous_version_page = button("이전")
+        self.next_version_page = button("다음")
+        self.version_page_label = label("", 12, color=SECONDARY)
+        self.version_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.version_page_label.setAccessibleName("버전 목록 페이지")
+        for control, caption in ((self.previous_version_page, "버전 목록 이전 페이지"),
+                                 (self.next_version_page, "버전 목록 다음 페이지")):
+            control.setAutoDefault(False)
+            control.setFixedHeight(32)
+            control.setAccessibleName(caption)
+        self.previous_version_page.clicked.connect(lambda: self.set_version_page(self.version_page - 1))
+        self.next_version_page.clicked.connect(lambda: self.set_version_page(self.version_page + 1))
+        pager.addWidget(self.previous_version_page)
+        pager.addWidget(self.version_page_label)
+        pager.addWidget(self.next_version_page)
+        pager.addStretch()
+        self.rows_card.body.addWidget(self.version_pager)
         layout.addWidget(self.rows_card)
         self.issues = QVBoxLayout()
         self.issues.setSpacing(8)
@@ -202,6 +220,37 @@ class VersionGroupDialog(QDialog):
     def family(self, pair=None):
         pair = pair or self.pair
         return self.source.families.get(pair.family_id) if pair else None
+
+    @property
+    def version_page(self):
+        return self.version_pages.get(self.pair.key, 0) if self.pair is not None else 0
+
+    def _ordered_options(self, pair=None):
+        pair = pair or self.pair
+        options = (option for option in pair.options if option.release.family_id == pair.family_id) if pair else ()
+        return sorted(options, key=lambda option: (option.release.version_order is None,
+                                                  -(option.release.version_order or 0)))
+
+    def set_version_page(self, page):
+        if (type(page) is not int or self.pair is None or not 0 <= page < self.version_page_count
+                or page == self.version_page):
+            return False
+        self.version_pages[self.pair.key] = page
+        self._render()
+        self.scroll.verticalScrollBar().setValue(0)
+        return True
+
+    def _update_version_pager(self, total, *, ready):
+        self.version_page_count = (total + VERSION_PAGE_SIZE - 1) // VERSION_PAGE_SIZE if ready else 0
+        count = self.version_page_count
+        page = min(self.version_page, max(0, count - 1))
+        if self.pair is not None and ready:
+            self.version_pages[self.pair.key] = page
+        self.version_page_label.setText(f"{page + 1 if count else 0} / {count} 페이지")
+        self.version_page_label.setToolTip(f"전체 {total}개 버전 · 페이지당 {VERSION_PAGE_SIZE}개")
+        self.previous_version_page.setEnabled(ready and page > 0)
+        self.next_version_page.setEnabled(ready and page + 1 < count)
+        self.version_pager.setVisible(count > 1)
 
     def draft(self, pair=None) -> dict[int, Slot]:
         pair = pair or self.pair
@@ -271,19 +320,21 @@ class VersionGroupDialog(QDialog):
         ready = pair is not None and pair.key in self.history_pages
         self.save_button.setEnabled(ready)
         if not ready:
+            self._update_version_pager(0, ready=False)
             self.details_button.setEnabled(False)
             self._show_slot_choices(False)
             message = "설정할 모델·계열이 없습니다." if pair is None else "저장된 기준을 먼저 조회합니다."
             self.rows.addWidget(label(message, 13, color=SECONDARY), 0, 0)
             return
-        self.rows.addWidget(label("버전 (최신 → 오래된 순)", 12, medium=True, color=SECONDARY), 0, 0)
+        self.rows.addWidget(label("버전", 12, medium=True, color=SECONDARY), 0, 0)
         self.slot_heading = label("수동 설정", 12, medium=True, color=SECONDARY)
         self.rows.addWidget(self.slot_heading, 0, 1)
         self.rows.addWidget(label("기준", 12, medium=True, color=SECONDARY), 0, 2)
-        options = [o for o in pair.options if o.release.family_id == pair.family_id]
-        ordered = sorted(options, key=lambda o: (o.release.version_order is None, -(o.release.version_order or 0)))
+        ordered = self._ordered_options(pair)
+        self._update_version_pager(len(ordered), ready=True)
+        start = self.version_page * VERSION_PAGE_SIZE
         draft = self.draft(pair)
-        for row, option in enumerate(ordered, 1):
+        for row, option in enumerate(ordered[start:start + VERSION_PAGE_SIZE], 1):
             release = option.release
             release_id = release.release_version_id
             reason = option.unavailable_reason
@@ -519,10 +570,12 @@ class VersionGroupDialog(QDialog):
 
     # --- 동작 ---
     def set_slot(self, release_id, slot, *, fill_range=False):
+        ordered = [option.release.release_version_id for option in self._ordered_options()]
+        if release_id not in ordered:
+            return
         draft = self.draft()
         release_ids = (release_id,)
         if fill_range:
-            ordered = list(self.version_checks)
             selected = [index for index, rid in enumerate(ordered)
                         if rid == release_id or draft.get(rid) is Slot.N]
             release_ids = ordered[selected[0]:selected[-1] + 1]
@@ -531,10 +584,11 @@ class VersionGroupDialog(QDialog):
                 draft.pop(rid, None)
             else:
                 draft[rid] = slot
-            choice, combo = self.version_checks[rid], self.slot_combos[rid]
-            with QSignalBlocker(choice), QSignalBlocker(combo):
-                choice.setChecked(slot is Slot.N)
-                combo.setCurrentIndex(SLOT_CHOICES.index(slot))
+            choice, combo = self.version_checks.get(rid), self.slot_combos.get(rid)
+            if choice is not None and combo is not None:
+                with QSignalBlocker(choice), QSignalBlocker(combo):
+                    choice.setChecked(slot is Slot.N)
+                    combo.setCurrentIndex(SLOT_CHOICES.index(slot))
         self.status.clear()
         self._refresh()
 

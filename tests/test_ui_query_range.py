@@ -52,7 +52,7 @@ def test_range_mode_reuses_date_field_and_reflows_then_restores_normal_mode(pane
     assert selected.count() == applied.count() == 0
 
 
-def test_accepting_range_sets_metadata_before_one_global_query_and_keeps_end_date(panel):
+def test_accepting_range_stages_metadata_and_search_applies_once(panel):
     panel.set_as_of(END)
     panel.apply_draft()
     panel.enable_date_range(START, END)
@@ -68,9 +68,11 @@ def test_accepting_range_sets_metadata_before_one_global_query_and_keeps_end_dat
     dialog.calendar.clicked.emit(QDate(2026, 10, 15))
     QTest.mouseClick(dialog.apply_button, Qt.MouseButton.LeftButton)
 
-    assert selected.count() == confirmed.count() == applied.count() == 1
-    assert events == [("range", date(2026, 10, 1), date(2026, 10, 15), END),
-                      ("query", date(2026, 10, 15))]
+    assert selected.count() == confirmed.count() == 1 and applied.count() == 0
+    assert events == [("range", date(2026, 10, 1), date(2026, 10, 15), END)]
+    assert panel.state.applied.selection.as_of == END and panel.state.draft.as_of == date(2026, 10, 15)
+    panel.search_button.click()
+    assert applied.count() == 1 and events[-1] == ("query", date(2026, 10, 15))
     assert panel.state.applied.selection.as_of == date(2026, 10, 15)
     assert panel.date_edit.date().toPython() == date(2026, 10, 15)
     panel.disable_date_range()
@@ -102,6 +104,8 @@ def test_canceling_pending_range_or_leaving_mode_does_not_apply(panel):
 def test_regular_date_confirmation_and_replay_period_signals_stay_independent(panel, app, catalog):
     regular = QSignalSpy(panel.applied)
     panel.date_edit.setDate(QDate(2026, 10, 15))
+    assert regular.count() == 0 and panel.state.applied is None
+    panel.search_button.click()
     assert regular.count() == 1 and panel.state.applied.selection.as_of == date(2026, 10, 15)
 
     replay = QueryPanel(QueryState(catalog), period=True)

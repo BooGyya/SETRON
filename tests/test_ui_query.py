@@ -112,13 +112,13 @@ def test_parent_changes_clear_dependents_but_not_group(state):
 
 def test_all_unassigned_and_known_line_are_distinct(state):
     state.set_draft(QuerySelection("s1", UNASSIGNED, "l3"))
-    assert "Fab 미지정" in state.describe(state.draft)
-    assert "Line Fab 미등록 Line" in state.describe(state.draft)
+    assert "분류 미지정" in state.describe(state.draft)
+    assert "라인 Fab 미등록 Line" in state.describe(state.draft)
     state.select("line_key", UNASSIGNED)
     assert state.draft.line_key is UNASSIGNED
     state.select("line_key", None)
     assert state.draft.line_key is None
-    assert "Line 전체" in state.describe(state.draft)
+    assert "라인 전체" in state.describe(state.draft)
 
 
 @pytest.mark.parametrize("selection", [
@@ -220,13 +220,16 @@ def check_only(popup, *keys):
 
 
 def choose(panel, field, *keys):
+    previous = panel.state.applied
     popup = open_filter(panel, field)
     check_only(popup, *keys)
     QTest.mouseClick(popup.confirm_button, Qt.MouseButton.LeftButton)
     assert panel.filter_popup is None
+    assert panel.state.applied is previous
+    QTest.mouseClick(panel.search_button, Qt.MouseButton.LeftButton)
 
 
-def test_filter_change_applies_before_close_and_reset_applies(window):
+def test_filter_completion_and_reset_wait_for_search(window):
     panel = window.query_panel
     spy = QSignalSpy(window.query_applied)
     draft_spy = QSignalSpy(panel.draft_changed)
@@ -234,19 +237,27 @@ def test_filter_change_applies_before_close_and_reset_applies(window):
     popup = open_filter(panel, "site_key")
     assert all(check.isChecked() for check in popup.checks.values())
     check_only(popup, "s1")
-    applied = window.query_state.applied
-    assert spy.count() == draft_spy.count() == 1 and spy.at(0)[0] is applied
-    assert popup.isVisible() and applied.selection.site_key == "s1"
-    assert panel.status.text() == "조건 적용됨"
-    assert "테스트 Site A" in panel.applied_summary.text()
+    assert spy.count() == draft_spy.count() == 0
+    assert popup.isVisible() and window.query_state.applied is None
+    assert panel.state.draft == QuerySelection()
     QTest.keyClick(popup.search, Qt.Key.Key_Escape)
-    assert panel.filter_popup is None and spy.count() == draft_spy.count() == 1
-    assert panel.state.applied is applied and panel.combos["site_key"].caption == "테스트 Site A"
+    assert panel.filter_popup is None and spy.count() == draft_spy.count() == 0
+    assert panel.state.applied is None and panel.combos["site_key"].caption == "전체"
+    popup = open_filter(panel, "site_key")
+    check_only(popup, "s1")
+    popup.confirm_button.click()
+    assert panel.state.draft.site_key == "s1" and panel.state.applied is None
+    assert draft_spy.count() == 1 and spy.count() == 0
+    panel.search_button.click()
+    applied = panel.state.applied
+    assert applied.selection.site_key == "s1" and spy.count() == 1
     panel.select("group_key", "g1")
     panel.reset_draft()
     assert panel.state.draft == QuerySelection() and panel.state.applied is applied and spy.count() == 1
 
     QTest.mouseClick(panel.reset_button, Qt.MouseButton.LeftButton)
+    assert panel.state.applied is applied and panel.state.draft == QuerySelection() and spy.count() == 1
+    panel.search_button.click()
     assert panel.state.applied.selection == panel.state.draft == QuerySelection()
     assert spy.count() == 2 and spy.at(1)[0] is panel.state.applied
     assert panel.status.text() == "조건 적용됨"
@@ -333,7 +344,7 @@ def test_invalid_registration_flag_has_no_partial_mutation(window):
 
 def test_keyboard_filter_labels_and_unavailable_features(window):
     panel = window.query_panel
-    for field, caption in (("site_key", "Site"), ("fab_key", "Fab"), ("line_key", "Line"), ("group_key", "설비군")):
+    for field, caption in (("fab_key", "분류"), ("site_key", "사업장"), ("line_key", "라인"), ("group_key", "설비군")):
         assert panel.combos[field].accessibleName() == f"{caption} 전체"
     assert not panel.goal_button.isEnabled()
     assert not panel.preferences_button.isEnabled()
@@ -345,10 +356,12 @@ def test_keyboard_filter_labels_and_unavailable_features(window):
     other_site = popup.checks["s2"]
     other_site.setFocus()
     QTest.keyClick(other_site, Qt.Key.Key_Space)
-    assert not other_site.isChecked() and panel.state.draft.site_key == "s1"
-    assert panel.state.applied.revision == 1 and panel.state.applied.selection.site_key == "s1"
+    assert not other_site.isChecked() and panel.state.draft == QuerySelection()
+    assert panel.state.applied is None
     popup.confirm_button.setFocus()
     QTest.keyClick(popup.confirm_button, Qt.Key.Key_Space)
+    assert panel.state.draft.site_key == "s1" and panel.state.applied is None
+    panel.search_button.click()
     assert panel.state.applied.revision == 1 and panel.state.applied.selection.site_key == "s1"
     assert "DB" not in panel.status.text()
 

@@ -1,4 +1,4 @@
-"""기준일 확정 즉시 그날 이전 최신 관측을 조회하며, 달력 탐색은 조건을 변경하지 않는다."""
+"""기준일 초안은 조회 버튼에서 적용하며 달력 탐색은 적용 조건을 변경하지 않는다."""
 
 import os
 
@@ -69,10 +69,15 @@ def test_date_field_is_first_on_first_row_and_reset_returns_today(window):
     assert panel.date_edit.mapTo(panel.card, panel.date_edit.rect().topLeft()).x() < \
         panel.combos["site_key"].mapTo(panel.card, panel.combos["site_key"].rect().topLeft()).x()
     panel.date_edit.setDate(QDate(2026, 8, 30))
+    assert window.query_state.applied is None and window.query_state.draft.as_of == date(2026, 8, 30)
+    assert applied.count() == 0
+    panel.search_button.click()
     assert window.query_state.applied.selection.as_of == window.query_state.draft.as_of == date(2026, 8, 30)
     assert applied.count() == 1
     panel.reset_button.click()  # 조건 초기화는 기준 날짜도 오늘(최신 관측)로 되돌린다
     assert window.query_state.draft.as_of is None and panel.date_edit.date().toPython() == today
+    assert applied.count() == 1 and window.query_state.applied.selection.as_of == date(2026, 8, 30)
+    panel.search_button.click()
     assert applied.count() == 2 and window.query_state.applied.selection == QuerySelection()
 
 
@@ -93,14 +98,15 @@ def test_search_icon_applies_the_selected_conditions(window):
     assert window.pages["dashboard"].snapshot.base_date == date(2026, 8, 21)
 
 
-def test_calendar_day_click_applies_once_to_dashboard_and_heatmap(window):
+def test_calendar_day_confirmation_waits_for_search_to_update_both_screens(window):
     panel = window.query_panel
     panel.set_as_of(date(2026, 10, 21))
     previous = panel.apply_draft()
     applied = QSignalSpy(window.query_applied)
     text = panel.date_edit.findChild(QLineEdit)
     QTest.mouseClick(text, Qt.MouseButton.LeftButton, pos=text.rect().center())
-    calendar = panel.date_edit.calendarWidget()
+    dialog = panel.date_edit.dialog
+    calendar = dialog.calendar
     assert calendar.isVisible()
     QTest.mouseClick(calendar.previous_button, Qt.MouseButton.LeftButton)
     calendar.month_combo.setCurrentIndex(7)
@@ -113,12 +119,20 @@ def test_calendar_day_click_applies_once_to_dashboard_and_heatmap(window):
     day = next(index for row in range(1, model.rowCount()) for column in range(model.columnCount())
                if (index := model.index(row, column)).data() in (25, "25"))
     QTest.mouseClick(grid.viewport(), Qt.MouseButton.LeftButton, pos=grid.visualRect(day).center())
-    assert not calendar.isVisible() and applied.count() == 1
+    assert calendar.isVisible() and window.query_state.applied is previous and applied.count() == 0
+    assert panel.date_edit.date() == QDate(2026, 10, 21)
+    QTest.mouseClick(dialog.apply_button, Qt.MouseButton.LeftButton)
+    assert not calendar.isVisible() and applied.count() == 0
+    assert window.query_state.applied is previous and window.query_state.draft.as_of == date(2026, 8, 25)
+    panel.search_button.click()
+    assert applied.count() == 1
     assert window.query_state.applied.selection.as_of == date(2026, 8, 25)
     dashboard = window.pages["dashboard"]
     assert dashboard.snapshot is window.pages["heatmap"].snapshot
     assert dashboard.snapshot.base_date == date(2026, 8, 21)
     panel.date_edit.setDate(QDate(2026, 1, 1))
+    assert applied.count() == 1 and dashboard.snapshot.base_date == date(2026, 8, 21)
+    panel.search_button.click()
     assert applied.count() == 2
     assert dashboard.snapshot is None and "2026-01-01 이전" in dashboard.message.text()
     assert "2026-01-01 이전" in window.pages["heatmap"].message.text()

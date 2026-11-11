@@ -214,14 +214,19 @@ def test_clicking_the_query_date_text_opens_calendar_until_day_confirmation(own)
     edit = panel.date_edit
     text = edit.findChild(QLineEdit)
     QTest.mouseClick(text, Qt.MouseButton.LeftButton, pos=text.rect().center())
-    calendar = edit.calendarWidget()
+    dialog = edit.dialog
+    calendar = dialog.calendar
     assert calendar.isVisible()
     assert panel.state.applied is applied
 
     chosen = QDate(2026, 10, 21)
     calendar.setSelectedDate(chosen)
     assert panel.state.applied is applied
-    calendar.activated.emit(chosen)
+    calendar.clicked.emit(chosen)
+    assert panel.state.applied is applied and edit.date() == QDate(2026, 10, 5)
+    dialog.apply_button.click()
+    assert panel.state.applied is applied and panel.state.draft.as_of == chosen.toPython()
+    panel.search_button.click()
     assert panel.state.applied.selection.as_of == panel.state.draft.as_of == chosen.toPython()
     assert panel.state.applied.revision == applied.revision + 1
     assert not calendar.isVisible()

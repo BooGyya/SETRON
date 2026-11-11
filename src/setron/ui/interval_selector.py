@@ -12,7 +12,7 @@ from setron.ui.view_controls import SegmentedControl
 class IntervalSelector(QWidget):
     step_changed = Signal(object)
 
-    def __init__(self, caption="재생 간격", parent=None, *, compact=False, custom_days=False):
+    def __init__(self, caption="데이터 간격", parent=None, *, compact=False, custom_days=False, action="표시"):
         super().__init__(parent)
         self.compact = compact
         self.custom_days = custom_days
@@ -25,7 +25,6 @@ class IntervalSelector(QWidget):
         self._segments = self.segment.grid
         self.group = self.segment.group
         self.buttons = {}
-        action = "재생" if caption == "재생 간격" else "표시"
         self._action = action
         for step, text in INTERVALS.items():
             if step is None and custom_days:

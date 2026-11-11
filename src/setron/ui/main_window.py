@@ -41,8 +41,6 @@ MENUS = (
     # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 기존 버전 관리·관리 데이터 메뉴를 대신한다.
     Menu("data", "데이터 관리", *_ver5("versions")),
     Menu("versions", "버전 관리", *_ver5("versions")),
-    # VER5 사이드바에 없는 기존 메뉴. 다른 화면의 내부 이동(레코드 열기 등)용으로 남기고 사이드바에는 숨긴다.
-    Menu("management", "관리 데이터", *_ver5("management", "settings")),
     Menu("reports", "보고서", *_ver5("reports")),
     Menu("settings", "설정", *_ver5("settings")),
 )
@@ -52,7 +50,7 @@ MENU_GROUPS = (
     ("reports", "settings"),
 )
 # 사이드바에 보이지 않지만 등록·내부 이동은 되는 메뉴 (11-10 데이터 관리 개편 전 화면).
-HIDDEN_MENUS = ("versions", "management")
+HIDDEN_MENUS = ("versions",)
 
 
 class BrandLogo(QLabel):

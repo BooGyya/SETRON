@@ -3,17 +3,20 @@
 각 시점은 대시보드와 같이 그 날짜까지 설비별 최신 관측으로 계산한다 (QA R-01).
 """
 
+from collections import Counter
 from copy import deepcopy
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import date
 
+from setron.features.aggregation.schemas import Summary
 from setron.features.aggregation.service import summarize
 from setron.features.targets.groups import with_saved_groups
 from setron.features.version.schemas import CompareStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource, GroupBinding, family_name
 from setron.ui.equipment_data import EquipmentDetail
 from setron.ui.heatmap_data import EquipmentTile, record_tiles
+from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups
 from setron.ui.observation_interval import INTERVALS, interval_days
 from setron.ui.query_state import AppliedQuery, QueryState, TargetN
 from setron.ui.target_data import target_map, target_pairs, validate_targets
@@ -87,6 +90,75 @@ class ReplayData:
             if base is not None:
                 result.append(replace(base, at=day))
         return tuple(result)
+
+
+@dataclass(frozen=True)
+class ReplayTrend:
+    """히트맵과 같은 분류 키를 사용하는 시점별 적용률 집계."""
+
+    key: str | tuple[str, ...]
+    label: str
+    summaries: tuple[Summary | None, ...]
+
+    @property
+    def color_key(self):
+        return self.key if isinstance(self.key, str) else repr(self.key)
+
+
+def replay_trends(data, frames=None, visible_groups=None, *, grouping="group"):
+    """고정된 조회 결과에서 분류별 추이를 만든다. 외부 자료를 다시 읽지 않는다.
+
+    설비군은 기존 모델별 SW 범위를 유지한다. 위치 분류는 그 시점의 물리
+    설비를 한 번씩 골라 조회에 포함된 전체 SW를 집계한다. 없는 시점은 None,
+    비교 가능한 SW가 없는 시점은 rate=None인 Summary로 남겨 선을 끊는다.
+    """
+    if grouping not in dict(GROUPING_MODES):
+        raise ValueError("지원하지 않는 추이 분류입니다.")
+    frames = tuple(data.frames if frames is None else frames)
+    visible_groups = None if visible_groups is None else frozenset(visible_groups)
+    if grouping == "group":
+        return tuple(
+            ReplayTrend(group.key, group.label, tuple(
+                next((cell.summary for cell in frame.snapshot.groups
+                      if cell.group_keys == (group.key,)), None)
+                for frame in frames))
+            for group in data.source.catalog.groups
+            if visible_groups is None or group.key in visible_groups)
+
+    nodes, snapshots = {}, []
+    site_order = tuple(site.key for site in data.source.catalog.sites)
+    for frame in frames:
+        snapshot = frame.snapshot
+        groups = tuple((cell.group_keys[0], cell.label, cell.equipment_ids)
+                       for cell in snapshot.groups if len(cell.group_keys) == 1)
+        plan = build_heatmap_groups(frame.tiles, groups, mode=grouping, site_order=site_order)
+        records = {record.equipment_id: record for record in snapshot.selected_records if not record.is_hpa}
+        summaries = {}
+        for node in plan:
+            nodes.setdefault(node.key, node)
+            members = tuple(records[tile.equipment_id] for tile in node.tiles if tile.equipment_id in records)
+            if members:
+                summaries[node.key] = summarize(members, data.source.families, snapshot.effective_targets)
+        snapshots.append(summaries)
+
+    # 같은 라인명이 서로 다른 사업장·분류에 있어도 범례와 툴팁에서 구분한다.
+    counts = Counter(node.title for node in nodes.values())
+    labels = {}
+    for key, node in nodes.items():
+        title = node.title
+        if counts[title] > 1:
+            if grouping == "fab":
+                title += f" ({key[1] or '분류 미지정'})"
+            else:
+                tile = node.tiles[0]
+                site = tile.site_label or tile.site_key or "사업장 미지정"
+                fab = {"MEMORY": "Memory", "FOUNDRY": "Foundry"}.get(key[2], key[2] or "미지정")
+                title += f" ({site} · {fab})"
+        labels[key] = title
+    duplicates = Counter(labels.values())
+    return tuple(ReplayTrend(key, labels[key] if duplicates[labels[key]] == 1 else f"{labels[key]} [{key[1]}]",
+                             tuple(snapshot.get(key) for snapshot in snapshots))
+                 for key in nodes)
 
 
 def freeze_source(source):

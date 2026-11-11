@@ -37,14 +37,13 @@ class EquipmentListDrawer(EquipmentDrawer):
         self.show_panel()
         self.list_scroll.verticalScrollBar().setValue(0)
 
-    def show_detail(self, request, detail, rows, *, edit_available=False):
+    def show_detail(self, request, detail, rows):
         if not self.is_open or self.list_equipment is None:
             return
         self.list_scroll.hide()
         self.scroll.show()
         self.back_button.show()
-        super().open_detail(request, detail, rows, return_focus=self.return_focus,
-                            edit_available=edit_available)
+        super().open_detail(request, detail, rows, return_focus=self.return_focus)
 
     def show_list(self):
         self.clear_detail()

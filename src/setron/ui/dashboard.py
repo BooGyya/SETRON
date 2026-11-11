@@ -263,6 +263,8 @@ class DashboardPage(QWidget):
         self.state, self.source, self.snapshot = state, source, None
         self.trend_snapshot, self.trend_step = None, 1
         self._trend_period_edited = False
+        self._applied_trend_period = None
+        self._applied_trend_query = None
         self.visible_groups = {o.key for o in source.catalog.groups}
         self.metrics = {}
         self.matrix_buttons, self.risk_buttons = {}, {}
@@ -303,7 +305,7 @@ class DashboardPage(QWidget):
         for field in self._trend_date_fields:
             field.setParent(self.trend_filters)
             field.hide()
-        self.trend_interval = IntervalSelector("데이터 간격", compact=True, custom_days=True)
+        self.trend_interval = IntervalSelector(compact=True, custom_days=True)
         self.trend_interval.set_step(self.trend_step)
         period_body.addWidget(self.trend_interval)
         for control in (self.trend_start, self.trend_end):
@@ -504,7 +506,10 @@ class DashboardPage(QWidget):
         if not self.state.is_current(query) or result.query is not query:
             return False
         self.snapshot = result
-        self._sync_trend_period(result)
+        if query is not self._applied_trend_query:
+            self._sync_trend_period(result)
+            self._applied_trend_period = (self.trend_start.date().toPython(), self.trend_end.date().toPython())
+            self._applied_trend_query = query
         summary = result.summary
         unresolved = sum(1 for status in summary.equipment if _equipment_state(status)[0] in ("미확인", "확인 필요"))
         self.result_status.setText(f"{self._result_label()} · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))
@@ -544,13 +549,11 @@ class DashboardPage(QWidget):
     def _change_trend_date(self, control):
         if not control.calendarWidget().isVisible():
             self._trend_period_edited = True
-            self._render_view()
 
     def _confirm_trend_date(self, control, day):
         with QSignalBlocker(control):
             control.setDate(day)
         self._trend_period_edited = True
-        self._render_view()
 
     def _set_trend_interval(self, step):
         self.trend_step = step
@@ -559,11 +562,8 @@ class DashboardPage(QWidget):
 
     def reset_trend_period(self):
         self._trend_period_edited = False
-        self.trend_step = 1
-        self.trend_interval.set_step(1)
         if self.snapshot is not None:
             self._sync_trend_period(self.snapshot)
-        self._render_view()
 
     def _select(self, title, ids, *, risk_only=False):
         if self.snapshot is None or not self.state.is_current(self.snapshot.query) or not ids:
@@ -604,10 +604,9 @@ class DashboardPage(QWidget):
         mode = self.tabs.currentIndex()
         data = self.snapshot
         trend_data, trend_problem = None, ""
-        if mode == 3 and data is not None:
+        if mode == 3 and data is not None and self._applied_trend_period is not None:
             try:
-                trend_data = trend_window(data, self.trend_start.date().toPython(),
-                                         self.trend_end.date().toPython(), self.trend_step)
+                trend_data = trend_window(data, *self._applied_trend_period, self.trend_step)
             except ValueError:
                 trend_problem = "시작 날짜는 종료 날짜와 같거나 앞서야 합니다."
         self.trend_snapshot = trend_data

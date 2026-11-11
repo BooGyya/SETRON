@@ -94,7 +94,7 @@ def test_interval_keyboard_applies_step_and_hiding_cancels_dialog(app):
 
 
 def test_saved_days_mode_survives_cancel_and_changes_to_custom_days_on_apply(app):
-    interval = IntervalSelector("재생 간격", compact=True, custom_days=True)
+    interval = IntervalSelector(compact=True, custom_days=True, action="재생")
     interval.set_saved_days()
     changed = QSignalSpy(interval.step_changed)
     first = interval.buttons[None]
