@@ -143,6 +143,7 @@ class ReportsPage(QWidget):
         with QSignalBlocker(self.start), QSignalBlocker(self.end):
             self.start.setDate(QDate.fromString(str(min(days, default=date.today())), "yyyy-MM-dd"))
             self.end.setDate(QDate.fromString(str(max(days, default=date.today())), "yyyy-MM-dd"))
+        self.query_panel.sync_period_range()
         self.query_panel.reset_draft()
         self._notice("")
 

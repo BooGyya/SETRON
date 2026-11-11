@@ -116,7 +116,6 @@ class ReplayPage(QWidget):
         self.view_tabs.currentChanged.connect(self._show_view)
         self._show_view(self.view_tabs.currentIndex())
         body.addWidget(self.content)
-        self.query_panel.confirmed.connect(self._confirm_filters)
         self.reset_button.clicked.connect(self.reset_filters)
         self.query_panel.search_button.clicked.connect(self.apply_query)
         self.version_button.clicked.connect(self.open_versions)
@@ -186,15 +185,6 @@ class ReplayPage(QWidget):
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
 
-    def _matches_filters(self, request):
-        return (self.start.date().toPython(), self.end.date().toPython(), self.state.draft) == (
-            request.start, request.end, request.query.selection)
-
-    def _confirm_filters(self):
-        if self.data is not None and not self.dirty and self._matches_filters(self.data.request):
-            return
-        self.apply_query()
-
     def _sync_controls(self):
         ready = self.data is not None and not self.dirty and not self.busy
         self.query_panel.card.setEnabled(not self.busy)
@@ -222,7 +212,7 @@ class ReplayPage(QWidget):
     def enter(self):
         if self.state.catalog != self.source.catalog:
             self.invalidate()
-        if self.data is None and not self.busy:
+        if self.data is None and not self.busy and self.state.applied is None:
             self.apply_query()
 
     def apply_query(self):
@@ -260,10 +250,6 @@ class ReplayPage(QWidget):
     def _loaded(self, data, error):
         request, self.pending_request = self.pending_request, None
         if request is None:
-            return
-        if not self._matches_filters(request):
-            # 팝업에서 계속 선택할 수 있으므로 읽기가 끝나면 가장 최근 선택으로 다시 조회한다.
-            self.apply_query()
             return
         if error is not None or not isinstance(data, ReplayData) or data.request != request:
             self._clear_display()
@@ -487,7 +473,7 @@ class ReplayPage(QWidget):
             return False
         self._reset_period()
         self.query_panel.reset_draft()
-        return self.apply_query()
+        return True
 
     def open_versions(self):
         if self.busy:
@@ -504,7 +490,6 @@ class ReplayPage(QWidget):
         def done(result):
             if result == QDialog.DialogCode.Accepted and self.epoch == epoch:
                 self.query_panel.set_version_filter(dialog.result_filter)
-                self._confirm_filters()
             self.version_dialog = None
             dialog.deleteLater()
         dialog.finished.connect(done)
