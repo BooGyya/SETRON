@@ -61,7 +61,7 @@ def test_create_group_validates_name_category_and_parent_and_records_history(sto
     assert created.parent_id == c4.group_id and created.parent_name == "M-C4"
     groups, _ = service.equipment_overview()
     assert any(g.group_id == created.group_id and g.parent_id == c4.group_id for g in groups)
-    for args, message in ((("m-c4 qa개조", "POLY", None), "이미 있는"), (("QA2", "OXIDE", c4.group_id), "같은 분류"),
+    for args, message in ((("m-c4 qa개조", "POLY", None), "개조형으로 등록돼"), (("M-C4", "POLY", None), "이미 있는"), (("QA2", "OXIDE", c4.group_id), "같은 분류"),
                           (("", "POLY", None), "이름"), (("QA3", "HPA", None), "분류")):
         with pytest.raises((ValueError, StorageValidationError), match=message):
             service.create_group(*args)
@@ -258,3 +258,91 @@ def test_apply_release_in_one_transaction_and_undo_release_brings_deleted_rows_b
     assert sorted(r.content for r in rows if r.release_version_id == base) == ["남길 Item", "지울 Item"]
     kinds = [(e.kind, e.after) for e in service.history()[:6]]
     assert ("되돌리기", "되살림") in kinds and ("삭제", "추가 취소") in kinds
+
+
+# --- 11-11 6차: DB 값 기준 현황표 · 설비군 · Site · 라인 등록 관리 ------------------------------------------
+def test_sheet_rows_show_db_values_with_source_cells_and_site_lines(storage):
+    receipt = _save(storage, "QA-DA-ROWS")
+    data = DataAdminService(storage).sheet_rows(receipt.batch_id)
+    assert (data.site, data.base_date, data.workbook) == ("화성", date(2026, 10, 21), "가상.xlsx")
+    row = next(r for r in data.rows if r.equipment_code == "QA-DA-ROWS")
+    assert (row.line, row.group_name, row.model_name, row.production_area, row.version_raw) == (
+        "13L", "M-C4", "M-C4", "MEMORY", "v4.56.6.43")
+    assert row.sources == {"equipment_code": "C3", "line": "B3", "version_raw": "D3"}
+    assert row.source_values["version_raw"] == "v4.56.6.43" and not row.has_pm
+    assert "13L" in data.lines and {"POLY", "OXIDE", "KCTC"} >= {c for _, _, c in data.groups}
+
+
+def test_apply_rows_regroups_with_family_and_undo_rows_puts_it_back(storage):
+    service = DataAdminService(storage)
+    service.add_site("QA재분류")
+    batch = service.create_sheet("QA재분류", date(2026, 11, 5))
+    keep = service.add_row(batch, {"group_name": "M-C4", "equipment_code": "QA-RG1", "version_raw": "v1"}, None)
+    moved = service.add_row(batch, {"group_name": "M-C4", "equipment_code": "QA-RG2", "version_raw": "v1"}, None)
+    target = service.create_group("QA재분류군", "POLY")
+    result = service.apply_rows(batch, regroup=[(moved, target.group_id)])
+    c4 = next(g for g in service.equipment_overview()[0] if g.name == "M-C4")
+    assert result == {"added": [], "journal": None, "regroup": [(moved, c4.group_id)]}
+    rows = {r.snapshot_id: r for r in service.sheet_rows(batch).rows}
+    assert (rows[moved].group_name, rows[moved].model_name, rows[moved].family_name) == ("QA재분류군",) * 3
+    assert rows[keep].group_name == "M-C4" and not rows[keep].sources  # 행 번호 없이 더한 행은 원본 칸이 없다
+    entry = service.history()[0]
+    assert (entry.target, entry.before, entry.after) == ("설비 1대", "M-C4", "QA재분류군")
+    service.undo_rows(batch, regroup=result["regroup"])
+    back = next(r for r in service.sheet_rows(batch).rows if r.snapshot_id == moved)
+    assert (back.group_name, back.model_name, back.family_name) == ("M-C4", "M-C4", rows[keep].family_name)
+    with pytest.raises(StorageValidationError, match="쓰이고 있어"):
+        service.delete_group(c4.group_id)
+
+
+def test_new_group_gets_its_family_and_unused_group_can_be_renamed_or_deleted(storage):
+    service = DataAdminService(storage)
+    created = service.create_group("QA계열군", "KCTC")
+    assert [f.name for f in service.release_families() if f.group_id == created.group_id] == ["QA계열군"]
+    assert service.rename_group(created.group_id, "QA계열군2") == "QA계열군2"
+    assert [f.name for f in service.release_families() if f.group_id == created.group_id] == ["QA계열군2"]
+    assert service.delete_group(created.group_id) == "QA계열군2"
+    assert all(f.group_id != created.group_id for f in service.release_families())
+    c4 = next(g for g in service.equipment_overview()[0] if g.name == "M-C4")
+    variant = service.create_group("M-C4 QA독립", "POLY", c4.group_id)
+    assert not [f for f in service.release_families() if f.group_id == variant.group_id]  # 개조형은 상위 계열을 쓴다
+    with pytest.raises(StorageValidationError, match="개조형으로 등록돼"):
+        service.create_group("m-c4 qa독립", "POLY")
+    assert service.set_independent(variant.group_id, True)
+    assert next(g for g in service.equipment_overview()[0] if g.group_id == variant.group_id).independent
+    with pytest.raises(StorageValidationError, match="기본형"):
+        service.set_independent(c4.group_id, True)
+
+
+def test_lines_are_registered_under_memory_or_foundry_and_judge_new_imports(storage):
+    from setron.features.reference_data import default_area
+
+    service = DataAdminService(storage)
+    service.add_site("QA라인")
+    assert service.add_line("QA라인", " QL1 ", "FOUNDRY") == "QL1"
+    assert next(r for r in service.lines() if r.site == "QA라인") == module_line("QA라인", "QL1", "FOUNDRY", 0, True)
+    assert default_area("QA라인", "QL1") == "FOUNDRY"  # 가져오기 판정에 바로 쓰인다
+    for args, message in ((("QA라인", "ql1", "MEMORY"), "이미 있는"), (("없는Site", "X1", "MEMORY"), "없는 Site"),
+                          (("QA라인", "X2", "HPA"), "메모리 또는 파운드리")):
+        with pytest.raises(StorageValidationError, match=message):
+            service.add_line(*args)
+    assert service.rename_line("QA라인", "QL1", "QL2") == 0
+    assert service.set_line_fab("QA라인", "QL2", "MEMORY") == 0 and default_area("QA라인", "QL2") == "MEMORY"
+    service.delete_line("QA라인", "QL2")
+    assert all(r.site != "QA라인" for r in service.lines())
+    _save(storage, "QA-DA-LINE")
+    with pytest.raises(StorageValidationError, match="설비 현황이 있어"):
+        service.delete_line("화성", "13L")
+    with pytest.raises(StorageValidationError):
+        service.delete_site("화성")
+    assert service.rename_site("QA라인", "QA라인2") == 0 and "QA라인2" in service.sites()
+    service.delete_site("QA라인2")
+    assert "QA라인2" not in service.sites()
+    kinds = [e.kind for e in service.history()[:3]]
+    assert kinds and all(kinds)
+
+
+def module_line(*values):
+    from setron.features.data_admin import LineRow
+
+    return LineRow(*values)

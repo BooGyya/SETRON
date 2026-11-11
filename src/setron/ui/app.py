@@ -936,6 +936,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def finish_management_save(result, catalog, preserve_detail):
         reapplied = apply_saved_catalog(catalog, reapply=True)
+        if catalog is not None:
+            configure_import_choices()  # 데이터 관리에서 추가 · 이름 변경한 Site를 가져오기 선택 목록에도 (11-11 6차)
         window.management_saving = False
         sync_export_page()
         window.management_last_success = result is not None
