@@ -40,6 +40,7 @@ HEADER = QColor("#eef1f8")     # 시트 머리글 행
 NEW_ROW = QColor("#fdecef")    # 새 행의 아직 비어 있는 필수 칸
 MUTED = QColor("#5d6678")      # DB와 연결되지 않은 원본 값
 DELETED = QColor("#a0a7b4")    # 지운 행
+DELETE_ROW = QColor("#f8d7da")  # 저장하면 지울 행 (삭제 예정)
 DANGER = "#ad344d"
 TABLE_STYLE = "QTableWidget {font-size:14px;} QHeaderView::section {font-size:13px;padding:4px 6px;}"
 FIELD_NAMES = {"line": "Line", "model_name": "설비군", "equipment_code": "호기", "version_raw": "SW 버전"}
@@ -114,18 +115,26 @@ class ColumnMemory:
             table.setColumnWidth(column, width)
         return True
 
-    def fit(self, table, *, cap=360, spread=True, fixed=None):
-        """기억한 폭이 없으면 내용 폭으로 맞추고, ``spread``면 남는 폭을 열마다 나눈다. ``fixed``: {열: 고정 폭}."""
+    def fit(self, table, *, cap=360, spread=True, fixed=None, grow=None):
+        """기억한 폭이 없으면 내용 폭으로 맞춘다. 남는 폭은 ``grow`` 열에 주거나(있으면), ``spread``면 열마다 나눈다.
+
+        ``fixed``: {열: 고정 폭}. ``grow``를 주면 마지막 열이 남는 폭을 다 차지하지 않게 끝 열 늘이기를 끈다.
+        """
+        if grow is not None:
+            table.horizontalHeader().setStretchLastSection(False)
         if self.restore(table):
             return
         table.resizeColumnsToContents()
         widths = [min(max(table.columnWidth(c) + 16, 64), cap) for c in range(table.columnCount())]
         for column, width in (fixed or {}).items():
             widths[column] = width
-        spare = table.viewport().width() - sum(widths)
-        extra = spare // len(widths) if spread and widths and spare > 0 else 0
+        spare = max(0, table.viewport().width() - sum(widths))
+        if grow is not None:
+            widths[grow] += spare
+        elif spread and widths:
+            widths = [w + spare // len(widths) for w in widths]
         for column, width in enumerate(widths):
-            table.setColumnWidth(column, width + extra)
+            table.setColumnWidth(column, width)
 
 
 def _table(headers, name):
@@ -329,7 +338,7 @@ class SheetPanel(_Panel):
         card.body.addWidget(label("가져온 엑셀 시트를 원래 열·행 번호로 보여 줍니다. DB 값과 연결된 칸을 두 번 눌러 고치고, [＋ 행 추가]로 "
                                   "설비를 더하고, 칸이나 왼쪽 행 번호를 고른 뒤 [선택 행 삭제]로 지울 행을 표시합니다. 바뀐 내용은 "
                                   "[저장]을 눌러야 한꺼번에 DB에 반영되고 변경 이력에 남습니다 (노란색 수정 · 분홍색 새 행 빈 필수 칸 · "
-                                  "회색 취소선 삭제 예정). Site · 기준일은 바꿀 수 없습니다.", 12, color=SECONDARY, wrap=True))
+                                  "빨간 칸 삭제 예정). Site · 기준일은 바꿀 수 없습니다.", 12, color=SECONDARY, wrap=True))
         card.body.addWidget(self.notice)
         self._sync()
 
@@ -495,11 +504,9 @@ class SheetPanel(_Panel):
                 if header and value.strip().casefold() in HIDDEN_HEADERS and not any(
                         _split(a)[0] == c for a in grid.bindings):
                     hidden.add(c)
-                if address in deleting:
+                if address in deleting:  # 삭제 예정 행은 칸을 빨간색으로 (11-11 5차)
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    font = QFont(self.table.font())
-                    font.setStrikeOut(True)
-                    item.setFont(font)
+                    item.setBackground(QBrush(DELETE_ROW))
                     item.setForeground(QBrush(QColor(DANGER)))
                     item.setToolTip("삭제 예정 · [저장]을 누르면 지워집니다. [되돌리기]로 표시를 풉니다.")
                 elif binding is not None and binding.editable:
@@ -1171,13 +1178,14 @@ class _ReleaseTable(QTableWidget):
 
 
 class ReleasePanel(_Panel):
-    """릴리즈노트 엑셀형 표 (최신 버전이 위). 칸을 고치면 바로 저장하고, 버전 · Item을 추가 · 삭제하며,
-    Item 줄을 끌어 같은 버전 안의 순서(No)를 바꾼다. 위험 지정은 아이템 매니저에서 한다 (11-11 4차)."""
+    """릴리즈노트 엑셀형 표 (최신 버전이 위). 칸 수정 · 버전/Item 추가 · 삭제 · Item 순서를 모아 두었다가 [저장]으로
+    한꺼번에 반영하고, [되돌리기]로 바로 앞 단계(또는 마지막 저장 전체)를 되돌린다 (11-11 5차). 위험 지정은 아이템 매니저에서 한다."""
 
     def __init__(self, page):
         super().__init__(page)
-        self.families, self.rows, self.groups, self.edits, self.originals = (), (), {}, {}, {}
-        self.family_id, self.variant = None, None
+        self.families, self.rows, self.groups = (), (), {}
+        self.family_id, self.variant, self.view, self.steps = None, None, [], []
+        self._reset_pending()
         body = QHBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(18)
@@ -1201,17 +1209,24 @@ class ReleasePanel(_Panel):
         head.addStretch()
         middle.body.addLayout(head)
         actions = QHBoxLayout()
+        self.undo_button = button("되돌리기")
+        self.undo_button.setToolTip("바로 앞 단계 하나를 되돌립니다 (저장 전 수정 · 추가 · 삭제 표시 · 순서, 또는 마지막 저장).")
         self.add_version_button = button("＋ 버전 추가")
         self.add_item_button = button("＋ Item 추가")
         self.add_item_button.setToolTip("고른 줄의 버전 맨 뒤에 새 Item을 추가합니다. 순서는 줄을 끌어서 바꿉니다.")
         self.delete_item_button = button("선택 Item 삭제")
         self.delete_version_button = button("선택 버전 삭제")
+        self.save_button = button("저장", primary=True)
+        self.save_button.setMinimumWidth(110)
+        self.undo_button.clicked.connect(self.undo)
         self.add_version_button.clicked.connect(self.add_version)
         self.add_item_button.clicked.connect(self.add_item)
         self.delete_item_button.clicked.connect(self.delete_item)
         self.delete_version_button.clicked.connect(self.delete_version)
+        self.save_button.clicked.connect(self.save)
         actions.addStretch()
-        for widget in (self.add_version_button, self.add_item_button, self.delete_item_button, self.delete_version_button):
+        for widget in (self.undo_button, self.add_version_button, self.add_item_button, self.delete_item_button,
+                       self.delete_version_button, self.save_button):
             actions.addWidget(widget)
         middle.body.addLayout(actions)
         self.table = _ReleaseTable(len(RELEASE_COLUMNS))
@@ -1229,13 +1244,28 @@ class ReleasePanel(_Panel):
         self.table.moved.connect(self.move_item)
         self.page.columns.attach(self.table, "release")
         middle.body.addWidget(self.table)
-        middle.body.addWidget(label("최신 버전이 위에 옵니다. 칸을 두 번 눌러 고치면 바로 저장되고, Item 줄을 끌어 같은 버전 안에 놓으면 "
-                                    "순서(No)가 바뀝니다. 버전 칸(▼/▶)을 누르면 Item 줄을 접거나 펼칩니다. 날짜는 YYYY-MM-DD, 적용 모델은 "
-                                    "설비군 이름을 쉼표로('전체'는 전체 설비) 적습니다. 위험 지정은 아이템 매니저에서 합니다.",
+        middle.body.addWidget(label("최신 버전이 위에 옵니다. 칸을 두 번 눌러 고치고, 버전 · Item을 추가하거나 삭제 표시하고, Item 줄을 끌어 "
+                                    "같은 버전 안에 놓아 순서(No)를 바꾼 뒤 [저장]을 누르면 한꺼번에 반영됩니다 (노란색 저장 전 · 빨간 칸 "
+                                    "삭제 예정). 버전 칸(▼/▶)을 누르면 Item 줄을 접거나 펼칩니다. 날짜는 YYYY-MM-DD, 적용 모델은 설비군 "
+                                    "이름을 쉼표로('전체'는 전체 설비) 적습니다. 위험 지정은 아이템 매니저에서 합니다.",
                                     12, color=SECONDARY, wrap=True))
         middle.body.addWidget(self.notice)
         self._sync()
 
+    def _reset_pending(self):
+        # edits: ("v", 릴리즈 ID, 칸) · ("i", Item ID, "content") · ("l", 릴리즈 ID, Item ID) → 새 값
+        self.edits, self.deleted, self.orders, self.new_versions, self.new_items = {}, set(), {}, [], []
+        self.collapsed = set()
+        self._temp = 0
+
+    @property
+    def pending(self):
+        return bool(self.edits or self.deleted or self.orders or self.new_versions or self.new_items)
+
+    def _count(self):
+        return len(self.edits) + len(self.deleted) + len(self.orders) + len(self.new_versions) + len(self.new_items)
+
+    # 읽기 -----------------------------------------------------------------------------------
     def reload(self):
         self.say("릴리즈노트 계열을 읽고 있습니다…")
         return self.run(lambda: (self.page.gateway.data_admin("release_families"),
@@ -1271,8 +1301,39 @@ class ReleasePanel(_Panel):
         if not items:
             return
         family_id, variant = items[0].data(0, Qt.ItemDataRole.UserRole)
+        if family_id != self.family_id and not self._leave_ok():
+            self._select_family(self.family_id)  # 고른 계열을 원래대로
+            return
+        if family_id != self.family_id:
+            self.steps = []
         self.variant = variant
         self._load_rows(family_id)
+
+    def _select_family(self, family_id):
+        self.tree.blockSignals(True)
+        for i in range(self.tree.topLevelItemCount()):
+            node = self.tree.topLevelItem(i)
+            if node.data(0, Qt.ItemDataRole.UserRole) == (family_id, None):
+                self.tree.setCurrentItem(node)
+        self.tree.blockSignals(False)
+
+    def _leave_ok(self):
+        """저장하지 않은 변경이 있으면 저장 · 버리기 · 취소를 묻는다."""
+        if not self.pending:
+            return True
+        box = QMessageBox(QMessageBox.Icon.Question, "저장하지 않은 변경",
+                          f"저장하지 않은 릴리즈노트 변경이 {self._count()}건 있습니다. 어떻게 할까요?", parent=self)
+        save = box.addButton("저장", QMessageBox.ButtonRole.AcceptRole)
+        discard = box.addButton("버리기", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is save:
+            self.save()
+            return False
+        if box.clickedButton() is discard:
+            self._reset_pending()
+            return True
+        return False
 
     def _load_rows(self, family_id, note=""):
         self.family_id = family_id
@@ -1285,7 +1346,8 @@ class ReleasePanel(_Panel):
         if error is not None:
             self.say("버전과 Item을 읽지 못했습니다.", error=True)
             return
-        self.rows, self.edits, self.originals = tuple(rows), {}, {}
+        self.rows = tuple(rows)
+        self._reset_pending()
         note, self.saved_note = self.saved_note, ""
         family = next((f for f in self.families if f.family_id == self.family_id), None)
         variant = next((n for g, n in (family.variants if family else ()) if g == self.variant), None)
@@ -1293,124 +1355,190 @@ class ReleasePanel(_Panel):
         versions = len({r.release_version_id for r in self.rows})
         self.family_info.setText(f"버전 {versions} · Item {sum(r.item_id is not None for r in self.rows)} · 최신 버전이 위"
                                  + (f" · {variant} 적용 Item 굵게" if variant else ""))
+        self._render()
+        self.say(note)
+
+    # 화면 줄 만들기 ------------------------------------------------------------------------------
+    def _versions(self):
+        """[(버전 키, 버전 정보)] 화면 순서. 새 버전(최신)이 맨 위, 그 아래 DB 버전(이미 최신순)."""
+        found = [(v["temp"], {"raw": v["version_raw"], "date": v["released_at"], "new": True}) for v in reversed(self.new_versions)]
+        seen = set()
+        for row in self.rows:
+            if row.release_version_id not in seen:
+                seen.add(row.release_version_id)
+                found.append((row.release_version_id, {"raw": row.version_raw, "date": row.released_at, "new": False}))
+        return found
+
+    def _items(self, version):
+        """버전의 Item 줄 키(DB Item ID 또는 새 Item temp) 화면 순서."""
+        stored = [r.item_id for r in self.rows if r.release_version_id == version and r.item_id is not None]
+        fresh = [i["temp"] for i in self.new_items if i["release"] == version]
+        if version in self.orders:
+            return list(self.orders[version])
+        return stored + fresh
+
+    def _render(self):
+        """DB 줄과 저장 전 변경(수정 · 추가 · 삭제 표시 · 순서)으로 표를 다시 그린다."""
+        by_item = {(r.release_version_id, r.item_id): r for r in self.rows if r.item_id is not None}
+        new_items = {i["temp"]: i for i in self.new_items}
+        self.view = []
+        for version, info in self._versions():
+            items = self._items(version)
+            for index, key in enumerate(items or [None]):
+                self.view.append({"version": version, "info": info, "item": key, "first": index == 0, "number": index + 1,
+                                  "row": by_item.get((version, key)), "new_item": new_items.get(key)})
         self.table.blockSignals(True)
-        self.table.setRowCount(len(self.rows))
-        self.table.setVerticalHeaderLabels([str(i) for i in range(1, len(self.rows) + 1)])  # 줄 번호는 1부터
-        for i, row in enumerate(self.rows):
-            values = (row.version_raw if row.first_of_version else "", row.released_at if row.first_of_version else "",
-                      row.item_no, row.content, row.applied_models)
-            for c, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setToolTip(value)
-                editable = (c in (0, 1) and row.first_of_version) or (c in (3, 4) and row.item_id is not None)
+        self.table.setRowCount(len(self.view))
+        self.table.setVerticalHeaderLabels([str(i) for i in range(1, len(self.view) + 1)])  # 줄 번호는 1부터
+        for r, line in enumerate(self.view):
+            for c in range(len(RELEASE_COLUMNS)):
+                item = QTableWidgetItem(self._display(line, c))
+                editable = self._editable(line, c)
                 if not editable:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                else:
-                    self.originals[(i, c)] = value
-                if c == 2 and row.item_id is not None:
-                    item.setToolTip("순서는 줄을 끌어서 바꿉니다.")
-                if self.variant is not None and self.variant in row.target_group_ids:
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-                self.table.setItem(i, c, item)
-            if row.first_of_version:
-                self.table.item(i, 0).setText("▼ " + row.version_raw)
+                self._paint(item, line, c)
+                self.table.setItem(r, c, item)
+            self.table.setRowHidden(r, line["version"] in self.collapsed and not line["first"])
         self.page.columns.fit(self.table, cap=520)
         self.table.blockSignals(False)
-        self.say(note)
         self._sync()
 
-    def _toggle_version(self, row, column):
-        if column != 0 or not self.rows or not self.rows[row].first_of_version or self.table.state() == QAbstractItemView.State.EditingState:
-            return
-        vid = self.rows[row].release_version_id
-        hidden = not any(self.table.isRowHidden(i) for i, r in enumerate(self.rows) if r.release_version_id == vid and i != row)
-        self.table.blockSignals(True)
-        for i, r in enumerate(self.rows):
-            if r.release_version_id == vid and i != row:
-                self.table.setRowHidden(i, hidden)
-        item = self.table.item(row, 0)
-        if (row, 0) not in self.edits:
-            item.setText(("▶ " if hidden else "▼ ") + self.originals[(row, 0)])
-        self.table.blockSignals(False)
+    def _key(self, line, column):
+        """칸 수정 키. 새 줄이면 None."""
+        version, item = line["version"], line["item"]
+        if column in (0, 1) and not line["info"]["new"]:
+            return ("v", version, "version_raw" if column == 0 else "released_at")
+        if column == 3 and line["row"] is not None:
+            return ("i", item, "content")
+        if column == 4 and line["row"] is not None:
+            return ("l", version, item)
+        return None
 
-    def _set_cell(self, key, text, background=None, tip=None):
-        item = self.table.item(*key)
-        self.table.blockSignals(True)
-        item.setText(("▼ " + text) if key[1] == 0 else text)
-        item.setBackground(QBrush(background) if background is not None else QBrush())
-        item.setToolTip(tip or text)
-        self.table.blockSignals(False)
+    def _original(self, line, column):
+        row = line["row"]
+        return {0: line["info"]["raw"], 1: line["info"]["date"], 3: row.content if row else "",
+                4: row.applied_models if row else ""}.get(column, "")
 
-    def _cell_changed(self, item):
-        key = (item.row(), item.column())
-        if key not in self.originals:
-            return
-        value = item.text().strip()
-        if key[1] == 0:
-            value = value.removeprefix("▼ ").removeprefix("▶ ").strip()
-        original = self.originals[key]
-        if value == original:
-            self.edits.pop(key, None)
-            self._set_cell(key, original)
-            return
-        try:
-            self.changes({key: value})
-        except ValueError as error:
-            self.say(f"{error}. 날짜는 YYYY-MM-DD, 적용 모델은 설비군 이름으로 적어 주세요.", error=True)
-            self._set_cell(key, original)
-            return
-        self.edits[key] = value
-        self._set_cell(key, value, SAVING, f"{original or '(빈칸)'} → {value or '(빈칸)'} · 저장 중")
-        self.flush()
+    def _display(self, line, column):
+        if column in (0, 1) and not line["first"]:
+            return ""
+        if column == 2:
+            if line["item"] is None:
+                return ""
+            stored = line["row"].item_no if line["row"] else ""
+            return str(line["number"]) if line["version"] in self.orders or line["new_item"] else stored
+        new = line["new_item"]
+        if column in (0, 1) and line["info"]["new"]:
+            text = line["info"]["raw"] if column == 0 else (line["info"]["date"] or "")
+        elif new is not None and column in (3, 4):
+            text = new["content"] if column == 3 else (new["models"] or "전체")
+        else:
+            key = self._key(line, column)
+            text = self.edits.get(key, self._original(line, column)) if key else self._original(line, column)
+        if column == 0:
+            return ("▶ " if line["version"] in self.collapsed else "▼ ") + text
+        return text
 
-    def flush(self):
-        if not self.edits or self.page.saving:
+    def _editable(self, line, column):
+        if self._deleted(line):
             return False
-        batch, rows = dict(self.edits), self.rows
-        self.edits.clear()
-        started = self.page.save_changes(self.changes(batch), self, done=lambda _: self._stored(rows, batch),
-                                         failed=lambda _: self._rejected(rows, batch))
-        if not started:
-            self.edits.update(batch)
-        return started
+        if column in (0, 1):
+            return line["first"]
+        if column in (3, 4):
+            return line["item"] is not None
+        return False
 
-    def _stored(self, rows, batch):
-        if rows is not self.rows:
+    def _deleted(self, line):
+        return ("version", line["version"]) in self.deleted or ("item", line["version"], line["item"]) in self.deleted
+
+    def _paint(self, item, line, column):
+        text = item.text()
+        item.setToolTip(text)
+        if self._deleted(line):
+            item.setBackground(QBrush(DELETE_ROW))
+            item.setForeground(QBrush(QColor(DANGER)))
+            item.setToolTip("삭제 예정 · [저장]을 누르면 지워집니다. [되돌리기]로 표시를 풉니다.")
             return
-        for key, value in batch.items():
-            before, self.originals[key] = self.originals[key], value
-            if key not in self.edits:
-                self._set_cell(key, value, SAVED, f"{before or '(빈칸)'} → {value or '(빈칸)'} · 저장됨")
+        key = self._key(line, column)
+        has_item = line["item"] is not None
+        pending = ((line["info"]["new"] and ((column in (0, 1) and line["first"]) or (column in (2, 3, 4) and has_item)))
+                   or (line["new_item"] is not None and column in (2, 3, 4))
+                   or (key is not None and key in self.edits)
+                   or (column == 2 and has_item and line["version"] in self.orders))
+        if pending:
+            item.setBackground(QBrush(SAVING))
+            item.setToolTip(f"{text} · 저장 전")
+        if self.variant is not None and line["row"] is not None and self.variant in line["row"].target_group_ids:
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
 
-    def _rejected(self, rows, batch):
-        if rows is not self.rows:
+    def _toggle_version(self, row, column):
+        if column != 0 or not (0 <= row < len(self.view)) or not self.view[row]["first"] \
+                or self.table.state() == QAbstractItemView.State.EditingState:
             return
-        for key in batch:
-            self.edits.pop(key, None)
-            self._set_cell(key, self.originals[key])
+        version = self.view[row]["version"]
+        self.collapsed ^= {version}
+        self._render()
 
-    def changes(self, edits=None):
-        grouped = defaultdict(dict)
-        for (r, c), value in (self.edits if edits is None else edits).items():
-            row = self.rows[r]
-            table, name = RELEASE_FIELDS[c]
-            if table == "release_version":
-                key = {"release_version_id": row.release_version_id}
-                if name == "released_at":
-                    try:
-                        value = date.fromisoformat(value) if value else None
-                    except ValueError:
-                        raise ValueError(f"날짜 형식이 아닙니다: {value}") from None
-            elif table == "item":
-                key = {"item_id": row.item_id}
+    # 칸 수정 ----------------------------------------------------------------------------------
+    def _cell_changed(self, item):
+        r, c = item.row(), item.column()
+        if not (0 <= r < len(self.view)):
+            return
+        line = self.view[r]
+        value = item.text().strip()
+        if c == 0:
+            value = value.removeprefix("▼ ").removeprefix("▶ ").strip()
+        try:
+            if c == 1 and value:
+                date.fromisoformat(value)
+            if c == 4:
+                self._models(value)
+        except ValueError as error:
+            self.say(f"{error if c == 4 else '날짜 형식이 아닙니다: ' + value}. 날짜는 YYYY-MM-DD, 적용 모델은 설비군 이름으로 "
+                     "적어 주세요.", error=True)
+            self._repaint(r, c)
+            return
+        target = self._new_target(line, c)
+        if target is not None:
+            record, field = target
+            previous = record[field] or ""
+            if value != previous:
+                self.steps.append(("new_edit", record, field, previous))
+                record[field] = value
+        else:
+            key = self._key(line, c)
+            if key is None:
+                return
+            previous = self.edits.get(key, self._original(line, c))
+            if value == previous:
+                return
+            self.steps.append(("edit", key, previous))
+            if value == self._original(line, c):
+                self.edits.pop(key, None)
             else:
-                key = {"release_version_id": row.release_version_id, "item_id": row.item_id}
-                grouped[(table, tuple(sorted(key.items())))].update(self._models(value))
-                continue
-            grouped[(table, tuple(sorted(key.items())))][name] = value or None
-        return [(table, dict(key), changes) for (table, key), changes in grouped.items()]
+                self.edits[key] = value
+        self._repaint(r, c)
+        self._sync()
+
+    def _new_target(self, line, column):
+        """새 줄의 칸이면 (기록 dict, 칸 이름)."""
+        if column in (0, 1) and line["info"]["new"]:
+            record = next(v for v in self.new_versions if v["temp"] == line["version"])
+            return record, "version_raw" if column == 0 else "released_at"
+        if column in (3, 4) and line["new_item"] is not None:
+            return line["new_item"], "content" if column == 3 else "models"
+        return None
+
+    def _repaint(self, r, c):
+        """편집 신호 안에서는 칸 하나만 다시 칠한다."""
+        self.table.blockSignals(True)
+        item = self.table.item(r, c)
+        item.setText(self._display(self.view[r], c))
+        item.setBackground(QBrush())
+        self._paint(item, self.view[r], c)
+        self.table.blockSignals(False)
 
     def _models(self, text):
         names = [n.strip() for n in (text or "").split(",") if n.strip() and n.strip() != "전체"]
@@ -1420,11 +1548,15 @@ class ReleasePanel(_Panel):
         return {"target_scope": "LISTED" if names else "ALL" if (text or "").strip() == "전체" else "UNKNOWN",
                 "target_group_ids": [self.groups[n.casefold()] for n in names] if names else None}
 
-    def selected_row(self):
+    def selected_line(self):
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
-        return self.rows[rows[0].row()] if rows and self.rows else None
+        return self.view[rows[0].row()] if rows and rows[0].row() < len(self.view) else None
 
-    # 추가 · 삭제 · 순서 ---------------------------------------------------------------------------
+    # 추가 · 삭제 표시 · 순서 ----------------------------------------------------------------------
+    def _next_temp(self, prefix):
+        self._temp += 1
+        return f"{prefix}{self._temp}"
+
     def add_version(self):
         if self.family_id is None or self.page.saving:
             return False
@@ -1433,92 +1565,268 @@ class ReleasePanel(_Panel):
             return False
         version, day = dialog.values()
         try:
-            released = date.fromisoformat(day) if day else None
+            date.fromisoformat(day) if day else None
         except ValueError:
             self.say("날짜는 YYYY-MM-DD로 적어 주세요.", error=True)
             return False
         if not version:
             self.say("버전명을 적어 주세요.", error=True)
             return False
-        family_id = self.family_id
-        return self.page.change(lambda: self.page.gateway.data_admin("add_release_version", family_id, version, released),
-                                self, message=f"버전 '{version}'을 추가하고 있습니다…",
-                                done=lambda _: self._changed(f"버전 '{version}'을 추가했습니다 (맨 위 · 최신). "))
+        temp = self._next_temp("new-version-")
+        self.new_versions.append({"temp": temp, "version_raw": version, "released_at": day or None})
+        self.steps.append(("add_version", temp))
+        self._render()
+        self.say(f"버전 '{version}'을 맨 위에 추가했습니다 · [저장]을 누르면 반영됩니다.")
+        return True
 
     def add_item(self):
-        row = self.selected_row()
-        if row is None or self.page.saving:
+        line = self.selected_line()
+        if line is None or self.page.saving or self._deleted(line):
             return False
-        dialog = _FormDialog(self, f"Item 추가 · {row.version_raw}", (("Item 내용", ""), ("적용 모델 (쉼표, 비우면 전체)", "")))
+        dialog = _FormDialog(self, f"Item 추가 · {line['info']['raw']}", (("Item 내용", ""), ("적용 모델 (쉼표, 비우면 전체)", "")))
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         content, models = dialog.values()
         try:
-            ids = self._models(models)["target_group_ids"]
+            self._models(models)
         except ValueError as error:
             self.say(f"{error}.", error=True)
             return False
         if not content:
             self.say("Item 내용을 적어 주세요.", error=True)
             return False
-        release_id = row.release_version_id
-        return self.page.change(lambda: self.page.gateway.data_admin("add_release_item", release_id, content, None, ids),
-                                self, message="Item을 추가하고 있습니다…",
-                                done=lambda _: self._changed(f"{row.version_raw} 맨 뒤에 Item을 추가했습니다 · 순서는 끌어서 바꿉니다. "))
+        version = line["version"]
+        temp = self._next_temp("new-item-")
+        before = list(self.orders[version]) if version in self.orders else None
+        self.new_items.append({"temp": temp, "release": version, "content": content, "models": models})
+        if before is not None:
+            self.orders[version] = before + [temp]
+        self.steps.append(("add_item", temp, version, before))
+        self._render()
+        self.say(f"{line['info']['raw']} 맨 뒤에 Item을 추가했습니다 · 순서는 끌어서 바꾸고 [저장]을 누릅니다.")
+        return True
 
     def delete_item(self):
-        row = self.selected_row()
-        if row is None or row.item_id is None or self.page.saving:
+        line = self.selected_line()
+        if line is None or line["item"] is None or self.page.saving or self._deleted(line):
             return False
-        if QMessageBox.question(self, "Item 삭제", f"{row.version_raw}에서 Item '{row.content[:40]}'을(를) 지울까요?\n"
-                                "다른 버전에 쓰이지 않는 Item이면 Item 자체도 지워지고 되돌릴 수 없습니다. 이 Item을 가리키던 "
-                                "위험 지정은 '연결 미확인'으로 바뀝니다.") != QMessageBox.StandardButton.Yes:
-            return False
-        release_id, item_id = row.release_version_id, row.item_id
-        return self.page.change(lambda: self.page.gateway.data_admin("delete_release_rows", release_id, item_id), self,
-                                message="Item을 지우고 있습니다…", done=lambda name: self._changed(f"'{name}'을(를) 지웠습니다. "))
+        if line["new_item"] is not None:  # 저장 전 새 Item은 바로 없앤다
+            self._drop_new_item(line["new_item"]["temp"])
+            self._render()
+            return True
+        mark = ("item", line["version"], line["item"])
+        self.deleted.add(mark)
+        self.steps.append(("delete", mark))
+        self._render()
+        self.say("Item을 삭제 예정으로 표시했습니다 · [저장]을 누르면 지워집니다.")
+        return True
 
     def delete_version(self):
-        row = self.selected_row()
-        if row is None or self.page.saving:
+        line = self.selected_line()
+        if line is None or self.page.saving or self._deleted(line):
             return False
-        count = sum(r.release_version_id == row.release_version_id and r.item_id is not None for r in self.rows)
-        if QMessageBox.question(self, "버전 삭제", f"버전 {row.version_raw}과 그 Item {count}개를 지울까요?\n"
-                                "되돌릴 수 없습니다. 이 버전으로 정한 목표 N은 다시 정해야 하고, 이 버전을 쓰는 설비 SW는 "
-                                "'릴리즈 노트에 없는 버전'이 됩니다.") != QMessageBox.StandardButton.Yes:
-            return False
-        release_id = row.release_version_id
-        return self.page.change(lambda: self.page.gateway.data_admin("delete_release_rows", release_id), self,
-                                message="버전을 지우고 있습니다…", done=lambda name: self._changed(f"버전 {name}을(를) 지웠습니다. "))
+        version = line["version"]
+        if line["info"]["new"]:  # 저장 전 새 버전은 그 Item과 함께 바로 없앤다
+            self.new_versions = [v for v in self.new_versions if v["temp"] != version]
+            for item in [i for i in self.new_items if i["release"] == version]:
+                self._drop_new_item(item["temp"])
+            self.orders.pop(version, None)
+            self.steps = [s for s in self.steps if not (s[0] == "add_version" and s[1] == version)]
+            self._render()
+            return True
+        mark = ("version", version)
+        self.deleted.add(mark)
+        self.steps.append(("delete", mark))
+        self._render()
+        self.say(f"버전 {line['info']['raw']}을 삭제 예정으로 표시했습니다 · [저장]을 누르면 그 Item과 함께 지워집니다.")
+        return True
+
+    def _drop_new_item(self, temp):
+        self.new_items = [i for i in self.new_items if i["temp"] != temp]
+        for version, order in list(self.orders.items()):
+            if temp in order:
+                self.orders[version] = [i for i in order if i != temp]
+        self.steps = [s for s in self.steps if not (s[0] == "add_item" and s[1] == temp)
+                      and not (s[0] == "new_edit" and s[1].get("temp") == temp)]
 
     def move_item(self, source, target):
-        """Item 줄을 같은 버전 안의 다른 줄 자리로 옮기고 순서(No)를 1부터 다시 매겨 저장한다."""
-        if self.page.saving or not (0 <= source < len(self.rows) and 0 <= target < len(self.rows)):
+        """Item 줄을 같은 버전 안의 다른 줄 자리로 옮긴다. [저장]을 누르면 순서(No)를 1부터 다시 매긴다."""
+        if self.page.saving or not (0 <= source < len(self.view) and 0 <= target < len(self.view)):
             return False
-        moving, place = self.rows[source], self.rows[target]
-        if moving.item_id is None or moving.release_version_id != place.release_version_id:
+        moving, place = self.view[source], self.view[target]
+        if moving["item"] is None or moving["version"] != place["version"] or self._deleted(moving):
             self.say("Item 순서는 같은 버전 안에서만 바꿀 수 있습니다.", error=True)
             return False
-        order = [r.item_id for r in self.rows if r.release_version_id == moving.release_version_id and r.item_id is not None]
-        position = order.index(place.item_id) if place.item_id is not None else 0  # 버전만 있는 줄에 놓으면 맨 앞
-        order.remove(moving.item_id)
-        order.insert(position, moving.item_id)
-        release_id = moving.release_version_id
-        return self.page.change(lambda: self.page.gateway.data_admin("reorder_items", release_id, order), self,
-                                message="Item 순서를 바꾸고 있습니다…",
-                                done=lambda _: self._changed(f"{moving.version_raw}의 Item 순서를 바꿨습니다. "))
+        version = moving["version"]
+        order = self._items(version)
+        before = list(self.orders[version]) if version in self.orders else None
+        position = order.index(place["item"]) if place["item"] is not None else 0
+        order.remove(moving["item"])
+        order.insert(position, moving["item"])
+        self.orders[version] = order
+        self.steps.append(("order", version, before))
+        self._render()
+        self.say("Item 순서를 바꿨습니다 · [저장]을 누르면 No가 1부터 다시 매겨집니다.")
+        return True
 
-    def _changed(self, note):
-        self.saved_note = note  # 계열 목록(버전 수)과 표를 함께 다시 읽는다
+    # 저장 · 되돌리기 ------------------------------------------------------------------------------
+    def changes(self, edits=None):
+        """칸 수정 키를 관리 저장 변경으로 바꾼다."""
+        grouped = defaultdict(dict)
+        for key, value in (self.edits if edits is None else edits).items():
+            kind = key[0]
+            if kind == "v":
+                _, release, field = key
+                grouped[("release_version", (("release_version_id", release),))][field] = (
+                    date.fromisoformat(value) if field == "released_at" and value else value or None)
+            elif kind == "i":
+                grouped[("item", (("item_id", key[1]),))]["content"] = value or None
+            else:
+                _, release, item = key
+                grouped[("release_version_item", (("item_id", item), ("release_version_id", release)))].update(self._models(value))
+        return [(table, dict(key), changes) for (table, key), changes in grouped.items()]
+
+    def _plan(self):
+        deleted_versions = {mark[1] for mark in self.deleted if mark[0] == "version"}
+        return {
+            "add_versions": [{"temp": v["temp"], "version_raw": v["version_raw"], "released_at": v["released_at"]}
+                             for v in self.new_versions],
+            "add_items": [{"temp": i["temp"], "release": i["release"], "content": i["content"],
+                           "group_ids": self._models(i["models"])["target_group_ids"]}
+                          for i in self.new_items if i["release"] not in deleted_versions],
+            "orders": {version: [i for i in order if ("item", version, i) not in self.deleted]
+                       for version, order in self.orders.items() if version not in deleted_versions},
+            "delete_items": sorted((mark[1], mark[2]) for mark in self.deleted
+                                   if mark[0] == "item" and mark[1] not in deleted_versions),
+            "delete_versions": sorted(deleted_versions),
+        }
+
+    def save(self):
+        """수정 · 추가 · 삭제 · 순서를 한꺼번에 저장한다. 삭제가 있으면 한 번 묻는다."""
+        if not self.pending or self.page.saving or self.family_id is None:
+            return False
+        if any(not v["version_raw"].strip() for v in self.new_versions) or any(not i["content"].strip() for i in self.new_items):
+            self.say("새 버전의 버전명과 새 Item의 내용을 채운 뒤 저장해 주세요.", error=True)
+            return False
+        try:
+            plan = self._plan()
+            for version in self.new_versions:
+                if version["released_at"]:
+                    date.fromisoformat(version["released_at"])
+        except ValueError as error:
+            self.say(f"{error}. 고친 뒤 다시 저장해 주세요.", error=True)
+            return False
+        if self.deleted and QMessageBox.question(
+                self, "릴리즈노트 삭제",
+                f"버전 {len(plan['delete_versions'])}개 · Item {len(plan['delete_items'])}개를 지우고 저장할까요?\n"
+                "지운 버전으로 정한 목표 N은 다시 정해야 하고, 위험 지정 연결은 '연결 미확인'이 됩니다. "
+                "[되돌리기]로 저장 전으로 돌릴 수 있지만 위험 지정 연결은 되살아나지 않습니다.") != QMessageBox.StandardButton.Yes:
+            return False
+        deleted_versions = set(plan["delete_versions"])
+        edits = {k: v for k, v in self.edits.items() if not (k[0] in ("v", "l") and k[1] in deleted_versions)
+                 and not (k[0] == "i" and any(m[0] == "item" and m[2] == k[1] for m in self.deleted))
+                 and not (k[0] == "l" and ("item", k[1], k[2]) in self.deleted)}
+        olds = {k: self._original_of(k) for k in edits}
+        family_id, gateway = self.family_id, self.page.gateway
+        save_edits = self.page.edit_work(self.changes(edits)) if edits else None
+        structural = any(plan[k] for k in plan)
+
+        def work():
+            saved = save_edits() if save_edits else None  # 검토 지문 충돌이 가장 잦으므로 칸 수정을 먼저 저장한다
+            undo = gateway.data_admin("apply_release", family_id, plan) if structural else None
+            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None), undo=undo)
+
+        counts = (len(edits), len(plan["add_versions"]) + len(plan["add_items"]), len(plan["orders"]),
+                  len(plan["delete_versions"]) + len(plan["delete_items"]))
+        return self.page.change(work, self, message="릴리즈노트를 저장하고 있습니다…",
+                                done=lambda result: self._saved_all(result, olds, counts))
+
+    def _original_of(self, key):
+        for line in self.view:
+            for column in range(len(RELEASE_COLUMNS)):
+                if self._key(line, column) == key:
+                    return self._original(line, column)
+        return ""
+
+    def _saved_all(self, result, olds, counts):
+        self.steps = [s for s in self.steps if s[0] == "saved"]
+        self.steps.append(("saved", {"undo": result.undo, "olds": olds}))
+        parts = [f"{n}{unit}" for n, unit in zip(counts, ("칸 수정", "줄 추가", "버전 순서 변경", "줄 삭제")) if n]
+        self.saved_note = "저장했습니다 · " + " · ".join(parts) + ". "
+        self.reload()
+
+    def undo(self):
+        """바로 앞 단계 하나를 되돌린다 (저장 뒤에는 마지막 저장 전체)."""
+        if not self.steps or self.page.saving:
+            return False
+        kind, *rest = self.steps[-1]
+        if kind != "saved":
+            self.steps.pop()
+            if kind == "edit":
+                key, previous = rest
+                line_value = self._original_of(key)
+                if previous == line_value:
+                    self.edits.pop(key, None)
+                else:
+                    self.edits[key] = previous
+            elif kind == "new_edit":
+                record, field, previous = rest
+                record[field] = previous
+            elif kind == "add_version":
+                (temp,) = rest
+                self.new_versions = [v for v in self.new_versions if v["temp"] != temp]
+                for item in [i for i in self.new_items if i["release"] == temp]:
+                    self._drop_new_item(item["temp"])
+            elif kind == "add_item":
+                temp, version, before = rest
+                self._drop_new_item(temp)
+                if before is not None:
+                    self.orders[version] = before
+            elif kind == "delete":
+                (mark,) = rest
+                self.deleted.discard(mark)
+            elif kind == "order":
+                version, before = rest
+                if before is None:
+                    self.orders.pop(version, None)
+                else:
+                    self.orders[version] = before
+            self._render()
+            self.say("한 단계 되돌렸습니다.")
+            return True
+        if self.pending:
+            self.say("저장하지 않은 변경을 먼저 저장하거나 되돌려 주세요.", error=True)
+            return False
+        (info,) = rest
+        gateway = self.page.gateway
+        save_back = self.page.edit_work(self.changes(info["olds"])) if info["olds"] else None
+
+        def work():
+            if info["undo"]:
+                gateway.data_admin("undo_release", info["undo"])
+            saved = save_back() if save_back else None
+            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None))
+
+        return self.page.change(work, self, message="마지막 저장을 되돌리고 있습니다…", done=lambda _: self._undone())
+
+    def _undone(self):
+        self.steps.pop()
+        self.saved_note = "마지막 저장을 되돌렸습니다. "
         self.reload()
 
     def _sync(self):
         busy = self.page.saving
-        row = self.selected_row()
+        line = self.selected_line()
+        live = line is not None and not self._deleted(line)
+        count = self._count()
+        self.save_button.setText(f"저장 ({count}건)" if count else "저장")
+        self.save_button.setEnabled(bool(count) and not busy)
+        self.undo_button.setEnabled(bool(self.steps) and not busy)
         self.add_version_button.setEnabled(self.family_id is not None and not busy)
-        self.add_item_button.setEnabled(row is not None and not busy)
-        self.delete_item_button.setEnabled(row is not None and row.item_id is not None and not busy)
-        self.delete_version_button.setEnabled(row is not None and not busy)
+        self.add_item_button.setEnabled(live and not busy)
+        self.delete_item_button.setEnabled(live and line["item"] is not None and not busy)
+        self.delete_version_button.setEnabled(live and not busy)
+        self.tree.setEnabled(not busy)
 
 
 class _FormDialog(QDialog):
@@ -1586,7 +1894,8 @@ class HistoryPanel(_Panel):
         self.table = _table(self.COLUMNS, "변경 이력 (수정 일시 · 대상 · 수정 전후)")
         self.table.setMinimumHeight(560)
         self.table.setWordWrap(False)
-        self.page.columns.attach(self.table, "history")
+        # 열 구성 · 기본 폭이 바뀌어(11-11 5차) 예전에 기억한 폭을 쓰지 않도록 키를 새로 둔다
+        self.page.columns.attach(self.table, "history.v2")
         self.table.itemSelectionChanged.connect(self._open_detail)
         card.body.addWidget(self.table)
         card.body.addWidget(label("줄을 누르면 오른쪽에서 수정 파일 · 시트 · 셀과 수정 전 → 후 전체가 나옵니다. "
@@ -1649,7 +1958,7 @@ class HistoryPanel(_Panel):
             after.setFont(font)
         self.table.clearSelection()
         self.table.blockSignals(False)
-        self.page.columns.fit(self.table, cap=300)
+        self.page.columns.fit(self.table, cap=260, grow=2)  # 각 열은 내용 폭, 남는 폭은 '대상' 열에
         self.count.setText(f"{len(rows)}건")
 
     @staticmethod

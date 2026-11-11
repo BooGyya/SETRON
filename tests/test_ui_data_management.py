@@ -75,6 +75,7 @@ class FakeGateway:
                    "apply_rows": {"added": [77] if len(args) > 2 and args[1] else [],
                                   "journal": 900 if len(args) > 2 and args[2] else None},
                    "undo_rows": None, "delete_release_rows": "v4.60.1.1", "reorder_items": None,
+                   "apply_release": {"versions": [102]}, "undo_release": None,
                    "add_release_version": 102, "add_release_item": 502, "sites": tuple(self.sites),
                    "status_sheets": (SHEET,), "sheet_grid": GRID, "equipment_overview": (GROUPS, EQUIPMENT),
                    "release_families": FAMILIES, "release_rows": ROWS, "history": HISTORY}
@@ -159,7 +160,7 @@ def test_edits_adds_and_deletes_wait_for_save_then_go_together(own, monkeypatch)
     sheet.items["E4"].setText("v1.2a")              # 칸 수정
     sheet.table.selectRow(2)                        # 3행 EC2 삭제 표시
     assert sheet.delete_selected()
-    assert sheet.items["D3"].font().strikeOut() and "삭제 예정" in sheet.items["D3"].toolTip()
+    assert sheet.items["D3"].background().color() == module.DELETE_ROW and "삭제 예정" in sheet.items["D3"].toolTip()
     assert sheet.add_row()                          # 새 행
     for address, value in (("B6", "19L"), ("C6", "M-O2"), ("D6", "EC9"), ("E6", "v2.0")):
         sheet.items[address].setText(value)
@@ -196,7 +197,7 @@ def test_undo_goes_back_one_step_then_undoes_the_whole_last_save(own, monkeypatc
     assert sheet.undo() and sheet.items["E4"].text() == "v9" and sheet.edits == {"E4": "v9"}
     sheet.table.selectRow(2)
     sheet.delete_selected()
-    assert sheet.undo() and not sheet.deletes and not sheet.items["D3"].font().strikeOut()  # 삭제 표시 풀기
+    assert sheet.undo() and not sheet.deletes and sheet.items["D3"].background().color() != module.DELETE_ROW  # 삭제 표시 풀기
     sheet.add_row()
     sheet.items["D6"].setText("EC9")
     assert sheet.undo() and sheet.new_rows[0]["values"]["equipment_code"] == ""
@@ -317,7 +318,7 @@ def test_site_added_then_empty_sheet_is_created_and_opened(own, monkeypatch):
     assert page.status_stack.currentIndex() == 0 and "빈 현황표를 만들었습니다" in page.sheet_panel.notice.text()
 
 
-def test_release_numbers_rows_from_one_adds_deletes_and_reorders_items(own, monkeypatch):
+def test_release_changes_wait_for_save_then_go_together_and_undo(own, monkeypatch):
     asked = answer(monkeypatch)
     gateway = FakeGateway()
     page = page_with(own, gateway)
@@ -329,13 +330,9 @@ def test_release_numbers_rows_from_one_adds_deletes_and_reorders_items(own, monk
     settle(page)
     assert [panel.table.verticalHeaderItem(r).text() for r in range(3)] == ["1", "2", "3"]  # 줄 번호는 1부터
     assert panel.table.item(1, 3).font().bold() and not panel.table.item(0, 3).font().bold()  # 개조형 적용 Item 강조
-    assert not panel.table.item(0, 2).flags() & module.Qt.ItemFlag.ItemIsEditable  # No는 끌어서 바꾼다
-    panel.table.item(1, 4).setText("전체")
-    settle(page)
-    assert asked == [] and gateway.saved[0][0][0].changes == {"target_scope": "ALL", "target_group_ids": None}
-    assert panel.move_item(1, 0)       # 2번 Item을 1번 자리로
-    settle(page)
-    assert gateway.done["reorder_items"] == [((100, [501, 500]), {})]
+    panel.table.item(0, 3).setText("Recipe 확인 수정")          # 칸 수정 (저장 전, Item 500)
+    assert panel.move_item(1, 0)                                # 2번 Item을 1번 자리로 (저장 전)
+    assert [panel.table.item(r, 2).text() for r in range(2)] == ["1", "2"] and panel.table.item(0, 3).text() == "보호동작 수정"
     assert not panel.move_item(2, 0) and "같은 버전" in panel.notice.text()
     forms = iter([("v4.60.1.3", "2026-06-01"), ("새 기능", "M-C4")])
 
@@ -350,20 +347,45 @@ def test_release_numbers_rows_from_one_adds_deletes_and_reorders_items(own, monk
             return next(forms)
 
     monkeypatch.setattr(module, "_FormDialog", Form)
-    assert panel.add_version()
-    settle(page)
-    assert gateway.done["add_release_version"] == [((10, "v4.60.1.3", date(2026, 6, 1)), {})]
-    panel.table.selectRow(2)
+    assert panel.add_version()                                  # 새 버전은 맨 위
+    assert panel.table.item(0, 0).text() == "▼ v4.60.1.3" and panel.table.item(0, 0).background().color() == module.SAVING
+    panel.table.selectRow(3)                                    # v4.60.1.2 줄
     assert panel.add_item()
-    settle(page)
-    assert gateway.done["add_release_item"] == [((101, "새 기능", None, [1]), {})]  # 번호는 적지 않는다 (맨 뒤)
-    panel.table.selectRow(1)
+    panel.table.selectRow(1)                                    # v4.60.1.1의 첫 Item(보호동작 수정, 501)
     assert panel.delete_item()
+    assert panel.table.item(1, 3).background().color() == module.DELETE_ROW
+    assert not gateway.saved and "apply_release" not in gateway.calls  # 저장 전에는 DB에 쓰지 않는다
+    assert panel.save_button.text() == "저장 (5건)"
+    assert panel.save()
     settle(page)
+    assert len(asked) == 1 and "Item 1개" in asked[0]              # 삭제가 있을 때만 한 번 묻는다
+    assert gateway.saved[0][0][0].table == "item" and gateway.saved[0][0][0].changes == {"content": "Recipe 확인 수정"}
+    assert gateway.done["apply_release"] == [((10, {
+        "add_versions": [{"temp": "new-version-1", "version_raw": "v4.60.1.3", "released_at": "2026-06-01"}],
+        "add_items": [{"temp": "new-item-2", "release": 101, "content": "새 기능", "group_ids": [1]}],
+        "orders": {100: [500]}, "delete_items": [(100, 501)], "delete_versions": []}), {})]
+    assert panel.steps[-1][0] == "saved" and not panel.pending and "저장했습니다" in panel.notice.text()
+    assert panel.undo()                                         # 마지막 저장 전체를 되돌린다
+    settle(page)
+    assert gateway.done["undo_release"] == [(({"versions": [102]},), {})]
+    assert gateway.saved[-1][0][0].changes == {"content": "Recipe 확인"}
+    assert not panel.steps and "되돌렸습니다" in panel.notice.text()
+
+
+def test_release_pending_steps_undo_one_by_one(own):
+    page = page_with(own)
+    page.select_tab(1)
+    settle(page)
+    panel = page.release_panel
+    panel.tree.setCurrentItem(panel.tree.topLevelItem(0))
+    settle(page)
+    panel.table.item(0, 3).setText("Recipe 확인 수정")
     panel.table.selectRow(2)
-    assert not panel.delete_item_button.isEnabled() and panel.delete_version()
-    settle(page)
-    assert gateway.done["delete_release_rows"] == [((100, 501), {}), ((101,), {})] and len(asked) == 2
+    panel.delete_version()
+    assert panel.table.item(2, 0).background().color() == module.DELETE_ROW and panel.save_button.text() == "저장 (2건)"
+    assert panel.undo() and not panel.deleted
+    assert panel.undo() and not panel.edits and panel.table.item(0, 3).text() == "Recipe 확인"
+    assert not panel.undo_button.isEnabled()
 
 
 def test_release_bad_model_name_or_date_is_rejected_and_restored(own):
@@ -410,7 +432,7 @@ def test_history_shows_basic_columns_and_detail_slides_in_from_the_right(own):
 
 
 def test_column_widths_are_resizable_and_remembered(own):
-    store = Store({module.COLUMN_KEY + "history": [150, 60, 200, 160, 120, 110]})
+    store = Store({module.COLUMN_KEY + "history.v2": [150, 60, 200, 160, 120, 110]})
     page = page_with(own, store=store)
     page.select_tab(2)
     settle(page)
@@ -420,6 +442,17 @@ def test_column_widths_are_resizable_and_remembered(own):
     for table in (page.equipment_panel.group_table, page.equipment_panel.equipment_table,
                   page.location_panel.equipment_table, page.release_panel.table):
         assert table.horizontalHeader().sectionResizeMode(0) == module.QHeaderView.ResizeMode.Interactive
+
+
+def test_history_columns_start_at_content_width_and_spare_goes_to_target(own):
+    page = page_with(own)
+    page.select_tab(2)
+    settle(page)
+    table = page.history_panel.table
+    widths = [table.columnWidth(c) for c in range(6)]
+    assert not table.horizontalHeader().stretchLastSection()
+    assert widths[2] == max(widths) and widths[5] < 200  # '수정 후'가 남는 폭을 다 차지하지 않는다
+    assert sum(widths) <= table.viewport().width() + 2
 
 
 def test_multiline_labels_get_full_height(own):
