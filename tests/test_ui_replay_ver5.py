@@ -578,6 +578,10 @@ def test_saved_n_groups_remain_effective_without_query_summary(own):
     until(lambda: not page.busy)
     assert len(page.frame.snapshot.effective_targets) == 1
     assert page.query_panel.applied_summary.isHidden()
+    page.view_tabs.setCurrentIndex(1)
+    equipment_id, tile = next(iter(page.heatmap.tile_buttons.items()))
+    QTest.mouseClick(tile, Qt.MouseButton.LeftButton)
+    assert page.drawer.is_open and page.drawer.request.equipment_id == equipment_id
 
 
 def test_empty_period_clears_previous_achievement_tooltip(own):

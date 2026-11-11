@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 
 from setron.features.risk.schemas import RiskStatus
+from setron.features.version.groups import VersionGroups
 from setron.ui.dashboard_data import DashboardSource, GroupBinding
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.query_state import QuerySelection, QueryState, TargetN, VersionFilter
@@ -221,6 +222,21 @@ def test_multisw_equipment_keeps_one_physical_id_and_full_original_in_detail():
     assert len(detail.selected.families) < len(detail.whole.families)
     original = next(r for r in source.records if r.equipment_id == 1 and r.base_date == frame.day)
     assert detail.record is original
+
+
+def test_detail_accepts_saved_n_groups_in_stored_and_interval_frames():
+    source = demo_dashboard_source()
+    key, release = next(iter(source.targets.items()))
+    source.saved_groups[key] = VersionGroups.single(release)
+    value = load_replay(source, request(source, start=date(2026, 6, 1), end=date(2026, 8, 31)))
+    weekly = value.frames_for("week")
+
+    assert weekly[0].snapshot is value.seed.snapshot
+    for frame in (value.frames[0], weekly[0], weekly[-1]):
+        tile = frame.tiles[0]
+        detail, rows, _ = replay_detail(value, frame, tile.equipment_id)
+        assert detail.selected is tile and rows
+        assert detail.record.base_date == tile.observation_date
 
 
 @pytest.mark.parametrize("start,end", [(date(2026, 11, 1), date(2026, 1, 1)), ("2026-01-01", date(2026, 11, 1))])

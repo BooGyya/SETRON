@@ -248,7 +248,8 @@ def group_completion(cell):
 
 def replay_detail(data, frame, equipment_id):
     """현재 프레임의 전체 SW를 같은 고정 N·규칙으로 읽는다. 이력 편집/DB 저장은 제공하지 않는다."""
-    if frame.snapshot not in {f.snapshot for f in data.frames + ((data.seed,) if data.seed else ())}:
+    known_frames = data.frames + ((data.seed,) if data.seed is not None else ())
+    if frame.snapshot not in tuple(known.snapshot for known in known_frames):
         raise ValueError("현재 Replay에 없는 관측입니다.")
     selected = next(t for t in frame.tiles if t.equipment_id == equipment_id)
     source = data.source
