@@ -21,6 +21,10 @@ centered horizontally in the sidebar, including centering the rendered artwork
 inside the transparent slot, and preserving the aspect ratio.
 The original semes-logo.png remains available but is not shown in the sidebar.
 
+setron-window-icon.svg is the approved Blue Tile S for the native main window
+title bar. It is separate from the sidebar wordmark and keeps its brand colors
+at all display sizes and in both app themes.
+
 Task 4 dashboard additions (original artwork and root geometry preserved):
 KPI row 781:12122: 32ac4.svg, bbc12.svg, 60dbd.svg, e53b6.svg.
 Panel heading 357:5496: 7880d.svg.
