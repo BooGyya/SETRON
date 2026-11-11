@@ -75,6 +75,8 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
     locations = record_locations(sheet) if kind is ExtractKind.EQUIPMENT_STATUS else ()
     covered = set()
     issues = [ExtractionIssue(note.reason, note.field, note.address) for note in response.data.review_notes]
+    block_lines = _block_lines(sheet) if kind is ExtractKind.EQUIPMENT_STATUS else {}
+    note_title = _note_title(sheet) if kind is ExtractKind.RELEASE_NOTE else {}
     rows = []
     for number, row in enumerate(response.data.rows, 1):
         values = dict.fromkeys(fields)
@@ -107,6 +109,13 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
                 row_issues.append(ExtractionIssue("Engine·EPD 열의 값은 SW 버전으로 사용할 수 없습니다.", field, source.address, number))
                 continue
             values[field] = extracted
+        for field, found in note_title.items():
+            if not (values.get(field) or "").strip():   # AI가 모델 · UI를 빠뜨리면 노트 제목 칸에서 (11/12 멘토 피드백 5)
+                values[field], sources[field] = found
+        if kind is ExtractKind.EQUIPMENT_STATUS and not (values.get("line") or "").strip():
+            found = block_lines.get(getattr(sources.get("equipment_code"), "address", None))
+            if found is not None:               # AI가 라인을 빠뜨리면 그 설비 블록의 제목 칸에서 (11/12 멘토 피드백 4)
+                values["line"], sources["line"] = found
         if kind is ExtractKind.EQUIPMENT_STATUS:
             sources, location, location_issues = restore_required_sources(values, sources, locations, number)
             row_issues.extend(location_issues)
@@ -125,9 +134,121 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
     if not rows:
         issues.append(ExtractionIssue("AI 응답에 추출된 행이 없습니다. 원본 양식과 응답을 확인하세요."))
     if kind is ExtractKind.EQUIPMENT_STATUS:
+        issues.extend(_fill_missing_hpa(sheet, originals, locations, covered, rows, fields, kind))
         issues.extend(hpa_coverage_issues(sheet, locations, covered, rows))
     review = _review(sheet, kind, tuple(rows), tuple(issues), originals)
     return replace(response, data=review, message="추출 결과를 원본과 대조했습니다. 검토 후 검증을 진행하세요.")
+
+
+HPA_FILLED = "HPA_AUTO_FILLED"
+
+
+def _note_title(sheet):
+    """릴리즈노트 제목 칸('P-PJT M-O5 SW. 정기 Release List')의 모델 · UI. 규칙 추출과 같은 판단이다.
+
+    return
+    - {필드: (값, 제목 칸)}. 제목 칸을 못 찾으면 빈 dict. 값은 제목 글자의 부분 문자열이라 원본 대조를 통과한다.
+    """
+    from setron.features.rule_extraction.release_rules import _find_model, _single
+
+    for r, row in enumerate(sheet.values[:8]):
+        for c, value in enumerate(row):
+            text = _text(value)
+            model = _find_model(text) if text.strip() else None
+            if not model:
+                continue
+            source = CellSource(sheet.sheet_name, sheet.address_of(r, c), value)
+            found = {"model_name": (model, source)}
+            ui = _single(text, ("구UI", "통합UI"))
+            if ui:
+                found["ui_type"] = (ui, source)
+            return found
+    return {}
+
+
+def _block_lines(sheet):
+    """설비 호기 칸 주소 → (라인, 블록 제목 칸). 규칙 추출이 블록 제목('P3-S5 ( 3F )')에서 읽는 라인과 같다.
+
+    AI 추출이 라인을 빠뜨린 행(실제 P3-S5 현황표 → 대시보드 '미지정')에 쓴다. 규칙이 읽지 못하는 양식이면 빈 dict.
+    """
+    from setron.features.rule_extraction.status_rules import parse_status
+
+    try:
+        merged = [(m.top - sheet.first_row, m.left - sheet.first_col, m.bottom - sheet.first_row, m.right - sheet.first_col)
+                  for m in sheet.merged_ranges]
+        parsed = parse_status([list(row) for row in sheet.values], merged) or []
+    except Exception:                                   # 규칙이 모르는 양식 — 라인 보완만 건너뛴다
+        return {}
+    found = {}
+    for item in parsed:
+        equipment, line = item.positions.get("equipment_code"), item.positions.get("line")
+        if equipment is None or line is None or not item.values.get("line"):
+            continue
+        address = sheet.address_of(*line)
+        found[sheet.address_of(*equipment)] = (item.values["line"], CellSource(sheet.sheet_name, address,
+                                                                               sheet.values[line[0]][line[1]]))
+    return found
+
+
+def _fill_missing_hpa(sheet, originals, locations, covered, rows, fields, kind):
+    """추출 결과에 빠진 원본 HPA 레코드를 원본 칸 값 그대로 채운다 (11/12 멘토 피드백 3).
+
+    실제 V2 라인 현황표에서 AI가 HPA 행(X9 · Y9 · Z9 · AA9)을 빠뜨려 '원본 HPA 레코드가 추출 결과에서 확인되지
+    않습니다'로 저장이 막혔다. 검사는 빠진 행의 원본 위치를 이미 정확히 알고 있으므로, **호기와 버전이 원본에 적혀
+    있는 레코드만** 그 칸의 값으로 채운다. 빈 칸 · 모호한 위치는 지금처럼 사람이 확인하도록 막는다(값을 짐작하지 않음).
+
+    return
+    - 채운 행마다 남기는 안내(저장을 막지 않음). ``rows``와 ``covered``는 제자리에서 늘어난다.
+    """
+    notes = []
+    lines = {}
+    used = {source.address for row in rows for source in row.sources.values() if source is not None}
+    for row in rows:
+        line, source = row.values.get("line"), row.sources.get("line")
+        if line:
+            lines.setdefault(line, source)
+    for location in locations:
+        if not location.is_hpa or id(location) in covered:
+            continue
+        code, version = location.fields.get("equipment_code"), location.fields.get("version_raw")
+        if code is None or version is None or not _text(code.value).strip() or not _text(version.value).strip():
+            continue                                    # 빈 HPA 칸은 채우지 않는다 → 아래 검사가 그대로 막는다
+        if any(source.address in used for source in location.fields.values()):
+            continue                                    # AI가 이 칸을 다른 행에 썼다 → 겹치거나 잘못 분류 → 사람이 확인
+        marker = next((address for address in sorted(location.hpa_addresses)
+                       if _text(originals.get(address)).strip().upper() == "HPA"), None)
+        if marker is None:
+            continue                                    # 'HPA' 글자 그대로인 칸이 없으면(제목 등) 모델명 출처가 없다 → 사람이 확인
+        values = dict.fromkeys(fields)
+        sources = {}
+        for field, source in location.fields.items():
+            if field in values:
+                values[field], sources[field] = _text(source.value), source
+        for field in ("model_name", "group_name", "family_name"):  # 'HPA' 칸이 모델 · 설비군 · 계열의 원본 근거 (HPA는 계열도 HPA)
+            if field not in sources:
+                values[field] = _text(originals.get(marker))
+                sources[field] = _source(sheet, originals, marker)
+        if location.pm_name is not None:
+            values["pm_name"] = location.pm_name
+        if len(lines) == 1 and not values.get("line"):       # 시트에 라인이 하나뿐이면 그 라인 (예: V2)
+            line, source = next(iter(lines.items()))
+            values["line"] = line
+            if source is not None:
+                sources["line"] = source
+        number = len(rows) + 1
+        normalized, key, row_notes = normalize(values, kind, number, sources)
+        where = ", ".join(f"{label} {location.fields[field].address}" for field, label in
+                          (("equipment_code", "호기"), ("version_raw", "SW 버전"), ("pm_name", "PM"))
+                          if field in location.fields)
+        # 행 번호를 붙이지 않는다: 행 번호가 있는 추출 안내는 저장 전 '오류'로 바뀐다(excel_import.draft_from_review).
+        note = ExtractionIssue(f"원본 HPA 레코드({where})가 추출 결과에 없어 원본 칸 값으로 채웠습니다. "
+                               "HPA는 집계에서 제외됩니다.", "model_name", sorted(location.hpa_addresses)[0], None,
+                               code=HPA_FILLED)
+        rows.append(ReviewRow(normalized, dict(values), sources, key, tuple(row_notes)))
+        covered.add(id(location))
+        notes.append(note)
+        notes.extend(row_notes)
+    return notes
 
 
 def recheck_hpa_coverage(sheet: SheetData, rows) -> tuple[ExtractionIssue, ...]:

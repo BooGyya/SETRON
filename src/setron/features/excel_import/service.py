@@ -43,8 +43,9 @@ from .reference import ReferenceData, analysis_excluded, family_key, identity, m
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseError
 from setron.infrastructure.excel_reader import SheetData, cell_address
 
+# SW 계열은 필수가 아니다(11/12 멘토 피드백 1): 비어 있으면 모델명(번역표)으로 정한다 — :func:`_derive_families`.
 REQUIRED = {
-    ExtractKind.EQUIPMENT_STATUS: ("base_date", "site", "model_name", "equipment_code", "family_name", "version_raw"),
+    ExtractKind.EQUIPMENT_STATUS: ("base_date", "site", "model_name", "equipment_code", "version_raw"),
     ExtractKind.RELEASE_NOTE: ("version_raw",),
 }
 # DB 컬럼 길이. equipment_code·version_raw·pm_name은 VARBINARY 원문 기준 글자 수다.
@@ -193,8 +194,68 @@ def draft_from_review(review: ExtractionReview, *, source: ResponseSource | None
                         else IssueLevel.REVIEW,
                         note.reason, note.row_number, note.field, note.address,
                         code=getattr(note, "code", None) or "EXTRACTION_UNRESOLVED") for note in review.issues)
-    return ImportDraft(review.kind, review.workbook_name, snapshot, rows, ai_source=source, extraction_issues=notes,
-                       workbook_id=workbook_id)
+    draft = ImportDraft(review.kind, review.workbook_name, snapshot, rows, ai_source=source, extraction_issues=notes,
+                        workbook_id=workbook_id)
+    if review.kind is ExtractKind.EQUIPMENT_STATUS:
+        return _derive_lines(_derive_families(draft))
+    return _derive_families(draft)          # 릴리즈노트도 SW 계열이 비면 모델로 (11/12 멘토 피드백 5)
+
+
+# 라인처럼 생긴 시트 이름: P1F · V2 · S5 · P3-S5 · 15L · M1 (Memory · Foundry · Sheet1 같은 이름은 아님)
+_LINE_SHEET = re.compile(r"^(?:[A-Z]{1,3}\d{1,2}[A-Z]?(?:-[A-Z]{0,2}\d{1,2}[A-Z]?)?|\d{1,2}L)$", re.IGNORECASE)
+LINE_FROM_SHEET = "LINE_FROM_SHEET"
+
+
+def _derive_lines(draft: ImportDraft) -> ImportDraft:
+    """라인이 빈 행을 시트 이름으로 채운다 (11/12 멘토 피드백 4: P3-S5 → 대시보드 '미지정').
+
+    추출 단계에서 블록 제목 칸으로 먼저 채우고(:func:`setron.features.extraction.service._block_lines`), 그래도
+    빈 행만 쓴다. 시트 이름이 라인처럼 생겼을 때만이며, 원본 칸이 아니라서 확인 안내를 남긴다.
+    """
+    name = (draft.sheet.sheet_name or "").strip()
+    if "line" not in draft.fields or not _LINE_SHEET.match(name):
+        return draft
+    rows, filled = [], 0
+    for row in draft.rows:
+        if row.excluded or (row.value("line") or "").strip() or "line" in row.edits:
+            rows.append(row)
+            continue
+        rows.append(replace(row, edits={**row.edits, "line": name.upper()}))
+        filled += 1
+    if not filled:
+        return draft
+    note = Issue(IssueLevel.REVIEW, f"라인이 비어 있는 {filled}행을 시트 이름 '{name.upper()}'(으)로 채웠습니다. "
+                 "원본의 라인과 같은지 확인하세요.", None, "line", None, code=LINE_FROM_SHEET)
+    from .review_locations import refresh_hpa_coverage
+
+    return refresh_hpa_coverage(replace(draft, rows=tuple(rows), extraction_issues=(*draft.extraction_issues, note)))
+
+
+def _derive_families(draft: ImportDraft) -> ImportDraft:
+    """SW 계열이 빈 행은 모델명으로 계열을 정한다 (11/12 멘토 피드백 1: 'SW 계열 필요 없음').
+
+    '빈칸 자동 채우기'와 같은 번역표 후보 중 **계열만**, **비어 있을 때만** 쓴다. 설비군 · 모델은 지금처럼 사용자가
+    적용을 고른다. 번역표에 없는 모델이면 비워 두고, 저장 전 검증이 모델명을 확인하게 한다.
+    """
+    from setron.features.extraction.model_candidates import candidate_changes
+
+    rows, changed = [], False
+    for row in draft.rows:
+        current = {name: row.value(name) for name in draft.fields}
+        if row.excluded or (current.get("family_name") or "").strip() or "family_name" in row.edits:
+            rows.append(row)
+            continue
+        family = candidate_changes(current, draft.fields).get("family_name")
+        if family:
+            rows.append(replace(row, edits={**row.edits, "family_name": family}))
+            changed = True
+        else:
+            rows.append(row)
+    if not changed:
+        return draft
+    from .review_locations import refresh_hpa_coverage
+
+    return refresh_hpa_coverage(replace(draft, rows=tuple(rows)))
 
 
 def _replace_row(draft: ImportDraft, row: ReviewRow) -> ImportDraft:

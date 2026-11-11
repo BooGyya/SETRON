@@ -9,10 +9,14 @@ from setron.features.excel_import.provenance import validate_save_request_source
 from setron.features.excel_import.schemas import ImportBlockedError
 from setron.features.excel_import.service import build_save_request, draft_from_review, edit_value, validate
 from setron.features.extraction.locations import record_locations
-from setron.features.extraction.service import extract_sheet_data, recheck_hpa_coverage
+from setron.features.extraction.service import HPA_FILLED, extract_sheet_data, recheck_hpa_coverage
 from setron.infrastructure.ai_client import ExampleChatClient
 from setron.infrastructure.excel_reader import MergedRange, SheetData
 
+
+# 빠진 HPA 위치는 하나하나 찾아낸다. 호기 · 버전이 원본에 있으면 그 칸 값으로 채우고(HPA_AUTO_FILLED, 11/12 멘토 피드백),
+# 빈 칸 · 겹침 · 잘못 분류는 지금처럼 저장을 막는다(HPA_COVERAGE_MISSING).
+GAP = ("HPA_COVERAGE_MISSING", HPA_FILLED)
 
 FIELDS = ("base_date", "site", "group_name", "model_name", "family_name", "equipment_code", "version_raw", "pm_name")
 
@@ -107,7 +111,10 @@ def test_separator_does_not_hide_hpa_with_missing_required_values(transposed, mi
     sheet = oriented_sheet([list(FIELDS), list(normal), [None] * len(FIELDS), hpa], transposed)
     result = review(sheet, oriented_row(sheet, normal, 1, transposed))
     draft = draft_from_review(result)
-    assert any(issue.code == "HPA_COVERAGE_MISSING" and issue.blocks_save for issue in result.issues)
+    if missing == "metadata":       # 호기 · 버전은 원본에 있다 → 채우고, 비어 있는 기준일 · 사이트가 저장을 막는다
+        assert any(issue.code == HPA_FILLED for issue in result.issues)
+    else:
+        assert any(issue.code == "HPA_COVERAGE_MISSING" and issue.blocks_save for issue in result.issues)
     assert any(issue.blocks_save for issue in validate(draft))
     with pytest.raises(ImportBlockedError):
         build_save_request(draft, "HPA-구분행-누락")
@@ -161,8 +168,8 @@ def test_parallel_tables_keep_both_hpa_records_after_separator(transposed, compl
         rows.extend((oriented_row(sheet, left, 3, transposed),
                      oriented_row(sheet, right, 3, transposed, start=len(FIELDS))))
     result = review(sheet, *rows)
-    missing = [issue for issue in result.issues if issue.code == "HPA_COVERAGE_MISSING"]
-    assert len(missing) == (0 if complete else 2)
+    missing = [issue for issue in result.issues if issue.code in GAP]
+    assert len(missing) == (0 if complete else 2) and not any(issue.blocks_save for issue in missing)
 
 
 @pytest.mark.parametrize("transposed", [False, True], ids=["가로", "전치"])
@@ -178,7 +185,7 @@ def test_reordered_new_header_after_separator_does_not_create_old_table_records(
     assert len([location for location in record_locations(sheet) if location.is_hpa]) == 1
     assert not any(issue.code and issue.code.startswith("HPA_COVERAGE") for issue in result.issues)
     omitted = review(sheet, rows[0])
-    assert len([issue for issue in omitted.issues if issue.code == "HPA_COVERAGE_MISSING"]) == 1
+    assert len([issue for issue in omitted.issues if issue.code in GAP]) == 1
 
 
 @pytest.mark.parametrize("transposed", [False, True], ids=["빈행", "빈열"])
@@ -209,9 +216,9 @@ def test_hpa_section_keeps_records_across_separator_until_a_real_boundary(transp
         rows.append(row)
     result = review(sheet, *rows)
     draft = draft_from_review(result)
-    missing = [issue for issue in result.issues if issue.code == "HPA_COVERAGE_MISSING"]
+    missing = [issue for issue in result.issues if issue.code in GAP]
     assert len(missing) == (0 if complete else 1)
-    if not complete or version is None:
+    if version is None:                     # SW 버전이 빈 HPA는 채우지 않는다 → 저장을 막는다
         with pytest.raises(ImportBlockedError):
             build_save_request(draft, "HPA-구역-구분행")
     else:
@@ -245,7 +252,7 @@ def test_hpa_section_row_with_only_own_metadata_still_requires_code_and_sw(trans
         row["sources"].update({field: "A1" for field in ("model_name", "group_name", "family_name")})
         rows.append(row)
     omitted = review(sheet, rows[0])
-    assert len([issue for issue in omitted.issues if issue.code == "HPA_COVERAGE_MISSING"]) == 1
+    assert len([issue for issue in omitted.issues if issue.code in GAP]) == 1
     with pytest.raises(ImportBlockedError):
         build_save_request(draft_from_review(omitted), "HPA-메타데이터만-누락")
     draft = draft_from_review(review(sheet, *rows))
@@ -357,8 +364,8 @@ def test_duplicating_one_hpa_response_does_not_cover_another_hpa_row():
     sheet = table(record("TEST-HPA-1"), record("TEST-HPA-2"))
     first = row_at(sheet, 1)
     result = review(sheet, first, first)
-    assert any(issue.code == "HPA_COVERAGE_MISSING" and issue.address in {"E7", "F7", "G7"}
-               and issue.blocks_save for issue in result.issues)
+    assert any(issue.code in GAP and issue.address in {"E7", "F7", "G7"} for issue in result.issues)
+    assert "TEST-HPA-2" in [row.values["equipment_code"] for row in result.rows]     # 빠진 쪽은 원본 칸으로 채움
 
 
 def test_response_order_does_not_change_hpa_coverage():
@@ -409,7 +416,7 @@ def test_parallel_tables_have_separate_hpa_locations(complete):
     second = {"values": dict(zip(names, sheet.values[1][3:])),
               "sources": {field: sheet.address_of(1, index + 3) for index, field in enumerate(names)}}
     result = review(sheet, first, *([second] if complete else []))
-    missing = [issue for issue in result.issues if issue.code == "HPA_COVERAGE_MISSING"]
+    missing = [issue for issue in result.issues if issue.code in GAP]
     assert not missing if complete else len(missing) == 1 and missing[0].address == "D2"
 
 
@@ -478,7 +485,7 @@ def test_hpa_section_title_requires_each_following_record():
     first = {"values": {"model_name": "HPA", "equipment_code": "TEST-HPA-1", "version_raw": "v1"},
              "sources": {"model_name": "A1", "equipment_code": "A3", "version_raw": "B3"}}
     result = review(sheet, first)
-    assert len([issue for issue in result.issues if issue.code == "HPA_COVERAGE_MISSING"]) == 1
+    assert len([issue for issue in result.issues if issue.code in GAP]) == 1
 
 
 def test_unstructured_hpa_data_is_blocked_without_guessing_blank_coordinates():

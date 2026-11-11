@@ -753,6 +753,8 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     dim = agg.DIMENSIONS.get(by, "")
     notices = [f"HPA {scope.hpa}대는 분석에서 제외했습니다."] if scope.hpa else []
     name = lambda fid: data.family_names.get(fid, str(fid))
+    # 분포 이름: 같은 계열을 여러 설비군이 쓰면 설비군을 붙인다 ('C4 (M-C4 DFB)', 11/12 멘토 피드백 2)
+    label = lambda s_: f"{name(s_.family_id)} ({s_.model})" if s_.shared and s_.model else name(s_.family_id)
     if spec.measure == "baseline":
         family_id, release = agg.baseline_family(spec.baseline, data, found.family_ids, found.group_ids)
         if release is None:
@@ -819,17 +821,17 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         if spec.measure == "versions":
             order = sorted(scored, key=lambda k: (-max((s.kinds for s in scored[k][1]), default=0), k))
         ranking = tuple((str(i + 1), k, str(sum(s.total for s in scored[k][1])), f"{scored[k][0]:.2f}",
-                         (lambda s: f"{name(s.family_id)} · {s.kinds}가지" if s else "-")(
+                         (lambda s: f"{label(s)} · {s.kinds}가지" if s else "-")(
                              max(scored[k][1], key=lambda s: (s.index, s.total), default=None)))
                         for i, k in enumerate(order))
-        detail = tuple((k, name(s.family_id), str(s.total), str(s.kinds), s.top, _pct(s.top_share), f"{s.index:.2f}")
+        detail = tuple((k, label(s), str(s.total), str(s.kinds), s.top, _pct(s.top_share), f"{s.index:.2f}")
                        for k in order for s in sorted(scored[k][1], key=lambda s: (-s.index, -s.total)))
         top = order[0]
         score, spreads = scored[top]
         worst = max(spreads, key=lambda s: (s.index, s.total), default=None)
         if len(order) == 1 and worst is not None:                 # 묶음이 하나면 순위가 아니라 그 묶음의 분포를 바로 말한다
-            kinds = ", ".join(f"{name(s_.family_id)} {s_.kinds}가지" for s_ in sorted(spreads, key=lambda s_: -s_.kinds))
-            summary = (f"{scope.subject}은(는) {kinds} 버전을 써요. {name(worst.family_id)}은(는) 설비 {worst.total}대 중 "
+            kinds = ", ".join(f"{label(s_)} {s_.kinds}가지" for s_ in sorted(spreads, key=lambda s_: -s_.kinds))
+            summary = (f"{scope.subject}은(는) {kinds} 버전을 써요. {label(worst)}은(는) 설비 {worst.total}대 중 "
                        f"가장 많이 쓰는 {worst.top}이(가) {_pct(worst.top_share)}예요 (파편화 지수 {score:.2f}).")
             if spec.measure == "fragmentation":
                 notices.append("파편화 지수 = 같은 계열에서 설비 두 대를 골랐을 때 버전이 다를 확률 (0 = 모두 같음) · 판단 기준 협의 전 초안")
@@ -837,7 +839,7 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
             if worst is None or score == 0:
                 summary = f"{scope.subject} 설비는 {dim or '범위'}마다 계열별로 모두 같은 버전을 써서 파편화된 곳이 없어요."
             else:
-                summary = (f"{scope.subject}에서 가장 파편화된 {dim or '범위'}은(는) {top}이에요. {name(worst.family_id)} 설비 "
+                summary = (f"{scope.subject}에서 가장 파편화된 {dim or '범위'}은(는) {top}이에요. {label(worst)} 설비 "
                            f"{worst.total}대가 {worst.kinds}가지 버전으로 나뉘어 있고, 가장 많이 쓰는 {worst.top}도 "
                            f"{_pct(worst.top_share)}예요 (파편화 지수 {score:.2f}).")
             notices.append("파편화 지수 = 같은 계열에서 설비 두 대를 골랐을 때 버전이 다를 확률 (0 = 모두 같음, 1에 가까울수록 "
@@ -845,7 +847,7 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         else:
             most = max(spreads, key=lambda s: s.kinds, default=None)
             summary = (f"{scope.subject}에서 버전 종류가 가장 많은 {dim or '범위'}은(는) {top}이에요 "
-                       f"({name(most.family_id)} {most.kinds}가지)." if most else f"{scope.subject}에는 버전 정보가 없어요.")
+                       f"({label(most)} {most.kinds}가지)." if most else f"{scope.subject}에는 버전 정보가 없어요.")
         chart = BarChart(f"{dim or '범위'}별 파편화 지수 (0~100)", tuple(order),
                          tuple(round(scored[k][0] * 100, 1) for k in order), highlight=(0,))
         return ChatAnswer(request, scope.understood, summary, scope.base,

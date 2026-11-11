@@ -63,6 +63,8 @@ class Spread:
     top: str
     top_share: float
     index: float
+    model: str = ""             # 같은 계열을 여러 설비군이 쓰면(C4 · C4 DFB · C4+) 설비군별로 따로 센다
+    shared: bool = False        # 이 계열을 다른 설비군도 쓰는지 (표시 이름에 설비군을 붙인다)
 
 
 def _version(family, pm) -> str:
@@ -110,21 +112,29 @@ def _key(unit: Unit, by: str, data) -> str:
     return "전체"
 
 
-def spread(items: list[Unit], family_id: int) -> Spread | None:
-    """한 계열의 버전 분포. 버전 원문이 비어 있는 설비는 분포에서 뺀다(모르는 값을 한 종류로 세지 않는다)."""
-    versions = [u.version for u in items if u.family_id == family_id and u.version]
+def spread(items: list[Unit], family_id: int, model: str | None = None) -> Spread | None:
+    """한 계열(· 한 설비군)의 버전 분포. 버전 원문이 비어 있는 설비는 분포에서 뺀다(모르는 값을 한 종류로 세지 않는다).
+
+    ``model``을 주면 그 설비군만 센다. M-C4 DFB는 C4 노트를 쓰지만 버전 줄기(_DFB)가 달라 독립 설비군으로 본다
+    (11/12 멘토 피드백 2) — 함께 세면 파편화가 부풀려진다.
+    """
+    versions = [u.version for u in items if u.family_id == family_id and u.version
+                and (model is None or (u.record.model_name or "") == model)]
     if not versions:
         return None
     counts = Counter(versions)
     total = len(versions)
     top, top_count = max(counts.items(), key=lambda item: (item[1], item[0]))
     index = 1 - sum((n / total) ** 2 for n in counts.values())
-    return Spread(family_id, total, len(counts), top, top_count / total, round(index, 3))
+    return Spread(family_id, total, len(counts), top, top_count / total, round(index, 3), model or "")
 
 
 def fragmentation(items: list[Unit]) -> tuple[float, list[Spread]]:
-    """묶음 점수(계열별 지수의 설비 수 가중 평균)와 계열별 분포."""
-    spreads = [s for s in (spread(items, fid) for fid in sorted({u.family_id for u in items})) if s is not None]
+    """묶음 점수(계열 · 설비군별 지수의 설비 수 가중 평균)와 계열 · 설비군별 분포."""
+    pairs = sorted({(u.family_id, u.record.model_name or "") for u in items})
+    models = Counter(family_id for family_id, _ in pairs)
+    spreads = [replace(s, shared=models[s.family_id] > 1)
+               for s in (spread(items, fid, model) for fid, model in pairs) if s is not None]
     total = sum(s.total for s in spreads)
     score = sum(s.index * s.total for s in spreads) / total if total else 0.0
     return round(score, 3), spreads
