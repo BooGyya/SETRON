@@ -9,6 +9,7 @@ from setron.ui.heatmap_data import EquipmentTile, GoalState
 
 
 GROUPING_MODES = (
+    ("site", "사업장"),
     ("fab", "분류"),
     ("line", "라인"),
     ("subline", "세부라인"),
@@ -162,8 +163,36 @@ def build_heatmap_groups(tiles, groups, *, mode="group", site_order=(), show_hpa
             nodes.append(HeatmapGroupNode(node_key, _location_title(position, position.line), selected, children))
         return tuple(nodes)
 
+    def fab_nodes(members, prefix):
+        buckets = {}
+        for tile in members:
+            buckets.setdefault(positions[tile.equipment_id].fab_key, []).append(tile)
+        nodes = []
+        for key, bucket in sorted(buckets.items(), key=lambda item: _fab_order(item[0])):
+            selected = tuple(bucket)
+            node_key = (*prefix, "fab", key)
+            title = positions[selected[0].equipment_id].fab_label or "미지정"
+            nodes.append(HeatmapGroupNode(node_key, title, selected,
+                                         line_nodes(selected, node_key, models_below=True)))
+        return tuple(nodes)
+
     if mode == "group":
         result = model_nodes(analyzed, (), locations=True)
+    elif mode == "site":
+        buckets = {}
+        for tile in analyzed:
+            # 확인된 키를 우선하고, 키가 없으면 원문 이름으로만 구분한다.
+            buckets.setdefault(tile.site_key or tile.site_label or "", []).append(tile)
+        nodes = []
+        ordered = sorted(buckets.items(), key=lambda item: (
+            sites.get(item[0], sites.get(item[1][0].site_label, len(sites))),
+            _natural(item[1][0].site_label or item[0]), _natural(item[0])))
+        for key, bucket in ordered:
+            selected = tuple(bucket)
+            node_key = ("site", key)
+            title = selected[0].site_label or selected[0].site_key or "미지정"
+            nodes.append(HeatmapGroupNode(node_key, title, selected, fab_nodes(selected, node_key)))
+        result = tuple(nodes)
     elif mode == "line":
         result = line_nodes(analyzed, (), models_below=True)
     elif mode == "subline":
@@ -180,17 +209,7 @@ def build_heatmap_groups(tiles, groups, *, mode="group", site_order=(), show_hpa
                                          selected, model_nodes(selected, node_key)))
         result = tuple(nodes)
     else:
-        buckets = {}
-        for tile in analyzed:
-            buckets.setdefault(positions[tile.equipment_id].fab_key, []).append(tile)
-        nodes = []
-        for key, bucket in sorted(buckets.items(), key=lambda item: _fab_order(item[0])):
-            selected = tuple(bucket)
-            node_key = ("fab", key)
-            title = positions[selected[0].equipment_id].fab_label or "미지정"
-            nodes.append(HeatmapGroupNode(node_key, title, selected,
-                                         line_nodes(selected, node_key, models_below=True)))
-        result = tuple(nodes)
+        result = fab_nodes(analyzed, ())
 
     hpa = tuple(tile for tile in tiles if tile.goal is GoalState.EXCLUDED)
     if show_hpa and hpa:

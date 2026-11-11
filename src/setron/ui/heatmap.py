@@ -308,7 +308,7 @@ class HeatmapPage(QWidget):
         self.tiles, self.tile_buttons, self.tile_grids, self.tile_occurrences = (), {}, [], []
         self.visible_ids = ()
         self.selected_id = None
-        self.grouping_mode = "group"
+        self.grouping_mode = "site"
         self._show_grouping = show_grouping
         self._query_bound = True
         self._display_groups = ()
@@ -474,11 +474,11 @@ class HeatmapPage(QWidget):
         self.tile_body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.tile_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.content.body.addWidget(self.tile_host)
-        self.list_model = HeatmapListModel(("설비명", "Site / 원본 구역", "모델", "설비 버전", "SW N 판정", "위험 판정"),
+        self.list_model = HeatmapListModel(("설비명", "Site / 원본 구역", "모델", "버전", "목표 달성", "위험 판정"),
                                          numeric_columns=(3,), centered=True)
         self.list_table = HeatmapTreeView(self.list_model, "히트맵 설비 목록형", (220, 150, 190, 230, 120, 160))
         self._list_style = self.list_table.property("setronOriginalStyle") or self.list_table.styleSheet()
-        self._compact_list = False
+        self._compact_list = None
         self.list_table.activated.connect(self._select_row)
         self.list_table.clicked.connect(self._select_row)
         self.list_table.hide()
@@ -780,7 +780,7 @@ class HeatmapPage(QWidget):
         card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         card.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         card.body.setContentsMargins(12, 4, 12, 12)
-        card.body.setSpacing(8)
+        card.body.setSpacing(0)
         card.body.takeAt(card.body.count() - 1)  # 셀 아래로 남는 공간을 늘리던 stretch 제거
         heading = card.body.itemAt(0).widget()
         heading.setObjectName("heatmapGroupHeading")
@@ -811,11 +811,14 @@ class HeatmapPage(QWidget):
         grid.setSpacing(0)
         grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         tile_height = 0
+        boundaries = {}
 
         def add_children(parent, row, column, inherited_group):
             nonlocal tile_height
             for child in parent.children:
                 span = leaf_count(child)
+                if column:
+                    boundaries[column] = min(boundaries.get(column, row), row)
                 rows = 1 if child.children else header_rows - row
                 heading = label(child.title, 14, medium=True, wrap=True)
                 heading.setObjectName("heatmapColumnHeading")
@@ -837,6 +840,14 @@ class HeatmapPage(QWidget):
 
         add_children(node, 0, 0, group_name)
         canvas.setFixedSize(leaf_count(node) * HEATMAP_CELL_SIZE.width(), header_rows * header_height + tile_height)
+        for column, row in boundaries.items():
+            divider = QFrame(canvas)
+            divider.setObjectName("heatmapGroupDivider")
+            divider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            divider.setStyleSheet(f"background:{LINE};border:0;")
+            y = row * header_height
+            divider.setGeometry(column * HEATMAP_CELL_SIZE.width(), y, 1, canvas.height() - y)
+            divider.raise_()
         return canvas
 
     def _tile_column(self, node, expanded, group_name):
@@ -871,7 +882,8 @@ class HeatmapPage(QWidget):
         header = table.header()
         header.setStretchLastSection(not compact)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch if compact else QHeaderView.ResizeMode.Interactive)
-        for column in (2, 3):
+        table.setColumnHidden(1, True)
+        for column in (2, 3, 5):
             table.setColumnHidden(column, compact)
         table.horizontalScrollBar().setValue(0)
         if not compact:

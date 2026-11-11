@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.ui.components import Card, button, label
-from setron.ui.dashboard import DashboardGrid, _DashboardViewControls
+from setron.ui.dashboard import DashboardGrid
 from setron.ui.dashboard_charts import series_button_style, series_color
 from setron.ui.dashboard_data import information_gap_reasons
 from setron.ui.equipment import ignore_width
@@ -18,7 +18,7 @@ from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.replay_data import ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
-from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls
+from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls, ReplayViewControls
 from setron.ui.theme import SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.view_controls import SegmentedControl, bulk_selection_toggle_button, set_bulk_selection_state
@@ -47,7 +47,7 @@ class ReplayPage(QWidget):
         self._hidden_groups = set()
         self._hidden_trends = {}
         self.trend_legend_buttons, self.trend_legend_tools = {}, ()
-        self.grouping_mode = "group"
+        self.grouping_mode = "site"
         self._trend_legend_key = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 88)
@@ -69,7 +69,7 @@ class ReplayPage(QWidget):
         self.content.body.setSpacing(12)
         self.content.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         # 날짜 칩 대신 재생 간격 (요청 2-1). 하나만 고르는 세그먼트 버튼. 바꾸면 다시 조회하지 않고 시점만 다시 만든다.
-        self.timeline = IntervalSelector(compact=True, custom_days=True, action="재생")
+        self.timeline = IntervalSelector(compact=True, custom_days=True, action="재생", show_caption=False)
         self.interval_group, self.interval_buttons, self.step = self.timeline.group, self.timeline.buttons, None
         self.timeline.set_saved_days()
         self.timeline.step_changed.connect(self.set_interval)
@@ -79,7 +79,6 @@ class ReplayPage(QWidget):
             self.grouping_tabs.addTab(caption)
         self.grouping_tabs.setCurrentIndex(next(i for i, (mode, _) in enumerate(GROUPING_MODES)
                                                if mode == self.grouping_mode))
-        self.content.body.addWidget(self.grouping_tabs, 0, Qt.AlignmentFlag.AlignLeft)
         self.legend_host = QWidget()
         self.legend_body = QVBoxLayout(self.legend_host)
         self.legend_body.setContentsMargins(0, 0, 0, 0)
@@ -112,7 +111,7 @@ class ReplayPage(QWidget):
         set_widget_font(self.view_tabs, font(14, medium=True))
         for caption in ("달성률 추이", "히트맵"):
             self.view_tabs.addTab(caption)
-        self.view_controls = _DashboardViewControls(self.view_tabs, self.timeline, self.timeline)
+        self.view_controls = ReplayViewControls(self.view_tabs, self.grouping_tabs, self.timeline)
         self.content.body.insertWidget(0, self.view_controls)
         self.chart = ReplayChart()
         self.chart.date_selected.connect(self.select_date)

@@ -3,9 +3,9 @@
 from functools import partial
 
 from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.appearance import ui_color
 from setron.ui.components import button, label
@@ -21,6 +21,57 @@ CURRENT_MARKER = "현재 시점"
 FUTURE_SUFFIX = " · 이후"
 CURRENT_SUFFIX = " · 현재"
 POINT_SUFFIX = " · 시점"  # 실제 시점마다 찍는 점. 누르기·마우스 올리기는 이 점에서 받는다.
+
+
+class ReplayViewControls(QScrollArea):
+    """보기·분류·간격을 한 행으로 유지하고 부족한 폭은 도구 안에서 스크롤한다."""
+
+    def __init__(self, tabs, grouping, interval):
+        super().__init__()
+        self.tabs, self.grouping, self.interval = tabs, grouping, interval
+        self._refreshing = False
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+        self.setAccessibleName("리플레이 보기·분류·데이터 간격")
+        self.row = QWidget()
+        self.row_body = QHBoxLayout(self.row)
+        self.row_body.setContentsMargins(0, 0, 0, 0)
+        self.row_body.setSpacing(12)
+        for control in (tabs, grouping, interval):
+            self.row_body.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.row_body.addStretch()
+        self.setWidget(self.row)
+        self.horizontalScrollBar().rangeChanged.connect(self.refresh)
+        self.refresh()
+
+    def minimumSizeHint(self):
+        return QSize(0, self.height())
+
+    def refresh(self, *_):
+        if self._refreshing:
+            return
+        self._refreshing = True
+        try:
+            controls = self.tabs, self.grouping, self.interval
+            widths = self.tabs.sizeHint().width(), self.grouping.sizeHint().width(), self.interval.unwrapped_width()
+            height = max(control.sizeHint().height() for control in controls)
+            for control, width in zip(controls, widths):
+                control.setFixedSize(width, height)
+            self.row.setMinimumWidth(sum(widths) + 2 * self.row_body.spacing())
+            self.row.setFixedHeight(height)
+            scrollbar = self.horizontalScrollBar()
+            extra = scrollbar.sizeHint().height() if self.row.minimumWidth() > self.viewport().width() else 0
+            self.setFixedHeight(height + extra)
+        finally:
+            self._refreshing = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.refresh()
 
 
 class ReplayPlaybackControls(QFrame):
@@ -243,7 +294,7 @@ class ReplayHeatmap(QWidget):
         self.body.setContentsMargins(0, 0, 0, 0)
         self.body.setSpacing(0)
         self.view = None
-        self.grouping_mode = "group"
+        self.grouping_mode = "site"
         self.selected_tile = None
 
     @property

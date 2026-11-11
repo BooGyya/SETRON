@@ -12,14 +12,18 @@ from setron.ui.view_controls import SegmentedControl
 class IntervalSelector(QWidget):
     step_changed = Signal(object)
 
-    def __init__(self, caption="데이터 간격", parent=None, *, compact=False, custom_days=False, action="표시"):
+    def __init__(self, caption="데이터 간격", parent=None, *, compact=False, custom_days=False, action="표시", show_caption=True):
         super().__init__(parent)
         self.compact = compact
+        self.show_caption = show_caption
         self.custom_days = custom_days
         self.day_value = 1
         self._current_step = 1 if custom_days else None
         self.day_dialog = None
         self.caption_label = label(caption, 14, medium=True, color=SECONDARY)
+        self.caption_label.setParent(self)
+        if not show_caption:
+            self.caption_label.hide()
         self.segment = SegmentedControl(compact=compact)
         self._segment_margin = self.segment.margin
         self._segments = self.segment.grid
@@ -53,7 +57,8 @@ class IntervalSelector(QWidget):
 
     def unwrapped_width(self):
         controls = self._active_controls()
-        return (self.caption_label.sizeHint().width() + self._body.horizontalSpacing()
+        caption_width = self.caption_label.sizeHint().width() + self._body.horizontalSpacing() if self.show_caption else 0
+        return (caption_width
                 + sum(control.width() for control in controls)
                 + self._segments.horizontalSpacing() * (len(controls) - 1) + 2 * self._segment_margin)
 
@@ -131,10 +136,14 @@ class IntervalSelector(QWidget):
             return
         self._body.removeWidget(self.caption_label)
         self._body.removeWidget(self.segment)
-        self._body.addWidget(self.caption_label, 0, 0)
-        self._body.addWidget(self.segment, 0 if inline else 1, 1 if inline else 0)
+        if self.show_caption:
+            self._body.addWidget(self.caption_label, 0, 0)
+            self._body.addWidget(self.segment, 0 if inline else 1, 1 if inline else 0)
+        else:
+            self._body.addWidget(self.segment, 0, 0)
         for column in range(3):
-            self._body.setColumnStretch(column, int(column == (2 if inline else 1)))
+            stretch = (2 if inline else 1) if self.show_caption else -1
+            self._body.setColumnStretch(column, int(column == stretch))
         controls = self._active_controls()
         self.segment.set_columns(columns)
         if self.compact:

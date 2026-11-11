@@ -1,11 +1,11 @@
 """카드형과 같은 그룹 트리를 사용하는 히트맵 목록 표시."""
 
-from PySide6.QtCore import QModelIndex, QSignalBlocker, Qt
-from PySide6.QtGui import QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import QHeaderView, QStyledItemDelegate, QTreeView
+from PySide6.QtCore import QModelIndex, QPointF, QRect, QSignalBlocker, Qt
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
+from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOption, QStyledItemDelegate, QTreeView
 
 from setron.ui.appearance import ui_color
-from setron.ui.theme import ACCENT_SOFT, PRIMARY, TONES, font, paint_font, set_widget_font
+from setron.ui.theme import ACCENT_SOFT, LINE, PRIMARY, TONES, font, paint_font, set_widget_font
 
 
 class HeatmapListModel(QStandardItemModel):
@@ -152,6 +152,68 @@ class HeatmapTreeView(QTreeView):
                            f"QTreeView:focus {{border:1px solid {PRIMARY};}}")
         self.collapsed.connect(lambda index: self._remember_expansion(index, False))
         self.expanded.connect(lambda index: self._remember_expansion(index, True))
+
+    def drawBranches(self, painter, rect, index):
+        """댓글처럼 부모에서 자식으로 잇고 기본 펼침 화살표는 그대로 그린다."""
+        ancestors, parent = [], index.parent()
+        while parent.isValid():
+            ancestors.append(parent)
+            parent = parent.parent()
+        ancestors.reverse()
+        depth, indent = len(ancestors), float(self.indentation())
+        direction = -1 if self.layoutDirection() == Qt.LayoutDirection.RightToLeft else 1
+        current_x = rect.left() + indent / 2 if direction < 0 else rect.right() + 1 - indent / 2
+        dpr = max(1.0, self.devicePixelRatioF())
+
+        def snap(value):
+            return (round(value * dpr - 0.5) + 0.5) / dpr
+
+        def axis(level):
+            return snap(current_x - direction * (depth - level) * indent)
+
+        def has_next(item):
+            return item.row() + 1 < self.model().rowCount(item.parent())
+
+        top, middle, bottom = snap(rect.top()), snap(rect.top() + rect.height() / 2), snap(rect.bottom() + 1)
+        has_children = self.model().hasChildren(index)
+        radius, arrow_gap = min(5.0, indent / 3), 6.0
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        color = QColor(ui_color(LINE))
+        color.setAlphaF(0.8)
+        pen = QPen(color, 1.0)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        # 형제가 더 있는 조상의 연결선은 하위 행을 지나 다음 형제까지 이어진다.
+        for level, ancestor in enumerate(ancestors):
+            if level > 0 and has_next(ancestor):
+                x = axis(level - 1)
+                painter.drawLine(QPointF(x, top), QPointF(x, bottom))
+        if depth:
+            x = axis(depth - 1)
+            if has_next(index):
+                painter.drawLine(QPointF(x, top), QPointF(x, bottom))
+            path = QPainterPath(QPointF(x, top))
+            path.lineTo(x, middle - radius)
+            path.quadTo(x, middle, x + direction * radius, middle)
+            end = axis(depth) - direction * arrow_gap if has_children else axis(depth) + direction * (indent / 2 - 3)
+            path.lineTo(end, middle)
+            painter.drawPath(path)
+        if has_children and self.isExpanded(index):
+            painter.drawLine(QPointF(axis(depth), middle + arrow_gap), QPointF(axis(depth), bottom))
+        painter.restore()
+        if has_children and (depth or self.rootIsDecorated()):
+            option = QStyleOption()
+            option.initFrom(self)
+            option.rect = QRect(round(current_x - indent / 2), rect.top(), round(indent), rect.height())
+            # Item/Sibling은 기본 점선을 그리므로 화살표 상태만 넘긴다.
+            option.state &= ~(QStyle.StateFlag.State_Item | QStyle.StateFlag.State_Sibling)
+            option.state |= QStyle.StateFlag.State_Children
+            if self.isExpanded(index):
+                option.state |= QStyle.StateFlag.State_Open
+            self.style().drawPrimitive(QStyle.PrimitiveElement.PE_IndicatorBranch, option, painter, self)
 
     def _remember_expansion(self, index, expanded):
         key = index.data(HeatmapListModel.KEY_ROLE)
