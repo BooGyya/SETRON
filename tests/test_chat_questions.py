@@ -243,9 +243,12 @@ def test_report_card():
 def test_unknown_names_are_shown_not_dropped(question, word):
     result = ask(question)
     assert any(word in issue for issue in result.issues)
-    # 말한 조건을 못 쓰면 더 넓은 범위로 답하지 않고, 지금 자료의 선택지를 알려 준다
+    # 말한 조건을 못 쓰면 더 넓은 범위로 답하지 않고, 못 찾은 것과 그 종류의 선택지만 짧게 알려 준다 (11/11)
     assert not result.tables and not result.charts
-    assert "답하지 않았어요" in result.summary and "사업장 평택·화성" in result.summary
+    assert f"'{word}'" in result.summary or result.summary.startswith(f"{word} 자료는 아직 없어요")
+    expected = {"중국": "사업장: 평택·화성", "O7": "있는 모델:", "P9": "있는 라인:", "18L": "있는 라인:",
+                "v9.9.9": "등록된 릴리즈 버전에서 찾지 못했어요", "3월": "가장 최근은 2026-10-21"}[word]
+    assert expected in result.summary
 
 
 @pytest.mark.parametrize("question", ["안녕", "고마워"])

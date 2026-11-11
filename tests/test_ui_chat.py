@@ -174,9 +174,10 @@ def test_real_app_uses_chat_page_with_dashboard_source(app):
         window.navigate("items")
         QTest.qWait(20)
         assert not window.notice.isVisible()                             # VER5 Item 화면도 중복 설명 배지 없이
-        window.navigate("management")
-        QTest.qWait(20)
-        assert window.notice.isVisible()                                 # 숨김 목록에 없는 메뉴(관리 데이터)는 안내 유지
+        if "management" in window.nav:                                   # 11/11 develop: 관리 데이터는 데이터 관리로 합쳐짐
+            window.navigate("management")
+            QTest.qWait(20)
+            assert window.notice.isVisible()                             # 숨김 목록에 없는 메뉴(관리 데이터)는 안내 유지
         window.navigate("ai")
         QTest.qWait(20)
         page.empty.cards[0].buttons[0].click()                           # 예시 카드: 평택 P3 목표 N 미만

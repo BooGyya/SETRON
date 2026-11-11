@@ -20,12 +20,15 @@ class Intent(str, Enum):
     FORECAST = "FORECAST"          # 버전 통일 예측 (참고)
     VERSION_INFO = "VERSION_INFO"  # 최신 버전·버전별 설비
     REPORT = "REPORT"              # 보고서 생성
+    DATA_INFO = "DATA_INFO"        # 자료 안내: 최신 기준일·기준일 목록·저장 현황·만들 수 있는 보고서 (11/11)
+    AGGREGATE = "AGGREGATE"        # 범용 집계: 설비 수·버전 종류·파편화·달성률·기준 버전 이상 비율 × 무엇별로 (11/11)
 
 
 INTENT_LABELS: dict[Intent, str] = {
     Intent.SEARCH: "자연어 검색", Intent.COMPARE: "표준화율 분석", Intent.CHANGE: "기간 변화",
     Intent.CAUSE: "원인 분석", Intent.PRIORITY: "업그레이드 우선순위", Intent.FORECAST: "버전 통일 예측",
-    Intent.VERSION_INFO: "버전 정보", Intent.REPORT: "자동 보고서 생성",
+    Intent.VERSION_INFO: "버전 정보", Intent.REPORT: "자동 보고서 생성", Intent.DATA_INFO: "자료 안내",
+    Intent.AGGREGATE: "집계 분석",
 }
 
 
@@ -61,6 +64,11 @@ class ChatRequest:
     group_by: GroupBy | None = None
     understood: bool = True                     # False면 분석 질문이 아님 (인사 등)
     follow_up: bool = False                     # 앞 질문의 조건을 이어받음 ("그중에 P3만", "그럼 화성은?")
+    unsupported: str = ""                       # 지원하지 않는 요청 (예: "주간 보고서"). 다른 것으로 바꿔 답하지 않는다
+    topic: str = ""                             # 자료 안내의 주제: "reports"(만들 수 있는 보고서) / ""(기준일)
+    period: tuple[int, ...] = ()                # 여러 달 보고서의 해당 달 목록 (예: 5, 6, 7). 1~12월 전체는 자료가 있는 전체 기간
+    each_month: bool = False                    # 여러 달을 '각각' 월간 보고서로 원함
+    aggregate: tuple[str, ...] = ()             # 범용 집계 (무엇을 셀지, 무엇별로, 기준 버전). aggregate.MEASURES · DIMENSIONS
 
 
 @dataclass(frozen=True)
@@ -125,3 +133,4 @@ class ChatAnswer:
     equipment_ids: tuple[int, ...] = ()
     polished: bool = False                      # 요약 문장을 AI가 다듬었음 (숫자·이름은 원문과 같음을 확인)
     title: str = ""                             # 보고서·파일용 제목 (예: "목표 N 달성률 가장 낮은 원본 구역 분석")
+    actions: tuple[tuple[str, str], ...] = ()   # 화면 이동 버튼 (글자, 경로). 예: ("버전 표준화 리포트 만들기", "reports:status:…")

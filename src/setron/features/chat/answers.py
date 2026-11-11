@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -91,6 +92,7 @@ class _Scope:
     sites: tuple[str, ...] = ()
     lines: tuple[str, ...] = ()
     at: Callable | None = None       # 기준일 d → 조건에 맞는 설비별 최신 관측 (이전 기준일 비교용)
+    problems: tuple = ()             # 못 쓴 조건 (query.schemas.ConditionIssue) — 안내를 종류별로 짧게
 
 
 def latest_until(records, as_of: date | None) -> tuple:
@@ -170,7 +172,8 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
         parts.insert(0, "앞 질문 이어서")
     parts.append(f"기준일 {base.isoformat()}" if base else "기준일 없음")
     return _Scope(base, dates, every, on_base, statuses, sum(1 for r in on_base if r.is_hpa), issues, " · ".join(parts),
-                  " ".join(subject) or "전체", tuple(resolved.sites), tuple(resolved.lines), at)
+                  " ".join(subject) or "전체", tuple(resolved.sites), tuple(resolved.lines), at,
+                  tuple(resolved.issues))
 
 
 def _tier(family_status) -> Tier:
@@ -559,6 +562,289 @@ def _listing(values, limit: int) -> str:
     return "·".join(values[:limit]) + (f" 외 {len(values) - limit}개" if len(values) > limit else "")
 
 
+UNSUPPORTED_TITLE = "지원하지 않는 요청"
+PERIOD_TITLE = "기간 보고서"
+# 보고서 메뉴(ui/report_data.REPORT_TYPES)의 기간 보고서 — 이름과 키가 바뀌면 test_chat_planner가 알려 준다
+PERIOD_REPORTS = (("status", "버전 표준화 리포트", "기간 동안의 표준화율 · N 적용률 추이"),
+                  ("change", "설비별 변경 이력 리포트", "기간 안의 설비별 버전 변경"))
+_DATE_FIELDS = ("base_date", "date", "dates")
+_DATE_LIKE = re.compile(r"(?:(?<!\d)(?:1[0-2]|[1-9])\s*월|20\d\d[-./]\d{1,2})")
+_VERSION_LIKE = re.compile(r"v\d[\w.\-]*", re.I)
+_MODEL_LIKE = re.compile(r"M-[A-Z0-9]+(?:\s*[A-Z]+)?|[OC]\d{1,2}", re.I)   # M-C9, M-O5 Prime, O7
+_LINE_LIKE = re.compile(r"(?:[A-Z]\d{1,2}[A-Z]?|\d{1,2}L|[A-Z]{2,5})(?:-[A-Z]\d)?", re.I)
+
+
+def _dates(data: ChatData) -> tuple[date, ...]:
+    return tuple(sorted({r.base_date for r in data.records}))
+
+
+def _latest_report(data: ChatData) -> str:
+    dates = _dates(data)
+    return f"{dates[-1].month}월 보고서 만들어줘" if dates else "이번 달 표준화 보고서 만들어줘"
+
+
+def _date_range(data: ChatData) -> str:
+    dates = _dates(data)
+    if not dates:
+        return "저장된 기준일이 아직 없어요"
+    return f"저장된 기준일은 {dates[0].isoformat()} ~ {dates[-1].isoformat()} ({len(dates)}개)이고, 가장 최근은 {dates[-1].isoformat()}이에요"
+
+
+def _missing_short(data: ChatData, problems) -> str | None:
+    """못 찾은 조건의 종류에 맞춰 짧게 안내한다 (11/11: 사업장·라인·모델·기준일을 전부 늘어놓던 문제)."""
+    if not problems:
+        return None
+    first = problems[0]
+    value = str(getattr(first, "value", "")).strip("'")
+    field_name = getattr(first, "field", "")
+    if field_name in _DATE_FIELDS or _DATE_LIKE.search(value):
+        return f"{value} 자료는 아직 없어요. {_date_range(data)}."
+    catalog = data.catalog
+    choices = {"sites": ("사업장", catalog.sites), "lines": ("라인", catalog.lines),
+               "groups": ("모델", tuple(g.model_name or g.name for g in catalog.groups)),
+               "families": ("계열", tuple(f.name for f in catalog.families))}
+    if _VERSION_LIKE.fullmatch(value):
+        return f"'{value}'은(는) 등록된 릴리즈 버전에서 찾지 못했어요. 버전 목록은 데이터 관리 → 릴리즈노트에서 볼 수 있어요."
+    if field_name not in choices:                     # 질문 속 낱말: 글자 모양으로 종류를 짐작한다
+        field_name = ("groups" if _MODEL_LIKE.fullmatch(value) else "lines" if _LINE_LIKE.fullmatch(value) else "")
+    kind, names = choices.get(field_name, (None, ()))
+    if kind and names:
+        return f"'{value}'은(는) 지금 자료에 없는 {kind}이에요. 있는 {kind}: {_listing(names, 8)}."
+    return f"'{value}'은(는) 지금 자료에서 찾지 못했어요. 사업장: {_listing(catalog.sites, 6) or '없음'}."
+
+
+def _months_text(months) -> str:
+    months = list(months)
+    if len(months) >= 3 and months == list(range(months[0], months[0] + len(months))):
+        return f"{months[0]}월~{months[-1]}월"
+    return "·".join(f"{m}월" for m in months)
+
+
+def period_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
+    """여러 달 보고서: AI 분석은 월간만 바로 만들고, 기간을 묶은 보고서는 보고서 메뉴로 안내한다 (11/11).
+
+    '각각'이면 달마다 월간 보고서 버튼을 준다. 자료가 없는 달은 빼고, 하나도 없으면 없다고 말한다.
+    """
+    dates = _dates(data)
+    wanted = set(request.period)
+    whole = len(wanted) == 12
+    chosen = [d for d in dates if d.month in wanted]
+    asked = "여러 달" if whole else _months_text(request.period)
+    if not chosen:
+        return ChatAnswer(request, asked, f"{asked} 자료는 아직 없어요. {_date_range(data)}.", title=PERIOD_TITLE,
+                          suggestions=(_latest_report(data), *SUGGESTIONS[:2]))
+    months = list(dict.fromkeys(d.month for d in chosen))
+    monthly = tuple(f"{m}월 보고서 만들어줘" for m in months)
+    available = _months_text(months)
+    if request.each_month or len(months) == 1:
+        if len(months) == 1:
+            text = f"{asked} 중 자료가 있는 달은 {available}뿐이에요. 그 달의 월간 보고서는 AI 분석에서 바로 만들 수 있어요."
+        elif set(months) == wanted:
+            text = f"월간 보고서는 한 달씩 만들 수 있어요. {asked} 모두 자료가 있어요. 아래에서 고르세요."
+        else:
+            text = f"월간 보고서는 한 달씩 만들 수 있어요. {asked} 중 자료가 있는 달은 {available}이에요. 아래에서 고르세요."
+        return ChatAnswer(request, asked, text, chosen[-1], title=PERIOD_TITLE, suggestions=monthly[:6])
+    start, end = chosen[0].isoformat(), chosen[-1].isoformat()
+    lead = "여러 달을 묶은 통합 보고서는" if whole else f"{asked} 보고서처럼 여러 달을 묶은 보고서는"
+    summary = (f"{lead} 보고서 메뉴에서 만들 수 있어요. "
+               f"'{PERIOD_REPORTS[0][1]}'는 {PERIOD_REPORTS[0][2]}를, '{PERIOD_REPORTS[1][1]}'는 {PERIOD_REPORTS[1][2]}을 담아요. "
+               f"아래 버튼을 누르면 기간을 {start} ~ {end}로 채워서 열어요. AI 분석에서는 한 달씩 월간 보고서를 바로 만들 수 있어요.")
+    actions = tuple((f"{name} 만들기", f"reports:{key}:{start}:{end}") for key, name, _ in PERIOD_REPORTS)
+    return ChatAnswer(request, asked, summary, chosen[-1], title=PERIOD_TITLE, actions=actions, suggestions=monthly[-3:])
+
+
+def unsupported_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
+    """지원하지 않는 요청 (주간 보고서 등)은 다른 것으로 바꿔 답하지 않고, 없다고 말하고 대신 할 수 있는 것을 권한다."""
+    summary = (f"{request.unsupported}는 아직 만들 수 없어요. 설비 현황표가 한 달 간격으로 저장돼 그보다 짧은 기간의 "
+               f"자료가 없어요. 월간 보고서는 만들 수 있어요. {_date_range(data)}.")
+    return ChatAnswer(request, request.unsupported, summary, title=UNSUPPORTED_TITLE,
+                      suggestions=(_latest_report(data), "요즘 어때?", *SUGGESTIONS[:2]))
+
+
+def missing_date_answer(request: ChatRequest, data: ChatData, label: str) -> ChatAnswer:
+    """저장되지 않은 날짜·달을 물은 질문: 다른 날짜로 바꿔 답하지 않고, 있는 기준일을 알려 준다."""
+    follow = (_latest_report(data),) if Intent.REPORT in request.intents or "보고서" in request.question else ()
+    return ChatAnswer(replace(request, understood=True), label, f"{label} 자료는 아직 없어요. {_date_range(data)}.",
+                      suggestions=(*follow, *SUGGESTIONS[:4 - len(follow)]))
+
+
+def data_info_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
+    """자료 안내. 보고서를 물으면 만들 수 있는 보고서, 아니면 최신 기준일 · 기준일 목록 (11/11: 묻는 것에 바로 답한다).
+
+    숫자는 저장된 자료에서 센다.
+    """
+    dates = _dates(data)
+    if not dates:
+        return ChatAnswer(request, "자료 안내", "아직 저장된 설비 현황이 없어요. 데이터 가져오기에서 현황표를 먼저 저장해 주세요.",
+                          title="자료 안내", suggestions=SUGGESTIONS[:2])
+    current = latest_until(data.records, dates[-1])
+    sites = sorted({r.site for r in current if r.site})
+    months = sorted({(d.year, d.month) for d in dates})
+    span = f"{months[0][1]}월~{months[-1][1]}월" if len(months) > 1 else f"{months[0][1]}월"
+    if request.topic == "reports":
+        reports = (
+            ("월간 표준화 보고서", "한 달 · 전체 사업장·라인 · 5장",
+             f"AI 분석: '{dates[-1].month}월 보고서 만들어줘' ({span})"),
+            (PERIOD_REPORTS[0][1], PERIOD_REPORTS[0][2], "보고서 메뉴에서 기간 지정"),
+            (PERIOD_REPORTS[1][1], PERIOD_REPORTS[1][2], "보고서 메뉴에서 기간 지정"),
+            ("분석 답 보고서", "지금 답의 표 · 그래프 · 원인", "답 카드의 '보고서로 저장'"),
+            ("설비 목록 Excel", "조회 결과 설비 목록 · 조회 조건", "목록 답의 'Excel 내보내기'"),
+        )
+        summary = (f"만들 수 있는 보고서는 {len(reports)}가지예요. AI 분석에서는 월간 표준화 보고서(한 달 · "
+                   f"{'·'.join(sites) or '전체'} 전체 사업장·라인)를 바로 만들 수 있고, 여러 달을 묶은 기간 보고서는 "
+                   f"보고서 메뉴의 '{PERIOD_REPORTS[0][1]}' · '{PERIOD_REPORTS[1][1]}'에서 기간을 정해 만들 수 있어요.")
+        return ChatAnswer(request, "만들 수 있는 보고서", summary, dates[-1],
+                          tables=(Table("만들 수 있는 보고서", ("보고서", "내용", "만드는 방법"), reports),),
+                          title="자료 안내", actions=(("보고서 메뉴 열기", "reports"),),
+                          suggestions=(f"{dates[-1].month}월 보고서 만들어줘",
+                                       f"{months[0][1]}월부터 {months[-1][1]}월까지 보고서 만들 수 있어?"))
+    summary = (f"가장 최근 자료는 {dates[-1].isoformat()}이에요. 저장된 기준일은 {dates[0].isoformat()} ~ "
+               f"{dates[-1].isoformat()} ({len(dates)}개)이고, 그 날짜까지 설비는 {len(current)}대"
+               f"({'·'.join(sites) or '사업장 미확인'})예요.")
+    by_date = []
+    for day in sorted(dates, reverse=True):
+        rows = [r for r in data.records if r.base_date == day]
+        names = sorted({r.site for r in rows if r.site})
+        by_date.append((day.isoformat(), "·".join(names) or "-", f"{len({r.equipment_id for r in rows})}대"))
+    targets = sum(1 for value in data.targets.values() if value)
+    notices = (f"목표 N이 정해진 계열·모델 {targets}개" if targets else "목표 N이 정해진 계열이 아직 없어요",)
+    return ChatAnswer(request, "자료 안내", summary, dates[-1],
+                      tables=(Table("저장된 기준일", ("기준일", "사업장", "설비 수"), tuple(by_date)),),
+                      notices=notices, title="자료 안내",
+                      suggestions=(_latest_report(data), "어떤 보고서 만들 수 있어?", "지난달보다 달성률이 떨어진 라인은?"))
+
+
+def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
+    """범용 집계 (11/11): '무엇을 셀지 · 무엇별로 · 어떤 조건으로'를 조합해 DB 자료로 센다. 숫자는 대시보드와 같은 계산."""
+    from . import aggregate as agg
+    spec = agg.Spec.of(request.aggregate)
+    scope = _scope(request, data)
+    if spec is None or not scope.records:
+        short = _missing_short(data, scope.problems)
+        return ChatAnswer(request, scope.understood, short or _missing(data), scope.base, issues=scope.issues,
+                          suggestions=SUGGESTIONS[:4])
+    found = agg.resolved(request, data)
+    by = spec.by or ("line" if spec.measure in ("fragmentation", "versions", "baseline") else "")
+    dim = agg.DIMENSIONS.get(by, "")
+    notices = [f"HPA {scope.hpa}대는 분석에서 제외했습니다."] if scope.hpa else []
+    name = lambda fid: data.family_names.get(fid, str(fid))
+    if spec.measure == "baseline":
+        family_id, release = agg.baseline_family(spec.baseline, data, found.family_ids, found.group_ids)
+        if release is None:
+            family = data.catalog.releases.get(family_id) if family_id is not None else None
+            if family is not None and family.releases:
+                ordered = sorted(family.releases, key=lambda r: (r.version_order is None, r.version_order or 0))
+                latest = [r.version_raw for r in ordered][-5:][::-1]
+                text = (f"{name(family_id)}에 '{spec.baseline}' 버전은 등록돼 있지 않아 기준으로 쓸 수 없어요."
+                        + (f" 최근 버전: {', '.join(latest)}." if latest else ""))
+            else:
+                text = f"'{spec.baseline}'은(는) 등록된 릴리즈 버전에서 찾지 못해 기준으로 쓸 수 없어요."
+            return ChatAnswer(request, scope.understood, text, scope.base, title="기준 버전 없음",
+                              suggestions=SUGGESTIONS[:3])
+        rates = agg.baseline_rates(scope.records, data, family_id, release, by)
+        whole = rates.get("전체")
+        if whole is None:
+            return ChatAnswer(request, scope.understood,
+                              f"{scope.subject}에는 {name(family_id)} 설비가 없어 기준 버전으로 셀 수 없어요.", scope.base,
+                              suggestions=SUGGESTIONS[:3])
+        groups = {k: v for k, v in rates.items() if k != "전체"}
+        label = f"{name(family_id)} {release.version_raw}"
+        summary = (f"{label}을(를) 기준으로 보면 {scope.subject} 최신화율은 {_pct(whole.rate)}예요 "
+                   f"(기준 이상 {whole.compliant}대 · 미만 {whole.below}대 · 확인 필요 {whole.undetermined}대).")
+        known = {k: v.rate for k, v in groups.items() if v.rate is not None}
+        if len(known) > 1 and min(known.values()) < max(known.values()):
+            low = min(known, key=known.get)
+            summary += f" {dim}별로는 {low}이(가) {_pct(known[low])}로 가장 낮아요."
+        elif len(known) > 1:
+            summary += f" {dim}별로 모두 같아요."
+        rows = tuple((k, str(v.compliant + v.below), str(v.compliant), str(v.below), str(v.undetermined), _pct(v.rate))
+                     for k, v in (groups or {"전체": whole}).items())
+        chart = BarChart(f"{dim or '전체'}별 {label} 이상 비율", tuple(r[0] for r in rows),
+                         tuple(None if (groups or {"전체": whole})[r[0]].rate is None
+                               else round((groups or {"전체": whole})[r[0]].rate * 100, 1) for r in rows))
+        notices += ["저장된 목표 N이 아니라 질문의 기준 버전으로 계산했어요. 최신화율 = 기준 이상 ÷ (이상 + 미만), "
+                    "버전을 알 수 없는 설비는 '확인 필요'로 따로 셉니다."]
+        return ChatAnswer(request, scope.understood, summary, scope.base,
+                          tables=(Table(f"{dim or '전체'}별 기준 버전 이상 비율",
+                                        (dim or "범위", "판단 대수", "기준 이상", "기준 미만", "확인 필요", "최신화율"), rows),),
+                          charts=(chart,) if len(rows) > 1 else (), notices=tuple(notices),
+                          title=f"{label} 기준 최신화율")
+    items = agg.units(scope.records, data, found.family_ids)
+    if not items:
+        return ChatAnswer(request, scope.understood, f"{scope.subject}에는 셀 수 있는 설비가 없어요.", scope.base,
+                          suggestions=SUGGESTIONS[:3])
+    grouped: dict[str, list] = defaultdict(list)
+    for unit in items:
+        grouped[agg._key(unit, by, data) if by else "전체"].append(unit)
+    missing = sum(1 for u in items if not u.version)
+    if missing and spec.measure in ("fragmentation", "versions"):
+        notices.append(f"버전이 비어 있는 설비 {missing}대는 버전 분포에서 뺐어요.")
+    if spec.measure in ("fragmentation", "versions"):
+        scored = {k: agg.fragmentation(v) for k, v in grouped.items()}
+        order = sorted(scored, key=lambda k: (-scored[k][0], -sum(s.total for s in scored[k][1]), k))
+        if spec.measure == "versions":
+            order = sorted(scored, key=lambda k: (-max((s.kinds for s in scored[k][1]), default=0), k))
+        ranking = tuple((str(i + 1), k, str(sum(s.total for s in scored[k][1])), f"{scored[k][0]:.2f}",
+                         (lambda s: f"{name(s.family_id)} · {s.kinds}가지" if s else "-")(
+                             max(scored[k][1], key=lambda s: (s.index, s.total), default=None)))
+                        for i, k in enumerate(order))
+        detail = tuple((k, name(s.family_id), str(s.total), str(s.kinds), s.top, _pct(s.top_share), f"{s.index:.2f}")
+                       for k in order for s in sorted(scored[k][1], key=lambda s: (-s.index, -s.total)))
+        top = order[0]
+        score, spreads = scored[top]
+        worst = max(spreads, key=lambda s: (s.index, s.total), default=None)
+        if spec.measure == "fragmentation":
+            if worst is None or score == 0:
+                summary = f"{scope.subject} 설비는 {dim or '범위'}마다 계열별로 모두 같은 버전을 써서 파편화된 곳이 없어요."
+            else:
+                summary = (f"{scope.subject}에서 가장 파편화된 {dim or '범위'}은(는) {top}이에요. {name(worst.family_id)} 설비 "
+                           f"{worst.total}대가 {worst.kinds}가지 버전으로 나뉘어 있고, 가장 많이 쓰는 {worst.top}도 "
+                           f"{_pct(worst.top_share)}예요 (파편화 지수 {score:.2f}).")
+            notices.append("파편화 지수 = 같은 계열에서 설비 두 대를 골랐을 때 버전이 다를 확률 (0 = 모두 같음, 1에 가까울수록 "
+                           "흩어짐). 여러 계열은 설비 수로 가중 평균했어요 · 판단 기준 협의 전 초안")
+        else:
+            most = max(spreads, key=lambda s: s.kinds, default=None)
+            summary = (f"{scope.subject}에서 버전 종류가 가장 많은 {dim or '범위'}은(는) {top}이에요 "
+                       f"({name(most.family_id)} {most.kinds}가지)." if most else f"{scope.subject}에는 버전 정보가 없어요.")
+        chart = BarChart(f"{dim or '범위'}별 파편화 지수 (0~100)", tuple(order),
+                         tuple(round(scored[k][0] * 100, 1) for k in order), highlight=(0,))
+        return ChatAnswer(request, scope.understood, summary, scope.base,
+                          tables=(Table(f"{dim or '범위'}별 파편화 순위", ("순위", dim or "범위", "설비 수", "파편화 지수",
+                                                                        "가장 흩어진 계열"), ranking),
+                                  Table("계열별 버전 분포", (dim or "범위", "계열", "설비 수", "버전 종류", "대표 버전",
+                                                            "대표 비율", "파편화 지수"), detail)),
+                          charts=(chart,) if len(order) > 1 else (), notices=tuple(notices),
+                          title=f"{scope.subject} {dim}별 {agg.MEASURES[spec.measure]}".strip(),
+                          equipment_ids=tuple(sorted({u.record.equipment_id for u in items})))
+    if spec.measure == "achievement":
+        records_by: dict[str, dict] = defaultdict(dict)
+        for unit in items:
+            records_by[agg._key(unit, by, data) if by else "전체"][unit.record.equipment_id] = unit.record
+        rates = {k: summarize(list(v.values()), data.catalog.releases, data.targets) for k, v in sorted(records_by.items())}
+        rows = tuple((k, str(v.compliant + v.below), str(v.compliant), str(v.below), str(v.undetermined), _pct(v.rate))
+                     for k, v in rates.items())
+        known = {k: v.rate for k, v in rates.items() if v.rate is not None}
+        summary = (f"{scope.subject} {dim}별 목표 N 달성률에서 가장 낮은 곳은 {min(known, key=known.get)}"
+                   f"({_pct(min(known.values()))})이에요." if known else f"{scope.subject}에는 판단 가능한 설비가 없어요.")
+        return ChatAnswer(request, scope.understood, summary, scope.base,
+                          tables=(Table(f"{dim or '범위'}별 목표 N 달성률", (dim or "범위", "판단 대수", "달성", "미달",
+                                                                          "확인 필요", "달성률"), rows),),
+                          charts=(BarChart(f"{dim or '범위'}별 목표 N 달성률", tuple(r[0] for r in rows),
+                                           tuple(None if v.rate is None else round(v.rate * 100, 1) for v in rates.values())),)
+                          if len(rows) > 1 else (), notices=tuple(notices), title=f"{scope.subject} {dim}별 목표 N 달성률")
+    counts = {k: len({u.record.equipment_id for u in v}) for k, v in grouped.items()}
+    total = len({u.record.equipment_id for u in items})
+    order = sorted(counts, key=lambda k: (-counts[k], k))
+    rows = tuple((k, f"{counts[k]}대", _pct(counts[k] / total if total else None)) for k in order)
+    summary = f"{scope.subject} 설비는 {total}대예요."
+    if by:
+        summary += f" {dim}별로는 {order[0]}이(가) {counts[order[0]]}대로 가장 많아요."
+    return ChatAnswer(request, scope.understood, summary, scope.base,
+                      tables=(Table(f"{dim or '범위'}별 설비 수", (dim or "범위", "설비 수", "비율"), rows),),
+                      notices=tuple(notices), title=f"{scope.subject} {dim}별 설비 수".strip(),
+                      equipment_ids=tuple(sorted({u.record.equipment_id for u in items})))
+
+
 def _missing(data: ChatData) -> str:
     """조건을 못 쓴 질문의 답: 답하지 않은 이유와 지금 자료에 있는 선택지."""
     catalog = data.catalog
@@ -588,6 +874,14 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     if not request.understood or not request.intents:
         return ChatAnswer(request, "요청을 찾지 못함", "분석할 내용을 찾지 못했어요. 아래 같은 질문을 해 보세요.",
                           suggestions=SUGGESTIONS)
+    if Intent.DATA_INFO in request.intents:
+        return data_info_answer(request, data)
+    if Intent.AGGREGATE in request.intents:
+        return aggregate_answer(request, data)
+    if request.period:
+        return period_answer(request, data)
+    if request.unsupported:
+        return unsupported_answer(request, data)
     scope = _scope(request, data)
     sentences, tables, charts, notices = [], [], [], []
     cause, cause_is_ai, report, equipment_ids, focus = None, False, None, (), None
@@ -595,8 +889,10 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         notices.append(f"HPA {scope.hpa}대는 분석에서 제외했습니다.")
     if scope.issues:
         # 말한 조건을 못 쓰면 더 넓은 범위로 답하지 않는다 (평택을 물었는데 전체 숫자를 주면 오해를 부른다).
-        return ChatAnswer(request, scope.understood, _missing(data), scope.base, issues=scope.issues,
-                          suggestions=SUGGESTIONS[:4])
+        short = _missing_short(data, scope.problems)
+        follow = (_latest_report(data),) if short and Intent.REPORT in request.intents else ()
+        return ChatAnswer(request, scope.understood, short or _missing(data), scope.base, issues=scope.issues,
+                          suggestions=(*follow, *SUGGESTIONS[:4 - len(follow)]))
     if not scope.records:
         return ChatAnswer(request, scope.understood, "조건에 맞는 설비가 없습니다.", scope.base, issues=scope.issues,
                           suggestions=SUGGESTIONS[:4])

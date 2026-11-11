@@ -14,9 +14,10 @@ from dataclasses import replace
 from setron.features.analysis.service import explain
 from collections import Counter
 
-from setron.features.chat import ChatAnswer, ChatData, ChatRequest, answer, polish, recognize
-from setron.features.chat.answers import SUGGESTIONS, josa, latest_until, report_answers
-from setron.features.chat.classify import OUT_OF_SCOPE_MESSAGE, OUT_OF_SCOPE_TITLE, classify
+from setron.features.chat import ChatAnswer, ChatData, ChatRequest, Intent, answer, polish, recognize
+from setron.features.chat.answers import (SUGGESTIONS, UNSUPPORTED_TITLE, josa, latest_until, missing_date_answer,
+                                          report_answers, unsupported_answer)
+from setron.features.chat.classify import CLARIFY_TITLE, OUT_OF_SCOPE_MESSAGE, OUT_OF_SCOPE_TITLE, plan
 from setron.features.chat.recognize import is_smalltalk
 from setron.features.chat.export import query_export
 from setron.features.query.schemas import FamilyChoice, GroupChoice, QueryCatalog
@@ -67,6 +68,7 @@ class ChatService:
 
     def __init__(self, source, targets_provider: Callable[[], dict], client=None):
         self.source, self.targets_provider, self.client = source, targets_provider, client
+        self.quick_questions: set[str] = set()      # 화면의 바로 분석·예시 질문: AI 계획 없이 규칙으로 즉시
 
     def data(self) -> ChatData:
         source = self.source
@@ -122,10 +124,22 @@ class ChatService:
 
     reports_progress = True          # 화면 대기 카드에 실제 진행 단계를 알려 준다
 
-    def ask(self, question: str, previous: ChatRequest | None = None, progress=None) -> ChatAnswer:
-        """질문 → 답. 규칙으로 먼저 이해하고, 못 알아들은 질문만 AI에게 '요청 종류·조건' 분류를 부탁한다.
+    def _quick(self) -> set[str]:
+        """AI 계획 없이 규칙으로 바로 답할 질문: 바로 분석 버튼·예시 카드·추천 질문 (정해진 문장이라 규칙이 확실히 안다)."""
+        texts = set(self.quick_questions) | set(SUGGESTIONS)
+        try:
+            for _, _, questions in self.starters() or ():
+                texts.update(questions)
+        except Exception:
+            pass
+        return {text.strip() for text in texts}
 
-        AI는 분류만 한다. 숫자·표는 언제나 DB 계산이고, AI가 바꿔 준 질문도 규칙이 다시 확인한다.
+    def ask(self, question: str, previous: ChatRequest | None = None, progress=None) -> ChatAnswer:
+        """질문 → 답. AI가 먼저 계획하고, 규칙이 검사·대체한다 (11/11).
+
+        - 직접 입력한 질문: AI가 '어떤 도구를, 어떤 조건으로'만 계획 → 규칙이 이름·날짜·도구를 검사 → DB 계산.
+        - 바로 분석·예시 질문, 인사말, AI 없음·실패: 규칙만으로 답한다 (지금처럼).
+        - 없는 기능·없는 날짜는 다른 것으로 바꿔 답하지 않고 '없다'고 말한다. 숫자는 언제나 DB 계산이다.
 
         param
         - progress: 실제 단계가 끝날 때마다 끝난 단계 수를 받는 함수 (워커 스레드에서 불림).
@@ -133,23 +147,39 @@ class ChatService:
         """
         step = progress or (lambda done: None)
         data = self.data()
-        request = recognize(question, data.catalog, previous=previous)
-        interpreted = ""
-        if not request.understood and self.client is not None and not is_smalltalk(question):
-            guess = classify(self.client, question, data.catalog)
-            if guess is not None and guess.out_of_scope:
-                return ChatAnswer(request, OUT_OF_SCOPE_TITLE, OUT_OF_SCOPE_MESSAGE, suggestions=SUGGESTIONS[:4],
+        rules = recognize(question, data.catalog, previous=previous)
+        request, interpreted = rules, ""
+        # 보고서 + 달·기간이 분명하면 규칙이 정확하다 ('5월부터 10월까지 보고서 만들 수 있어?'를 AI가 자료 안내로 계획하던 문제)
+        exact_report = rules.intents == (Intent.REPORT,) and bool(rules.period or rules.conditions.base_date)
+        # 파편화 · 버전 종류 · '버전 + 기준 + 최신화율'도 질문에 분명한 단서가 있어 규칙이 정확하다
+        # (AI가 '최신화율'만 보고 달성률 비교로 계획하면 기준 버전을 무시하거나 '그 버전 쓰는 설비'로 읽던 문제)
+        exact_aggregate = rules.intents == (Intent.AGGREGATE,)
+        if (self.client is not None and not is_smalltalk(question) and not exact_report and not exact_aggregate
+                and question.strip() not in self._quick()):
+            planned = plan(self.client, question, data.catalog, previous=previous)
+            if planned is not None and planned.out_of_scope:
+                return ChatAnswer(rules, OUT_OF_SCOPE_TITLE, OUT_OF_SCOPE_MESSAGE, suggestions=SUGGESTIONS[:4],
                                   title=OUT_OF_SCOPE_TITLE)
-            if guess is not None and guess.question:
-                retry = recognize(guess.question, data.catalog, previous=previous)
-                if retry.understood:
-                    request, interpreted = replace(retry, question=question), guess.question
+            if planned is not None and planned.clarify:
+                return ChatAnswer(replace(rules, understood=True, intents=()), CLARIFY_TITLE, planned.clarify,
+                                  suggestions=planned.options or SUGGESTIONS[:3], title=CLARIFY_TITLE)
+            if planned is not None and planned.unsupported:
+                return unsupported_answer(replace(rules, understood=True, unsupported=planned.unsupported), data)
+            if planned is not None and planned.missing_date:
+                return missing_date_answer(rules, data, planned.missing_date)
+            if planned is not None and planned.question:
+                retry = recognize(planned.question, data.catalog, previous=previous)
+                if retry.understood:          # 규칙 검사를 통과한 계획만 쓴다. 아니면 규칙의 이해로 대체
+                    request, interpreted = replace(retry, question=question), planned.question
         step(2)                                            # 질문 이해 · 데이터 조회 끝
         result = answer(request, data)
         step(4)                                            # 표 · 그래프 · 원인 · 우선순위 끝 → 답변 작성
         if interpreted:
             result = replace(result, notices=(f"질문을 ‘{interpreted}’(으)로 이해했어요.", *result.notices))
-        if not request.understood:
+        if result.title != CLARIFY_TITLE:
+            # 답에 넣은 추천 질문은 규칙에 맞게 만든 문장이다 → 누르면 AI 계획 없이 규칙으로 바로 (확인 질문의 선택지는 제외)
+            self.quick_questions.update(text.strip() for text in result.suggestions)
+        if not request.understood or result.title == UNSUPPORTED_TITLE:
             return result                                   # 정해진 안내 문장은 AI로 다듬지 않는다
         return polish(result, self.client)
 

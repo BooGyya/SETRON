@@ -132,6 +132,26 @@ class ReportsPage(QWidget):
     def kind(self):
         return next(key for key, control in self.type_buttons.items() if control.isChecked())
 
+    def open_period(self, kind: str, start, end) -> bool:
+        """다른 화면(AI 분석)에서 '이 종류 · 이 기간으로' 보고서 메뉴를 채운다. 만들기는 사용자가 누른다 (11/11).
+
+        param
+        - kind: REPORT_TYPES의 키 (예: "status", "change").
+        - start, end: 기간 (datetime.date).
+
+        return
+        - 채웠으면 True. 저장 중이거나 모르는 종류면 False (지금 조건을 그대로 둔다).
+        """
+        if self.saving or kind not in self.type_buttons:
+            return False
+        self.type_buttons[kind].setChecked(True)
+        with QSignalBlocker(self.start), QSignalBlocker(self.end):
+            self.start.setDate(QDate(start.year, start.month, start.day))
+            self.end.setDate(QDate(end.year, end.month, end.day))
+        self._kind_changed()
+        self._notice(f"AI 분석에서 요청한 기간 {start.isoformat()} ~ {end.isoformat()}으로 채웠어요. 형식을 고르고 만들어 주세요.")
+        return True
+
     def enter(self):
         if self.state.catalog != self.source.catalog:
             self.query_panel.set_catalog(self.source.catalog)

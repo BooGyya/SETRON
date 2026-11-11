@@ -8,7 +8,7 @@
 import argparse
 import sys
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
@@ -788,7 +788,17 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.catalog_changed.connect(lambda *_: ai.refresh())
     window.query_panel.targets_changed.connect(lambda *_: ai.refresh())
     window.page_changed.connect(lambda key: ai.refresh() if key == "ai" else None)
-    ai.navigate_requested.connect(window.navigate)
+    def ai_navigate(route):
+        # AI 분석의 이동 버튼. "reports:<종류>:<시작>:<끝>"이면 보고서 메뉴를 열고 종류·기간을 채운다 (11/11).
+        key, _, rest = str(route).partition(":")
+        window.navigate(key)
+        if key == "reports" and rest:
+            kind, start, end = (rest.split(":") + ["", ""])[:3]
+            try:
+                reports.open_period(kind, date.fromisoformat(start), date.fromisoformat(end))
+            except ValueError:
+                pass
+    ai.navigate_requested.connect(ai_navigate)
     importer.requery_requested.connect(lambda: window.navigate("dashboard"))
 
     def show_import_result(day, site, route):
