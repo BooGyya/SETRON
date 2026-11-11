@@ -9,7 +9,7 @@ from setron.ui.theme import SECONDARY
 
 EXPORT_OPTIONS = (
     ("sql", "DB 전체 SQL", "데이터베이스 전체를 복원 가능한 SQL 파일로 저장합니다."),
-    ("summary", "관리값 요약 Excel", "현재 관리값을 요약한 Excel 통합문서를 저장합니다."),
+    ("summary", "관리값 요약 Excel", "설비현황표와 릴리즈노트 두 시트를 Excel로 저장합니다."),
 )
 
 

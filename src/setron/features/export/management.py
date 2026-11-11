@@ -1,7 +1,7 @@
-"""관리 데이터 전체를 정리된 표의 Excel(xlsx)로 내보낸다 (명세 BE-021, REQ-023·REQ-063).
+"""저장된 설비현황표와 릴리즈노트를 Excel(xlsx) 두 시트로 내보낸다.
 
 현황 보고서(:mod:`setron.features.export.service`)와 달리 계산 결과가 아니라 DB에 저장된 **현재 관리값**을
-데이터 종류별 시트로 옮긴다. 앱에서 수정·저장한 값이 그대로 나온다.
+설비현황표·릴리즈노트 시트로 옮긴다. 릴리즈노트에는 버전별 Item도 함께 담는다.
 
 정한 규칙
 - 모든 표를 한 트랜잭션에서 읽어 같은 시점의 자료를 쓴다.
@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -28,47 +27,29 @@ from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.infrastructure.database import DatabaseError
 
 SHEETS = (
-    ("모델·계열", "설비군 분류·모델과 버전 계열"),
-    ("설비 현황", "기준일별 설비 현황. PM·적용 SW마다 한 줄"),
-    ("릴리즈", "버전 계열별 릴리즈 버전"),
-    ("Item", "릴리즈 버전별 Item 적용 상태와 모델 범위"),
-    ("위험 기준", "등록된 환경안전·결함·직접 지정 위험"),
-    ("관리 설정", "노후도 기간 기준 등"),
+    ("설비현황표", "기준일별 설비 현황. PM·적용 SW마다 한 줄"),
+    ("릴리즈노트", "버전 계열별 릴리즈와 Item 적용 상태·모델 범위"),
 )
-CATEGORY_LABELS = {"POLY": "Poly", "OXIDE": "Oxide", "KCTC": "KCTC", "HPA": "HPA"}
 STATE_LABELS = {"APPLIED": "적용", "NOT_APPLIED": "미적용", "UNKNOWN": "미확인"}
 SCOPE_LABELS = {"ALL": "전체 모델", "LISTED": "지정 모델", "UNKNOWN": "미확인"}
-RULE_LABELS = {"SAFETY_REQUIRED": "환경안전 필수 Item", "DEFECT_ITEM": "결함 Item", "DIRECT_VERSION": "직접 지정 버전"}
 FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 def build_management_workbook(storage, *, now=datetime.now) -> Workbook:
-    """DB의 관리 데이터 전체로 통합문서를 만든다. 파일로 저장하지는 않는다."""
+    """같은 시점의 DB 자료로 설비현황표·릴리즈노트 통합문서를 만든다."""
     rows = EquipmentRepository().rows
     with storage.transaction() as tx:
         data = {table: rows(tx, table) for table in (
             "equipment_group", "version_family", "equipment", "equipment_snapshot", "equipment_version",
-            "equipment_pm", "release_version", "item", "release_version_item", "risk_rule", "app_setting")}
+            "equipment_pm", "release_version", "item", "release_version_item")}
     names = _Names(data)
 
     book = Workbook()
-    guide = book.active
-    guide.title = "안내"
-    _rows(guide, ["항목", "내용"], [
-        ["생성 시각", now().strftime("%Y-%m-%d %H:%M:%S")],
-        ["내용", "DB에 저장된 현재 관리값 (앱에서 수정·저장한 값 반영)"],
-        ["원본 셀", "원본 셀 위치·원문 값은 넣지 않았습니다. 원문까지 옮기려면 DB 전체 SQL 내보내기를 쓰세요."],
-        *([f"시트: {title}", description] for title, description in SHEETS),
-    ])
-    for title, _ in SHEETS:
-        book.create_sheet(title)
-    _catalog(book["모델·계열"], data, names)
-    _equipment(book["설비 현황"], data, names)
-    _releases(book["릴리즈"], data, names)
-    _items(book["Item"], data, names)
-    _risks(book["위험 기준"], data, names)
-    _rows(book["관리 설정"], ["설정 이름", "값"],
-          [[r["setting_key"], json.dumps(r["setting_value"], ensure_ascii=False)] for r in data["app_setting"]])
+    book.properties.created = now()
+    book.active.title = "설비현황표"
+    book.create_sheet("릴리즈노트")
+    _equipment(book["설비현황표"], data, names)
+    _releases(book["릴리즈노트"], data, names)
     return book
 
 
@@ -92,20 +73,6 @@ def save_management_summary(storage, path: str | Path) -> ExportResult:
 
 
 # --- 시트 -----------------------------------------------------------------------
-
-def _catalog(sheet: Worksheet, data, names: _Names) -> None:
-    families = {}
-    for family in data["version_family"]:
-        families.setdefault(family["group_id"], []).append(family)
-    rows = []
-    for group in data["equipment_group"]:
-        base = [CATEGORY_LABELS.get(group["category"], group["category"]), group["group_name"],
-                names.group(group["parent_group_id"]) if group["parent_group_id"] else "",
-                "예" if group["analysis_enabled"] else "아니오 (분석 제외)"]
-        for family in families.get(group["group_id"], []) or [None]:
-            rows.append([*base, family["family_name"] if family else "", (family or {}).get("ui_type") or ""])
-    _rows(sheet, ["분류", "모델", "기본 모델", "분석 포함", "버전 계열", "UI 유형"], rows)
-
 
 def _equipment(sheet: Worksheet, data, names: _Names) -> None:
     codes = {e["equipment_id"]: e["equipment_code"] for e in data["equipment"]}
@@ -134,50 +101,37 @@ def _equipment(sheet: Worksheet, data, names: _Names) -> None:
 
 
 def _releases(sheet: Worksheet, data, names: _Names) -> None:
-    rows = [[names.family_owner(r["family_id"]), names.family(r["family_id"]), r["version_raw"],
-             r["version_suffix"] or "", r["released_at"] or "미확인",
-             "미확인" if r["version_order"] is None else r["version_order"],
-             "확인됨" if r["item_mapping_status"] == "VERIFIED" else "미확인",
-             ", ".join(r["edited_fields"] or ()), r["batch_id"]]
-            for r in sorted(data["release_version"], key=lambda r: (r["family_id"], r["version_order"] is None,
-                                                                    r["version_order"] or 0, r["release_version_id"]))]
-    _rows(sheet, ["관리 모델", "버전 계열", "버전(원문)", "접미사", "출시일", "확인된 순서", "Item 매핑",
-                  "직접 수정 항목", "입력 작업"], rows)
-
-
-def _items(sheet: Worksheet, data, names: _Names) -> None:
     items = {i["item_id"]: i for i in data["item"]}
+    links_by_release = {}
+    for link in data["release_version_item"]:
+        links_by_release.setdefault(link["release_version_id"], []).append(link)
     linked = set()
     rows = []
-    for link in data["release_version_item"]:
-        item = items[link["item_id"]]
-        linked.add(item["item_id"])
-        release = names.releases[link["release_version_id"]]
-        rows.append([names.family(release["family_id"]), release["version_raw"], _item_no(item), item["content"],
-                     STATE_LABELS.get(link["item_state"], link["item_state"]),
-                     SCOPE_LABELS.get(link["target_scope"], link["target_scope"]),
-                     ", ".join(names.group(g) for g in link["target_group_ids"] or ()),
-                     ", ".join(item["edited_fields"] or ())])
-    rows += [["", "연결 없음", _item_no(i), i["content"], "", "", "", ", ".join(i["edited_fields"] or ())]
+    releases = sorted(data["release_version"], key=lambda r: (r["family_id"], r["version_order"] is None,
+                                                            r["version_order"] or 0, r["release_version_id"]))
+    for release in releases:
+        base = [names.family_owner(release["family_id"]), names.family(release["family_id"]), release["version_raw"],
+                release["version_suffix"] or "", release["released_at"] or "미확인",
+                "미확인" if release["version_order"] is None else release["version_order"],
+                "확인됨" if release["item_mapping_status"] == "VERIFIED" else "미확인",
+                ", ".join(release["edited_fields"] or ()), release["batch_id"]]
+        links = links_by_release.get(release["release_version_id"], [])
+        if not links:
+            rows.append([*base, "", "", "", "", "", ""])
+        for link in links:
+            item = items[link["item_id"]]
+            linked.add(item["item_id"])
+            rows.append([*base, _item_no(item), item["content"],
+                         STATE_LABELS.get(link["item_state"], link["item_state"]),
+                         SCOPE_LABELS.get(link["target_scope"], link["target_scope"]),
+                         ", ".join(names.group(g) for g in link["target_group_ids"] or ()),
+                         ", ".join(item["edited_fields"] or ())])
+    rows += [["", "", "연결 없음", "", "", "", "", "", i["batch_id"],
+              _item_no(i), i["content"], "", "", "", ", ".join(i["edited_fields"] or ())]
              for i in data["item"] if i["item_id"] not in linked]
-    _rows(sheet, ["버전 계열", "버전", "Item 번호", "내용", "적용 상태", "모델 범위", "지정 모델", "직접 수정 항목"], rows)
-
-
-def _risks(sheet: Worksheet, data, names: _Names) -> None:
-    items = {i["item_id"]: i for i in data["item"]}
-
-    def item(item_id):
-        return f"{_item_no(items[item_id])} {items[item_id]['content']}".strip() if item_id in items else ""
-
-    rows = [[RULE_LABELS.get(r["rule_type"], r["rule_type"]), names.family(r["family_id"]),
-             names.group(r["group_id"]) if r["group_id"] else "계열 전체", item(r["item_id"]),
-             *(names.release(r[key]) if r[key] else "" for key in
-               ("release_version_id", "start_release_version_id", "end_release_version_id")),
-             r["risk_reason"], "사용" if r["is_enabled"] else "사용 안 함",
-             "확인됨" if r["mapping_status"] == "VERIFIED" else "연결 확인 필요"]
-            for r in data["risk_rule"]]
-    _rows(sheet, ["유형", "버전 계열", "대상 모델", "Item", "직접 지정 버전", "시작 버전(포함)", "해제 버전(제외)",
-                  "사유", "사용 여부", "연결 상태"], rows)
+    _rows(sheet, ["관리 모델", "버전 계열", "버전(원문)", "접미사", "출시일", "확인된 순서", "Item 매핑",
+                  "직접 수정 항목", "입력 작업", "Item 번호", "내용", "적용 상태", "모델 범위", "지정 모델",
+                  "Item 직접 수정 항목"], rows)
 
 
 # --- 보조 -----------------------------------------------------------------------

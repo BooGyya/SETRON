@@ -12,6 +12,7 @@ from setron.infrastructure.database import Database, DatabaseConnectionError
 from setron.ui.app import create_window
 from setron.ui.database_source import data_exporter_from_env, sql_exporter_from_env
 from setron.ui.import_dialogs import ImportConfirmDialog
+from test_release_revision import revision_storage  # noqa: F401
 
 
 @pytest.fixture(scope="module")
@@ -213,6 +214,36 @@ def test_export_action_runs_data_exporter(qapp, tmp_path):
     assert window.header.actions["export"].isEnabled()
     assert calls == [tmp_path / "관리데이터.xlsx"] and result.saved
     window.close()
+
+
+def test_sidebar_excel_export_saves_only_equipment_and_release_notes(qapp, revision_storage, tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+
+    from setron.features.export.management import save_management_summary
+    from test_management_db_source import connected
+
+    connected(revision_storage)
+    path = tmp_path / "두시트.xlsx"
+    messages = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_, **__: (str(path), ""))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[-1]))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: pytest.fail(args[-1]))
+    window = create_window(data_exporter=lambda destination: save_management_summary(revision_storage, destination))
+    try:
+        window.nav["export"].click()
+        page = window.pages["export"]
+        assert page.details["summary"].text() == "설비현황표와 릴리즈노트 두 시트를 Excel로 저장합니다."
+        page.buttons["summary"].click()
+        book = load_workbook(path)
+        try:
+            assert book.sheetnames == ["설비현황표", "릴리즈노트"]
+            assert book["설비현황표"].max_row == 2
+            assert book["릴리즈노트"].cell(2, 11).value == "원본 안전 개선"
+        finally:
+            book.close()
+        assert len(messages) == 1 and "설비현황표 1행 · 릴리즈노트 1행" in messages[0]
+    finally:
+        window.close()
 
 
 def test_data_exporter_exists_only_with_db_settings(tmp_path):

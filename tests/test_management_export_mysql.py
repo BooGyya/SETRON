@@ -1,4 +1,4 @@
-"""관리 데이터 전체 Excel 내보내기를 실제 MySQL 5.6.19에서 검증한다 (BE-021, REQ-023·REQ-063)."""
+"""설비현황표·릴리즈노트 Excel 내보내기를 실제 MySQL 5.6.19에서 검증한다."""
 
 import os
 from datetime import date, datetime
@@ -52,41 +52,32 @@ def values(sheet):
 
 
 def test_sheets_follow_data_kinds(book):
-    assert book.sheetnames == ["안내", *(title for title, _ in SHEETS)]
-    assert values(book["안내"])[1] == ["생성 시각", "2026-11-03 12:00:00"]
-
-
-def test_catalog_lists_models_with_families(book):
-    rows = values(book["모델·계열"])
-    assert ["Oxide", "M-O5 Prime", "M-O5", "예", "", ""] in rows
-    assert ["HPA", "HPA", "", "아니오 (분석 제외)", "HPA", ""] in rows
-    assert ["Poly", "M-C3", "", "예", "C3 통합UI", "INTEGRATED"] in rows
+    assert book.sheetnames == ["설비현황표", "릴리즈노트"] == [title for title, _ in SHEETS]
+    assert book.properties.created == datetime(2026, 11, 3, 12, 0)
 
 
 def test_equipment_has_one_row_per_pm_and_software_with_names(book):
-    rows = [r for r in values(book["설비 현황"])[1:] if r[0] == "MG-1"]
+    rows = [r for r in values(book["설비현황표"])[1:] if r[0] == "MG-1"]
     assert [(r[10], r[11], r[13], r[14], r[15]) for r in rows] == [
         ("PM1", "M-O2", "O2", "v1", "v1"), ("PM3", "M-O3", "O3", "v3", "미등록")]
     assert rows[0][5] == "혼합·미확인" and rows[0][2] == "화성"
 
 
-def test_release_item_and_risk_use_readable_names(book):
-    release = [r for r in values(book["릴리즈"])[1:] if r[1] == "O2"][0]
+def test_release_notes_include_items_and_readable_names(book):
+    release = [r for r in values(book["릴리즈노트"])[1:] if r[1] == "O2"][0]
     assert release[:7] == ["M-O2", "O2", "v1", "", date(2026, 9, 1), "미확인", "미확인"]
-    item = [r for r in values(book["Item"])[1:] if r[3] == FORMULA][0]
-    assert item[:7] == ["O2", "v1", "7", FORMULA, "적용", "미확인", ""]
-    risk = values(book["위험 기준"])[1]
-    assert risk[:5] == ["직접 지정 버전", "O2", "계열 전체", "", "v1"] and risk[-2:] == ["사용", "확인됨"]
-    assert values(book["관리 설정"])[1][0] == "version_age_thresholds"
+    assert release[9:14] == ["7", FORMULA, "적용", "미확인", ""]
 
 
 def test_saved_file_keeps_formula_like_text_as_text(storage, book, tmp_path):  # noqa: F811
     result = save_management_summary(storage, tmp_path / "관리데이터.xlsx")
 
-    assert result.saved and "설비 현황" in result.message
+    assert result.saved and "설비현황표" in result.message and "릴리즈노트" in result.message
     saved = load_workbook(tmp_path / "관리데이터.xlsx")
-    cell = next(c for row in saved["Item"].iter_rows() for c in row if c.value == FORMULA)
+    assert saved.sheetnames == ["설비현황표", "릴리즈노트"]
+    cell = next(c for row in saved["릴리즈노트"].iter_rows() for c in row if c.value == FORMULA)
     assert cell.data_type == "s"
+    saved.close()
 
 
 def test_wrong_name_and_db_failure_are_reported(storage, tmp_path):  # noqa: F811
