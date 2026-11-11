@@ -115,26 +115,18 @@ class ColumnMemory:
             table.setColumnWidth(column, width)
         return True
 
-    def fit(self, table, *, cap=360, spread=True, fixed=None, grow=None):
-        """기억한 폭이 없으면 내용 폭으로 맞춘다. 남는 폭은 ``grow`` 열에 주거나(있으면), ``spread``면 열마다 나눈다.
-
-        ``fixed``: {열: 고정 폭}. ``grow``를 주면 마지막 열이 남는 폭을 다 차지하지 않게 끝 열 늘이기를 끈다.
-        """
-        if grow is not None:
-            table.horizontalHeader().setStretchLastSection(False)
+    def fit(self, table, *, cap=360, spread=True, fixed=None):
+        """기억한 폭이 없으면 내용 폭으로 맞추고, ``spread``면 남는 폭을 열마다 나눈다. ``fixed``: {열: 고정 폭}."""
         if self.restore(table):
             return
         table.resizeColumnsToContents()
         widths = [min(max(table.columnWidth(c) + 16, 64), cap) for c in range(table.columnCount())]
         for column, width in (fixed or {}).items():
             widths[column] = width
-        spare = max(0, table.viewport().width() - sum(widths))
-        if grow is not None:
-            widths[grow] += spare
-        elif spread and widths:
-            widths = [w + spare // len(widths) for w in widths]
+        spare = table.viewport().width() - sum(widths)
+        extra = spare // len(widths) if spread and widths and spare > 0 else 0
         for column, width in enumerate(widths):
-            table.setColumnWidth(column, width)
+            table.setColumnWidth(column, width + extra)
 
 
 def _table(headers, name):
@@ -1894,8 +1886,7 @@ class HistoryPanel(_Panel):
         self.table = _table(self.COLUMNS, "변경 이력 (수정 일시 · 대상 · 수정 전후)")
         self.table.setMinimumHeight(560)
         self.table.setWordWrap(False)
-        # 열 구성 · 기본 폭이 바뀌어(11-11 5차) 예전에 기억한 폭을 쓰지 않도록 키를 새로 둔다
-        self.page.columns.attach(self.table, "history.v2")
+        self.page.columns.attach(self.table, "history")
         self.table.itemSelectionChanged.connect(self._open_detail)
         card.body.addWidget(self.table)
         card.body.addWidget(label("줄을 누르면 오른쪽에서 수정 파일 · 시트 · 셀과 수정 전 → 후 전체가 나옵니다. "
@@ -1958,7 +1949,7 @@ class HistoryPanel(_Panel):
             after.setFont(font)
         self.table.clearSelection()
         self.table.blockSignals(False)
-        self.page.columns.fit(self.table, cap=260, grow=2)  # 각 열은 내용 폭, 남는 폭은 '대상' 열에
+        self.page.columns.fit(self.table, cap=300)
         self.count.setText(f"{len(rows)}건")
 
     @staticmethod
