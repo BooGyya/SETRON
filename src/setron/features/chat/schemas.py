@@ -69,6 +69,7 @@ class ChatRequest:
     period: tuple[int, ...] = ()                # 여러 달 보고서의 해당 달 목록 (예: 5, 6, 7). 1~12월 전체는 자료가 있는 전체 기간
     each_month: bool = False                    # 여러 달을 '각각' 월간 보고서로 원함
     aggregate: tuple[str, ...] = ()             # 범용 집계 (무엇을 셀지, 무엇별로, 기준 버전). aggregate.MEASURES · DIMENSIONS
+    codes: tuple[str, ...] = ()                 # 질문 속 설비 호기 (예: DEMO-0121 · ESPA02) — 그 설비만 본다
 
 
 @dataclass(frozen=True)

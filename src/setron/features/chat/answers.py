@@ -129,10 +129,14 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
     issues = tuple(f"'{issue.value}': {issue.message}" for issue in resolved.issues)
     dates = tuple(sorted({r.base_date for r in data.records}))
     base = resolved.base_date or (dates[-1] if dates else None)
+    wanted_codes = {code.casefold() for code in request.codes}
+
     def pick(records):
         chosen = select_records(records, replace(resolved, base_date=None), data.catalog)
         if request.areas:
             chosen = tuple(r for r in chosen if area_of({"site": r.site, "line": r.line}) in request.areas)
+        if wanted_codes:                                   # 질문 속 설비 호기 (DEMO-0121 · ESPA02)
+            chosen = tuple(r for r in chosen if (r.equipment_code or "").casefold() in wanted_codes)
         return tuple(chosen)
 
     def at(day):
@@ -151,6 +155,9 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
     subject += list(resolved.lines)
     subject += [groups.get(i, str(i)) for i in resolved.group_ids]
     subject += [families.get(i, str(i)) for i in resolved.family_ids if families.get(i) not in subject]
+    subject += list(request.codes)
+    if request.codes:
+        parts.append("설비 = " + ", ".join(request.codes))
     if resolved.sites:
         parts.append("Site = " + ", ".join(resolved.sites))
     if request.areas:
@@ -568,7 +575,7 @@ PERIOD_TITLE = "기간 보고서"
 PERIOD_REPORTS = (("status", "버전 표준화 리포트", "기간 동안의 표준화율 · N 적용률 추이"),
                   ("change", "설비별 변경 이력 리포트", "기간 안의 설비별 버전 변경"))
 _DATE_FIELDS = ("base_date", "date", "dates")
-_DATE_LIKE = re.compile(r"(?:(?<!\d)(?:1[0-2]|[1-9])\s*월|20\d\d[-./]\d{1,2})")
+_DATE_LIKE = re.compile(r"(?:(?<!\d)(?:1[0-2]|[1-9])\s*월|20\d\d[-./]\d{1,2}|20\d\d\s*년|\d{1,2}/\d{1,2}|\d+달 전)")
 _VERSION_LIKE = re.compile(r"v\d[\w.\-]*", re.I)
 _MODEL_LIKE = re.compile(r"M-[A-Z0-9]+(?:\s*[A-Z]+)?|[OC]\d{1,2}", re.I)   # M-C9, M-O5 Prime, O7
 _LINE_LIKE = re.compile(r"(?:[A-Z]\d{1,2}[A-Z]?|\d{1,2}L|[A-Z]{2,5})(?:-[A-Z]\d)?", re.I)
@@ -654,8 +661,23 @@ def period_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
 
 
 def unsupported_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
-    """지원하지 않는 요청 (주간 보고서 등)은 다른 것으로 바꿔 답하지 않고, 없다고 말하고 대신 할 수 있는 것을 권한다."""
-    summary = (f"{request.unsupported}는 아직 만들 수 없어요. 설비 현황표가 한 달 간격으로 저장돼 그보다 짧은 기간의 "
+    """지원하지 않는 요청은 다른 것으로 바꿔 답하지 않고, 없다고 말하고 대신 할 수 있는 것을 권한다.
+
+    - 주간 · 일별 보고서: 자료가 한 달 간격이라 없다.
+    - 공정 · 담당자 · 일정 · 비용 · 고장 이력: 저장하지 않는 정보.
+    - 위험 후보 거르기: AI 분석에서는 아직 못 거른다 — 히트맵 · 아이템 매니저로 안내.
+    """
+    label = request.unsupported
+    if label == "위험 후보 거르기":
+        summary = ("AI 분석에서는 아직 위험 후보로 설비를 거르지 못해요. 버전 히트맵의 '위험 후보만' 필터나 아이템 매니저의 "
+                   "위험 기준에서 볼 수 있어요.")
+        return ChatAnswer(request, label, summary, title=UNSUPPORTED_TITLE, actions=(("버전 히트맵 열기", "heatmap"),),
+                          suggestions=("어디부터 업그레이드해야 해?", "요즘 어때?"))
+    if not label.endswith("보고서"):
+        summary = (f"{label}는 지금 저장하지 않는 정보라 답할 수 없어요. 지금 자료는 설비 현황표(사업장 · 라인 · 모델 · "
+                   f"PM · 설치 버전)와 릴리즈노트(버전 · Item)예요.")
+        return ChatAnswer(request, label, summary, title=UNSUPPORTED_TITLE, suggestions=SUGGESTIONS[:3])
+    summary = (f"{label}는 아직 만들 수 없어요. 설비 현황표가 한 달 간격으로 저장돼 그보다 짧은 기간의 "
                f"자료가 없어요. 월간 보고서는 만들 수 있어요. {_date_range(data)}.")
     return ChatAnswer(request, request.unsupported, summary, title=UNSUPPORTED_TITLE,
                       suggestions=(_latest_report(data), "요즘 어때?", *SUGGESTIONS[:2]))
@@ -721,6 +743,9 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     scope = _scope(request, data)
     if spec is None or not scope.records:
         short = _missing_short(data, scope.problems)
+        if spec is not None and not scope.problems:                      # 조건은 다 맞는데 설비가 없다
+            return ChatAnswer(request, scope.understood, f"{scope.subject}에는 조건에 맞는 설비가 없어요.", scope.base,
+                              suggestions=SUGGESTIONS[:3])
         return ChatAnswer(request, scope.understood, short or _missing(data), scope.base, issues=scope.issues,
                           suggestions=SUGGESTIONS[:4])
     found = agg.resolved(request, data)
@@ -731,12 +756,21 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     if spec.measure == "baseline":
         family_id, release = agg.baseline_family(spec.baseline, data, found.family_ids, found.group_ids)
         if release is None:
-            family = data.catalog.releases.get(family_id) if family_id is not None else None
-            if family is not None and family.releases:
+            wanted = list(found.family_ids) or [f.family_id for f in data.catalog.families
+                                                if getattr(f, "group_id", None) in found.group_ids]
+            wanted = [fid for fid in wanted if data.catalog.releases.get(fid) is not None
+                      and data.catalog.releases[fid].releases] or ([family_id] if family_id is not None else [])
+
+            def latest_of(fid):
+                family = data.catalog.releases.get(fid)
+                if family is None or not family.releases:
+                    return ""
                 ordered = sorted(family.releases, key=lambda r: (r.version_order is None, r.version_order or 0))
-                latest = [r.version_raw for r in ordered][-5:][::-1]
-                text = (f"{name(family_id)}에 '{spec.baseline}' 버전은 등록돼 있지 않아 기준으로 쓸 수 없어요."
-                        + (f" 최근 버전: {', '.join(latest)}." if latest else ""))
+                return ", ".join(r.version_raw for r in ordered[-3:][::-1])
+            recent = " / ".join(f"{name(fid)}: {latest_of(fid)}" for fid in wanted if latest_of(fid))
+            if wanted and recent:
+                where = " · ".join(name(fid) for fid in wanted)
+                text = f"{where}에 '{spec.baseline}' 버전은 등록돼 있지 않아 기준으로 쓸 수 없어요. 최근 버전 — {recent}."
             else:
                 text = f"'{spec.baseline}'은(는) 등록된 릴리즈 버전에서 찾지 못해 기준으로 쓸 수 없어요."
             return ChatAnswer(request, scope.understood, text, scope.base, title="기준 버전 없음",
@@ -769,7 +803,7 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
                                         (dim or "범위", "판단 대수", "기준 이상", "기준 미만", "확인 필요", "최신화율"), rows),),
                           charts=(chart,) if len(rows) > 1 else (), notices=tuple(notices),
                           title=f"{label} 기준 최신화율")
-    items = agg.units(scope.records, data, found.family_ids)
+    items = agg.units(scope.all_dates if by == "date" else scope.records, data, found.family_ids)
     if not items:
         return ChatAnswer(request, scope.understood, f"{scope.subject}에는 셀 수 있는 설비가 없어요.", scope.base,
                           suggestions=SUGGESTIONS[:3])
@@ -793,7 +827,13 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         top = order[0]
         score, spreads = scored[top]
         worst = max(spreads, key=lambda s: (s.index, s.total), default=None)
-        if spec.measure == "fragmentation":
+        if len(order) == 1 and worst is not None:                 # 묶음이 하나면 순위가 아니라 그 묶음의 분포를 바로 말한다
+            kinds = ", ".join(f"{name(s_.family_id)} {s_.kinds}가지" for s_ in sorted(spreads, key=lambda s_: -s_.kinds))
+            summary = (f"{scope.subject}은(는) {kinds} 버전을 써요. {name(worst.family_id)}은(는) 설비 {worst.total}대 중 "
+                       f"가장 많이 쓰는 {worst.top}이(가) {_pct(worst.top_share)}예요 (파편화 지수 {score:.2f}).")
+            if spec.measure == "fragmentation":
+                notices.append("파편화 지수 = 같은 계열에서 설비 두 대를 골랐을 때 버전이 다를 확률 (0 = 모두 같음) · 판단 기준 협의 전 초안")
+        elif spec.measure == "fragmentation":
             if worst is None or score == 0:
                 summary = f"{scope.subject} 설비는 {dim or '범위'}마다 계열별로 모두 같은 버전을 써서 파편화된 곳이 없어요."
             else:
@@ -824,8 +864,13 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         rows = tuple((k, str(v.compliant + v.below), str(v.compliant), str(v.below), str(v.undetermined), _pct(v.rate))
                      for k, v in rates.items())
         known = {k: v.rate for k, v in rates.items() if v.rate is not None}
-        summary = (f"{scope.subject} {dim}별 목표 N 달성률에서 가장 낮은 곳은 {min(known, key=known.get)}"
-                   f"({_pct(min(known.values()))})이에요." if known else f"{scope.subject}에는 판단 가능한 설비가 없어요.")
+        if by == "date" and known:
+            first, last = min(known), max(known)
+            summary = (f"{scope.subject} 목표 N 달성률 추이: {first} {_pct(known[first])} → {last} {_pct(known[last])}"
+                       f" ({len(known)}개 기준일).")
+        else:
+            summary = (f"{scope.subject} {dim}별 목표 N 달성률에서 가장 낮은 곳은 {min(known, key=known.get)}"
+                       f"({_pct(min(known.values()))})이에요." if known else f"{scope.subject}에는 판단 가능한 설비가 없어요.")
         return ChatAnswer(request, scope.understood, summary, scope.base,
                           tables=(Table(f"{dim or '범위'}별 목표 N 달성률", (dim or "범위", "판단 대수", "달성", "미달",
                                                                           "확인 필요", "달성률"), rows),),
@@ -876,14 +921,25 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
                           suggestions=SUGGESTIONS)
     if Intent.DATA_INFO in request.intents:
         return data_info_answer(request, data)
+    if request.unsupported and not request.unsupported.endswith("보고서"):
+        return unsupported_answer(request, data)
+    if request.codes:
+        known = {r.equipment_code.casefold() for r in data.records if r.equipment_code}
+        missing = [code for code in request.codes if code.casefold() not in known]
+        if missing:
+            return ChatAnswer(request, " · ".join(request.codes),
+                              f"설비 {', '.join(missing)}은(는) 저장된 현황에 없어요. 호기 이름을 다시 확인해 주세요.",
+                              suggestions=SUGGESTIONS[:3])
     if Intent.AGGREGATE in request.intents:
         return aggregate_answer(request, data)
+    tier_note = ("N+1 · N-1 · N-2 같은 단계로 거르는 건 아직 지원하지 않아 목표 N 이상 · 미만으로 보여줘요. 단계별 색은 버전 히트맵에서 "
+                 "볼 수 있어요.") if re.search(r"n\s*[+\-]\s*[12]", request.question.casefold()) else ""
     if request.period:
         return period_answer(request, data)
     if request.unsupported:
         return unsupported_answer(request, data)
     scope = _scope(request, data)
-    sentences, tables, charts, notices = [], [], [], []
+    sentences, tables, charts, notices = [], [], [], ([tier_note] if tier_note else [])
     cause, cause_is_ai, report, equipment_ids, focus = None, False, None, (), None
     if scope.hpa:
         notices.append(f"HPA {scope.hpa}대는 분석에서 제외했습니다.")

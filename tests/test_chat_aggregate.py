@@ -46,7 +46,7 @@ def test_baseline_version_freshness_rate():
 
 def test_unknown_baseline_version_is_honest():
     result = ask("C3의 V1.2.1.4를 M 버전이라고 했을 때 최신화율은?")
-    assert result.summary == "C3 통합UI에 'V1.2.1.4' 버전은 등록돼 있지 않아 기준으로 쓸 수 없어요. 최근 버전: v3.52_20, v3.52_13."
+    assert result.summary == "C3 통합UI에 'V1.2.1.4' 버전은 등록돼 있지 않아 기준으로 쓸 수 없어요. 최근 버전 — C3 통합UI: v3.52_20, v3.52_13."
     assert not result.tables and result.request.conditions.lines == ()       # 'V1'을 라인으로 읽지 않음
 
 
