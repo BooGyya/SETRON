@@ -2,10 +2,10 @@
 
 from .service import (
     WORKBOOK_KEY, CellBinding, DataAdminService, EquipmentRow, GroupRow, HistoryEntry, ReleaseFamily, ReleaseRow,
-    SheetGrid, StatusSheet, sheet_names, with_workbook,
+    SITES_KEY, SheetGrid, StatusSheet, registered_sites, sheet_names, with_workbook,
 )
 
 __all__ = [
     "WORKBOOK_KEY", "CellBinding", "DataAdminService", "EquipmentRow", "GroupRow", "HistoryEntry", "ReleaseFamily",
-    "ReleaseRow", "SheetGrid", "StatusSheet", "sheet_names", "with_workbook",
+    "ReleaseRow", "SITES_KEY", "SheetGrid", "StatusSheet", "registered_sites", "sheet_names", "with_workbook",
 ]

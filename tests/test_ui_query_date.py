@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
@@ -14,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QTableView
 from setron.ui.app import create_window
 from setron.ui.dashboard_data import NoObservationBefore
 from setron.ui.dashboard_demo import demo_dashboard_source
-from setron.ui.query_state import AppliedQuery, QuerySelection, QueryState
+from setron.ui.query_state import AppliedQuery, FabOption, LineOption, QuerySelection, QueryState
 from setron.ui.theme import install_theme
 
 
@@ -74,9 +75,10 @@ def test_date_field_is_first_on_first_row_and_reset_returns_today(window):
     panel.search_button.click()
     assert window.query_state.applied.selection.as_of == window.query_state.draft.as_of == date(2026, 8, 30)
     assert applied.count() == 1
+    previous = window.query_state.applied
     panel.reset_button.click()  # 조건 초기화는 기준 날짜도 오늘(최신 관측)로 되돌린다
     assert window.query_state.draft.as_of is None and panel.date_edit.date().toPython() == today
-    assert applied.count() == 1 and window.query_state.applied.selection.as_of == date(2026, 8, 30)
+    assert applied.count() == 1 and window.query_state.applied is previous
     panel.search_button.click()
     assert applied.count() == 2 and window.query_state.applied.selection == QuerySelection()
 
@@ -98,10 +100,44 @@ def test_search_icon_applies_the_selected_conditions(window):
     assert window.pages["dashboard"].snapshot.base_date == date(2026, 8, 21)
 
 
+@pytest.mark.parametrize("field", ["site_key", "fab_key", "line_key", "group_key"])
+def test_filter_checkboxes_and_selection_complete_preserve_both_results_until_search(window, field):
+    panel = window.query_panel
+    dashboard, heatmap = window.pages["dashboard"], window.pages["heatmap"]
+    source = dashboard.source
+    site = source.catalog.sites[0].key
+    source.catalog = replace(source.catalog, fabs=(FabOption("test-fab", "테스트 Fab", site),),
+                             lines=(LineOption("test-line", "테스트 Line", site, "test-fab"),))
+    window.set_query_catalog(source.catalog)
+    previous = panel.apply_draft()
+    snapshot = dashboard.snapshot
+    applied = QSignalSpy(window.query_applied)
+    panel.combos[field].click()
+    popup = panel.filter_popup
+    popup.all_button.click()
+    key = next(iter(popup.checks))
+    popup.checks[key].click()
+    assert panel.state.draft == previous.selection
+    assert popup.isVisible() and applied.count() == 0 and panel.state.applied is previous
+    assert dashboard.snapshot is heatmap.snapshot is snapshot
+    popup.confirm_button.click()
+    assert panel.filter_popup is None and applied.count() == 0
+    assert getattr(panel.state.draft, field) == key and panel.state.applied is previous
+    assert dashboard.snapshot is heatmap.snapshot is snapshot
+    window.navigate("heatmap")
+    window.navigate("dashboard")
+    assert dashboard.snapshot is heatmap.snapshot is snapshot and applied.count() == 0
+    panel.search_button.click()
+    assert applied.count() == 1 and panel.state.applied.selection == panel.state.draft
+    assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot is not snapshot
+    assert dashboard.snapshot.query is panel.state.applied
+
+
 def test_calendar_day_confirmation_waits_for_search_to_update_both_screens(window):
     panel = window.query_panel
     panel.set_as_of(date(2026, 10, 21))
     previous = panel.apply_draft()
+    previous_snapshot = window.pages["dashboard"].snapshot
     applied = QSignalSpy(window.query_applied)
     text = panel.date_edit.findChild(QLineEdit)
     QTest.mouseClick(text, Qt.MouseButton.LeftButton, pos=text.rect().center())
@@ -121,17 +157,20 @@ def test_calendar_day_confirmation_waits_for_search_to_update_both_screens(windo
     QTest.mouseClick(grid.viewport(), Qt.MouseButton.LeftButton, pos=grid.visualRect(day).center())
     assert calendar.isVisible() and window.query_state.applied is previous and applied.count() == 0
     assert panel.date_edit.date() == QDate(2026, 10, 21)
+    assert window.pages["dashboard"].snapshot is window.pages["heatmap"].snapshot is previous_snapshot
     QTest.mouseClick(dialog.apply_button, Qt.MouseButton.LeftButton)
     assert not calendar.isVisible() and applied.count() == 0
     assert window.query_state.applied is previous and window.query_state.draft.as_of == date(2026, 8, 25)
+    assert window.pages["dashboard"].snapshot is window.pages["heatmap"].snapshot is previous_snapshot
     panel.search_button.click()
     assert applied.count() == 1
     assert window.query_state.applied.selection.as_of == date(2026, 8, 25)
     dashboard = window.pages["dashboard"]
     assert dashboard.snapshot is window.pages["heatmap"].snapshot
     assert dashboard.snapshot.base_date == date(2026, 8, 21)
+    snapshot = dashboard.snapshot
     panel.date_edit.setDate(QDate(2026, 1, 1))
-    assert applied.count() == 1 and dashboard.snapshot.base_date == date(2026, 8, 21)
+    assert applied.count() == 1 and dashboard.snapshot is window.pages["heatmap"].snapshot is snapshot
     panel.search_button.click()
     assert applied.count() == 2
     assert dashboard.snapshot is None and "2026-01-01 이전" in dashboard.message.text()

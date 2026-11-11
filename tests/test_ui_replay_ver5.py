@@ -251,7 +251,10 @@ def test_interval_too_long_for_period_is_disabled(own):
     assert page.apply_query()
     until(lambda: not page.busy)
     assert page.interval_buttons["month"].isEnabled() and page.interval_buttons["week"].isEnabled()
+    previous = page.data
     page.end.setDate(QDate(2026, 5, 21))
+    assert page.data is previous and not page.busy and page.interval_buttons["month"].isEnabled()
+    page.query_panel.search_button.click()
     until(lambda: not page.busy)
     assert not any(page.interval_buttons[s].isEnabled() for s in ("week", "month", "quarter"))
     assert not page.set_interval("week") and page.step is None
@@ -363,6 +366,7 @@ def test_view_tabs_show_one_view_and_share_the_selected_frame(own):
 
 def test_version_popup_all_clear_cancel_confirm_and_reapply_without_changing_n(own):
     page = replay_page(own)
+    before = page.data
     n = dict(page.source.targets)
     page.open_versions()
     dialog = page.version_dialog
@@ -379,12 +383,14 @@ def test_version_popup_all_clear_cancel_confirm_and_reapply_without_changing_n(o
     dialog.choices["v1.0.1"].click()
     dialog.confirm_button.click()
     assert page.state.draft.versions == VersionFilter(("v1.0.1",))
+    assert page.data is before and not page.busy and page.play_button.isEnabled()
+    page.query_panel.search_button.click()
     assert page.busy and not page.play_button.isEnabled()
     until(lambda: not page.busy)
     assert page.source.targets == n and page.data.request.query.selection.versions == VersionFilter(("v1.0.1",))
 
 
-def test_site_choices_apply_while_popup_stays_open_and_reset_preserves_targets(own):
+def test_site_choices_close_and_reset_wait_for_search_and_preserve_targets(own):
     page = replay_page(own)
     data, n = page.data, dict(page.source.targets)
     page.play()
@@ -394,14 +400,22 @@ def test_site_choices_apply_while_popup_stays_open_and_reset_preserves_targets(o
     popup.all_button.click()
     assert page.data is data and page.timer.isActive()
     popup.checks["hwaseong"].click()
-    assert not page.timer.isActive() and page.busy
+    assert page.data is data and page.timer.isActive() and not page.busy
     assert popup.isVisible() and popup.checks["pyeongtaek"].isEnabled()
     popup.checks["pyeongtaek"].click()
-    until(lambda: not page.busy)
-    assert page.data.request.query.selection.site_key == ("hwaseong", "pyeongtaek")
+    assert page.state.draft.site_key == ("hwaseong", "pyeongtaek")
+    assert page.data is data and not page.busy
     assert popup.isVisible()
     popup.confirm_button.click()
+    assert page.data is data and not page.busy
+    panel.search_button.click()
+    assert not page.timer.isActive() and page.busy
+    until(lambda: not page.busy)
+    data = page.data
+    assert data.request.query.selection.site_key == ("hwaseong", "pyeongtaek")
     page.reset_button.click()
+    assert page.data is data and not page.busy and page.state.draft == QuerySelection()
+    panel.search_button.click()
     until(lambda: not page.busy)
     assert page.state.draft == page.data.request.query.selection == QuerySelection() and page.source.targets == n
     assert page.start.text() == "2026-05-21" and page.end.text() == "2026-10-21"
@@ -412,13 +426,17 @@ def test_inverted_period_never_starts_external_loader(own):
     page = own(ReplayPage(demo_dashboard_source(), loader=lambda request: calls.append(request)))
     page.start.setDate(QDate(2026, 11, 1))
     assert not page.busy and calls == []
+    assert "시작 날짜는 종료 날짜" not in page.message.text()
+    page.query_panel.search_button.click()
+    assert not page.busy and calls == []
     assert "시작 날짜는 종료 날짜와 같거나 앞서야" in page.message.text()
 
 
-def test_replay_calendar_month_navigation_does_not_apply_until_day_is_confirmed(own):
+def test_replay_calendar_day_selection_waits_for_search(own):
     calls = []
     source = demo_dashboard_source()
     page = replay_page(own, loader=lambda request: calls.append(request) or load_replay(source, request))
+    before = page.data
     page.query_panel.range_button.click()
     dialog = page.query_panel.range_button.dialog
     calendar = dialog.calendar
@@ -432,6 +450,8 @@ def test_replay_calendar_month_navigation_does_not_apply_until_day_is_confirmed(
     calendar.clicked.emit(chosen)
     assert len(calls) == 1 and not page.busy
     dialog.apply_button.click()
+    assert page.end.date() == chosen and len(calls) == 1 and not page.busy and page.data is before
+    page.query_panel.search_button.click()
     until(lambda: not page.busy)
     assert len(calls) == 2 and page.data.request.end == chosen.toPython()
 
@@ -454,7 +474,7 @@ def test_empty_single_date_and_zero_match_are_not_playable_or_fake_zero_percent(
     assert page.heatmap.visible_ids == () and not page.play()
 
 
-def test_requery_keeps_previous_display_until_latest_filters_are_loaded(own):
+def test_requery_uses_clicked_conditions_and_does_not_submit_edits_during_load(own):
     page = replay_page(own)
     page.view_tabs.setCurrentIndex(1)
     chart = page.chart.chart()
@@ -487,6 +507,15 @@ def test_requery_keeps_previous_display_until_latest_filters_are_loaded(own):
         assert_previous_display()
         set_period(page, "2026-06-01", "2026-08-21")
         gates[0].set()
+        until(lambda: not page.busy)
+        assert len(requests) == 1 and page.data.request is requests[0]
+        assert page.data.request.end == date(2026, 10, 21)
+        assert page.end.date().toPython() == date(2026, 8, 21)
+        assert page.chart.days[-1] == date(2026, 10, 21)
+        chart = page.chart.chart()
+        tiles, legend = page.heatmap.tile_buttons, page.legend_buttons
+        achievement, progress = page.achievement.text(), page.progress.value()
+        page.query_panel.search_button.click()
         until(lambda: len(requests) == 2)
         assert_previous_display()
         gates[1].set()
@@ -536,6 +565,8 @@ def test_loader_failure_is_sanitized_and_can_retry(own):
     assert page.reset_button.isEnabled() and not page.play_button.isEnabled()
     page.loader = None
     page.reset_button.click()
+    assert page.data is None and not page.busy
+    page.query_panel.search_button.click()
     until(lambda: not page.busy)
     assert page.data is not None
 

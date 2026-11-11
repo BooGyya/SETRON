@@ -37,7 +37,10 @@ def test_daily_range_updates_points_and_chips_only_in_trend_view(window, source)
     assert page.trend_start.date().toPython() == DAY1
     assert page.trend_end.date().toPython() == DAY2
     assert "Inline O2" in _visible_group_names(page)
+    previous = page.trend_snapshot
     _set_period(page, DAY2, DAY2)
+    assert page.trend_snapshot is previous
+    window.query_panel.search_button.click()
 
     assert [point.day for point in page.trend_snapshot.observations] == [DAY2]
     assert _visible_group_names(page) == {"O2", "O3"}
@@ -54,10 +57,12 @@ def test_invalid_trend_period_hides_chart_then_recovers_when_valid(window):
     window.query_panel.apply_draft()
     page.tabs.setCurrentIndex(3)
     _set_period(page, DAY2, DAY1)
+    window.query_panel.search_button.click()
 
     assert page.trend_notice.isVisible() and page.trend_notice.text()
     assert not page.chart.isVisible()
     _set_period(page, DAY1, DAY2)
+    window.query_panel.search_button.click()
 
     assert not page.trend_notice.isVisible()
     assert page.chart.isVisible() and page.chart.chart().series()
@@ -75,6 +80,8 @@ def test_interval_reuses_loaded_points_and_reports_actual_observation_day(window
     metrics = {name: metric.value.text() for name, metric in page.metrics.items()}
     start, end = DAY1 + timedelta(days=1), DAY2 - timedelta(days=1)
     _set_period(page, start, end)
+    window.query_panel.search_button.click()
+    snapshot = page.snapshot
 
     def unexpected_read(_query):
         raise AssertionError("재생 간격 변경은 DB 자료를 다시 조회하지 않아야 합니다.")
@@ -112,12 +119,13 @@ def test_global_query_limits_period_and_keeps_bar_scope_when_switching_views(win
     snapshot = page.snapshot
     page.tabs.setCurrentIndex(3)
     _set_period(page, DAY1, DAY2)
-
+    assert page.snapshot is snapshot and window.query_state.applied.selection == selection
+    window.query_panel.search_button.click()
     assert page.trend_end.date().toPython() == DAY1
     assert all(point.day <= DAY1 for point in page.trend_snapshot.observations)
     assert _visible_group_names(page) == {"O3"}
     assert page.trend_snapshot.equipment_ids == (1,)
-    assert page.snapshot is snapshot and window.query_state.applied.selection == selection
+    assert window.query_state.applied.selection == selection
     page.tabs.setCurrentIndex(2)
     assert not page.trend_filters.isVisible()
     bars = page.chart.chart().series()[0].barSets()
@@ -154,7 +162,16 @@ def test_calendar_confirmation_and_global_reset_restore_full_daily_period(app, s
         QTest.mouseClick(grid.viewport(), Qt.MouseButton.LeftButton, pos=grid.visualRect(day).center())
         QTest.mouseClick(dialog.apply_button, Qt.MouseButton.LeftButton)
 
-        assert not dialog.isVisible() and applied.count() == 1
+        assert not dialog.isVisible() and applied.count() == 0
+        assert window.query_state.applied.selection.as_of == DAY2
+        previous_days = [point.day for point in page.trend_snapshot.observations]
+        assert previous_days == [DAY1 + timedelta(days=offset) for offset in range((DAY2 - DAY1).days + 1)]
+        page.tabs.setCurrentIndex(2)
+        page.tabs.setCurrentIndex(3)
+        assert [point.day for point in page.trend_snapshot.observations] == previous_days
+        assert applied.count() == 0
+        panel.search_button.click()
+        assert applied.count() == 1
         assert window.query_state.applied.selection.as_of == DAY1
         assert page.trend_start.date().toPython() == page.trend_end.date().toPython() == DAY1
         assert [point.day for point in page.trend_snapshot.observations] == [DAY1]
@@ -169,9 +186,12 @@ def test_calendar_confirmation_and_global_reset_restore_full_daily_period(app, s
         assert panel.range_button.isVisible() and not panel.date_edit.isVisible()
         page.trend_interval.buttons["week"].click()
         assert page.trend_step == "week"
+        previous = page.trend_snapshot
         panel.reset_button.click()
-
-        assert applied.count() == 2 and window.query_state.draft == QuerySelection()
+        assert applied.count() == 1 and window.query_state.draft == QuerySelection()
+        assert page.trend_snapshot is previous and page.trend_step == "week"
+        panel.search_button.click()
+        assert applied.count() == 2
         assert page.trend_step == 1 and page.trend_interval.buttons[None].isChecked()
         assert page.trend_interval.day_value == 1
         assert page.trend_start.date().toPython() == DAY1

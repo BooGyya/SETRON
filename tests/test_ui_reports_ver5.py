@@ -59,6 +59,8 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     assert p.kind == "status" and p.result_card.isHidden()
     assert p.library_model.rowCount() == 0
     assert type(p.start) is type(replay.start) and type(p.end) is type(replay.end)
+    assert (p.query_panel.range_button.start, p.query_panel.range_button.end) == (
+        p.start.date().toPython(), p.end.date().toPython())
     assert list(p.query_panel.combos) == ["site_key", "fab_key", "line_key"]
     assert list(replay.query_panel.combos) == ["site_key", "fab_key", "line_key", "group_key"]
     assert not any("뒤로" in b.text() for b in p.findChildren(QPushButton))
@@ -82,6 +84,9 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     p.query_panel.reset_button.click()
     assert p.state.draft.site_key is None
     assert p.start.date().toPython() == min(p.source.analysis_dates)
+    assert (p.query_panel.range_button.start, p.query_panel.range_button.end) == (
+        p.start.date().toPython(), p.end.date().toPython())
+    assert not p.request.busy and p.result is r
 
 
 def test_reversed_dates_do_not_generate(own, tmp_path):
@@ -139,11 +144,24 @@ def test_generated_report_keeps_original_scope_after_filters_change(own, tmp_pat
     first = generated(p)
     html = report_html(first)
     p.source.targets.clear()
-    p.query_panel.select("site_key", p.source.catalog.sites[0].key)
+    for field in ("site_key", "fab_key", "line_key"):
+        p.query_panel.combos[field].click()
+        popup = p.query_panel.filter_popup
+        popup.all_button.click()
+        key = next(iter(popup.checks))
+        popup.checks[key].click()
+        assert p.result is first and not p.request.busy
+        popup.confirm_button.click()
+        assert p.result is first and not p.request.busy
+    p.start.setDate(QDate(2026, 9, 1))
+    p.end.setDate(QDate(2026, 9, 21))
     p.type_buttons["change"].click()
-    assert p.result is first and report_html(first) == html
-    new = generated(p)
+    assert p.result is first and report_html(first) == html and not p.request.busy
+    p.query_panel.search_button.click()
+    until(lambda: not p.request.busy)
+    new = p.result
     assert new.request.kind == "change" and new.scope != first.scope
+    assert new.request.start == date(2026, 9, 1) and new.request.end == date(2026, 9, 21)
 
 
 def test_item_selection_and_existing_cumulative_service_used():

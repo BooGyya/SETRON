@@ -188,6 +188,8 @@ def test_click_multiple_n_versions_and_keep_each_pair_draft_until_save(window):
     dialog.save_button.click()
     assert window.group_dialog is None and not dialog.isVisible()
     assert store.load(PAIR).groups.members(Slot.N) == {10011, 10012}
+    assert dashboard.snapshot is heatmap.snapshot is before
+    window.query_panel.search_button.click()
     assert dashboard.snapshot is heatmap.snapshot and dashboard.snapshot is not before
     assert dashboard.snapshot.query.selection == before.query.selection
     assert dashboard.snapshot.summary.compliant > before.summary.compliant
@@ -249,7 +251,7 @@ def test_crossed_order_warns_in_red_and_keeps_save_available(window, monkeypatch
     assert "v1.0.1(N+1)" in message.text() and "v1.0.2(N)" in message.text()
     assert message.text().endswith("수동 설정에서 버전별 단계를 확인해 주세요.")
     assert message.wordWrap() and message.font().pixelSize() == 13
-    assert message.styleSheet() == f"color: {BLOCK_INK};"
+    assert message.styleSheet().replace(" ", "") == f"color:{BLOCK_INK};"
 
 
 def test_manual_settings_keep_steps_when_hidden_and_reopened(window):
@@ -283,7 +285,7 @@ def test_manual_settings_keep_steps_when_hidden_and_reopened(window):
     assert dialog.slot_combos[10013].currentText() == SLOT_LABELS[Slot.N_PLUS_1]
 
 
-def test_save_applies_after_close_and_cancel_discards_restored_draft(window):
+def test_save_waits_for_search_and_cancel_discards_restored_draft(window):
     window.query_panel.apply_draft()
     dashboard, heatmap = window.pages["dashboard"], window.pages["heatmap"]
     before = dashboard.snapshot
@@ -300,6 +302,9 @@ def test_save_applies_after_close_and_cancel_discards_restored_draft(window):
 
     window.query_applied.connect(record_visibility)
     assert dialog.save()
+    assert window.group_dialog is None and visible_at_apply == []
+    assert dashboard.snapshot is heatmap.snapshot is before
+    window.query_panel.search_button.click()
     window.query_applied.disconnect(record_visibility)
     assert window.group_dialog is None and visible_at_apply == [False]
     first_snapshot = dashboard.snapshot
@@ -319,6 +324,8 @@ def test_save_applies_after_close_and_cancel_discards_restored_draft(window):
     dialog = open_editor(window)
     choose(dialog, 10012, Slot.N)
     assert dialog.save()
+    assert dashboard.snapshot is first_snapshot
+    window.query_panel.search_button.click()
     history = store.load(PAIR).history
     assert len(history) == 2
     latest = dashboard.snapshot
@@ -335,6 +342,8 @@ def test_save_applies_after_close_and_cancel_discards_restored_draft(window):
     assert dialog.revert(first) and dialog.save()
     assert store.load_current(PAIR) == first
     assert store.load(PAIR).history == history
+    assert dashboard.snapshot is heatmap.snapshot is latest
+    window.query_panel.search_button.click()
     restored = dashboard.snapshot
     assert restored is heatmap.snapshot and restored.query.revision == latest.query.revision + 1
     assert restored.summary.compliant == first_snapshot.summary.compliant
@@ -360,7 +369,9 @@ def test_replay_baseline_uses_saved_groups_and_discards_cancelled_changes(window
     choose(dialog, 10013, Slot.N)
     assert replay.data is before
     dialog.save_button.click()
-    assert window.group_dialog is None and replay.busy
+    assert window.group_dialog is None and not replay.busy and replay.data is before
+    replay.query_panel.search_button.click()
+    assert replay.busy
     until(lambda: not replay.busy)
     assert replay.data.source.saved_groups[PAIR].members(Slot.N) == {10013}
 
@@ -368,7 +379,10 @@ def test_replay_baseline_uses_saved_groups_and_discards_cancelled_changes(window
     dialog = open_editor(window)
     choose(dialog, 10012, Slot.N)
     dialog.save_button.click()
+    before = replay.data
     window.navigate("replay")
+    assert not replay.busy and replay.data is before
+    replay.query_panel.search_button.click()
     until(lambda: not replay.busy)
     assert replay.data.source.saved_groups[PAIR].members(Slot.N) == {10012, 10013}
 

@@ -279,7 +279,7 @@ class QueryPanel(QWidget):
         state = self.state
         expected, revision = state.draft, state.catalog_revision
         anchor = self.combos[field]
-        # 리플레이가 조회 중 카드를 잠가도 열린 팝업에서는 선택을 이어갈 수 있다.
+        # 선택 중인 조건만 바꾸고, 조회 버튼을 누르기 전의 결과는 유지한다.
         popup = QueryFilterPopup(FILTER_CAPTIONS[field], self._filter_options(field),
                                  selection_keys(getattr(expected, field)), parent=self, anchor=anchor,
                                  show_groups=field != "line_key")

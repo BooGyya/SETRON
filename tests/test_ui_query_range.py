@@ -52,9 +52,9 @@ def test_range_mode_reuses_date_field_and_reflows_then_restores_normal_mode(pane
     assert selected.count() == applied.count() == 0
 
 
-def test_accepting_range_stages_metadata_and_search_applies_once(panel):
+def test_accepting_range_stages_metadata_until_search_and_keeps_end_date(panel):
     panel.set_as_of(END)
-    panel.apply_draft()
+    previous = panel.apply_draft()
     panel.enable_date_range(START, END)
     events = []
     panel.date_range_selected.connect(lambda start, end: events.append(("range", start, end, panel.state.draft.as_of)))
@@ -70,9 +70,11 @@ def test_accepting_range_stages_metadata_and_search_applies_once(panel):
 
     assert selected.count() == confirmed.count() == 1 and applied.count() == 0
     assert events == [("range", date(2026, 10, 1), date(2026, 10, 15), END)]
-    assert panel.state.applied.selection.as_of == END and panel.state.draft.as_of == date(2026, 10, 15)
+    assert panel.state.applied is previous and panel.state.draft.as_of == date(2026, 10, 15)
     panel.search_button.click()
-    assert applied.count() == 1 and events[-1] == ("query", date(2026, 10, 15))
+    assert applied.count() == 1
+    assert events == [("range", date(2026, 10, 1), date(2026, 10, 15), END),
+                      ("query", date(2026, 10, 15))]
     assert panel.state.applied.selection.as_of == date(2026, 10, 15)
     assert panel.date_edit.date().toPython() == date(2026, 10, 15)
     panel.disable_date_range()

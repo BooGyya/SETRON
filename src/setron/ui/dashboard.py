@@ -263,8 +263,9 @@ class DashboardPage(QWidget):
         self.state, self.source, self.snapshot = state, source, None
         self.trend_snapshot, self.trend_step = None, 1
         self._trend_period_edited = False
-        self._applied_trend_period = None
+        self._applied_trend_period = None  # 보기·간격을 바꿔도 검색으로 확정한 기간을 사용한다.
         self._applied_trend_query = None
+        self._trend_reset_pending = False
         self.visible_groups = {o.key for o in source.catalog.groups}
         self.metrics = {}
         self.matrix_buttons, self.risk_buttons = {}, {}
@@ -507,6 +508,10 @@ class DashboardPage(QWidget):
             return False
         self.snapshot = result
         if query is not self._applied_trend_query:
+            if self._trend_reset_pending:
+                self.trend_step = 1
+                self.trend_interval.set_step(1)
+                self._trend_reset_pending = False
             self._sync_trend_period(result)
             self._applied_trend_period = (self.trend_start.date().toPython(), self.trend_end.date().toPython())
             self._applied_trend_query = query
@@ -549,11 +554,13 @@ class DashboardPage(QWidget):
     def _change_trend_date(self, control):
         if not control.calendarWidget().isVisible():
             self._trend_period_edited = True
+            self.trend_period_changed.emit(self.trend_start.date().toPython(), self.trend_end.date().toPython())
 
     def _confirm_trend_date(self, control, day):
         with QSignalBlocker(control):
             control.setDate(day)
         self._trend_period_edited = True
+        self.trend_period_changed.emit(self.trend_start.date().toPython(), self.trend_end.date().toPython())
 
     def _set_trend_interval(self, step):
         self.trend_step = step
@@ -562,8 +569,15 @@ class DashboardPage(QWidget):
 
     def reset_trend_period(self):
         self._trend_period_edited = False
-        if self.snapshot is not None:
-            self._sync_trend_period(self.snapshot)
+        self._trend_reset_pending = True
+        days = self.source.analysis_dates or self.source.dates
+        start = min(days, default=self.trend_start.date().toPython())
+        end = max(days, default=self.trend_end.date().toPython())
+        for control, value in ((self.trend_start, start), (self.trend_end, end)):
+            with QSignalBlocker(control):
+                control.setMaximumDate(QDate(end.year, end.month, end.day))
+                control.setDate(QDate(value.year, value.month, value.day))
+        self.trend_period_changed.emit(start, end)
 
     def _select(self, title, ids, *, risk_only=False):
         if self.snapshot is None or not self.state.is_current(self.snapshot.query) or not ids:

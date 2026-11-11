@@ -124,7 +124,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dialog.open()
 
     window.query_panel.version_button.clicked.connect(open_version_filter)
-    window.query_panel.goal_button.setToolTip("모델·계열별 기준 버전을 설정합니다. 저장하면 바로 조회합니다.")
+    window.query_panel.goal_button.setToolTip("모델·계열별 기준 버전을 설정합니다. 저장 후 조회 버튼을 눌러 반영합니다.")
     window.target_dialog = None
 
     def open_targets():
@@ -191,12 +191,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                     except OSError:
                         pass  # 개인 설정을 저장하지 못해도 열린 창에서는 선택을 유지한다.
             dialog.deleteLater()
-            if result == VersionGroupDialog.DialogCode.Accepted:
-                window.query_panel.apply_draft()
-                if window.route == "replay":
-                    replay.apply_query()
-                elif replay.data is not None or replay.busy:
-                    replay.invalidate()
 
         dialog.finished.connect(finish)
         dialog.open()
@@ -210,8 +204,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def sync_dashboard_date_mode(*_):
         if window.route == "dashboard" and dashboard.tabs.currentIndex() == 3 and dashboard.snapshot is not None:
-            window.query_panel.enable_date_range(dashboard.trend_start.date().toPython(),
-                                                dashboard.trend_end.date().toPython())
+            start, end = dashboard.trend_start.date().toPython(), dashboard.trend_end.date().toPython()
+            if start <= end:
+                window.query_panel.enable_date_range(start, end)
         else:
             window.query_panel.disable_date_range()
 
@@ -274,11 +269,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     replay.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
     replay.query_panel.goal_button.clicked.connect(open_groups)
     risk_save = RiskRuleSaveController(management_gateway, context_provider=release_refresh_context, parent=window)
-    # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 저장은 같은 관리 저장 흐름(after_management_save)을 쓴다.
-    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context,
-                                   risk_opener=lambda family_id, item_id: items.manager.open_add(
-                                       family_id=family_id, item_id=item_id))
-    # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 저장 자료 삭제로 옮긴다 (같은 객체·연결 유지).
+    # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 고치기·더하기·지우기는 바로 DB에 반영하고
+    # 같은 관리 저장 흐름(after_management_save)으로 조회 선택지와 화면을 다시 읽는다. 위험 지정은 아이템 매니저에서만 한다 (11-11).
+    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context)
+    # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 가져온 엑셀 삭제로 옮긴다 (같은 객체·연결 유지).
     data_page.attach_deletion(importer.deletion)
     importer.tabs.setTabVisible(1, False)
     versions.configure(management_gateway, release_refresh_context,

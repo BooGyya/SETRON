@@ -240,7 +240,7 @@ class ReplayPage(QWidget):
     def enter(self):
         if self.state.catalog != self.source.catalog:
             self.invalidate()
-        if self.data is None and not self.busy:
+        if self.data is None and not self.busy and self.state.applied is None:
             self.apply_query()
 
     def apply_query(self):

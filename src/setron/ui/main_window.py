@@ -293,7 +293,7 @@ class MainWindow(QMainWindow):
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.placeholder = EmptyState(
             "공통 화면 준비가 완료되었습니다",
-            "Site·Fab·Line·설비군 선택을 완료하면 조회 조건이 반영됩니다.\n"
+            "분류·사업장·라인·설비군을 선택한 뒤 조회 버튼을 누르면 조건이 반영됩니다.\n"
             "대시보드의 지표·그래프, 히트맵, 설비 목록·상세는 아직 연결하지 않았습니다.\n\n"
             "회색 메뉴는 아직 업무 화면이 연결되지 않아 사용할 수 없습니다.",
         )
