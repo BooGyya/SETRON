@@ -52,7 +52,7 @@ def test_chart_tooltip_counts_unique_equipment_without_listing_names():
     assert equipment_count_tooltip("A < B\n3건 (60.0%)", (1, 1, 2)) == "<qt>A &lt; B<br>3건 (60.0%)<br>설비 2대</qt>"
 
 
-def test_composition_shows_aggregates_and_bar_uses_clicked_cohort(chart_tooltip, source):
+def test_composition_and_bar_show_aggregates(chart_tooltip, source):
     view, tooltip = chart_tooltip
     data = source.snapshot(applied(source))
     view.composition(data)
@@ -66,21 +66,18 @@ def test_composition_shows_aggregates_and_bar_uses_clicked_cohort(chart_tooltip,
     assert tooltip.value == "<qt>판단 불가 1건 (20.0%)<br>설비 1대</qt>"
 
     areas, groups = plot = bar_plot(data)
-    requests = []
-    view.bars(plot, lambda label, ids: requests.append((label, ids)), {"o2"})
+    view.bars(plot, {"o2"})
     assert tooltip.value == ""
     series = view.chart().series()[0]
     bar = series.barSets()[0]
-    label, cohorts = groups["o2"]
-    index = cohorts.index((1, 2))
-    zero_index = cohorts.index(())
-    series.hovered.emit(True, zero_index, bar)
+    label, points = groups["o2"]
+    index = next(i for i, point in enumerate(points) if point.equipment_ids == (1, 2))
+    empty_index = next(i for i, point in enumerate(points) if not point.equipment_ids)
+    series.hovered.emit(True, empty_index, bar)
     assert tooltip.value == ""
     series.hovered.emit(True, index, bar)
     unknown.hovered.emit(False)
-    assert tooltip.value == f"<qt>{areas[index]} / {label}<br>설비 2대</qt>"
-    series.clicked.emit(index, bar)
-    assert requests == [(f"{areas[index]} / {label}", (1, 2))]
+    assert tooltip.value == f"<qt>{areas[index]} / {label}<br>목표 N 이상 1/2건 (50.0%)<br>설비 2대</qt>"
     series.hovered.emit(False, index, bar)
     assert tooltip.value == ""
 

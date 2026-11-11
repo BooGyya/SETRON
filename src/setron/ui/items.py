@@ -337,13 +337,17 @@ class _Toolbar(QWidget):
 
     def resizeEvent(self, event):
         def natural_width(widget):
+            if widget.isHidden():
+                return 0
             if isinstance(widget, _WrapRow):
-                return sum(max(w.minimumWidth(), w.sizeHint().width()) for w in widget.widgets) + widget.grid.horizontalSpacing() * (len(widget.widgets) - 1)
+                visible = [w for w in widget.widgets if not w.isHidden()]
+                return (sum(max(w.minimumWidth(), w.sizeHint().width()) for w in visible)
+                        + widget.grid.horizontalSpacing() * max(0, len(visible) - 1))
             return max(widget.minimumWidth(), widget.sizeHint().width())
 
         trailing_width = natural_width(self.trailing) if self.wrap_trailing else max(self.trailing.width(), self.search_minimum)
         leading_width = natural_width(self.leading)
-        stacked = event.size().width() < leading_width + self.gap + trailing_width
+        stacked = not self.trailing.isHidden() and event.size().width() < leading_width + self.gap + trailing_width
         self.grid.setColumnMinimumWidth(0, 0 if stacked else leading_width)
         self._arrange(stacked)
         super().resizeEvent(event)
@@ -587,7 +591,7 @@ class ItemsPage(QWidget):
         application_body.setSpacing(8)
         application_body.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.full_detail.body.addWidget(self.application_details)
-        application_body.addWidget(label("설비별 적용 현황", 16, medium=True))
+        self.application_heading = label("설비별 적용 현황", 16, medium=True)
         # 자료가 없을 때는 필터·집계 대신 이 안내 한 블록만 보인다.
         self.no_data_notice = QFrame()
         self.no_data_notice.setObjectName("noDataNotice")
@@ -607,25 +611,28 @@ class ItemsPage(QWidget):
         self.state_filter.addItem("전체 상태", None)
         for state, name in APPLICATION_LABELS.items():
             self.state_filter.addItem(name, state)
-        self.site_filter, self.distribution_view = ComboBox(), ComboBox()
-        for widget, name in ((self.site_filter, "Item 적용 Site"), (self.distribution_view, "Item 적용 보기")):
-            widget.setAccessibleName(name)
-            widget.setProperty("queryField", True)
-            widget.setFixedHeight(32)
-            widget.setMinimumWidth(0)
-            widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.site_filter = ComboBox()
+        self.site_filter.setAccessibleName("Item 적용 Site")
+        self.site_filter.setProperty("queryField", True)
+        self.site_filter.setFixedHeight(32)
+        self.site_filter.setMinimumWidth(0)
+        self.site_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.site_filter.addItem("전체 Site", None)
+        # 설비 상세 복귀에서 참조하는 보기 상태는 유지하되, 화면에서는 설비 목록을 기본으로 제공한다.
+        self.distribution_view = ComboBox(self.application_details)
+        self.distribution_view.setAccessibleName("Item 적용 보기")
         self.distribution_view.addItem("설비 목록", "list")
         self.distribution_view.addItem("Site · 설비 히트맵", "heatmap")
-        for control in (self.site_filter, self.state_filter, self.distribution_view):
+        self.distribution_view.hide()
+        for control in (self.site_filter, self.state_filter):
             set_widget_font(control, font(14))
             set_widget_font(control.view(), font(14))
             control.setStyleSheet("QComboBox {padding-right:28px;} QComboBox::drop-down {border:0;width:28px;}"
                                  f"QComboBox::down-arrow {{image:url({caret});width:12px;height:12px;}}")
             control.currentTextChanged.connect(control.setToolTip)
-        self.filter_row = _ContentWrapRow([self.site_filter, self.state_filter, self.distribution_view], 184)
+        self.filter_row = _ContentWrapRow([self.application_heading, self.site_filter, self.state_filter], 184)
         self.application_toolbar = _Toolbar(self.filter_row, self.summary, wrap_trailing=True)
-        application_body.addWidget(self.application_toolbar)
+        application_body.insertWidget(0, self.application_toolbar)
         self.distribution = ItemDistribution()
         application_body.addWidget(self.distribution)
         self.distribution.scope_selected.connect(self.select_distribution_scope)
@@ -1123,8 +1130,8 @@ class ItemsPage(QWidget):
             "설비 관측 자료가 없어 설비별 적용 여부를 판단할 수 없습니다. 위험 기준 등록은 그대로 할 수 있습니다."
             if not self.data.observations_connected else
             "이 Item과 연결된 릴리즈가 없어 설비별 적용 여부를 판단할 수 없습니다. 위험 기준 등록은 그대로 할 수 있습니다.")
-        self.filter_row.setVisible(summary is not None)
-        self.application_toolbar.setVisible(summary is not None)
+        self.site_filter.setVisible(summary is not None)
+        self.state_filter.setVisible(summary is not None)
         with QSignalBlocker(self.state_filter):
             self.state_filter.setCurrentIndex(self.state_filter.findData(Application.NOT_APPLIED) if scoped and self.search.text().strip() else 0)
         with QSignalBlocker(self.site_filter):
@@ -1134,10 +1141,16 @@ class ItemsPage(QWidget):
                 self.site_filter.addItem(site, site)
         self.state_filter.setEnabled(summary is not None)
         self.site_filter.setEnabled(summary is not None)
-        for control, minimum_width in ((self.site_filter, 144), (self.state_filter, 120), (self.distribution_view, 160)):
+        for control, minimum_width in ((self.site_filter, 144), (self.state_filter, 152)):
+            control.setMinimumWidth(0)
+            control.setMaximumWidth(16777215)
+            control.ensurePolished()
             text_width = max((control.fontMetrics().horizontalAdvance(control.itemText(i))
                               for i in range(control.count())), default=0)
-            control.setFixedWidth(min(184, max(minimum_width, text_width + 40)))
+            # QSS의 오른쪽 padding(28px)과 드롭다운 영역(28px)은 각각 공간을 차지한다.
+            required = text_width + 12 + 28 + 28 + 8
+            hint = max(control.sizeHint().width(), control.minimumSizeHint().width())
+            control.setFixedWidth(max(minimum_width, required, hint))
         self.render_equipment()
         self._set_mode("detail")
         _fit(self.equipment_table)

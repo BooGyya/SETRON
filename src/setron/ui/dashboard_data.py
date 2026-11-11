@@ -142,12 +142,14 @@ class DashboardSnapshot:
 def trend_window(snapshot: DashboardSnapshot, start: date, end: date, step=None) -> DashboardSnapshot:
     """기준 설비 집합과 집계는 유지하고 추이의 표시 기간·시점만 선택한다.
 
-    저장일마다는 실제 관측점만 남긴다. 간격 시점은 그 시점 이전 마지막 관측을 사용하며,
+    저장일마다는 실제 관측점만 남긴다. 양의 정수 간격은 지정 일수마다 시점을 만든다.
+    간격 시점은 그 시점 이전 마지막 관측을 사용하며,
     마지막 관측의 달성률이 계산 불가이면 그대로 둔다. 이전의 계산 가능한 관측으로 건너뛰지 않는다.
     """
     if type(start) is not date or type(end) is not date or start > end:
         raise ValueError("시작 날짜와 종료 날짜를 확인해 주세요.")
-    if step is not None and (not isinstance(step, str) or step not in INTERVALS):
+    custom_days = isinstance(step, int) and not isinstance(step, bool) and step > 0
+    if step is not None and not custom_days and (not isinstance(step, str) or step not in INTERVALS):
         raise ValueError("관측 간격을 확인해 주세요.")
     days = tuple(point.day for point in snapshot.observations)
     if step is None:

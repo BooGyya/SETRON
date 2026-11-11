@@ -1,15 +1,16 @@
 """데이터로 그리는 QtCharts. Figma의 예시 SVG 그래프를 고정 이미지로 사용하지 않는다."""
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from functools import partial
 from html import escape
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
 
-from setron.features.aggregation.schemas import Summary
+from setron.features.aggregation.schemas import RateCount, Summary
 from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import chart_font, chart_text_font, manager, ui_color
 from setron.ui.appearance_data import Appearance
@@ -37,16 +38,40 @@ def series_button_style(color):
             f"QPushButton:focus {{border-color:{PRIMARY};}}")
 
 
+@dataclass(frozen=True)
+class BarPoint:
+    equipment_ids: tuple[int, ...]
+    counts: RateCount
+
+
 def bar_plot(snapshot):
-    """원본 구역과 설비군별 막대가 실제로 세는 설비를 돌려준다."""
+    """구역·설비군별 기존 N 판정을 모아 적용률과 실제 설비 범위를 함께 유지한다."""
     areas = [(row.label, set(row.cells[-1].equipment_ids)) for row in snapshot.rows
              if row.position is not None and row.cells[-1].summary.equipment_count]
     groups = {}
     for group in snapshot.groups:
-        cohorts = tuple(tuple(eid for eid in group.equipment_ids if eid in ids) for _, ids in areas)
-        if any(cohorts):
-            groups[group.group_keys[0]] = group.label, cohorts
+        points = []
+        for _, ids in areas:
+            equipment = tuple(e for e in group.summary.equipment if e.record.equipment_id in ids)
+            statuses = [family.status for e in equipment for family in e.families]
+            counts = RateCount(compliant=statuses.count(CompareStatus.AT_OR_ABOVE),
+                               below=statuses.count(CompareStatus.BELOW),
+                               undetermined=statuses.count(CompareStatus.UNDETERMINED))
+            points.append(BarPoint(tuple(e.record.equipment_id for e in equipment), counts))
+        if any(point.equipment_ids for point in points):
+            groups[group.group_keys[0]] = group.label, tuple(points)
     return tuple(label for label, _ in areas), groups
+
+
+def bar_tooltip(title, point):
+    counts = point.counts
+    if counts.rate is None:
+        title += "\n목표 N 이상 적용률 계산 불가"
+    else:
+        title += f"\n목표 N 이상 {counts.compliant}/{counts.compliant + counts.below}건 ({counts.rate:.1%})"
+    if counts.undetermined:
+        title += f"\n판단 불가 {counts.undetermined}건"
+    return equipment_count_tooltip(title, point.equipment_ids)
 
 
 def equipment_tooltip(title: str, equipment_ids: Iterable[int], equipment_names: Mapping[int, str]) -> str:
@@ -179,20 +204,21 @@ class DashboardChart(QChartView):
         place_center(chart.plotArea())
         self.setAccessibleDescription(" · ".join(f"{name} {value}건" for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)))
 
-    def bars(self, plot, on_click, visible_groups):
+    def bars(self, plot, visible_groups):
         chart = self._chart()
         areas, groups = plot
         series = QBarSeries()
         shown = {}
-        for key, (label, cohorts) in groups.items():
+        for key, (label, points) in groups.items():
             if key not in visible_groups:
                 continue
             group_set = QBarSet(label)
             group_set.setColor(ui_color(series_color(key)))
             chart_font(group_set, "labelFont", font(10))
-            group_set.append([len(ids) for ids in cohorts])
+            # QBarSet의 빈 값 자리만 0으로 두고, 계산 불가는 별도 '—' 표시로 구분한다.
+            group_set.append([point.counts.rate * 100 if point.counts.rate is not None else 0 for point in points])
             series.append(group_set)
-            shown[group_set] = label, cohorts
+            shown[group_set] = label, points
         if not shown:
             return
         series.setLabelsVisible(False)
@@ -201,33 +227,48 @@ class DashboardChart(QChartView):
         x.append(list(areas))
         x.setGridLineVisible(False)
         y = QValueAxis()
-        maximum = max((group.at(i) for group in series.barSets() for i in range(group.count())), default=0)
-        y.setRange(0, max(2, maximum + 1))
-        y.setLabelFormat("%d")
-        y.setTitleText("대수 (대)")
+        y.setRange(0, 100)
+        y.setLabelFormat("%.0f%%")
+        y.setTitleText("목표 N 이상 적용률 (%)")
         chart_font(y, "titleFont", font(12))
-        y.setTickCount(min(5, int(y.max()) + 1))
+        y.setTickCount(5)
         for axis, alignment in ((x, Qt.AlignmentFlag.AlignBottom), (y, Qt.AlignmentFlag.AlignLeft)):
             self._axis(axis)
             chart.addAxis(axis, alignment)
             series.attachAxis(axis)
-        def clicked(index, bar_set):
-            if bar_set in shown and 0 <= index < len(areas):
-                label, cohorts = shown[bar_set]
-                if ids := cohorts[index]:
-                    on_click(f"{areas[index]} / {label}", ids)
-        series.clicked.connect(clicked)
-
         def hovered(entering, index, bar_set):
             target = bar_set, index
             if not entering:
                 self._hover_tooltip(chart, target, "")
             elif bar_set in shown and 0 <= index < len(areas):
-                label, cohorts = shown[bar_set]
-                if ids := cohorts[index]:
+                label, points = shown[bar_set]
+                if points[index].equipment_ids:
                     title = f"{areas[index]} / {label}"
-                    self._hover_tooltip(chart, target, equipment_count_tooltip(title, ids))
+                    self._hover_tooltip(chart, target, bar_tooltip(title, points[index]))
         series.hovered.connect(hovered)
+        baseline_labels = []
+        for group_index, (label, points) in enumerate(shown.values()):
+            for area_index, point in enumerate(points):
+                if not point.equipment_ids or point.counts.rate not in (None, 0):
+                    continue
+                title = f"{areas[area_index]} / {label}"
+                marker = QGraphicsSimpleTextItem("—" if point.counts.rate is None else "0%", chart)
+                marker.setToolTip(bar_tooltip(title, point))
+                marker.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                chart_text_font(marker, font(10))
+                marker.setBrush(QBrush(ui_color(SECONDARY)))
+                offset = ((group_index + 0.5) / len(shown) - 0.5) * series.barWidth()
+                baseline_labels.append((marker, area_index + offset))
+
+        def place_baseline_labels(_rect=None):
+            for marker, value in baseline_labels:
+                position = chart.mapToPosition(QPointF(value, 0), series)
+                bounds = marker.boundingRect()
+                marker.setPos(position.x() - bounds.width() / 2, position.y() - bounds.height() - 3)
+
+        chart._setron_place_labels = place_baseline_labels
+        chart.plotAreaChanged.connect(place_baseline_labels)
+        place_baseline_labels()
 
     def _trend_hover(self, chart, series, group, segment, position, hovered):
         if not hovered:

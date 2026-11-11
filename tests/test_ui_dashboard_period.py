@@ -22,7 +22,7 @@ def _visible_group_names(page):
     return {control.text() for control in page.series_widgets if control.isVisible()}
 
 
-def test_saved_day_range_updates_points_and_chips_only_in_trend_view(window, source):
+def test_daily_range_updates_points_and_chips_only_in_trend_view(window, source):
     source.records = tuple(record for record in source.records
                            if not (record.equipment_id == 5 and record.base_date == DAY2))
     page = window.pages["dashboard"]
@@ -32,6 +32,8 @@ def test_saved_day_range_updates_points_and_chips_only_in_trend_view(window, sou
     QTest.qWait(20)
 
     assert page.trend_filters.isVisible()
+    assert page.trend_step == 1 and page.trend_interval.day_input.isVisible()
+    assert page.trend_interval.day_input.value() == 1
     assert page.trend_start.date().toPython() == DAY1
     assert page.trend_end.date().toPython() == DAY2
     assert "Inline O2" in _visible_group_names(page)
@@ -59,7 +61,9 @@ def test_invalid_trend_period_hides_chart_then_recovers_when_valid(window):
 
     assert not page.trend_notice.isVisible()
     assert page.chart.isVisible() and page.chart.chart().series()
-    assert [point.day for point in page.trend_snapshot.observations] == [DAY1, DAY2]
+    assert [point.day for point in page.trend_snapshot.observations] == [
+        DAY1 + timedelta(days=offset) for offset in range((DAY2 - DAY1).days + 1)
+    ]
 
 
 def test_interval_reuses_loaded_points_and_reports_actual_observation_day(window, source, monkeypatch):
@@ -117,10 +121,10 @@ def test_global_query_limits_period_and_keeps_bar_scope_when_switching_views(win
     page.tabs.setCurrentIndex(2)
     assert not page.trend_filters.isVisible()
     bars = page.chart.chart().series()[0].barSets()
-    assert [bar.label() for bar in bars] == ["O3"] and bars[0].at(0) == 1
+    assert [bar.label() for bar in bars] == ["O3"] and bars[0].at(0) == 100
 
 
-def test_calendar_confirmation_and_global_reset_restore_full_saved_day_period(app, source):
+def test_calendar_confirmation_and_global_reset_restore_full_daily_period(app, source):
     window = create_window(source)
     window.resize(1600, 960)
     window.show()
@@ -168,11 +172,14 @@ def test_calendar_confirmation_and_global_reset_restore_full_saved_day_period(ap
         panel.reset_button.click()
 
         assert applied.count() == 2 and window.query_state.draft == QuerySelection()
-        assert page.trend_step is None and page.trend_interval.buttons[None].isChecked()
+        assert page.trend_step == 1 and page.trend_interval.buttons[None].isChecked()
+        assert page.trend_interval.day_input.isVisible() and page.trend_interval.day_input.value() == 1
         assert page.trend_start.date().toPython() == DAY1
         assert page.trend_end.date().toPython() == DAY2
         assert (panel.range_button.start, panel.range_button.end) == (DAY1, DAY2)
-        assert [point.day for point in page.trend_snapshot.observations] == [DAY1, DAY2]
+        assert [point.day for point in page.trend_snapshot.observations] == [
+            DAY1 + timedelta(days=offset) for offset in range((DAY2 - DAY1).days + 1)
+        ]
         assert page.chart.isVisible() and not page.trend_notice.isVisible()
     finally:
         window.close()

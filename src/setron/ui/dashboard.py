@@ -242,7 +242,7 @@ class DashboardPage(QWidget):
         super().__init__()
         self.setObjectName("canvas")
         self.state, self.source, self.snapshot = state, source, None
-        self.trend_snapshot, self.trend_step = None, None
+        self.trend_snapshot, self.trend_step = None, 1
         self._trend_period_edited = False
         self.visible_groups = {o.key for o in source.catalog.groups}
         self.metrics = {}
@@ -290,7 +290,8 @@ class DashboardPage(QWidget):
         for field in self._trend_date_fields:
             field.setParent(self.trend_filters)
             field.hide()
-        self.trend_interval = IntervalSelector("데이터 간격", compact=True)
+        self.trend_interval = IntervalSelector("데이터 간격", compact=True, custom_days=True)
+        self.trend_interval.set_step(self.trend_step)
         period_body.addWidget(self.trend_interval)
         for control in (self.trend_start, self.trend_end):
             control.dateChanged.connect(lambda _day, edit=control: self._change_trend_date(edit))
@@ -537,8 +538,8 @@ class DashboardPage(QWidget):
 
     def reset_trend_period(self):
         self._trend_period_edited = False
-        self.trend_step = None
-        self.trend_interval.set_step(None)
+        self.trend_step = 1
+        self.trend_interval.set_step(1)
         if self.snapshot is not None:
             self._sync_trend_period(self.snapshot)
         self._render_view()
@@ -622,7 +623,7 @@ class DashboardPage(QWidget):
             self.chart.composition(data)
             self._render_composition_legend(data)
         elif mode == 2:
-            self.chart.bars(bars, self._select, self.visible_groups)
+            self.chart.bars(bars, self.visible_groups)
         else:
             if not has_trend:
                 self.chart.clear()
@@ -995,10 +996,14 @@ class DashboardPage(QWidget):
             headers = ("상태", "설비·계열 건수", "구성비")
             rows = [(name, str(value), f"{value / total:.1%}" if total else "—") for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)]
         elif mode == 2:
-            headers = ("Site / 원본 구역", "설비군", "물리 대수")
+            headers = ("Site / 원본 구역", "설비군", "목표 N 이상 적용률", "N 이상/판단 가능", "판단 불가", "설비 대수")
             areas, groups = bar_plot(data)
-            rows = [(area, label, str(len(cohorts[index]))) for index, area in enumerate(areas)
-                    for key, (label, cohorts) in groups.items() if key in self.visible_groups]
+            rows = [(area, label, f"{point.counts.rate:.1%}" if point.counts.rate is not None else
+                     "계산 불가" if point.equipment_ids else "데이터 없음",
+                     f"{point.counts.compliant}/{point.counts.compliant + point.counts.below}",
+                     str(point.counts.undetermined), str(len(point.equipment_ids)))
+                    for index, area in enumerate(areas) for key, (label, points) in groups.items()
+                    if key in self.visible_groups for point in (points[index],)]
         else:
             headers = ("관측일", "설비군", "N 이상/판단 가능", "달성률", "판단 불가", "미관측 대수")
             rows = [(str(p.day), group.label, f"{p.summary.compliant}/{p.summary.compliant + p.summary.below}",

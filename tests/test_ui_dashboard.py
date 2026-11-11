@@ -20,7 +20,7 @@ from setron.features.version.service import FamilyReleases
 from setron.ui import dashboard
 from setron.ui.app import create_window
 from setron.ui.dashboard import DashboardPage
-from setron.ui.dashboard_charts import DashboardChart
+from setron.ui.dashboard_charts import DashboardChart, bar_plot
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, missing_sw_count
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.main_window import MainWindow
@@ -357,11 +357,11 @@ def test_all_four_views_and_numeric_table_are_driven_by_same_result(window):
     assert page.data_table.item(0, 2).text() == "60.0%"  # 구성비는 판단 불가 포함 5건이 분모
     page.tabs.setCurrentIndex(2)
     assert isinstance(page.chart.chart().series()[0], QBarSeries)
-    assert page.data_table.columnCount() == 3
+    assert page.data_table.columnCount() == 6
     assert not any(widget.text() == "설비 대수 · 복수 SW는 설비군별 집계" and widget.isVisibleTo(page)
                    for widget in page.findChildren(QLabel))
     page.tabs.setCurrentIndex(3)
-    assert page.data_table.columnCount() == 6
+    assert page.data_table.columnCount() == 7
     assert page.snapshot is before
 
 
@@ -489,7 +489,10 @@ def test_trend_legend_requires_a_plottable_point_on_any_observation_day(window, 
     assert o2.isVisible() and o2.isEnabled() and o2.isChecked()
     o2_series, = [series for series in page.chart.chart().series() if series.name() == "O2"]
     assert isinstance(o2_series, QLineSeries)
-    assert [(point.x(), point.y()) for point in o2_series.points()] == [(0, 100), (1, 0)]
+    elapsed_days = (DAY2 - DAY1).days
+    assert [(point.x(), point.y()) for point in o2_series.points()] == [
+        *((offset, 100) for offset in range(elapsed_days)), (elapsed_days, 0),
+    ]
     assert inline_trend.points[0].summary.rate == 0
     assert inline_trend.points[-1].summary.rate is None
     assert inline.isEnabled()  # 마지막 날짜의 분모가 없어도 이전의 유효한 점은 표시한다.
@@ -516,7 +519,7 @@ def test_search_applies_all_location_date_and_group_filters_to_every_view(app, s
         assert page.chart.chart().series()[0].sum() == 1
         page.tabs.setCurrentIndex(2)
         bars = page.chart.chart().series()[0].barSets()
-        assert [bar.label() for bar in bars] == ["O3"] and bars[0].at(0) == 1
+        assert [bar.label() for bar in bars] == ["O3"] and bars[0].at(0) == 100
         page.tabs.setCurrentIndex(3)
         assert {series.name() for series in page.chart.chart().series()} == {"O3"}
         assert [point.day for point in snapshot.observations] == [DAY1]
@@ -527,7 +530,7 @@ def test_search_applies_all_location_date_and_group_filters_to_every_view(app, s
         app.processEvents()
 
 
-def test_bar_click_does_not_inherit_global_or_risk_only_scope(window):
+def test_bar_click_does_not_open_equipment(window):
     page = window.pages["dashboard"]
     window.query_panel.apply_draft()
     page.tabs.setCurrentIndex(2)
@@ -536,11 +539,12 @@ def test_bar_click_does_not_inherit_global_or_risk_only_scope(window):
     rows = [row for row in page.snapshot.rows if row.position is not None and row.cells[-1].summary.equipment_count]
     index = next(i for i, row in enumerate(rows) if row.position == ("s1", "P1"))
     series.clicked.emit(index, series.barSets()[0])
-    request = spy.at(0)[0]
-    assert request.equipment_ids == (1, 2) and not request.risk_only
-    zero_index = next(i for i in range(len(rows)) if series.barSets()[0].at(i) == 0)
-    series.clicked.emit(zero_index, series.barSets()[0])
-    assert spy.count() == 1
+    assert spy.count() == 0
+    _, groups = bar_plot(page.snapshot)
+    _, points = groups["o2"]
+    empty_index = next(i for i, point in enumerate(points) if not point.equipment_ids)
+    series.clicked.emit(empty_index, series.barSets()[0])
+    assert spy.count() == 0
 
 
 @pytest.mark.parametrize("gap", ("no_observation", "undetermined"))
