@@ -41,6 +41,8 @@ class ReplayViewControls(QScrollArea):
         self.setMinimumWidth(0)
         self.setAccessibleName("리플레이 보기·분류·데이터 간격")
         self.row = QWidget()
+        self.row.setObjectName("replayViewControlsRow")
+        self.row.setStyleSheet("QWidget#replayViewControlsRow {background:transparent;}")
         self.row_body = QHBoxLayout(self.row)
         self.row_body.setContentsMargins(0, 0, 0, 0)
         self.row_body.setSpacing(12)
@@ -48,6 +50,7 @@ class ReplayViewControls(QScrollArea):
             self.row_body.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
         self.row_body.addStretch()
         self.setWidget(self.row)
+        self.row.setAutoFillBackground(False)  # QScrollArea.setWidget가 켠 배경 채우기를 해제한다.
         self.horizontalScrollBar().rangeChanged.connect(self.refresh)
         self.refresh()
 
@@ -396,8 +399,10 @@ class ReplayHeatmap(QWidget):
         self.select_equipment(equipment_id)
 
     def _open_equipment(self, selection):
-        tile = (self.list_table if self.view.layout_buttons.checkedId() == 1
-                else self.tile_buttons.get(selection.equipment_id))
+        tile = getattr(self.view, "selection_control", None)
+        if tile is None:
+            tile = (self.list_table if self.view.layout_buttons.checkedId() == 1
+                    else self.tile_buttons.get(selection.equipment_id))
         self.equipment_selected.emit(selection.equipment_id, tile)
 
     def show_frame(self, data, frame, selected=None):

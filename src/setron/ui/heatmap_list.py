@@ -2,7 +2,7 @@
 
 from math import floor
 
-from PySide6.QtCore import QModelIndex, QRect, QSignalBlocker, Qt
+from PySide6.QtCore import QEvent, QModelIndex, QRect, QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOption, QStyledItemDelegate, QTreeView
 
@@ -26,6 +26,7 @@ class HeatmapListModel(QStandardItemModel):
         self._equipment_items, self._group_items = {}, {}
         self._structure_signature, self._row_items = None, ()
         self.name_changed = False
+        self._rebuilding = False
         self.setHorizontalHeaderLabels(self.headings)
 
     @classmethod
@@ -72,9 +73,20 @@ class HeatmapListModel(QStandardItemModel):
             self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
             return False, tuple(changed_rows)
 
-        self.clear()
-        self.setHorizontalHeaderLabels(self.headings)
+        self._rebuilding = True
+        try:
+            self._replace_groups(nodes, row_factory, signature)
+        finally:
+            self._rebuilding = False
+        return True, ()
+
+    def _replace_groups(self, nodes, row_factory, signature):
+        # clear()는 열과 숨김 상태까지 지우며 resize 이벤트가 삭제된 셀을 읽게 한다.
+        # 참조를 먼저 비우고 행만 교체해 헤더와 열 설정을 그대로 유지한다.
         self._equipment_items, self._group_items = {}, {}
+        self._structure_signature, self._row_items = None, ()
+        self.rows, self.ids, self.tones = (), (), ()
+        self.removeRows(0, self.rowCount())
         rows, ids, tones, row_items = [], [], [], []
 
         def append(parent, node, group_name=None):
@@ -116,7 +128,6 @@ class HeatmapListModel(QStandardItemModel):
         self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
         self._structure_signature, self._row_items = signature, tuple(row_items)
         self.name_changed = True
-        return True, ()
 
     def equipment_index(self, equipment_id, preferred_key=None):
         items = self._equipment_items.get(equipment_id, ())
@@ -171,6 +182,7 @@ class HeatmapTreeView(QTreeView):
         self.base_widths, self.compact = tuple(widths), False
         self._collapsed_keys = set()
         self._fitting_height = False
+        self._resizing_columns = False
         self._row_heights, self._last_compact = {}, self.compact
         self.setModel(model)
         self.setAccessibleName(name)
@@ -332,7 +344,7 @@ class HeatmapTreeView(QTreeView):
                 parent = parent.parent()
         self.setCurrentIndex(index)
 
-    def resize_columns(self):
+    def _column_widths(self):
         name_width = 260
         for items in self.model()._equipment_items.values():
             for item in items:
@@ -345,20 +357,35 @@ class HeatmapTreeView(QTreeView):
                 name_width = max(name_width, text_width + depth * self.indentation() + 20)
         name_width = min(340, name_width)
         if self.compact:
-            widths = {0: name_width, 3: 180, 4: 140}
+            remaining = max(320, self.viewport().width() - name_width)
+            version = max(180, int(remaining * 0.55))
+            widths = {0: name_width, 3: version, 4: remaining - version}
         else:
             widths = {column: width for column, width in enumerate(self.base_widths) if not self.isColumnHidden(column)}
             widths[0], widths[4] = name_width, 140
             other_width = sum(width for column, width in widths.items() if column != 0)
-            extra = min(max(0, self.viewport().width() - sum(widths.values())), int(other_width * 0.15))
-            for column in widths:
-                if column != 0:
-                    widths[column] += int(extra * widths[column] / other_width) if other_width else 0
+            remaining = max(other_width, self.viewport().width() - name_width)
+            others = [column for column in widths if column != 0]
+            allocated = 0
+            for column in others:
+                width = remaining - allocated if column == others[-1] else int(remaining * widths[column] / other_width)
+                widths[column] = width
+                allocated += width
+        return widths
+
+    def resize_columns(self):
+        model = self.model()
+        if self._resizing_columns or model is None or model._rebuilding:
+            return False
         changed = False
-        for column, width in widths.items():
-            if self.columnWidth(column) != width:
-                self.setColumnWidth(column, width)
-                changed = True
+        self._resizing_columns = True
+        try:
+            for column, width in self._column_widths().items():
+                if self.columnWidth(column) != width:
+                    self.setColumnWidth(column, width)
+                    changed = True
+        finally:
+            self._resizing_columns = False
         return changed
 
     @staticmethod
@@ -370,7 +397,7 @@ class HeatmapTreeView(QTreeView):
                    for column in range(self.model().columnCount(index.parent())) if not self.isColumnHidden(column))
 
     def fit_height(self):
-        if self._fitting_height or self.model() is None:
+        if self._fitting_height or self.model() is None or self.model()._rebuilding:
             return
         self._fitting_height = True
         try:
@@ -403,3 +430,10 @@ class HeatmapTreeView(QTreeView):
         if event.size().width() != event.oldSize().width():
             self.resize_columns()
             self.fit_height()
+
+    def viewportEvent(self, event):
+        result = super().viewportEvent(event)
+        if event.type() == QEvent.Type.Resize:
+            self.resize_columns()
+            self.fit_height()
+        return result

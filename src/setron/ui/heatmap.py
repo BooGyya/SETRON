@@ -415,9 +415,11 @@ class HeatmapPage(QWidget):
         self.view_toggle.setObjectName("heatmapView")
         self.view_toggle.setMinimumWidth(104)
         self.hpa_button = button("HPA 표시")
+        display_border = 1
+        display_content_height = toolbar_height - 2 * display_border
         display_style = (
-            f"QPushButton {{background:white;border:1px solid {LINE};border-radius:10px;"
-            "padding:0 10px;min-height:0;}"
+            f"QPushButton {{background:white;border:{display_border}px solid {LINE};border-radius:10px;"
+            f"padding:0 10px;min-height:{display_content_height}px;max-height:{display_content_height}px;}}"
             f"QPushButton:checked {{background:{PRIMARY};border-color:{PRIMARY};color:white;}}"
             f"QPushButton:focus {{border-color:{PRIMARY};}}"
             f"QPushButton:checked:focus {{border-color:{INK};}}")
@@ -908,7 +910,7 @@ class HeatmapPage(QWidget):
             size = HEATMAP_CELL_SIZE if expanded else HEATMAP_COMPACT_CELL_SIZE
             control = TileButton(tile, expanded=expanded, families=families, cell_size=size)
             control.setChecked(tile.equipment_id == self.selected_id)
-            control.clicked.connect(lambda checked=False, eid=tile.equipment_id: self._select(eid))
+            control.clicked.connect(lambda checked=False, eid=tile.equipment_id, origin=control: self._select(eid, origin))
             self.tile_buttons.setdefault(tile.equipment_id, control)
             self.tile_occurrences.append(control)
             buttons.append(control)
@@ -969,9 +971,9 @@ class HeatmapPage(QWidget):
         if index.isValid():
             equipment_id = index.data(Qt.ItemDataRole.UserRole)
             if equipment_id is not None:
-                self._select(equipment_id)
+                self._select(equipment_id, self.list_table)
 
-    def _select(self, equipment_id):
+    def _select(self, equipment_id, origin=None):
         if (self.snapshot is None or equipment_id not in self.visible_ids
                 or self._query_bound and (self.state is None or not self.state.is_current(self.snapshot.query))):
             return
@@ -980,8 +982,14 @@ class HeatmapPage(QWidget):
         self.selection_notice.setText(f"선택: {tile.code} · {tile.goal.value} · {tile.risk_label}\n"
                                       + ("설비 상세로 이동합니다." if self.detail_connected else
                                          "설비 ID 전달 완료 · 목록·상세는 6번 작업에서 연결합니다."))
-        self.equipment_selected.emit(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id,
-                                                        tile.observation_date))
+        self.selection_control = (origin if origin is not None else
+                                  self.list_table if self.layout_buttons.checkedId() == 1 else
+                                  self.tile_buttons.get(equipment_id))
+        try:
+            self.equipment_selected.emit(EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id,
+                                                            tile.observation_date))
+        finally:
+            self.selection_control = None
 
     def select_equipment(self, equipment_id):
         """카드·목록의 선택 표시를 맞춘다. 선택 신호나 조회는 발생시키지 않는다."""
