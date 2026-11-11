@@ -480,11 +480,11 @@ def data_exporter_from_env(environ=None):
     if not values.get("SETRON_DB_NAME"):
         return None
 
-    def exporter(path):
+    def exporter(path, *, production_area=None, batch_ids=None):
         database = None
         try:
             database = Database.from_env(values)
-            return save_management_summary(StorageService(database), path)
+            return save_management_summary(StorageService(database), path, production_area=production_area, batch_ids=batch_ids)
         except DatabaseError as error:
             return ExportResult(ExportStatus.FAILED, Path(path), f"DB 자료를 읽지 못했습니다: {error}")
         finally:
@@ -492,3 +492,31 @@ def data_exporter_from_env(environ=None):
                 database.dispose()
 
     return exporter
+
+
+def export_files_from_env(environ=None):
+    """가져온 파일 선택 목록을 독립 DB 연결에서 비동기로 읽는다."""
+    import os
+    from dataclasses import replace
+
+    from setron.features.data_admin.service import clock_offset
+    from setron.features.export.management_files import management_files
+    from setron.features.storage.service import StorageService
+    from setron.infrastructure.database import Database
+    from setron.ui.read_worker import BackgroundRead
+
+    values = os.environ if environ is None else environ
+    if not values.get("SETRON_DB_NAME"):
+        return None
+
+    def load():
+        database = Database.from_env(values)
+        try:
+            storage = StorageService(database)
+            offset = clock_offset(storage)
+            return tuple(replace(value, imported_at=value.imported_at + offset if value.imported_at else None)
+                         for value in management_files(storage))
+        finally:
+            database.dispose()
+
+    return BackgroundRead(load)

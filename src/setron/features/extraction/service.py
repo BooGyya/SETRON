@@ -113,6 +113,12 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
             if location is not None:
                 covered.add(id(location))
         normalized, key, notes = normalize(values, kind, number, sources)
+        if kind is ExtractKind.RELEASE_NOTE and not values.get("content") and not values.get("item_no"):
+            from setron.features.management_format import RELEASE_HEADERS
+
+            if sheet.values and set(RELEASE_HEADERS).issubset(sheet.values[0]):
+                # 이 양식의 빈 Item 칸은 'Item이 없는 저장 릴리즈'를 명시한다.
+                notes = tuple(note for note in notes if note.field != "content")
         row_issues.extend(notes)
         rows.append(ReviewRow(normalized, raw_values, sources, key, tuple(row_issues)))
         issues.extend(row_issues)

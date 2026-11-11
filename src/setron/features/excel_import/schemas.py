@@ -33,6 +33,7 @@ FIELD_LABELS = {
     "ui_type": "UI 구분", "structure_type": "구조 구분", "geometry_type": "형상",
     "modification_type": "개조 정보", "modification_mark": "개조 적용 표식",
     "engine_version": "Engine 버전", "epd_version": "EPD 버전",
+    "version_order": "확인된 순서", "version_suffix": "접미사", "item_mapping_status": "Item 매핑",
 }
 
 KIND_LABELS = {ExtractKind.EQUIPMENT_STATUS: "설비 현황", ExtractKind.RELEASE_NOTE: "릴리즈 노트"}

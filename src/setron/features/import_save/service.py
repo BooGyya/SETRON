@@ -41,6 +41,7 @@ from setron.features.excel_import.repository import ImportValidationRepository
 from setron.features.excel_import.service import parse_address, validate_batch
 from setron.features.excel_import.provenance import validate_save_request_sources
 from setron.features.release.schemas import ItemInput, ReleaseInput
+from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.release.service import ReleaseService
 from setron.features.release.refresh import ReleaseRefreshService
 from setron.features.release.refresh_schemas import RefreshContext
@@ -64,10 +65,12 @@ SNAPSHOT_FIELDS = ("base_date", "site", "line", "model_name", "equipment_code", 
 SNAPSHOT_METADATA_FIELDS = ("line", "production_area", "structure_type", "geometry_type", "modification_type")
 SOFTWARE_FIELDS = ("family_name", "version_raw", "ui_type")
 PM_FIELDS = ("pm_name", "model_name")
-RELEASE_FIELDS = ("version_raw", "release_date", "family_name", "model_name", "group_name", "ui_type")
+RELEASE_FIELDS = ("version_raw", "release_date", "family_name", "model_name", "group_name", "ui_type",
+                  "production_area", "version_order", "version_suffix", "item_mapping_status")
 ITEM_FIELDS = ("item_no", "content")
 # 검토 화면에서 고친 항목 중 DB 수정 표시(edited_fields)에 남길 수 있는 것과 그 열 이름.
-RELEASE_EDITED = {"version_raw": "version_raw", "release_date": "released_at"}
+RELEASE_EDITED = {"version_raw": "version_raw", "release_date": "released_at", "version_suffix": "version_suffix",
+                  "version_order": "version_order", "item_mapping_status": "item_mapping_status"}
 ITEM_EDITED = {"item_no": "item_no", "content": "content"}
 
 TARGET_LABEL = "MySQL DB"
@@ -164,6 +167,51 @@ class DatabaseImportSaver:
                     {row["group_id"]: row["group_name"] for row in self.repository.rows(tx, "equipment_group")}))
             return tuple(result)
 
+    def _management_links(self, tx, request):
+        """앱 내보내기 표에 명시된 Item 상태·적용 모델만 복원한다. 일반 노트 기호는 추측하지 않는다."""
+        from setron.features.management_format import RELEASE_HEADERS
+
+        if ExtractKind(request.kind) is not ExtractKind.RELEASE_NOTE:
+            return {}
+        header_rows = {}
+        for sheet_name, cells in batch_raw_data(request.raw_data).items():
+            if not isinstance(cells, dict):
+                continue
+            for address, value in cells.items():
+                row, _ = parse_address(address)
+                if isinstance(value, str):
+                    header_rows.setdefault((sheet_name, row), set()).add(value)
+        if not any(set(RELEASE_HEADERS).issubset(values) for values in header_rows.values()):
+            return {}
+        groups = {row["group_name"]: row["group_id"] for row in self.repository.rows(tx, "equipment_group")}
+        family_cache, links = {}, {}
+        states = {"적용": ItemState.APPLIED, "미적용": ItemState.NOT_APPLIED, "미확인": ItemState.UNKNOWN}
+        for row in request.rows:
+            values = row.values
+            if not values.get("content"):
+                continue
+            mark = values.get("modification_mark")
+            _require(mark in states, "내보낸 Item의 적용·미적용·미확인 상태를 확인해 주세요.")
+            targets = values.get("target_models")
+            ids = ()
+            if targets == "전체 모델":
+                scope = TargetScope.ALL
+            elif targets == "미확인":
+                scope = TargetScope.UNKNOWN
+            else:
+                labels = tuple(part.strip() for part in (targets or "").split(",") if part.strip())
+                _require(labels and all(label in groups for label in labels), "내보낸 Item의 지정 모델을 확인해 주세요.")
+                scope, ids = TargetScope.LISTED, tuple(sorted({groups[label] for label in labels}))
+            context = tuple(values.get(name) for name in ("model_name", "group_name", "family_name", "ui_type",
+                                                          "structure_type", "production_area"))
+            if context not in family_cache:
+                family_cache[context] = self._family(tx, self._model(tx, values, row), values, row)["family_id"]
+            key = family_cache[context], values["version_raw"], values.get("item_no"), values["content"]
+            metadata = {"item_state": states[mark], "target_scope": scope, "target_group_ids": ids}
+            _require(key not in links or links[key] == metadata, "같은 버전·Item의 적용 상태나 모델 범위가 상충합니다.")
+            links[key] = metadata
+        return links
+
     def _replacement_requests(self, tx, requests):
         """여러 시트를 같은 계열의 전체 노트로 묶고 각 원본 셀 위치를 보존한다.
 
@@ -174,8 +222,12 @@ class DatabaseImportSaver:
         return
         - 계열 ID 순서의 교체 요청. 같은 이름의 원본 셀 값이 다르면 저장하지 않음.
         """
-        groups, raws = {}, {}
+        groups, raws, management_links = {}, {}, {}
         for request in requests:
+            for key, metadata in self._management_links(tx, request).items():
+                _require(key not in management_links or management_links[key] == metadata,
+                         "같은 버전·Item의 적용 상태나 모델 범위가 시트마다 다릅니다.")
+                management_links[key] = metadata
             if ExtractKind(request.kind) is not ExtractKind.RELEASE_NOTE or not request.release_note_confirmed:
                 continue
             _require(request.filename_confirmed is True, "릴리즈 교체 전에 원본 파일명을 확인해 주세요.")
@@ -216,6 +268,7 @@ class DatabaseImportSaver:
                 seen, links = {}, []
                 for item in items:
                     key = (item.item_no, item.content)
+                    metadata = management_links.get((family, release.version_raw, *key), {})
                     if key in seen:
                         index = seen[key]
                         previous = all_items[index]
@@ -233,14 +286,14 @@ class DatabaseImportSaver:
                             source_reference=merge_sources(previous.value.source_reference, item.source_reference),
                             edited_fields=tuple(dict.fromkeys((*previous.value.edited_fields, *item.edited_fields)))))
                         seen[key] = index
-                        links.append(ReplacementLink(item_key=previous.key))
+                        links.append(ReplacementLink(item_key=previous.key, **metadata))
                         continue
                     item_key = f"release-{ri}-item-{len(links)}"
                     seen[key] = len(all_items)
                     if existing_item is not None:
                         shared[existing_item] = len(all_items)
                     all_items.append(ReplacementItem(key=item_key, value=item))
-                    links.append(ReplacementLink(item_key=item_key))
+                    links.append(ReplacementLink(item_key=item_key, **metadata))
                 releases.append(ReplacementRelease(key=f"release-{ri}", value=release, links=tuple(links)))
             result.append(ReplacementRequest(family_id=family, releases=tuple(releases), items=tuple(all_items),
                 raw_data=raws[family], complete_note_confirmed=True, filename_confirmed=True))
@@ -357,8 +410,20 @@ class DatabaseImportSaver:
             equipment_batches, equipment_metadata_keys = [], []
             for request, batch, snapshots in prepared:
                 if ExtractKind(request.kind) is ExtractKind.RELEASE_NOTE:
+                    management_links = self._management_links(tx, request)
                     for release, items in self._releases(tx, request.rows, batch["batch_id"]):
                         detail = releases.register_release_in(tx, release, items)
+                        release_id = detail.release.current["release_version_id"]
+                        for linked in detail.items:
+                            item = linked.item.current
+                            metadata = management_links.get((release.family_id, release.version_raw,
+                                                             item["item_no"], item["content"]))
+                            if metadata is not None:
+                                tx.update("release_version_item", {"release_version_id": release_id, "item_id": item["item_id"]},
+                                          {**metadata, "item_state": metadata["item_state"].value,
+                                           "target_scope": metadata["target_scope"].value,
+                                           "target_group_ids": list(metadata["target_group_ids"])
+                                           if metadata["target_scope"] is TargetScope.LISTED else None})
                         changed_release_ids.add(detail.release.current["release_version_id"])
             for index, (request, batch, snapshots) in enumerate(prepared):
                 if ExtractKind(request.kind) is ExtractKind.EQUIPMENT_STATUS:
@@ -499,10 +564,26 @@ class DatabaseImportSaver:
             _require(allow_existing or next(iter(linked_ids)) is None,
                      f"{version}: 이미 저장된 릴리즈입니다. 전체 누적 노트·파일명·충돌 선택을 확인한 뒤 교체해 주세요.")
             dates = {r.values.get("release_date") for r in group} - {None}
+            orders = {r.values.get("version_order") for r in group} - {None, ""}
+            _require(len(orders) <= 1, f"{version}: 확인된 릴리즈 순서가 상충합니다.")
+            order = next(iter(orders), None)
+            try:
+                order = int(order) if order is not None else None
+            except (TypeError, ValueError):
+                raise StorageValidationError("확인된 순서는 정수여야 합니다.") from None
+            suffixes = {r.values.get("version_suffix") for r in group} - {None, ""}
+            _require(len(suffixes) <= 1, f"{version}: 릴리즈 접미사가 상충합니다.")
+            mapping_labels = {r.values.get("item_mapping_status") for r in group} - {None, ""}
+            mappings = {"확인됨": "VERIFIED", "미확인": "UNKNOWN", "VERIFIED": "VERIFIED", "UNKNOWN": "UNKNOWN"}
+            _require(len(mapping_labels) <= 1 and all(value in mappings for value in mapping_labels),
+                     "Item 매핑 확인 상태를 확인해 주세요.")
             # 같은 버전이 다른 날짜로 또 나오면 재배포로 보고 첫 출시일을 쓴다 (멘토 확인 2026-11-05).
             release = ReleaseInput(
                 family_id=family_id, version_raw=version, batch_id=batch_id,
+                version_suffix=next(iter(suffixes), None),
                 released_at=date.fromisoformat(min(dates)) if dates else None,
+                version_order=order,
+                item_mapping_status=mappings[next(iter(mapping_labels))] if mapping_labels else "UNKNOWN",
                 source_reference=merge_sources(*(_sources(row, RELEASE_FIELDS) for row in group)),
                 edited_fields=tuple(dict.fromkeys(name for row in group for name in _edited(row, RELEASE_EDITED))),
             )

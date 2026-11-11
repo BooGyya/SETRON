@@ -156,6 +156,37 @@ def _pm_names(value):
     return tuple(dict.fromkeys("PM" + number for number in re.findall(r"[0-9]+", value)))
 
 
+def _management_locations(sheet, grid):
+    """동일 행에 반복되는 표시용 HPA를 별도 설비로 세지 않고 명시된 열로 대응한다."""
+    from setron.features.ai.schemas import ExtractKind
+    from setron.features.management_format import EQUIPMENT_HEADERS
+    from setron.features.rule_extraction.management_rules import parse_management_sheet
+
+    if not sheet.values or not set(EQUIPMENT_HEADERS).issubset(sheet.values[0]):
+        return None
+    columns = {name: index for index, name in enumerate(sheet.values[0])}
+    sources = {cell_address(row, column): grid.source(row, column) for row, column in grid.original}
+    result = []
+    parsed = parse_management_sheet(ExtractKind.EQUIPMENT_STATUS, sheet)
+    fixed = {"equipment_code": "설비 호기", "base_date": "기준일", "site": "사업장", "version_raw": "SW 버전(원문)",
+             "model_name": "모델명(원문)", "pm_name": "PM"}
+    for row in parsed.rows:
+        fields = {field: sources[address] for field, address in row.sources.items() if address in sources}
+        anchor = fields.get("equipment_code") or fields.get("model_name")
+        if anchor is None:
+            continue
+        match = re.search(r"([0-9]+)$", anchor.address)
+        number = int(match[1])
+        for field, header in fixed.items():
+            fields.setdefault(field, grid.source(number, sheet.first_col + columns[header]))
+        markers = frozenset(cell.address for header in ("모델명(원문)", "대표 모델", "PM 모델", "PM 모델명(원문)", "설비군")
+                            if (cell := grid.source(number, sheet.first_col + columns[header])) and _is_hpa(cell.value))
+        pm_names = _pm_names(fields["pm_name"].value)
+        for pm in pm_names or (None,):
+            result.append(RecordLocation(fields, markers, pm))
+    return tuple(result)
+
+
 def record_locations(sheet: SheetData) -> tuple[RecordLocation, ...]:
     """호기·SW 머리글이 있는 가로·세로 표의 실제 데이터 위치를 찾는다.
 
@@ -169,6 +200,9 @@ def record_locations(sheet: SheetData) -> tuple[RecordLocation, ...]:
     - 확정 머리글 아래의 레코드 위치 튜플. 위치가 모호한 필드는 제외한다.
     """
     grid = _Grid(sheet)
+    management = _management_locations(sheet, grid)
+    if management is not None:
+        return management
     found = {}
     for transposed in (False, True):
         first_head, last_head = ((sheet.first_col, grid.last_col) if transposed
