@@ -81,11 +81,14 @@ class Gateway:
                               "합성 결과", "rev-2" if self.outcome == "success" else "")
 
 
-def select_period(page):
+def select_period(page, choose=True):
+    """화성 · 7~8월 조건을 고른다. 목록에는 조건에 맞는 것만 보이고 자동으로 고르지 않으므로(11-11), ``choose``면 전체 선택을 누른다."""
     page.set_catalog(catalog())
     page.site_combo.setCurrentIndex(page.site_combo.findData("화성"))
     page.start.setText("2026-07-01")
     page.end.setText("2026-08-31")
+    if choose:
+        page.select_all.click()
 
 
 def approve(dialog):
@@ -318,11 +321,11 @@ def test_default_delete_never_calls_or_invents_database(own):
 
 def test_period_is_inclusive_scoped_and_distinguishes_physical_and_sw_counts(own):
     page = own(ImportDeletePage())
-    select_period(page)
+    select_period(page, choose=False)
+    assert not page.selected and set(page.checks) == {"july", "aug"}  # 조건에 맞는 파일만 보이고 자동 선택은 없다
+    page.select_all.click()
     assert page.selected == {"july", "aug"}
     assert "116행" in page.counts.text() and "남는 기준일 2개" in page.counts.text()
-    assert not page.checks["aug-other"].isEnabled()
-    assert not page.checks["oct"].isEnabled()
     page.start.setText("2026-09-01")
     assert not page.selected and not page.delete_button.isEnabled()
     page.start.setText("invalid")
@@ -337,6 +340,8 @@ def test_release_mode_uses_family_not_hidden_dates_or_site(own):
     assert not page.start_box.isVisibleTo(page) and page.family_box.isVisibleTo(page)
     assert not page.selected
     page.family_combo.setCurrentIndex(page.family_combo.findData("C4"))
+    assert not page.selected and set(page.checks) == {"release"}
+    page.checks["release"].click()
     assert page.selected == {"release"}
     assert page.plan().start is None and page.plan().site is None
 
@@ -377,7 +382,8 @@ def test_read_only_release_catalog_refreshes_after_a_successful_import(own):
     assert deletion.table.rowCount() == 2 and deletion.family_combo.currentText() == "전체"
     deletion.family_combo.setCurrentIndex(deletion.family_combo.findData("O2"))
     assert deletion.table.rowCount() == 1
-    assert deletion.table.item(0, 2).text() == "신규 릴리즈" and deletion.table.item(0, 3).text() == "3개"
+    assert deletion.table.item(0, 3).text() == "신규 릴리즈" and deletion.table.item(0, 4).text() == "3개"
+    assert deletion.table.isColumnHidden(2)  # 릴리즈 노트에는 Site 열이 없다
     assert not deletion.confirm_delete() and not gateway.calls
 
 
@@ -386,11 +392,11 @@ def test_quick_ranges_use_latest_saved_date_and_keyboard_toggle_works(own):
     select_period(page)
     page.quick_range("latest")
     assert page.start.text() == page.end.text() == "2026-10-21"
-    assert page.selected == {"oct"}
+    assert not page.selected and set(page.checks) == {"oct"}
     assert page.quick_buttons[0].isChecked()
     page.checks["oct"].setFocus()
     QTest.keyClick(page.checks["oct"], Qt.Key.Key_Space)
-    assert not page.selected
+    assert page.selected == {"oct"}
     page.quick_range("quarter")
     assert page.start.text() == "2026-07-21"
 
@@ -404,7 +410,7 @@ def test_header_select_all_never_selects_ineligible_site_or_date(own):
     page.checks["july"].click()
     assert page.select_all.checkState() == Qt.CheckState.PartiallyChecked
     page.select_all.click()
-    assert page.selected == {"july", "aug"} and not page.checks["aug-other"].isChecked()
+    assert page.selected == {"july", "aug"} and "aug-other" not in page.checks
 
 
 @pytest.mark.parametrize("connected", [False, True])
