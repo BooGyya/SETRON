@@ -20,7 +20,7 @@ from setron.ui.replay_data import ReplayData, ReplayRequest, can_replay, group_v
 from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls
 from setron.ui.theme import PRIMARY, SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
-from setron.ui.view_controls import SegmentedControl, bulk_selection_button
+from setron.ui.view_controls import SegmentedControl, bulk_selection_toggle_button, set_bulk_selection_state
 
 
 class ReplayPage(QWidget):
@@ -337,10 +337,7 @@ class ReplayPage(QWidget):
                      if len(cell.group_keys) == 1 and cell.equipment_ids}
         if not available:
             return
-        self.toggle_all_button = bulk_selection_button("전체 해제")
-        self.toggle_all_button.setCheckable(True)
-        self.toggle_all_button.setMinimumWidth(96)
-        set_widget_font(self.toggle_all_button, font(13, medium=True))
+        self.toggle_all_button = bulk_selection_toggle_button()
         self.toggle_all_button.clicked.connect(self.toggle_all_groups)
         self.legend_tools = (self.toggle_all_button,)
         for group in self.data.source.catalog.groups:
@@ -384,10 +381,7 @@ class ReplayPage(QWidget):
 
     def _update_bulk_toggle(self):
         if self.legend_tools:
-            all_selected = self.selected_groups() is None
-            self.toggle_all_button.setChecked(all_selected)
-            self.toggle_all_button.setText("전체 해제" if all_selected else "전체 선택")
-            self.toggle_all_button.setAccessibleName("설비군 " + self.toggle_all_button.text())
+            set_bulk_selection_state(self.toggle_all_button, self.selected_groups() is None)
 
     def _draw_chart(self, *_):
         if self.data is not None:

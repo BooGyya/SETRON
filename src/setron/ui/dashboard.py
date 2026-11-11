@@ -22,7 +22,7 @@ from setron.ui.dashboard_data import (
 from setron.ui.interval_selector import IntervalSelector
 from setron.ui.query_panel import QueryPanel
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
-from setron.ui.view_controls import SegmentedControl, bulk_selection_button
+from setron.ui.view_controls import SegmentedControl, bulk_selection_toggle_button, set_bulk_selection_state
 
 OUTLINE_BUTTON = (f"QPushButton {{background:white;border:1px solid {LINE};border-radius:8px;padding:0 16px;"
                   "min-height:32px;max-height:32px;}"
@@ -350,12 +350,9 @@ class DashboardPage(QWidget):
         tools_body = QHBoxLayout(self.series_tools)
         tools_body.setContentsMargins(0, 0, 0, 0)
         tools_body.setSpacing(8)
-        self.select_all_button = bulk_selection_button("전체 선택")
-        self.clear_all_button = bulk_selection_button("전체 해제")
-        self.select_all_button.clicked.connect(lambda: self._set_all_groups(True))
-        self.clear_all_button.clicked.connect(lambda: self._set_all_groups(False))
-        tools_body.addWidget(self.select_all_button)
-        tools_body.addWidget(self.clear_all_button)
+        self.toggle_all_button = bulk_selection_toggle_button()
+        self.toggle_all_button.clicked.connect(self._toggle_all_groups)
+        tools_body.addWidget(self.toggle_all_button)
         self.series_controls = _ChartSeriesControls(self.series_tools, self.series_grid)
         self.content.body.addWidget(self.series_controls)
         self.matrix_scroll = QScrollArea()
@@ -592,12 +589,16 @@ class DashboardPage(QWidget):
 
     def _set_all_groups(self, checked):
         for group, control in zip(self.source.catalog.groups, self.series_widgets):
-            if control.isEnabled() and control.isVisible():
+            if control.isEnabled():
                 if checked:
                     self.visible_groups.add(group.key)
                 else:
                     self.visible_groups.discard(group.key)
         self._render_view()
+
+    def _toggle_all_groups(self):
+        available = [control for control in self.series_widgets if control.isEnabled()]
+        self._set_all_groups(not all(control.isChecked() for control in available))
 
     def _render_view(self, *_):
         mode = self.tabs.currentIndex()
@@ -683,6 +684,7 @@ class DashboardPage(QWidget):
         self.series_grid.setVisible(bool(visible))
         self.series_controls.setVisible(bool(visible))
         self.series_tools.setEnabled(bool(visible))
+        set_bulk_selection_state(self.toggle_all_button, bool(visible) and all(check.isChecked() for check in visible))
 
     def _render_composition_legend(self, data):
         _clear_layout(self.composition_rows)

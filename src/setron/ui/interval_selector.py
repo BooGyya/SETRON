@@ -136,11 +136,8 @@ class IntervalSelector(QWidget):
         self._body.addWidget(self.segment, 0 if inline else 1, 1 if inline else 0)
         for column in range(3):
             self._body.setColumnStretch(column, int(column == (2 if inline else 1)))
-        for control in self.buttons.values():
-            self._segments.removeWidget(control)
         controls = self._active_controls()
-        for index, control in enumerate(controls):
-            self._segments.addWidget(control, index // columns, index % columns)
+        self.segment.set_columns(columns)
         if self.compact:
             rows = (len(controls) + columns - 1) // columns
             self.segment.setFixedHeight(rows * 30 + (rows - 1) * 2 + 4)

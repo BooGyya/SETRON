@@ -222,15 +222,27 @@ def test_bulk_chart_selection_only_changes_visible_series_without_querying(windo
     for mode in (2, 3):
         page.tabs.setCurrentIndex(mode)
         QTest.qWait(10)
-        assert page.select_all_button.isVisible() and page.clear_all_button.isVisible()
+        toggle = page.toggle_all_button
+        assert toggle.isVisible() and toggle.text() == "전체 해제" and toggle.isChecked()
+        assert page.series_tools.layout().count() == 1
         visible = [control for control in page.series_widgets if control.isVisible()]
         assert visible
-        page.clear_all_button.click()
+        toggle.click()
         assert all(not control.isChecked() for control in visible)
+        assert toggle.text() == "전체 선택" and not toggle.isChecked()
         assert "inline-o2" in page.visible_groups
-        page.select_all_button.click()
+        visible[0].click()
+        assert visible[0].isChecked() and not all(control.isChecked() for control in visible)
+        assert toggle.text() == "전체 선택" and not toggle.isChecked()
+        toggle.click()
         assert all(control.isChecked() for control in visible)
+        assert toggle.text() == "전체 해제" and toggle.isChecked()
         assert page.snapshot is snapshot and window.query_state.applied is applied
 
+    visible[0].click()
+    page.tabs.setCurrentIndex(2)
+    assert page.toggle_all_button.text() == "전체 선택"
+    page.toggle_all_button.click()
+    assert page.toggle_all_button.text() == "전체 해제"
     page.tabs.setCurrentIndex(1)
-    assert not page.select_all_button.isVisible() and not page.clear_all_button.isVisible()
+    assert not page.toggle_all_button.isVisible()
