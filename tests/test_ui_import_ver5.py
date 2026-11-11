@@ -82,11 +82,12 @@ class Gateway:
 
 
 def select_period(page, choose=True):
-    """화성 · 7~8월 조건을 고른다. 목록에는 조건에 맞는 것만 보이고 자동으로 고르지 않으므로(11-11), ``choose``면 전체 선택을 누른다."""
+    """화성 · 7~8월 조건으로 [검색]한다. 목록에는 조건에 맞는 것만 보이고 자동으로 고르지 않으므로(11-11), ``choose``면 전체 선택을 누른다."""
     page.set_catalog(catalog())
     page.site_combo.setCurrentIndex(page.site_combo.findData("화성"))
     page.start.setText("2026-07-01")
     page.end.setText("2026-08-31")
+    assert page.search()
     if choose:
         page.select_all.click()
 
@@ -340,6 +341,8 @@ def test_release_mode_uses_family_not_hidden_dates_or_site(own):
     assert not page.start_box.isVisibleTo(page) and page.family_box.isVisibleTo(page)
     assert not page.selected
     page.family_combo.setCurrentIndex(page.family_combo.findData("C4"))
+    assert not page.checks  # 조건을 바꾸면 [검색]을 다시 눌러야 목록이 보인다 (11-11 4차)
+    page.search()
     assert not page.selected and set(page.checks) == {"release"}
     page.checks["release"].click()
     assert page.selected == {"release"}
@@ -363,6 +366,8 @@ def test_read_only_release_catalog_refreshes_after_a_successful_import(own):
     page.tabs.setCurrentIndex(1)
     until(lambda: not deletion.busy)
     deletion.kind_combo.setCurrentIndex(1)
+    assert deletion.table.rowCount() == 0 and "[검색]" in deletion.empty.text()
+    deletion.search()
     assert deletion.table.rowCount() == 1
     assert not page.delete_steps.isVisibleTo(page)
     assert deletion.table.isColumnHidden(0) and not deletion.impact_card.isVisibleTo(page)
@@ -381,6 +386,7 @@ def test_read_only_release_catalog_refreshes_after_a_successful_import(own):
     until(lambda: not deletion.busy)
     assert deletion.table.rowCount() == 2 and deletion.family_combo.currentText() == "전체"
     deletion.family_combo.setCurrentIndex(deletion.family_combo.findData("O2"))
+    deletion.search()
     assert deletion.table.rowCount() == 1
     assert deletion.table.item(0, 3).text() == "신규 릴리즈" and deletion.table.item(0, 4).text() == "3개"
     assert deletion.table.isColumnHidden(2)  # 릴리즈 노트에는 Site 열이 없다
@@ -392,6 +398,7 @@ def test_quick_ranges_use_latest_saved_date_and_keyboard_toggle_works(own):
     select_period(page)
     page.quick_range("latest")
     assert page.start.text() == page.end.text() == "2026-10-21"
+    page.search()
     assert not page.selected and set(page.checks) == {"oct"}
     assert page.quick_buttons[0].isChecked()
     page.checks["oct"].setFocus()
@@ -470,6 +477,8 @@ def test_catalog_empty_failure_and_duplicate_ids_are_distinct(own):
     until(lambda: not page.busy)
     assert page.catalog == catalog()
     page.set_catalog(DeletionCatalog("empty", (), "빈 합성 목록"))
+    assert "[검색]" in page.empty.text()
+    page.search()
     assert "없습니다" in page.empty.text() and "0행" in page.counts.text()
     with pytest.raises(ValueError):
         DeletionCatalog("bad", (catalog().batches[0], catalog().batches[0]), "중복")

@@ -259,8 +259,9 @@ class DeleteConfirmDialog(ImportDialog):
 class ImportDeletePage(QWidget):
     """종류·Site·기간/계열 선택 → 조건에 맞는 가져온 엑셀만 목록에 보임 → 지울 것을 직접 체크 → 영향 확인 → 명시 확인.
 
-    11-11: 목록은 화면에 들어올 때 읽고(조회 버튼 없음), 조건을 바꾸면 그 조건의 파일만 보인다. 자동 선택은 하지 않는다.
-    기간을 비우면 기간 제한 없이 보인다. 기본 상태는 미연결이다.
+    11-11 4차: 목록은 화면에 들어올 때 읽어 두고, 조건을 고른 뒤 [검색]을 눌러야 그 조건의 파일이 2번 목록에 보인다.
+    조건을 바꾸면 목록을 비우고 다시 [검색]을 기다린다. 자동 선택은 하지 않고, 기간을 비우면 기간 제한이 없다.
+    기본 상태는 미연결이다.
     """
 
     backup_requested = Signal()
@@ -281,6 +282,8 @@ class ImportDeletePage(QWidget):
         self.request = ReadRequest(self)
         self.request.completed.connect(self._completed)
         self.pending_plan = None
+        self.applied = None  # [검색]을 누른 때의 조건 (종류, Site, 계열, 시작일, 종료일)
+        self._search_after_load = False
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
@@ -340,6 +343,12 @@ class ImportDeletePage(QWidget):
         quick_wrap = _WrapRow(self.quick_buttons, 120)
         quick_wrap.grid.setSpacing(8)
         quick_layout.addWidget(quick_wrap, 1)
+        self.search_button = button("검색", primary=True)
+        self.search_button.setFixedHeight(32)
+        self.search_button.setMinimumWidth(88)
+        self.search_button.setAccessibleName("고른 조건으로 가져온 엑셀 검색")
+        self.search_button.clicked.connect(self.search)
+        quick_layout.addWidget(self.search_button, 0, Qt.AlignmentFlag.AlignTop)
         self.quick_label.setContentsMargins(0, 8, 0, 0)
         filters.body.addWidget(self.quick_choices)
         self.kind_notice = label("릴리즈 노트는 기간 대신 확인된 설비군/계열을 선택합니다.", 12, color=SECONDARY, wrap=True)
@@ -524,7 +533,30 @@ class ImportDeletePage(QWidget):
             combo.setCurrentIndex(max(0, index))
             combo.blockSignals(False)
         self._set_notice(catalog.source_label)
+        if self._search_after_load:
+            self._search_after_load = False
+            self.applied = self._filters() if self._valid_filters() else None
         self.apply_filter()
+        return True
+
+    def _filters(self):
+        return (self.kind, self.site_combo.currentData(), self.family_combo.currentData(), self.start.text(), self.end.text())
+
+    def _valid_filters(self):
+        return not (self.kind is ExtractKind.EQUIPMENT_STATUS and (self.start.text() or self.end.text()) and self._dates() is None)
+
+    def search(self):
+        """고른 조건으로 2번 목록을 보인다. 목록을 아직 읽지 않았으면 읽은 뒤 보인다."""
+        if self.busy or self.phase == "unknown":
+            return False
+        if not self._valid_filters():
+            return False
+        if self.catalog is None:
+            self._search_after_load = True
+            return self.reload()
+        self.applied = self._filters()
+        self.selected.clear()
+        self._render()
         return True
 
     def _dates(self):
@@ -555,24 +587,34 @@ class ImportDeletePage(QWidget):
         self.end.setText(end.isoformat())
         self.quick_buttons[("latest", "month", "quarter").index(mode)].setChecked(True)
 
+    def _applied_dates(self):
+        _, _, _, start, end = self.applied
+        try:
+            first, last = date.fromisoformat(start), date.fromisoformat(end)
+        except ValueError:
+            return None
+        return (first, last) if first <= last else None
+
     def matches(self, batch):
-        """지금 고른 종류 · Site · 기간(비우면 전체) · 계열에 맞는 묶음인가 (목록에 보이는 것)."""
-        if batch.kind is not self.kind:
+        """[검색]한 종류 · Site · 기간(비우면 전체) · 계열에 맞는 묶음인가 (2번 목록에 보이는 것). 검색 전에는 없다."""
+        if self.applied is None:
+            return False
+        kind, site, family, start, end = self.applied
+        if batch.kind is not kind:
             return False
         if batch.kind is ExtractKind.RELEASE_NOTE:
-            family = self.family_combo.currentData()
             return family is None or batch.family == family
-        if self.site_combo.currentData() is not None and batch.site != self.site_combo.currentData():
+        if site is not None and batch.site != site:
             return False
-        if not (self.start.text() or self.end.text()):
+        if not (start or end):
             return True
-        days = self._dates()
+        days = self._applied_dates()
         return bool(days and days[0] <= batch.day <= days[1])
 
     def eligible(self, batch):
         if not batch.deletable or self.viewing_releases or not self.matches(batch):
             return False
-        return batch.kind is not ExtractKind.RELEASE_NOTE or self.family_combo.currentData() is not None
+        return batch.kind is not ExtractKind.RELEASE_NOTE or self.applied[2] is not None
 
     def apply_filter(self, *_):
         equipment = self.kind is ExtractKind.EQUIPMENT_STATUS
@@ -604,7 +646,9 @@ class ImportDeletePage(QWidget):
         self.table.setColumnHidden(2, not equipment)  # 릴리즈 노트에는 Site가 없다
         self.select_all.setVisible(not viewing)
         if not self.busy and self.phase != "unknown":
-            # 조건을 바꾸면 목록에서 빠진 것만 선택을 푼다. 새로 보이는 것을 자동으로 고르지 않는다 (11-11).
+            # 조건을 바꾸면 목록을 비우고 다시 [검색]을 기다린다 (11-11 4차). 자동으로 고르지 않는다.
+            if self.applied is not None and self.applied != self._filters():
+                self.applied = None
             self.selected = {b.key for b in self.catalog.batches if b.key in self.selected and self.eligible(b)} if self.catalog else set()
         self._render()
 
@@ -637,7 +681,7 @@ class ImportDeletePage(QWidget):
     def _render(self):
         locked = self.busy or self.phase == "unknown"
         for widget in (self.kind_combo, self.site_combo, self.family_combo, self.start, self.end,
-                       self.reload_button, self.cancel_button, *self.quick_buttons):
+                       self.reload_button, self.search_button, self.cancel_button, *self.quick_buttons):
             widget.setEnabled(not locked)
         selected = self._selected_batches()
         batches = tuple(b for b in self.catalog.batches if self.matches(b)) if self.catalog else ()
@@ -684,7 +728,8 @@ class ImportDeletePage(QWidget):
                 self.table.setItem(r, c, item)
         self.empty.setVisible(not batches)
         missing = "저장된 릴리즈 버전이 없습니다." if viewing else "고른 조건에 맞는 가져온 엑셀이 없습니다. Site나 기간을 바꿔 보세요."
-        self.empty.setText(missing if self.catalog else "가져온 엑셀 목록을 읽고 있습니다.")
+        self.empty.setText("조건을 고른 뒤 [검색]을 누르면 지울 수 있는 가져온 엑셀이 보입니다." if self.applied is None
+                           else missing if self.catalog else "가져온 엑셀 목록을 읽고 있습니다.")
         # 남는 기준일은 목록에 보이는 것만이 아니라 같은 종류의 저장 자료 전체에서 센다.
         everything = tuple(b for b in self.catalog.batches if b.kind is self.kind) if self.catalog else ()
         dates = {b.day for b in everything if b.day}
