@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
-from setron.ui.dashboard_data import DashboardSource, family_name, model_name
+from setron.ui.dashboard_data import DashboardDrilldown, DashboardSource, family_name, model_name
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import (
     dashboard_source_from_env, data_exporter_from_env, sql_exporter_from_env, sql_importer_from_env,
@@ -413,6 +413,29 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     items.answer_navigation.connect(navigate_item_answer)
     window.navigate_item_answer = navigate_item_answer
+
+    def show_item_risk_candidates(title, equipment_ids):
+        """아이템 매니저의 위험 기준 판정 결과를 대시보드 위험 후보 목록으로 연다.
+
+        대시보드 위험 후보는 현재 조회 조건과 활성 위험 기준 전체로 판정하므로, 두 결과에 모두 있는 설비만 연다.
+        조회 미적용·범위 밖이면 이동하지 않고 이유를 안내한다(0대로 확정하지 않는다).
+        """
+        snapshot = dashboard.snapshot
+        if snapshot is None or not window.query_state.is_current(snapshot.query):
+            items.show_notice("대시보드 조회 조건을 먼저 적용해 주세요. 적용한 조회 결과의 위험 후보에 등록한 기준이 반영됩니다.")
+            return False
+        wanted = set(equipment_ids)
+        shown = tuple(i for i in snapshot.risky_ids if i in wanted)
+        if not shown:
+            items.show_notice(f"현재 대시보드 조회 범위(기준일 {snapshot.base_date})의 위험 후보에는 이 기준의 위험 후보 설비가 없습니다. "
+                              "Site·설비군·기준일 조건을 확인해 주세요.")
+            return False
+        window.navigate("dashboard")
+        dashboard.drilldown_requested.emit(DashboardDrilldown(snapshot.query, snapshot.base_date, title, shown, True))
+        return True
+
+    items.risk_candidates_requested.connect(show_item_risk_candidates)
+    window.show_item_risk_candidates = show_item_risk_candidates
     window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
     drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
     list_drawer = window.equipment_list_drawer = EquipmentListDrawer(window.centralWidget())

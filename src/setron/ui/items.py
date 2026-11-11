@@ -22,7 +22,7 @@ from setron.ui.item_analysis import ItemSearchError, answer_items
 from setron.ui.item_answer_card import ItemAnswerCard
 from setron.ui.item_risk_dialog import _ClampLabel, warning_icon
 from setron.ui.item_risk_page import ItemRiskPage
-from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, category, repeats_item
+from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, category, repeats_item, risk_candidate_ids
 from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, set_widget_font
 from setron.ui.versions import _fit
@@ -76,10 +76,18 @@ class _ItemResultButton(QPushButton):
         self.display_content = ""
         self.version_label = label("", 15, medium=True, color=INK)
         self.version_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        for widget in (self.caption, self.version_label, self.arrow):
+        # 릴리즈노트 원본의 Jira 코드. 없으면 'Jira 없음'(빈 칸)·'Jira 미확인'(열/원본 없음)으로 구분한다.
+        self.jira = None
+        self.jira_slot_width = 0
+        self.jira_label = label("", 13, color=SECONDARY)
+        self.jira_label.setObjectName("itemJira")
+        self.jira_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        for widget in (self.caption, self.version_label, self.jira_label, self.arrow):
             widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         row.addWidget(self.version_label)
         row.addWidget(self.caption, 1)
+        row.addWidget(self.jira_label)
+        self.jira_label.hide()
         # 부모가 없는 위젯에 setVisible(True)를 하면 빈 최상위 창이 잠깐 뜨므로, 보이기는 레이아웃에 넣은 뒤에 정한다.
         self.version_label.hide()
         self._badge = button("")
@@ -98,12 +106,24 @@ class _ItemResultButton(QPushButton):
             self.rule_requested.emit(self._single_rule)
 
     def set_content(self, content, rules, version="", version_tip="", *, display_content=None,
-                    show_version=True, version_width=None):
+                    show_version=True, version_width=None, jira=None, jira_width=None):
         self.setAccessibleName(content)
         self.display_content = content if display_content is None else display_content
         # 긴 제목은 한 줄로 줄이고 전체 제목을 툴팁으로 보여 준다. 릴리즈 정보도 같은 툴팁 하나에 합친다.
-        self.setToolTip(content + (f"\n{version_tip}" if version_tip else ""))
-        self.setAccessibleDescription(f"포함 릴리즈 {version}" if version else "")
+        self.setToolTip(content + (f"\n{version_tip}" if version_tip else "") + (f"\n{jira.tooltip}" if jira else ""))
+        self.jira = jira
+        jira_text = jira.row_text if jira else ""
+        jira_metrics = self.jira_label.fontMetrics()
+        self.jira_slot_width = ((min(180, jira_metrics.horizontalAdvance(jira_text) + 2) if jira_text else 0)
+                                if jira_width is None else jira_width)
+        self.jira_label.setFixedWidth(self.jira_slot_width)
+        self.jira_label.setText(jira_metrics.elidedText(jira_text, Qt.TextElideMode.ElideRight, self.jira_slot_width))
+        self.jira_label.setStyleSheet(f"color:{INK if jira and jira.codes else SECONDARY};")
+        self.jira_label.setVisible(self.jira_slot_width > 0)
+        description = f"포함 릴리즈 {version}" if version else ""
+        if jira:
+            description += (". " if description else "") + f"Jira {jira.label}"
+        self.setAccessibleDescription(description)
         self.version = version
         metrics = self.version_label.fontMetrics()
         self.version_slot_width = (min(168, metrics.horizontalAdvance(version) + 2) if version else 0) if version_width is None else version_width
@@ -123,7 +143,8 @@ class _ItemResultButton(QPushButton):
             names = "\n".join(rule.display_name or rule.risk_reason for rule in rules)
             # 부모 행과 배지가 같은 기준명을 각자 툴팁으로 갖고 있으면 배지 위에서 두 번 뜬다.
             # 행 툴팁은 Item 내용만, 기준명은 배지 툴팁 하나로만 보여 준다.
-            self.setAccessibleDescription((f"포함 릴리즈 {version}. " if version else "") + f"등록된 위험 기준 {len(rules)}건. {names}")
+            self.setAccessibleDescription((f"포함 릴리즈 {version}. " if version else "") + (f"Jira {jira.label}. " if jira else "")
+                                          + f"등록된 위험 기준 {len(rules)}건. {names}")
             self._badge.setToolTip(names)
         self._badge.setVisible(bool(rules))
         self.rule_badge = self._badge if rules else None
@@ -167,9 +188,10 @@ class _ItemResultButton(QPushButton):
         margins = layout.contentsMargins()
         badge_width = self._badge.sizeHint().width() if self.rule_badge else 0
         version_width = self.version_slot_width
-        gaps = 1 + bool(self.rule_badge) + bool(version_width)
+        jira_width = self.jira_slot_width
+        gaps = 1 + bool(self.rule_badge) + bool(version_width) + bool(jira_width)
         available = max(0, self.width() - margins.left() - margins.right() - self.arrow.width()
-                        - badge_width - version_width - gaps * layout.spacing() - 3)
+                        - badge_width - version_width - jira_width - gaps * layout.spacing() - 3)
         self.caption.setText(self.caption.fontMetrics().elidedText(self.display_content, Qt.TextElideMode.ElideRight, available))
 
 
@@ -396,6 +418,8 @@ class ItemsPage(QWidget):
     equipment_selected = Signal(object)
     selection_invalidated = Signal()
     answer_navigation = Signal(str, object)
+    # (표시 제목, 위험 후보 설비 ID 튜플): 등록한 위험 기준의 판정 결과를 대시보드 위험 후보 목록으로 연다.
+    risk_candidates_requested = Signal(str, object)
     page_size = 12
     SEARCH_PLACEHOLDER = "기능명·증상 검색"
 
@@ -419,6 +443,7 @@ class ItemsPage(QWidget):
         self.read_request.completed.connect(self._loaded)
         self.mode, self.page_index, self.selected_id = "list", 0, None
         self.visible_entries, self.equipment = (), ()
+        self.visible_jira = {}
         self.revision, self.selected_equipment_id = 0, None
         self.verdict_dialog = None
         body = QVBoxLayout(self)
@@ -581,10 +606,18 @@ class ItemsPage(QWidget):
         self.rules_kinds_row = QHBoxLayout(self.rules_kinds)
         self.rules_kinds_row.setContentsMargins(0, 0, 0, 0)
         self.rules_kinds_row.setSpacing(6)
+        # 등록 결과의 위험 후보 대수(관측 미연결이면 미확인)와 대시보드 위험 후보 목록으로 가는 버튼.
+        self.rules_risk = StatusBadge("", "danger")
+        self.rules_dashboard = button("대시보드 위험 후보 보기")
+        self.rules_dashboard.setToolTip("이 Item 위험 기준의 위험 후보 중 현재 대시보드 조회 범위에 표시되는 설비를 목록으로 엽니다.")
+        self.rules_dashboard.clicked.connect(self.open_rule_candidates)
+        self.rule_candidate_ids = None
         rules_row.addWidget(self.rules_chip)
         rules_row.addWidget(self.rules_kinds)
         rules_row.addWidget(self.inline_rules, 1)
         rules_row.addStretch(0)
+        rules_row.addWidget(self.rules_risk)
+        rules_row.addWidget(self.rules_dashboard)
         self.rules_box.hide()
         inline.addWidget(self.rules_box)
         detail.addWidget(self.inline_box)
@@ -639,6 +672,10 @@ class ItemsPage(QWidget):
         self.filter_row = _ContentWrapRow([self.application_heading, self.site_filter, self.state_filter], 184)
         self.application_toolbar = _Toolbar(self.filter_row, self.summary, wrap_trailing=True)
         application_body.insertWidget(0, self.application_toolbar)
+        # 버전·Item·Jira를 한 줄로 함께 보인다. Jira는 릴리즈노트 원본 행의 값만 쓴다.
+        self.item_facts = _text("", 12)
+        self.item_facts.setObjectName("itemFacts")
+        application_body.insertWidget(0, self.item_facts)
         self.distribution = ItemDistribution()
         application_body.addWidget(self.distribution)
         self.distribution.scope_selected.connect(self.select_distribution_scope)
@@ -682,7 +719,26 @@ class ItemsPage(QWidget):
             return False
         self.verdict_dialog = ItemRuleVerdictDialog(self.window(), self.data, rule.item_id, rule_id)
         self.verdict_dialog.exec()
+        ids = self.verdict_dialog.dashboard_ids
+        if ids:
+            self.risk_candidates_requested.emit(f"위험 기준 · {self.verdict_dialog.rule.display_name or self.verdict_dialog.rule.risk_reason}", ids)
         return True
+
+    def open_rule_candidates(self):
+        """펼친 Item의 활성 위험 기준이 판정한 위험 후보를 대시보드 위험 후보 목록으로 요청한다."""
+        if not self.rule_candidate_ids or self.selected_id is None:
+            return False
+        entry = next((e for e in self.data.versions.items if e.item.item_id == self.selected_id), None)
+        self.risk_candidates_requested.emit(f"위험 기준 · {entry.item.content if entry else self.selected_id}",
+                                            self.rule_candidate_ids)
+        return True
+
+    def show_notice(self, text, tone="warning"):
+        """이동 불가 등 일시 안내. 저장 결과 안내(save_feedback)와 달리 다음 조회에서 유지하지 않는다."""
+        self.notice.setText(text)
+        self.status.setText("확인 필요" if tone != "success" else "완료")
+        self.status.set_tone(tone)
+        self.status_host.show()
 
     def refresh_after_save(self, *, preserve_detail=False):
         """저장 전 조회 응답과 상세 선택을 폐기하고 현재 Item 자료를 읽는다."""
@@ -976,7 +1032,9 @@ class ItemsPage(QWidget):
         # 행 위젯은 풀에서 재사용한다(생성·스타일 계산 비용이 행당 약 7ms였다). 남는 행은 숨긴다.
         self.result_buttons.clear()
         release_captions = [self._release_caption(entry.item.item_id) for entry in self.visible_entries]
-        version_width = None
+        jira = self.data.jira([e.item.item_id for e in self.visible_entries]) if self.data else {}
+        self.visible_jira = jira
+        version_width = jira_width = None
         previous_release = object()
         for row, entry in enumerate(self.visible_entries):
             if row == len(self.row_pool):
@@ -991,6 +1049,10 @@ class ItemsPage(QWidget):
             if version_width is None:
                 metrics = control.version_label.fontMetrics()
                 version_width = min(168, max((metrics.horizontalAdvance(text) + 2 for text, _ in release_captions if text), default=0))
+                # Jira 칸도 페이지 안에서 같은 폭을 써 제목·배지 위치가 행마다 흔들리지 않게 한다.
+                jira_metrics = control.jira_label.fontMetrics()
+                jira_width = min(180, max((jira_metrics.horizontalAdvance(j.row_text) + 2
+                                           for j in jira.values()), default=0))
             included = releases.get(entry.item.item_id, ())
             representative = included[0].release_version_id if included else None
             show_version = representative != previous_release
@@ -1003,7 +1065,8 @@ class ItemsPage(QWidget):
                     caption = content.rstrip()[:-len(suffix)].rstrip() or content
                     break
             control.set_content(content, rules_by_item.get(entry.item.item_id, ()), version, version_tip,
-                                display_content=caption, show_version=show_version, version_width=version_width)
+                                display_content=caption, show_version=show_version, version_width=version_width,
+                                jira=jira.get(entry.item.item_id), jira_width=jira_width)
             control.show()
             self.result_buttons[entry.item.item_id] = control
         for control in self.row_pool[len(self.visible_entries):]:
@@ -1113,9 +1176,21 @@ class ItemsPage(QWidget):
         summary = catalog.summarize(item, records) if connected else None
         self.equipment = summary.equipment if summary else ()
         enabled_rules = [r for r in rules if r.is_enabled and r.family_id == self.family_id]
+        version_text, _ = self._release_caption(item.item_id)
+        jira = self.data.jira([item.item_id])[item.item_id]
+        self.item_facts.setText(" · ".join((f"포함 릴리즈 {version_text or '미확인'}",
+                                            f"Item No {item.item_no if item.item_no is not None else '미확인'}",
+                                            f"JIRA {jira.label}" if jira.codes else jira.label)))
+        self.item_facts.setToolTip(jira.tooltip)
         self.rules_box.setVisible(bool(enabled_rules))
+        self.rule_candidate_ids = risk_candidate_ids(self.data, enabled_rules) if enabled_rules else None
         if enabled_rules:
             self.rules_chip.setText(f"위험 기준 {len(enabled_rules)}건 등록됨")
+            known = self.rule_candidate_ids is not None
+            self.rules_risk.setText(f"위험 후보 {len(self.rule_candidate_ids)}대" if known else "위험 후보 미확인")
+            self.rules_risk.set_tone("danger" if known and self.rule_candidate_ids else "neutral")
+            self.rules_risk.setToolTip("" if known else "설비 관측 자료가 없어 위험 후보를 판정할 수 없습니다.")
+            self.rules_dashboard.setEnabled(bool(self.rule_candidate_ids))
             distinct = [n for n in dict.fromkeys(r.display_name or r.risk_reason for r in enabled_rules)
                         if not repeats_item(n, item.content)]
             self.inline_rules.setVisible(bool(distinct))
