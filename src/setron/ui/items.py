@@ -17,7 +17,7 @@ from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_data import (
     BASIS_LABELS, ItemEquipmentSelection, ItemManagerData, selected_application,
 )
-from setron.ui.item_distribution import ItemDistribution
+from setron.ui.item_distribution import APPLICATION_TONES, ItemDistribution
 from setron.ui.item_analysis import ItemSearchError, answer_items
 from setron.ui.item_answer_card import ItemAnswerCard
 from setron.ui.item_risk_dialog import _ClampLabel, warning_icon
@@ -36,6 +36,12 @@ def _text(text="", size=13):
     widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     widget.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     return widget
+
+
+def _pm_text(pm, value):
+    """이름 없는 일반 SW 접두어만 생략하고 실제 PM 구분 이름은 유지한다."""
+    name = (pm.pm_name or "").strip()
+    return f"{name} · {value}" if name and "".join(name.split()) != "일반SW" else value
 
 
 class _ItemResultButton(QPushButton):
@@ -270,8 +276,8 @@ class _PageBar(QWidget):
         self.last.setEnabled(self.current + 1 < self.total)
 
 
-class _FamilyItemDelegate(QStyledItemDelegate):
-    """계열 항목을 같은 위치와 글꼴로 그리며, 자료가 없는 항목의 글자색을 구분한다."""
+class _ColoredTextDelegate(QStyledItemDelegate):
+    """선택·호버 상태에서도 모델에 지정된 텍스트색을 유지한다."""
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
@@ -281,11 +287,12 @@ class _FamilyItemDelegate(QStyledItemDelegate):
         text = opt.fontMetrics.elidedText(opt.text, opt.textElideMode, max(0, rect.width()))
         opt.text = ""
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
-        brush = index.data(Qt.ItemDataRole.ForegroundRole)
+        foreground = index.data(Qt.ItemDataRole.ForegroundRole)
         selected = opt.state & (QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_MouseOver)
-        color = brush.color().name() if brush is not None else (PRIMARY if selected else INK)
+        color = (ui_color(foreground.color().name()) if isinstance(foreground, QBrush)
+                 else foreground if foreground is not None else ui_color(PRIMARY if selected else INK))
         painter.save()
-        painter.setPen(ui_color(color))
+        painter.setPen(color)
         painter.setFont(opt.font)
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text)
         painter.restore()
@@ -446,7 +453,7 @@ class ItemsPage(QWidget):
         caret = (ASSETS / "caret-down.svg").as_posix()
         self.family_combo.setStyleSheet("QComboBox {padding-right:28px;} QComboBox::drop-down {border:0;width:28px;}"
                                         f"QComboBox::down-arrow {{image:url({caret});width:12px;height:12px;}}")
-        self.family_combo.setItemDelegate(_FamilyItemDelegate(self.family_combo))
+        self.family_combo.setItemDelegate(_ColoredTextDelegate(self.family_combo))
         self.family_combo.currentIndexChanged.connect(self._family_combo_changed)
         # 돋보기 또는 Enter로 검색 분석을 실행한다.
         self.search = QLineEdit()
@@ -554,9 +561,8 @@ class ItemsPage(QWidget):
         inline.setSpacing(12)
         inline.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
-        tones = {Application.APPLIED: "success", Application.NOT_APPLIED: "danger", Application.UNKNOWN: "warning"}
-        self.summary_badges = {state: StatusBadge("", tones.get(state, "neutral")) for state in APPLICATION_LABELS}
-        self.hpa_badge = StatusBadge("")
+        self.summary_badges = {state: StatusBadge("", APPLICATION_TONES[state]) for state in APPLICATION_LABELS}
+        self.hpa_badge = StatusBadge("", APPLICATION_TONES[Application.NOT_TARGET])
         self.summary = _RightWrapRow([*self.summary_badges.values(), self.hpa_badge], 96)
         self.summary.grid.setSpacing(6)
         # 등록된 위험 기준은 펼침 영역 맨 위의 강조 박스에 둔다(옅은 주의색 배경 + 왼쪽 포인트 라인).
@@ -640,6 +646,7 @@ class ItemsPage(QWidget):
         self.equipment_model = ReadTableModel(("설비", "Site", "Line", "모델", "적용 상태", "버전", "비고"))
         self.equipment_table = read_table(self.equipment_model, "Item 설비별 적용 현황", (180, 90, 90, 120, 100, 200, 310))
         _style_raw_table(self.equipment_table)
+        self.equipment_table.setItemDelegateForColumn(4, _ColoredTextDelegate(self.equipment_table))
         self.equipment_table.clicked.connect(lambda index: self.open_equipment_row(index.row()))
         self.equipment_table.activated.connect(lambda index: self.open_equipment_row(index.row()))
         application_body.addWidget(self.equipment_table)
@@ -1172,11 +1179,11 @@ class ItemsPage(QWidget):
         self.distribution.setVisible(heatmap)
         self.equipment_model.set_rows(tuple((e.record.equipment_code, e.record.site, e.record.line or "미지정",
             e.record.model_name, e.label,
-            "\n".join(f"{p.pm.pm_name or '일반 SW'} · {p.pm.version_raw or '버전 미확인'}" for p in e.pms)
+            "\n".join(_pm_text(p.pm, p.pm.version_raw or "버전 미확인") for p in e.pms)
             or "버전 미확인",
-            "\n".join(f"{p.pm.pm_name or '일반 SW'} · "
-                      f"{APPLICATION_LABELS[p.application]} ({BASIS_LABELS[p.basis]})" for p in e.pms)
-            or "PM/SW 관측 없음 · 업무 규칙상 대상 외") for e in rows), tuple(e.record.equipment_id for e in rows))
+            "\n".join(_pm_text(p.pm, f"{APPLICATION_LABELS[p.application]} ({BASIS_LABELS[p.basis]})") for p in e.pms)
+            or "PM/SW 관측 없음 · 업무 규칙상 대상 외") for e in rows), tuple(e.record.equipment_id for e in rows),
+            tuple(APPLICATION_TONES[e.application] for e in rows))
         if self.selected_equipment_id in self.equipment_model.ids:
             self.equipment_table.setCurrentIndex(self.equipment_model.index(self.equipment_model.ids.index(self.selected_equipment_id), 0))
         self.equipment_table.setVisible(bool(rows) and not heatmap)

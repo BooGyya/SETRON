@@ -92,6 +92,7 @@ class ReplayChart(DashboardChart):
         self.values, self.days = {}, ()
         self.current = None
         self.trends = ()
+        self.available_trends = ()
         self._trend_key = self._trend_data = None
         self._trend_frames = ()
 
@@ -100,6 +101,7 @@ class ReplayChart(DashboardChart):
         self.values, self.days = {}, ()
         self.current = None
         self.trends = ()
+        self.available_trends = ()
         self._trend_key = self._trend_data = None
         self._trend_frames = ()
         self.setAccessibleDescription("")
@@ -111,12 +113,13 @@ class ReplayChart(DashboardChart):
             text = trend_tooltip(days[index], label, summaries[index])
         self._hover_tooltip(chart, series, text)
 
-    def show_data(self, data, visible_groups, current=None, frames=None, *, grouping="group"):
+    def show_data(self, data, visible_groups, current=None, frames=None, *, grouping="group", hidden_series=()):
         """공통 분류 기준별 꺾은선. 설비군 모드는 선택한 모델만 표시한다.
 
         current(재생 중인 날짜 번호)까지는 진한 실선, 이후는 흐린 점선, 현재 날짜에는 세로선과 큰 점을 둔다.
         실제 시점마다 점을 찍고, 점을 누르면 그 날짜로 가고 마우스를 올리면 대시보드와 같은 집계를 보인다.
         frames를 주지 않으면 실제 저장 날짜(data.frames)를 쓴다. current가 None이면 마지막 시점을 현재로 본다.
+        hidden_series는 집계 후 표시할 선만 숨긴다. available_trends는 숨긴 선도 포함해 범례에서 다시 켤 수 있다.
         """
         frames = tuple(data.frames if frames is None else frames)
         visible_groups = None if visible_groups is None else frozenset(visible_groups)
@@ -128,9 +131,11 @@ class ReplayChart(DashboardChart):
         cache_key = (id(data), tuple(id(frame) for frame in frames), grouping,
                      visible_groups if grouping == "group" else None)
         if cache_key != self._trend_key:
-            self.trends = replay_trends(data, frames, visible_groups, grouping=grouping)
+            self.available_trends = replay_trends(data, frames, visible_groups, grouping=grouping)
             self._trend_key, self._trend_data = cache_key, data
             self._trend_frames = frames
+        hidden_series = frozenset(hidden_series)
+        self.trends = tuple(trend for trend in self.available_trends if trend.key not in hidden_series)
         if not frames:
             return
         current = len(frames) - 1 if current is None else max(0, min(current, len(frames) - 1))
@@ -153,12 +158,13 @@ class ReplayChart(DashboardChart):
             series.attachAxis(y)
 
         # 현재 날짜 세로선. 선보다 먼저 넣어 선 아래에 깔린다.
-        marker = QLineSeries()
-        marker.setName(CURRENT_MARKER)
-        marker.setPen(QPen(ui_color(SECONDARY), 1.5, Qt.PenStyle.DashLine))
-        marker.append(current, 0)
-        marker.append(current, 100)
-        add(marker)
+        if self.trends:
+            marker = QLineSeries()
+            marker.setName(CURRENT_MARKER)
+            marker.setPen(QPen(ui_color(SECONDARY), 1.5, Qt.PenStyle.DashLine))
+            marker.append(current, 0)
+            marker.append(current, 100)
+            add(marker)
         for trend in self.trends:
             values, segments, segment = [], [], []
             summaries = trend.summaries

@@ -45,6 +45,8 @@ class ReplayPage(QWidget):
         self._playback_host = self
         self.legend_buttons, self.legend_tools, self.frames = {}, (), ()  # frames: 지금 재생 간격의 시점들
         self._hidden_groups = set()
+        self._hidden_trends = {}
+        self.trend_legend_buttons, self.trend_legend_tools = {}, ()
         self.grouping_mode = "group"
         self._trend_legend_key = None
         body = QVBoxLayout(self)
@@ -226,6 +228,8 @@ class ReplayPage(QWidget):
             control.setEnabled(ready)
         for control in self.legend_tools:
             control.setEnabled(ready)
+        for control in (*self.trend_legend_buttons.values(), *self.trend_legend_tools):
+            control.setEnabled(ready)
         self.view_tabs.setEnabled(not self.busy)
         self.grouping_tabs.setEnabled(ready)
         self.heatmap.setEnabled(ready)
@@ -347,6 +351,7 @@ class ReplayPage(QWidget):
         self.legend_tools = ()
         self.legend_host.hide()
         self._empty_layout(self.trend_legend_body)
+        self.trend_legend_buttons, self.trend_legend_tools = {}, ()
         self.trend_legend_host.hide()
         self._trend_legend_key = None
 
@@ -408,29 +413,67 @@ class ReplayPage(QWidget):
             groups = self.selected_groups() if self.grouping_mode == "group" else None
             visible = self.legend_buttons.keys() if groups is None else groups
             self.chart.show_data(self.data, visible, current=self.index, frames=self.frames,
-                                 grouping=self.grouping_mode)
+                                 grouping=self.grouping_mode,
+                                 hidden_series=self._hidden_trends.get(self.grouping_mode, ()))
             self._update_trend_legend()
 
     def _update_trend_legend(self):
-        """위치 분류의 색상 범례는 그래프가 사용한 집계 메타데이터를 공유한다."""
+        """숨긴 선도 범례에 남겨 위치 분류별 선택을 다시 바꿀 수 있다."""
         if self.grouping_mode == "group":
             self.trend_legend_host.hide()
             return
-        trends = self.chart.trends
+        trends = self.chart.available_trends
         key = (self.grouping_mode, tuple((trend.key, trend.label, trend.color_key) for trend in trends))
         if key != self._trend_legend_key:
             self._empty_layout(self.trend_legend_body)
-            chips = []
+            self.trend_legend_buttons, self.trend_legend_tools = {}, ()
+            mode = self.grouping_mode
+            hidden = self._hidden_trends.get(mode, ())
+            if trends:
+                toggle = bulk_selection_toggle_button()
+                toggle.clicked.connect(self.toggle_all_trends)
+                self.trend_legend_tools = (toggle,)
             for trend in trends:
-                chip = label(trend.label, 13, medium=True)
-                chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                chip.setStyleSheet(f"color:{series_color(trend.color_key)};padding:6px 10px;"
-                                  "background:#f7f8fa;border:1px solid #e4e7ed;border-radius:8px;")
-                chips.append(chip)
-            if chips:
-                self.trend_legend_body.addWidget(DashboardGrid(chips, minimum_width=96, maximum_columns=9, spacing=8))
+                control = button(trend.label)
+                control.setCheckable(True)
+                control.setChecked(trend.key not in hidden)
+                set_widget_font(control, font(13, medium=True))
+                control.setStyleSheet(series_button_style(series_color(trend.color_key)))
+                control.setAccessibleName(f"{dict(GROUPING_MODES)[mode]} {trend.label} 보기")
+                control.toggled.connect(lambda checked, mode=mode: self._trend_series_changed(mode))
+                self.trend_legend_buttons[trend.key] = control
+            widgets = (*self.trend_legend_tools, *self.trend_legend_buttons.values())
+            if widgets:
+                self.trend_legend_body.addWidget(DashboardGrid(widgets, minimum_width=96, maximum_columns=9, spacing=8))
             self._trend_legend_key = key
+        self._update_trend_bulk_toggle()
         self.trend_legend_host.setVisible(self.view_tabs.currentIndex() == 0 and bool(trends))
+
+    def set_all_trends(self, checked):
+        """위치 분류의 추이 선만 한 번에 켜거나 끈다."""
+        if self.data is None or self.dirty or self.busy or self.grouping_mode == "group":
+            return
+        for control in self.trend_legend_buttons.values():
+            with QSignalBlocker(control):
+                control.setChecked(checked)
+        self._trend_series_changed(self.grouping_mode)
+
+    def toggle_all_trends(self):
+        self.set_all_trends(not all(control.isChecked() for control in self.trend_legend_buttons.values()))
+
+    def _trend_series_changed(self, mode):
+        if self.data is None or self.dirty or self.busy or mode != self.grouping_mode:
+            return
+        hidden = self._hidden_trends.setdefault(mode, set())
+        hidden.difference_update(self.trend_legend_buttons)
+        hidden.update(key for key, control in self.trend_legend_buttons.items() if not control.isChecked())
+        self._draw_chart()
+
+    def _update_trend_bulk_toggle(self):
+        if self.trend_legend_tools:
+            toggle = self.trend_legend_tools[0]
+            set_bulk_selection_state(toggle, all(control.isChecked() for control in self.trend_legend_buttons.values()))
+            toggle.setAccessibleName(f"{dict(GROUPING_MODES)[self.grouping_mode]} " + toggle.text())
 
     def _clear_display(self):
         self._clear_legend()

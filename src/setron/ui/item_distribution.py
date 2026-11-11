@@ -13,8 +13,8 @@ from setron.ui.theme import PRIMARY, SECONDARY, TONES, paint_font
 from setron.ui.versions import _fit
 
 
-APPLICATION_TONES = {Application.APPLIED: "success", Application.NOT_APPLIED: "warning",
-                     Application.UNKNOWN: "info", Application.NOT_TARGET: "neutral"}
+APPLICATION_TONES = {Application.APPLIED: "success", Application.NOT_APPLIED: "danger",
+                     Application.UNKNOWN: "warning", Application.NOT_TARGET: "neutral"}
 
 
 class DistributionModel(ReadTableModel):
