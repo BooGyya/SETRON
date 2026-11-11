@@ -503,6 +503,16 @@ def _row_issues(draft: ImportDraft, row: ReviewRow) -> list[Issue]:
         if name == "production_area" and value.strip().upper() not in PRODUCTION_AREAS:
             issues.append(Issue(IssueLevel.ERROR, f"{label}: Memory 또는 Foundry이거나 비워 두어야 합니다.",
                                 row.row_id, name, address))
+        elif name == "production_area" and name not in row.edits and draft.kind is ExtractKind.EQUIPMENT_STATUS:
+            # AI가 넣은 값이 사업장 · 라인의 구분(장소표 · 데이터 관리 등록 라인)과 다르면 저장 직전이 아니라 지금 알린다 (11/12)
+            from setron.features.reference_data import area_of
+
+            expected = area_of({"site": row.value("site"), "line": row.value("line")}, draft.sheet.sheet_name,
+                               draft.workbook_name)
+            if expected and value.strip().upper() != expected:
+                issues.append(Issue(IssueLevel.ERROR, f"{label}: 라인 {row.value('line')}은(는) "
+                                    f"{'Foundry' if expected == 'FOUNDRY' else 'Memory'}입니다. 값을 확인·수정하세요.",
+                                    row.row_id, name, address))
         if (source := _source_issue(draft, row, name)) is not None:
             issues.append(source)
     values = {name: row.value(name) for name in draft.fields}

@@ -89,6 +89,8 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
             if extracted is None and not address:
                 continue
             source = _source(sheet, originals, address)
+            if source is None and field == "production_area":
+                continue            # 근거 없는 AI의 Memory/Foundry는 쓰지 않는다 — 저장 때 사업장 · 라인(장소표)으로 정한다 (11/12)
             if source is None:
                 row_issues.append(ExtractionIssue("원본 셀 위치가 없거나 읽은 범위를 벗어났습니다.", field, address, number))
                 continue
@@ -100,6 +102,9 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
             if source_text.strip() == extracted.strip():
                 extracted = source_text
             elif not _matches(field, extracted, source_text, row.values):
+                if field == "production_area":
+                    sources.pop(field, None)
+                    continue        # 근거 칸과 맞지 않는 AI의 Memory/Foundry도 쓰지 않는다 (저장 때 장소표로)
                 row_issues.append(ExtractionIssue("추출값을 원본 셀에서 확인할 수 없습니다.", field, source.address, number))
                 continue
             if source_text.startswith(("#N/A", "#REF!", "#VALUE!", "#DIV/0!", "#NAME?", "#NUM!", "#NULL!")):
@@ -117,6 +122,7 @@ def review_extraction_result(kind: ExtractKind, sheet: SheetData,
             if found is not None:               # AI가 라인을 빠뜨리면 그 설비 블록의 제목 칸에서 (11/12 멘토 피드백 4)
                 values["line"], sources["line"] = found
         if kind is ExtractKind.EQUIPMENT_STATUS:
+            _join_split_line(values, sources)
             sources, location, location_issues = restore_required_sources(values, sources, locations, number)
             row_issues.extend(location_issues)
             if location is not None:
@@ -164,6 +170,31 @@ def _note_title(sheet):
                 found["ui_type"] = (ui, source)
             return found
     return {}
+
+
+# 라인처럼 생긴 글자: P3 · S5 · V2 · P1F · 15L (사업장 이름이 아님)
+_LINE_LIKE = re.compile(r"^(?:[A-Z]{1,3}\d{1,2}[A-Z]?|\d{1,2}L)$", re.IGNORECASE)
+
+
+def _join_split_line(values, sources):
+    """AI가 블록 제목 'P3-S5 ( 3F )'를 사업장 'P3' + 라인 'S5'로 쪼개 읽은 것을 바로잡는다 (11/12 확인용 P3-S5).
+
+    라인의 근거 칸 제목에서 규칙과 같은 방식(:func:`_block_line`)으로 라인 전체를 다시 읽어, AI 라인이 그 일부면
+    전체('P3-S5')로 바꾼다. 같은 라인의 일부를 사업장으로 읽었으면(라인처럼 생긴 'P3') 사업장으로 쓰지 않는다 —
+    화면의 '기준일 · Site 일괄 적용'이 채운다. 실제 P3-S5 현황표가 대시보드 '미지정'으로 보이던 원인.
+    """
+    from setron.features.rule_extraction.status_rules import _block_line
+
+    line, source = (values.get("line") or "").strip(), sources.get("line")
+    if line and source is not None:
+        whole = _block_line(_text(source.value)) or ""
+        if whole and whole != line and line in whole:
+            values["line"] = whole
+    line = (values.get("line") or "").strip()
+    site = (values.get("site") or "").strip()
+    if site and line and site != line and site in line and _LINE_LIKE.match(site):
+        values["site"] = None
+        sources.pop("site", None)
 
 
 def _block_lines(sheet):

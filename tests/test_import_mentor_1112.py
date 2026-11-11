@@ -164,3 +164,55 @@ def test_release_note_model_and_family_survive_an_ai_that_drops_them():
     assert not errors(draft)
     request = saved(draft)
     assert len(request.rows) == 2 and request.rows[0].source_reference["model_name"]["cells"] == ["A1"]
+
+
+# --- 확인용 V2(AI 추출)에서 드러난 저장 직전 Memory/Foundry 오류 ---------------------------------------------------------
+@pytest.mark.parametrize("title, cited, value, saved_area", [
+    ("V2 Foundry\n( 2F )", "A1", "Foundry", "FOUNDRY"),   # 제목 칸을 근거로 → 검토는 통과, 저장 직전 '원본 셀 값과 다릅니다'였음
+    ("V2\n( 2F )", "B1", "FOUNDRY", None),                 # 관계없는 칸을 근거로 → AI 값은 쓰지 않음(저장 때 장소표로)
+])
+def test_ai_memory_foundry_follows_the_site_and_line(title, cited, value, saved_area):
+    base = v2_sheet()
+    values = [list(row) for row in base.values]
+    values[0][0] = title
+    sheet = SheetData(base.workbook_name, "V2", 1, 1, values)
+    rule = rule_extract(STATUS, base)
+    rows = tuple(ExtractedRow({**r.values, "production_area": value}, {**r.sources, "production_area": cited})
+                 for r in rule.data.rows)
+    draft = prepared(sheet, replace(rule, data=replace(rule.data, rows=rows)))
+    assert not errors(draft)
+    assert {row.values.get("production_area") for row in saved(draft).rows} == {saved_area}
+
+
+def test_ai_memory_foundry_against_the_location_table_is_flagged_at_review():
+    base = v2_sheet()
+    values = [list(row) for row in base.values]
+    values[0][0] = "V2 Memory\n( 2F )"
+    sheet = SheetData(base.workbook_name, "V2", 1, 1, values)
+    rule = rule_extract(STATUS, base)
+    rows = tuple(ExtractedRow({**r.values, "production_area": "Memory"}, {**r.sources, "production_area": "A1"})
+                 for r in rule.data.rows)
+    draft = prepared(sheet, replace(rule, data=replace(rule.data, rows=rows)))
+    messages = [issue.message for issue in errors(draft) if issue.field == "production_area"]
+    assert messages and "라인 V2은(는) Foundry입니다" in messages[0]
+
+
+def test_ai_split_of_block_title_into_site_and_line_is_rejoined():
+    """AI가 블록 제목 'P3-S5 ( 3F )'를 사업장 'P3' + 라인 'S5'로 쪼개 읽으면, 수정 전에는 오류 없이 그대로 저장돼
+    대시보드에서 '미지정'(멘토 피드백 4의 실제 원인)이었다. 라인은 'P3-S5'로, 사업장은 일괄 적용 값으로."""
+    sheet = v2_sheet("P3-S5", "P3-S5\n( 3F )")
+    rule = rule_extract(STATUS, sheet)
+    rows = tuple(ExtractedRow({**r.values, "site": "P3", "line": "S5"}, {**r.sources, "site": "A1", "line": "A1"})
+                 for r in rule.data.rows)
+    review = review_extraction_result(STATUS, sheet, replace(rule, data=replace(rule.data, rows=rows))).data
+    assert {(row.values.get("site"), row.values.get("line")) for row in review.rows} == {(None, "P3-S5")}
+    draft = prepared(sheet, replace(rule, data=replace(rule.data, rows=rows)))
+    assert {(row.values["site"], row.values["line"]) for row in saved(draft).rows} == {("평택", "P3-S5")}
+
+
+def test_real_site_names_are_kept():
+    sheet = v2_sheet("P3-S5", "P3-S5\n( 3F )")
+    rule = rule_extract(STATUS, sheet)
+    rows = tuple(ExtractedRow({**r.values, "site": None, "line": "S5"}, {**r.sources, "line": "A1"}) for r in rule.data.rows)
+    review = review_extraction_result(STATUS, sheet, replace(rule, data=replace(rule.data, rows=rows))).data
+    assert {row.values.get("line") for row in review.rows} == {"P3-S5"}
