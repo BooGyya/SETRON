@@ -48,6 +48,7 @@ class ReplayPage(QWidget):
         self._hidden_trends = {}
         self.trend_legend_buttons, self.trend_legend_tools = {}, ()
         self.grouping_mode = "site"
+        self.heatmap_controls = None
         self._trend_legend_key = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 88)
@@ -118,6 +119,7 @@ class ReplayPage(QWidget):
         self.content.body.addWidget(self.chart)
         self.heatmap = ReplayHeatmap()
         self.heatmap.equipment_selected.connect(self.open_equipment)
+        self.heatmap.controls_ready.connect(self._attach_heatmap_controls)
         self.content.body.addWidget(self.heatmap)
         self.grouping_tabs.currentChanged.connect(lambda index: self.set_grouping(GROUPING_MODES[index][0]))
         self.view_tabs.currentChanged.connect(self._show_view)
@@ -193,10 +195,22 @@ class ReplayPage(QWidget):
     def _show_view(self, index):
         self.chart.setVisible(index == 0)
         self.heatmap.setVisible(index == 1)
+        if self.heatmap_controls is not None:
+            self.heatmap_controls.setVisible(index == 1)
         self.trend_legend_host.setVisible(index == 0 and self.grouping_mode != "group"
                                           and self.trend_legend_body.count() > 0)
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
+        if self.frame is not None:
+            self._render_frame()
+
+    def _attach_heatmap_controls(self, controls):
+        """히트맵과 같은 검색·필터 도구를 리플레이의 첫 행에 한 번만 배치한다."""
+        self.heatmap_controls = controls
+        self.heatmap.view.content.body.removeWidget(controls)
+        self.content.body.insertWidget(0, controls)
+        controls.setVisible(self.view_tabs.currentIndex() == 1)
+        controls.setEnabled(self.data is not None and not self.dirty and not self.busy)
 
     def set_grouping(self, mode):
         """추이와 히트맵에 같은 분류를 적용하며 조회 데이터는 그대로 사용한다."""
@@ -232,6 +246,8 @@ class ReplayPage(QWidget):
         self.view_tabs.setEnabled(not self.busy)
         self.grouping_tabs.setEnabled(ready)
         self.heatmap.setEnabled(ready)
+        if self.heatmap_controls is not None:
+            self.heatmap_controls.setEnabled(ready)
         self.chart.setEnabled(ready)
         self._position_playback()
 
@@ -487,11 +503,12 @@ class ReplayPage(QWidget):
     def _render_frame(self):
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
-        # 히트맵과 함께 그래프도 현재 날짜까지 실선·세로선으로 다시 그린다 (재생 시 그래프도 움직임).
-        self._draw_chart()
         frame = self.frame
         if frame is None:
             return
+        # 숨은 보기는 전환할 때 현재 시점을 표시한다. 재생 중에는 보이는 보기만 갱신한다.
+        if self.view_tabs.currentIndex() == 0:
+            self._draw_chart()
         groups = self.selected_groups() if self.grouping_mode == "group" else None
         summary, observed_count, carried_count = group_view(self.data, frame, groups)
         if summary is None:
@@ -520,7 +537,8 @@ class ReplayPage(QWidget):
             self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
             self.progress.setAccessibleDescription(value)
         self.progress.setToolTip(self.achievement.toolTip())
-        self.heatmap.show_frame(self.data, frame, groups)
+        if self.view_tabs.currentIndex() == 1:
+            self.heatmap.show_frame(self.data, frame, groups)
 
     def select_date(self, index):
         if self.data is None or self.dirty or not 0 <= index < len(self.frames):

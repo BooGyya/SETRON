@@ -1,6 +1,8 @@
 """카드형과 같은 그룹 트리를 사용하는 히트맵 목록 표시."""
 
-from PySide6.QtCore import QModelIndex, QPointF, QRect, QSignalBlocker, Qt
+from math import floor
+
+from PySide6.QtCore import QModelIndex, QRect, QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOption, QStyledItemDelegate, QTreeView
 
@@ -22,14 +24,55 @@ class HeatmapListModel(QStandardItemModel):
         self.alignment = Qt.AlignmentFlag.AlignCenter if centered else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         self.rows, self.ids, self.tones = (), (), ()
         self._equipment_items, self._group_items = {}, {}
+        self._structure_signature, self._row_items = None, ()
         self.setHorizontalHeaderLabels(self.headings)
 
+    @classmethod
+    def _signature(cls, node):
+        return (node.key, node.title, node.group_name,
+                tuple(cls._signature(child) for child in node.children) if node.children
+                else tuple(tile.equipment_id for tile in node.tiles))
+
+    @classmethod
+    def _entries(cls, nodes, group_name=None):
+        for node in nodes:
+            current = node.group_name or group_name
+            if node.children:
+                yield from cls._entries(node.children, current)
+            else:
+                for tile in node.tiles:
+                    yield tile, current
+
     def set_groups(self, nodes, row_factory):
-        """카드와 같은 트리를 유지하며 각 설비군의 SW 표시 범위도 전달한다."""
+        """구조가 같으면 기존 셀 중 달라진 값만 갱신한다. (재구성 여부, 글자가 바뀐 행)을 반환한다."""
+        nodes = tuple(nodes)
+        signature = tuple(self._signature(node) for node in nodes)
+        if signature == self._structure_signature:
+            rows, ids, tones, changed_rows = [], [], [], []
+            for (tile, group_name), items in zip(self._entries(nodes), self._row_items):
+                values, tone, tooltips = row_factory(tile, group_name)
+                text_changed = False
+                for column, (item, value) in enumerate(zip(items, values)):
+                    if item.text() != value:
+                        item.setText(value)
+                        text_changed = True
+                    tooltip = tooltips.get(column, value)
+                    if item.toolTip() != tooltip:
+                        item.setToolTip(tooltip)
+                    if column == self.tone_column and item.data(self.TONE_ROLE) != tone:
+                        item.setData(tone, self.TONE_ROLE)
+                if text_changed:
+                    changed_rows.append(items[0])
+                rows.append(values)
+                ids.append(tile.equipment_id)
+                tones.append(tone)
+            self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
+            return False, tuple(changed_rows)
+
         self.clear()
         self.setHorizontalHeaderLabels(self.headings)
         self._equipment_items, self._group_items = {}, {}
-        rows, ids, tones = [], [], []
+        rows, ids, tones, row_items = [], [], [], []
 
         def append(parent, node, group_name=None):
             group_name = node.group_name or group_name
@@ -52,12 +95,14 @@ class HeatmapListModel(QStandardItemModel):
                     item = QStandardItem(value)
                     item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                     item.setData(tile.equipment_id, Qt.ItemDataRole.UserRole)
-                    item.setData(tone, self.TONE_ROLE)
+                    if column == self.tone_column:
+                        item.setData(tone, self.TONE_ROLE)
                     item.setData(node.key, self.KEY_ROLE)
                     item.setToolTip(tooltips.get(column, value))
                     children.append(item)
                 items[0].appendRow(children)
                 self._equipment_items.setdefault(tile.equipment_id, []).append(children[0])
+                row_items.append(tuple(children))
                 rows.append(values)
                 ids.append(tile.equipment_id)
                 tones.append(tone)
@@ -66,6 +111,8 @@ class HeatmapListModel(QStandardItemModel):
         for node in nodes:
             append(root, node)
         self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
+        self._structure_signature, self._row_items = signature, tuple(row_items)
+        return True, ()
 
     def equipment_index(self, equipment_id, preferred_key=None):
         items = self._equipment_items.get(equipment_id, ())
@@ -120,6 +167,7 @@ class HeatmapTreeView(QTreeView):
         self.base_widths, self.compact = tuple(widths), False
         self._collapsed_keys = set()
         self._fitting_height = False
+        self._row_heights, self._last_compact = {}, self.compact
         self.setModel(model)
         self.setAccessibleName(name)
         self.setAccessibleDescription("분류를 펼치거나 접고 설비를 선택합니다. 좌우 방향키로 분류를 탐색합니다.")
@@ -163,10 +211,10 @@ class HeatmapTreeView(QTreeView):
         depth, indent = len(ancestors), float(self.indentation())
         direction = -1 if self.layoutDirection() == Qt.LayoutDirection.RightToLeft else 1
         current_x = rect.left() + indent / 2 if direction < 0 else rect.right() + 1 - indent / 2
-        dpr = max(1.0, self.devicePixelRatioF())
+        dpr = max(0.01, self.devicePixelRatioF())
 
         def snap(value):
-            return (round(value * dpr - 0.5) + 0.5) / dpr
+            return (floor(value * dpr) + 0.5) / dpr
 
         def axis(level):
             return snap(current_x - direction * (depth - level) * indent)
@@ -174,35 +222,40 @@ class HeatmapTreeView(QTreeView):
         def has_next(item):
             return item.row() + 1 < self.model().rowCount(item.parent())
 
-        top, middle, bottom = snap(rect.top()), snap(rect.top() + rect.height() / 2), snap(rect.bottom() + 1)
+        top, middle, bottom = float(rect.top()), snap(rect.top() + rect.height() / 2), float(rect.bottom() + 1)
         has_children = self.model().hasChildren(index)
-        radius, arrow_gap = min(5.0, indent / 3), 6.0
+        radius, arrow_gap = min(5.0, indent / 3), 4.0
         painter.save()
+        painter.setClipRect(rect, Qt.ClipOperation.IntersectClip)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         color = QColor(ui_color(LINE))
         color.setAlphaF(0.8)
         pen = QPen(color, 1.0)
         pen.setCosmetic(True)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
+        branches = QPainterPath()
         # 형제가 더 있는 조상의 연결선은 하위 행을 지나 다음 형제까지 이어진다.
         for level, ancestor in enumerate(ancestors):
             if level > 0 and has_next(ancestor):
                 x = axis(level - 1)
-                painter.drawLine(QPointF(x, top), QPointF(x, bottom))
+                branches.moveTo(x, top)
+                branches.lineTo(x, bottom)
         if depth:
             x = axis(depth - 1)
-            if has_next(index):
-                painter.drawLine(QPointF(x, top), QPointF(x, bottom))
-            path = QPainterPath(QPointF(x, top))
-            path.lineTo(x, middle - radius)
-            path.quadTo(x, middle, x + direction * radius, middle)
+            branches.moveTo(x, top)
+            branches.lineTo(x, middle - radius)
+            branches.quadTo(x, middle, x + direction * radius, middle)
             end = axis(depth) - direction * arrow_gap if has_children else axis(depth) + direction * (indent / 2 - 3)
-            path.lineTo(end, middle)
-            painter.drawPath(path)
+            branches.lineTo(end, middle)
+            if has_next(index):
+                branches.moveTo(x, middle - radius)
+                branches.lineTo(x, bottom)
         if has_children and self.isExpanded(index):
-            painter.drawLine(QPointF(axis(depth), middle + arrow_gap), QPointF(axis(depth), bottom))
+            branches.moveTo(axis(depth), middle + arrow_gap)
+            branches.lineTo(axis(depth), bottom)
+        painter.drawPath(branches)
         painter.restore()
         if has_children and (depth or self.rootIsDecorated()):
             option = QStyleOption()
@@ -231,14 +284,31 @@ class HeatmapTreeView(QTreeView):
         preferred_key = current.data(HeatmapListModel.KEY_ROLE)
         preferred_key = tuple(preferred_key) if preferred_key is not None else None
         with QSignalBlocker(self):
-            self.model().set_groups(nodes, row_factory)
-            self.expandAll()
-            for key in self._collapsed_keys:
-                index = self.model().group_index(key)
-                if index.isValid():
-                    self.setExpanded(index, False)
-        self.select_equipment(equipment_id, preferred_key=preferred_key, reveal=False)
-        self.fit_height()
+            rebuilt, changed_rows = self.model().set_groups(nodes, row_factory)
+            if rebuilt:
+                self.expandAll()
+                for key in self._collapsed_keys:
+                    index = self.model().group_index(key)
+                    if index.isValid():
+                        self.setExpanded(index, False)
+        if rebuilt:
+            self.select_equipment(equipment_id, preferred_key=preferred_key, reveal=False)
+        resize = rebuilt or self.compact != self._last_compact
+        if not resize:
+            for item in changed_rows:
+                index = self.model().indexFromItem(item)
+                parent, visible = index.parent(), True
+                while parent.isValid():
+                    if not self.isExpanded(parent):
+                        visible = False
+                        break
+                    parent = parent.parent()
+                if visible and self._row_heights.get(self._row_key(index)) != self._row_height(index):
+                    resize = True
+                    break
+        if resize:
+            self.fit_height()
+        self._last_compact = self.compact
 
     def select_equipment(self, equipment_id, *, preferred_key=None, reveal=True):
         current = self.currentIndex()
@@ -259,10 +329,21 @@ class HeatmapTreeView(QTreeView):
 
     def resize_columns(self):
         if self.compact:
+            self.setColumnWidth(0, max(260, self.viewport().width() - 160 - 140))
+            self.setColumnWidth(3, 160)
+            self.setColumnWidth(4, 140)
             return
         ratio = max(1, self.viewport().width() / sum(self.base_widths))
         for column, width in enumerate(self.base_widths):
             self.setColumnWidth(column, int(width * ratio))
+
+    @staticmethod
+    def _row_key(index):
+        return tuple(index.data(HeatmapListModel.KEY_ROLE)), index.data(Qt.ItemDataRole.UserRole)
+
+    def _row_height(self, index):
+        return max(self.sizeHintForIndex(index.siblingAtColumn(column)).height()
+                   for column in range(self.model().columnCount(index.parent())) if not self.isColumnHidden(column))
 
     def fit_height(self):
         if self._fitting_height or self.model() is None:
@@ -271,13 +352,15 @@ class HeatmapTreeView(QTreeView):
         try:
             self.executeDelayedItemsLayout()
             height, model = self.header().height() + 2 * self.frameWidth() + 4, self.model()
+            self._row_heights = {}
 
             def add_rows(parent=QModelIndex()):
                 nonlocal height
                 for row in range(model.rowCount(parent)):
                     index = model.index(row, 0, parent)
-                    height += max(self.sizeHintForIndex(model.index(row, column, parent)).height()
-                                  for column in range(model.columnCount(parent)) if not self.isColumnHidden(column))
+                    row_height = self._row_height(index)
+                    self._row_heights[self._row_key(index)] = row_height
+                    height += row_height
                     if self.isExpanded(index):
                         add_rows(index)
 
