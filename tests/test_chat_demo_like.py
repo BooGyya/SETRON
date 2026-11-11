@@ -38,19 +38,23 @@ def current(**cond):
 def test_most_fragmented_line_in_pyeongtaek_any_phrasing(question):
     result = ask(question)
     assert result.request.aggregate == ("fragmentation", "line", "") and result.request.conditions.sites == ("평택",)
-    assert result.tables[0].rows[0][1] == "평택 P1F" and "C4 설비 11대가 10가지 버전" in result.summary
+    # DFB는 C4와 따로 센다(11/12 멘토 피드백 2) → P1F의 대표는 O5(8대 · 8가지)
+    assert result.tables[0].rows[0][1] == "평택 P1F" and "O5 설비 8대가 8가지 버전" in result.summary
 
 
-def test_fragmentation_index_is_computed_within_a_family():
-    """파편화 지수 = 같은 계열에서 설비 두 대의 버전이 다를 확률. 평택 P1F C4(11대 · 10가지) 손 계산과 같아야 한다."""
+@pytest.mark.parametrize("model, label", [("M-C4", "C4 (M-C4)"), ("M-C4 DFB", "C4 (M-C4 DFB)")])
+def test_fragmentation_index_is_computed_within_a_family_and_group(model, label):
+    """파편화 지수 = 같은 계열 · 같은 설비군에서 설비 두 대의 버전이 다를 확률. DFB는 C4 노트를 쓰지만 버전 줄기가
+    달라 독립 설비군으로 따로 센다(11/12 멘토 피드백 2). 평택 P1F 손 계산과 같아야 한다."""
     from collections import Counter
     fid = next(f.family_id for f in CATALOG.families if f.name == "C4")
-    versions = [p.version_raw for r in current(site="평택", line="P1F") for p in r.pms if p.family_id == fid]   # C4 계열 = M-C4 · DFB · C4+
+    versions = [p.version_raw for r in current(site="평택", line="P1F", model_name=model) for p in r.pms if p.family_id == fid]
     counts = Counter(versions)
     index = 1 - sum((n / len(versions)) ** 2 for n in counts.values())
     detail = next(t for t in ask("평택에서 가장 파편화된 라인은?").tables if t.title == "계열별 버전 분포")
-    row = next(r for r in detail.rows if r[0] == "평택 P1F" and r[1] == "C4")
+    row = next(r for r in detail.rows if r[0] == "평택 P1F" and r[1] == label)
     assert row[2] == str(len(versions)) and row[3] == str(len(counts)) and row[6] == f"{index:.2f}"
+    assert not any(r[1] == "C4" for r in detail.rows if r[0] == "평택 P1F")          # C4와 DFB를 섞은 줄은 없다
 
 
 def test_unknown_baseline_version_lists_every_family_of_the_model():
