@@ -136,12 +136,16 @@ def detect_aggregate(question: str) -> tuple[str, ...]:
                 return min(spots)[1]
         return ""
 
+    if _has(text, ("추이", "월별", "달마다", "기준일별", "흐름", "변화 추세")) and _has(text, _FRESH + ("달성", "대수", "설비 수")):
+        return ("achievement", "date", "")                 # '달성률 추이' · '월별 달성률' → 기준일별
     if _has(text, _FRAGMENT):
         return ("fragmentation", by_word() or "line", "")
     if _has(text, _KINDS):
         return ("versions", by_word() or "line", "")
     based = _has(text, _BASELINE) or re.search(r"기준(?!일)", text) is not None
-    if based and _has(text, _FRESH) and (found := _VERSION.search(question)) is not None:
+    fresh = _has(text, _FRESH) or _has(text, ("낮", "높", "비교", "순위", "얼마나", "어느 정도", "비율", "퍼센트"))
+    based = based or (_has(text, ("이상", "이후", "넘는", "넘은")) and _has(text, _FRESH + ("비율", "퍼센트", "얼마나")))  # 'v4.59 이상 쓰는 비율'
+    if based and fresh and (found := _VERSION.search(question)) is not None:
         return ("baseline", by_word(), found.group(0).rstrip(".,?"))
     if "버전별" in text and _has(text, ("몇 대", "몇대", "설비 수", "대수", "분포", "얼마나")):
         return ("count", "version", "")
@@ -166,14 +170,34 @@ def is_smalltalk(question: str) -> bool:
     """인사·감사처럼 분석 질문이 아닌 말 (AI 분류를 부르지 않는다)."""
     return _has(_norm(question), _SMALLTALK)
 _FOLLOW = ("그중", "그 중", "그럼", "거기서", "거기에서", "여기서", "이 중", "이중에", "그 설비", "그 구역", "그 라인",
+           "그래?", "그래요", "그런 거", "그런거", "왜 그", "이유는", "원인은", "거기", "비교하면", "비교하자면", "보고서로",
+           "결과를", "이 결과", "이걸", "이거", "엑셀로", "excel로", "csv로", "내보내", "뽑아줘", "저장해",
            "방금", "그거", "그것", "이어서", "그 결과")
 _KNOWN_SITE_WORDS = ("화성", "평택", "기흥", "천안", "온양", "중국", "미국", "시안", "오스틴", "청주", "이천")
+_SITE_ALIASES = {"pyeongtaek": "평택", "pyungtaek": "평택", "hwaseong": "화성", "hwasung": "화성", "giheung": "기흥", "cheonan": "천안"}
+_KOREAN_SOUNDS = (("씨", "C"), ("오", "O"))                    # '씨4' → C4, '오2' → O2
+_KOREAN_DIGITS = {"투": "2", "쓰리": "3", "포": "4", "파이브": "5"}   # '오투' → O2
 _LINE_TOKEN = re.compile(r"(?<![A-Za-z0-9.])((?:P|S|V|M)\d{1,2}F?|\d{1,2}L|NRD|MFAB)(?![A-Za-z0-9._])")  # 'V1.2.1.4'의 V1은 라인이 아니다
 _GROUP_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:M-)?([OC][0-9])(?![0-9])")
 _VERSION = re.compile(r"(?<![\w.])[vV]\d[0-9A-Za-z._\-+]*")   # 영문·숫자·기호만 ('v3.52_20을'의 조사를 붙여 읽지 않게)
 _VERSION_SPAN = re.compile(r"(?<![\w.])[vV]\d+[._][0-9A-Za-z._\-+]*")    # 점·밑줄이 있어야 버전 (V1 라인과 구분)
 _DATE = re.compile(r"(20\d\d)[-./](\d{1,2})[-./](\d{1,2})")
 _MONTH = re.compile(r"(?<!\d)(1[0-2]|[1-9])\s*월")
+_YEAR_MONTH = re.compile(r"(20\d\d)\s*년\s*(1[0-2]|[1-9])\s*월")
+_YEAR_ONLY = re.compile(r"(20\d\d)\s*년(?!\s*(?:1[0-2]|[1-9])\s*월)")
+_MONTH_DAY = re.compile(r"(?<![\d/.])(1[0-2]|[1-9])/(\d{1,2})(?![\d/])")
+_RELATIVE = (("지지난달", 2), ("지지난 달", 2), ("두 달 전", 2), ("2달 전", 2), ("2개월 전", 2), ("세 달 전", 3), ("3달 전", 3),
+             ("3개월 전", 3), ("네 달 전", 4), ("4달 전", 4), ("지난달", 1), ("지난 달", 1), ("저번달", 1), ("저번 달", 1),
+             ("전달", 1), ("한 달 전", 1), ("1달 전", 1), ("1개월 전", 1))
+_CHANGE_MARKERS = ("보다", "대비", "비교", "이후", "부터", "떨어", "올라", "늘", "줄", "변화", "바뀐", "변경", "나아", "나빠", "개선",
+                   "추이", "흐름")
+_CODE = re.compile(r"(?<![A-Za-z0-9-])(?:DEMO-\d{3,}|[A-Z]{4,6}\d[A-Z0-9]*|[A-Z]{2,5}\d{2,}[A-Z0-9]*|[A-Z]{1,4}-\d{3,}[A-Z0-9]*)(?![A-Za-z0-9])")   # ESOC6 · ESPA02 · FC40102 · DM-009 (XMO3 · MC4 같은 모델은 아님)
+_OFF_TOPIC = ("날씨", "점심", "저녁 메뉴", "아침 메뉴", "맛집", "영화", "주식", "로또", "농담", "노래", "게임", "하는 법", "방법 알려",
+              "팁 알려", "비법", "잘하는 법", "여행")
+_UNSUPPORTED_INFO = (("공정", "공정 정보"), ("담당자", "담당자 정보"), ("엔지니어", "담당자 정보"), ("일정", "일정 정보"),
+                     ("스케줄", "일정 정보"), ("비용", "비용 정보"), ("고장", "고장 이력"), ("장애", "고장 이력"),
+                     ("위험한 설비", "위험 후보 거르기"), ("위험 설비", "위험 후보 거르기"), ("위험 후보", "위험 후보 거르기"))
+_TIERS = ((re.compile(r"n\s*\+\s*1"), "ACHIEVED"), (re.compile(r"n\s*-\s*[12]"), "BELOW"))
 
 
 def _norm(text: str) -> str:
@@ -188,8 +212,10 @@ def _has(text: str, words: Iterable[str]) -> bool:
 def detect_intents(question: str) -> tuple[Intent, ...]:
     """질문 표현으로 요청 종류를 정한다. 종류를 콕 집지 않은 '분석해줘'는 비교·원인·우선순위·예측을 함께 한다."""
     text = _norm(question)
-    if _has(text, _DATA_INFO):
-        return (Intent.DATA_INFO,)            # 자료 자체에 대한 질문은 분석 요청보다 먼저 (11/11)
+    if _has(text, _OFF_TOPIC):
+        return ()                             # 날씨 · 점심 · '~하는 법' 같은 말은 분석 요청이 아니다 (AI가 있으면 범위 밖으로 안내)
+    if _has(text, _DATA_INFO) and re.search(r"(최근|최신|마지막)\s*(자료|데이터)\s*(로|를|의)?\s*기준", text) is None:
+        return (Intent.DATA_INFO,)            # 자료 자체에 대한 질문은 분석 요청보다 먼저 (11/11). '최근 자료 기준 …'은 조건이다
     found = {intent for intent, words in _WORDS.items() if _has(text, words)}
     if _forecast_in_chat(text):
         found.add(Intent.FORECAST)
@@ -230,7 +256,10 @@ def _match(text: str, names: Iterable[tuple[str, str]], taken: list[tuple[int, i
     for alias, name in sorted(names, key=lambda pair: len(pair[0]), reverse=True):
         if not alias.strip():
             continue
-        pattern = r"(?<![A-Za-z0-9])" + re.escape(alias.casefold()) + r"(?![A-Za-z0-9])"
+        if re.search(r"[가-힣]", alias):                            # 한글 이름: '평택P1F' · '평택에서'처럼 뒤에 무엇이 붙어도 단어
+            pattern = r"(?<![가-힣])" + re.escape(alias.casefold())
+        else:
+            pattern = r"(?<![A-Za-z0-9])" + re.escape(alias.casefold()) + r"(?![A-Za-z0-9])"
         for match in re.finditer(pattern, text):
             span = match.span()
             if any(start < span[1] and span[0] < end for start, end in taken):
@@ -254,20 +283,36 @@ def extract_conditions(question: str, catalog) -> QueryConditions:
     text = question.casefold()
     # 버전처럼 생긴 자리는 먼저 빼 둔다 — 'V1.2.1.4'의 V1을 V1 라인으로, 'v3.52'의 일부를 다른 이름으로 읽지 않게 (11/11)
     reserved = [m.span() for m in _VERSION_SPAN.finditer(question)]
+    codes = [m.group(0) for m in _CODE.finditer(question)]
+    reserved += [m.span() for m in _CODE.finditer(question)]
     taken: list[tuple[int, int]] = list(reserved)
     group_aliases = [alias for g in catalog.groups for alias in (
-        (g.name, g.name), (g.model_name, g.name), (re.sub(r"^M-", "", g.model_name), g.name))]
+        (g.name, g.name), (g.model_name, g.name), (re.sub(r"^M-", "", g.model_name), g.name),
+        (g.model_name.replace("-", ""), g.name))]                 # 'MC4'
+    for g in catalog.groups:                                       # 한글 발음: '씨4' · '오투'
+        short = re.sub(r"^M-", "", g.model_name)
+        for sound, letter in _KOREAN_SOUNDS:
+            if short[:1] == letter and short[1:2].isdigit():
+                group_aliases.append((sound + short[1:], g.name))
+                for word, digit in _KOREAN_DIGITS.items():
+                    if short[1:] == digit:
+                        group_aliases.append((sound + word, g.name))
     # 계열 이름이 설비군 이름과 같으면(예: O2) 더 넓은 설비군으로 본다. 'C3 통합UI'처럼 다른 이름만 계열로 잡는다.
     same = {alias.casefold() for alias, _ in group_aliases}
     families = _match(text, [(f.name, f.name) for f in catalog.families if f.name.casefold() not in same], taken)
     groups = _match(text, group_aliases, taken)
     lines = _match(text, [alias for line in catalog.lines for alias in (
         (line, line), (re.split(r"\s*\(", line)[0], line))], taken)
-    sites = _match(text, [(site, site) for site in catalog.sites], taken)
+    sites = _match(text, [(site, site) for site in catalog.sites]
+                   + [(alias, site) for alias, site in _SITE_ALIASES.items() if site in catalog.sites], taken)
     unresolved = []
     for word in _KNOWN_SITE_WORDS:
         if word in question and word not in catalog.sites and word not in sites:
-            unresolved.append(word)
+            inside = [line for line in catalog.lines if word in line]     # '기흥'은 '1L (기흥)'처럼 라인 이름 속 지역
+            if inside and not any(line in lines for line in inside):
+                lines.extend(line for line in inside if line not in lines)
+            elif not inside:
+                unresolved.append(word)
     for match in _LINE_TOKEN.finditer(question):             # 라인처럼 생겼는데 선택지에 없으면 보여 준다 (조용히 무시하지 않음)
         start, end = match.span()
         if not any(s < end and start < e for s, e in taken):
@@ -293,6 +338,20 @@ def extract_conditions(question: str, catalog) -> QueryConditions:
     base_date = None
     if (found := _DATE.search(question)) is not None:
         base_date = date(*(int(part) for part in found.groups())).isoformat()
+    elif (ym := _YEAR_MONTH.search(question)) is not None:
+        same = [d for d in catalog.dates if d.year == int(ym.group(1)) and d.month == int(ym.group(2))]
+        if same:
+            base_date = max(same).isoformat()
+        else:
+            unresolved.append(f"{ym.group(1)}년 {ym.group(2)}월")
+    elif (year := _YEAR_ONLY.search(question)) is not None and not any(d.year == int(year.group(1)) for d in catalog.dates):
+        unresolved.append(f"{year.group(1)}년")
+    elif (md := _MONTH_DAY.search(question)) is not None:
+        same = [d for d in catalog.dates if d.month == int(md.group(1)) and d.day == int(md.group(2))]
+        if same:
+            base_date = max(same).isoformat()
+        else:
+            unresolved.append(md.group(0))
     elif (month := _MONTH.search(question)) is not None and catalog.dates:
         same = [d for d in catalog.dates if d.month == int(month.group(1))]
         if same:
@@ -300,7 +359,8 @@ def extract_conditions(question: str, catalog) -> QueryConditions:
         else:
             unresolved.append(month.group(0))
     return QueryConditions(sites=tuple(sites), lines=tuple(lines), groups=tuple(groups), families=tuple(families),
-                           versions=tuple(versions), base_date=base_date, unresolved=tuple(dict.fromkeys(unresolved)))
+                           versions=tuple(versions), base_date=base_date, unresolved=tuple(dict.fromkeys(unresolved)),
+                           items=tuple(codes))                      # items 칸에 설비 호기를 실어 보낸다 (recognize가 codes로 옮김)
 
 
 def _union(*values: Iterable[str]) -> tuple[str, ...]:
@@ -326,7 +386,7 @@ def recognize(question: str, catalog, ai_conditions: QueryConditions | None = No
     conditions = QueryConditions(
         sites=_union(rule.sites, ai.sites), lines=_union(rule.lines, ai.lines), groups=_union(rule.groups, ai.groups),
         models=_union(ai.models), families=_union(rule.families, ai.families), versions=_union(rule.versions, ai.versions),
-        items=_union(ai.items), base_date=rule.base_date or ai.base_date, target_view=ai.target_view,
+        items=_union(rule.items, ai.items), base_date=rule.base_date or ai.base_date, target_view=ai.target_view,
         unresolved=_union(rule.unresolved, ai.unresolved))
     intents = detect_intents(question)
     # 범용 집계(파편화 · 버전 종류 · 기준 최신화율)는 이어 묻기 판단보다 먼저 본다 — 요청 종류 단어가 없다고
@@ -335,6 +395,8 @@ def recognize(question: str, catalog, ai_conditions: QueryConditions | None = No
     if aggregate:
         intents = (Intent.AGGREGATE,)
     verdict, areas, group_by = detect_verdict(question), detect_areas(question), detect_group_by(question)
+    if Intent.CHANGE in intents and Intent.COMPARE in intents and group_by is None and "별" not in _norm(question):
+        intents = tuple(i for i in intents if i is not Intent.COMPARE)       # '지난달이랑 비교하면?'은 기간 변화
     has_conditions = any((conditions.sites, conditions.lines, conditions.groups, conditions.families,
                           conditions.versions, conditions.items, conditions.base_date))
     text = _norm(question)
@@ -355,7 +417,7 @@ def recognize(question: str, catalog, ai_conditions: QueryConditions | None = No
                            conditions=_strip_baseline(conditions, inherited),
                            areas=areas or previous.areas, verdict=verdict or previous.verdict,
                            group_by=group_by or previous.group_by, understood=True, follow_up=True,
-                           aggregate=inherited)
+                           aggregate=inherited, codes=tuple(conditions.items) or previous.codes)
     if Intent.COMPARE in intents and verdict is Verdict.BELOW and _has(text, _COMPARE_NEGATIVE):
         verdict = None                        # '제일 안 된 데'는 미달 설비 목록이 아니라 가장 낮은 곳 비교
     if Intent.COMPARE in intents and group_by is None and len(conditions.groups) + len(conditions.models) > 1 \
@@ -368,10 +430,29 @@ def recognize(question: str, catalog, ai_conditions: QueryConditions | None = No
     if not intents and conditions.versions:
         intents = (Intent.VERSION_INFO,)
     conditions = _strip_baseline(conditions, aggregate)
+    codes = tuple(conditions.items)
+    conditions = replace(conditions, items=())
+    if Intent.CHANGE in intents and not _has(text, _CHANGE_MARKERS):
+        intents = tuple(i for i in intents if i is not Intent.CHANGE) or (Intent.SEARCH,)   # '지난달 현황'은 그 달의 현황
+    if not conditions.base_date and Intent.CHANGE not in intents:
+        back = next((n for word, n in _RELATIVE if word in text), None)        # '두 달 전 달성률' → 그 기준일
+        if back is not None and catalog.dates:
+            ordered = sorted(catalog.dates)
+            if len(ordered) > back:
+                conditions = replace(conditions, base_date=ordered[-1 - back].isoformat())
+            else:
+                conditions = replace(conditions, unresolved=(*conditions.unresolved, f"{back}달 전"))
+    for pattern, tier in _TIERS:                                                # 'N-2 이하' · 'N+1' → 미만 · 이상
+        if pattern.search(text) and verdict is None:
+            verdict = Verdict.BELOW if tier == "BELOW" else Verdict.ACHIEVED
+    unsupported_info = next((label for word, label in _UNSUPPORTED_INFO if word in text), "")
     understood = bool(intents) or not _has(text, _SMALLTALK)
     period, each = detect_period(question) if Intent.REPORT in intents else ((), False)
     unsupported = unsupported_period(question) if Intent.REPORT in intents and not period else ""
+    if unsupported_info and not unsupported:
+        unsupported = unsupported_info
+        intents = intents or (Intent.SEARCH,)
     topic = "reports" if intents == (Intent.DATA_INFO,) and "보고서" in text else ""
     return ChatRequest(question=question, intents=intents, conditions=conditions, areas=areas, verdict=verdict,
                        group_by=group_by, understood=understood and bool(intents), unsupported=unsupported,
-                       topic=topic, period=period, each_month=each, aggregate=aggregate)
+                       topic=topic, period=period, each_month=each, aggregate=aggregate, codes=codes)

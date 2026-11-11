@@ -24,7 +24,8 @@ from setron.features.query.service import resolve_conditions
 
 MEASURES = {"count": "설비 수", "versions": "버전 종류 수", "fragmentation": "파편화",
             "achievement": "목표 N 달성률", "baseline": "기준 버전 이상 비율"}
-DIMENSIONS = {"site": "사업장", "line": "라인", "model": "모델", "family": "계열", "version": "버전", "pm": "PM"}
+DIMENSIONS = {"site": "사업장", "line": "라인", "model": "모델", "family": "계열", "version": "버전", "pm": "PM",
+              "date": "기준일"}
 NO_VERSION = "버전 없음"
 
 
@@ -101,6 +102,8 @@ def _key(unit: Unit, by: str, data) -> str:
         return data.family_names.get(unit.family_id, str(unit.family_id))
     if by == "version":
         return f"{data.family_names.get(unit.family_id, unit.family_id)} {unit.version or NO_VERSION}"
+    if by == "date":
+        return record.base_date.isoformat()
     if by == "pm":
         names = sorted({pm.pm_name or "PM 미확인" for pm in record.pms if pm.family_id == unit.family_id})
         return "·".join(names) or "PM 미확인"

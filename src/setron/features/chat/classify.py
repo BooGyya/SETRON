@@ -20,6 +20,7 @@ from datetime import date
 
 from setron.infrastructure.ai_client import ChatMessage, ResponseSource
 
+from .recognize import _CODE
 from .schemas import Intent, Verdict
 
 OUT_OF_SCOPE = "OUT_OF_SCOPE"
@@ -129,7 +130,7 @@ def _prompt(catalog, *, previous=None, today: date | None = None) -> str:
         "숫자를 계산하거나 지어내지 마라. 계산은 프로그램이 한다.\n"
         f"tool은 아래 중 정확히 하나:\n{tools}\n{special}\n"
         "names에는 질문이 가리키는 이름을 아래 선택지에서 글자 그대로만 고른다. 선택지에 없으면 넣지 않는다. "
-        "버전(v로 시작)은 질문에 적힌 그대로 넣어도 된다.\n"
+        "버전(v로 시작)과 설비 호기(DEMO-0121 · ESPA02처럼 영문+숫자)는 질문에 적힌 그대로 넣어도 된다.\n"
         f"선택지: {json.dumps(choices, ensure_ascii=False)}\n"
         f"저장된 기준일(설비 현황표 날짜): {json.dumps(dates)}\n"
         f"오늘 날짜: {(today or date.today()).isoformat()}. '오늘·현재·지금·최근·이번 달'은 따로 날짜를 적지 말고 null로 둔다"
@@ -274,7 +275,8 @@ def plan(client, question: str, catalog, *, previous=None, today: date | None = 
             return Plan(question=f"{span} 보고서 만들어줘")
     allowed = {name for names in _choices(catalog).values() for name in names}
     raw = value.get("names") if isinstance(value.get("names"), list) else []
-    names = [str(n).strip() for n in raw if str(n).strip() in allowed or _VERSION.match(str(n).strip())]
+    names = [str(n).strip() for n in raw
+             if str(n).strip() in allowed or _VERSION.match(str(n).strip()) or _CODE.fullmatch(str(n).strip())]
     when, missing = _date_phrase(value.get("date"), catalog)
     if missing and intent is not Intent.DATA_INFO:
         return Plan(missing_date=missing)
