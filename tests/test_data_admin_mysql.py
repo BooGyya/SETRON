@@ -351,3 +351,19 @@ def module_line(*values):
     from setron.features.data_admin import LineRow
 
     return LineRow(*values)
+
+
+def test_new_row_on_a_registered_foundry_line_gets_the_foundry_family(storage):
+    service = DataAdminService(storage)
+    service.add_site("QA파운드리")
+    service.add_line("QA파운드리", "QF1", "FOUNDRY")
+    service.add_line("QA파운드리", "QM1", "MEMORY")
+    batch = service.create_sheet("QA파운드리", date(2026, 11, 6))
+    foundry = service.add_row(batch, {"group_name": "M-C4", "line": "QF1", "equipment_code": "QA-F1", "version_raw": "v1"}, None)
+    memory = service.add_row(batch, {"group_name": "M-C4", "line": "QM1", "equipment_code": "QA-M1", "version_raw": "v1"}, None)
+    rows = {r.snapshot_id: r for r in service.sheet_rows(batch).rows}
+    assert rows[foundry].production_area == "FOUNDRY" and "(파운드리)" in rows[foundry].family_name
+    assert rows[memory].production_area == "MEMORY" and "(파운드리)" not in rows[memory].family_name
+    # 같은 현황표의 메모리 설비 계열을 파운드리 새 행에 그대로 쓰지 않는다
+    second = service.add_row(batch, {"group_name": "M-C4", "line": "QF1", "equipment_code": "QA-F2", "version_raw": "v1"}, None)
+    assert "(파운드리)" in next(r for r in service.sheet_rows(batch).rows if r.snapshot_id == second).family_name
