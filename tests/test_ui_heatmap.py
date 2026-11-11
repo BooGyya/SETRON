@@ -7,7 +7,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QModelIndex, QPoint, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLabel
@@ -20,11 +20,24 @@ from setron.ui.app import create_window
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, RiskRuleState
 from setron.ui.heatmap import RISK_FILL, RISK_LINE, TIER_FILL, TileButton
 from setron.ui.heatmap_data import GoalState, equipment_tiles
+from setron.ui.heatmap_grouping import GROUPING_MODES
 from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
 from setron.ui.theme import TONES, install_theme
 
 
 DAY = date(2026, 10, 21)
+
+
+def tree_indexes(model, parent=QModelIndex()):
+    for row in range(model.rowCount(parent)):
+        index = model.index(row, 0, parent)
+        yield index
+        yield from tree_indexes(model, index)
+
+
+def equipment_indexes(model, equipment_id):
+    return tuple(index for index in tree_indexes(model)
+                 if index.data(Qt.ItemDataRole.UserRole) == equipment_id)
 
 
 @pytest.fixture
@@ -211,7 +224,7 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     request = spy.at(0)[0]
     assert request.query is query and request.base_date == DAY and request.equipment_id == 1
     assert tile.isChecked() and "설비 상세" in page.selection_notice.text()
-    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "data", "items", "import", "ai", "management", "replay",
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "data", "items", "import", "ai", "replay",
                                    "reports", "settings", "export"}
     assert window.route == "heatmap" and window.pages["equipment"].mode == "detail"
     assert window.equipment_drawer.isVisible()
@@ -269,7 +282,8 @@ def test_hpa_is_hidden_until_special_equipment_toggle(window):
     assert hpa <= set(page.tile_buttons)
     QApplication.processEvents()
     captions = [caption.text() for caption in page.tile_host.findChildren(QLabel) if caption.isVisibleTo(page.tile_host)]
-    assert f"HPA / {len(hpa)}대" in captions
+    assert "HPA · 분석 제외" in captions
+    assert not any(caption.startswith("HPA /") for caption in captions)
 
 
 def test_empty_scope_has_no_stale_tiles_or_fake_success(window):
@@ -334,18 +348,26 @@ def test_responsive_tiles_have_no_main_horizontal_overflow(window, size, mode):
     window.resize(*size)
     QTest.qWait(100)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    for tile in page.tile_buttons.values():
-        point = tile.mapTo(page, QPoint(0, 0))
-        assert point.x() >= 0 and point.x() + tile.width() <= page.width()
-        assert tile.code_label.width() >= tile.code_label.sizeHint().width()
-    assert all(grid.columns >= 1 for grid in page.tile_grids)
-    group_cards = page.tile_body.itemAt(0).widget()
-    for start in range(0, len(group_cards.items), group_cards.columns):
-        row = group_cards.items[start:start + group_cards.columns]
-        assert len({(card.y(), card.height()) for card in row}) == 1
+    assert all((tile.width(), tile.height()) == (140, 80 if mode else 40)
+               for tile in page.tile_occurrences)
+    assert all(grid.columns == 1 for grid in page.tile_grids)
+    assert page.tile_body.count() == len(page.group_cards)
+    for index, card in enumerate(page.group_cards):
+        assert page.tile_body.itemAt(index).widget() is card
+        assert card.x() == 0 and card.width() == page.tile_host.width()
+        scroll = card.scroll
+        point = scroll.mapTo(page, QPoint(0, 0))
+        assert 0 <= point.x() < point.x() + scroll.width() <= page.width()
+        assert scroll.verticalScrollBar().maximum() == 0
+        assert scroll.widget().height() <= scroll.viewport().height()
+        if scroll.widget().width() > scroll.viewport().width():
+            assert scroll.horizontalScrollBar().maximum() > 0
+        if index:
+            previous = page.group_cards[index - 1]
+            assert card.y() >= previous.y() + previous.height() + page.tile_body.spacing()
 
 
-def test_stacked_filters_and_display_buttons_at_wide_and_narrow_sizes(window):
+def test_horizontal_filters_and_equal_display_button_heights_at_wide_and_narrow_sizes(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     viewport = window.scroll.viewport()
@@ -371,28 +393,35 @@ def test_stacked_filters_and_display_buttons_at_wide_and_narrow_sizes(window):
         layouts = page.layout_buttons.buttons()
         assert all(control.height() == 38 for control in (page.search, hpa, view))
         assert card_mode.parentWidget().height() == 38 and all(control.height() == 30 for control in layouts)
+        assert view.height() == card_mode.parentWidget().height()
         for control in (*controls, *layouts):
             left = control.mapTo(viewport, QPoint(0, 0)).x()
             assert control.isVisible() and 0 <= left < left + control.width() <= viewport.width()
             assert 13 <= control.font().pixelSize() <= 14
         assert page.search.width() >= page.search.minimumWidth()
+        if page._control_rows == 1:
+            assert page.search.width() + page.filter_bar.width() + page.display_bar.width() + 2 * page.controls.horizontalSpacing() == page.controls_host.width()
         assert window.scroll.horizontalScrollBar().maximum() == 0
-        assert page.risk_button.x() == page.below_filter.x()
-        assert page.risk_button.geometry().bottom() < page.below_filter.y()
+        assert page.risk_button.y() == page.below_filter.y()
+        assert page.risk_button.geometry().right() < page.below_filter.x()
 
     page.below_filter.click()
     page.layout_buttons.button(1).click()
     assert page.list_table.isVisible() and set(page.visible_ids) == {1, 2, 3, 4, 5}
     model = page.list_model
     assert model.headings[2] == "모델"
-    assert model.rows[model.ids.index(1)][2:5] == ("O2\nO3", "v99\nv2", "목표 미달")
-    assert model.rows[model.ids.index(2)][3] == "v2"
-    assert model.rows[model.ids.index(4)][3] == "분석 제외"
-    unknown = model.index(model.ids.index(3), 4)
+    projections = {(index.siblingAtColumn(2).data(), index.siblingAtColumn(3).data())
+                   for index in equipment_indexes(model, 1)}
+    assert projections == {("O2", "v99\nv2"), ("O3", "v2")}
+    assert model.equipment_index(2).siblingAtColumn(3).data() == "v2"
+    assert model.equipment_index(4).siblingAtColumn(3).data() == "분석 제외"
+    unknown = model.equipment_index(3).siblingAtColumn(4)
     assert unknown.data(Qt.ItemDataRole.DisplayRole) == "정보 부족"
     assert "버전 값이 비어 있습니다." in unknown.data(Qt.ItemDataRole.ToolTipRole)
     for column in range(model.columnCount()):
-        assert model.index(0, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+        assert model.equipment_index(1).siblingAtColumn(column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+    assert model.index(0, 0).data(model.GROUP_ROLE)
+    assert model.index(0, 0).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 
 
 def test_compact_list_hides_detail_columns_and_keeps_row_selection(window):
@@ -401,38 +430,46 @@ def test_compact_list_hides_detail_columns_and_keeps_row_selection(window):
     page.layout_buttons.button(1).click()
     table, model = page.list_table, page.list_model
     row = model.ids.index(1)
+    index = model.equipment_index(1)
     detailed = model.rows[row]
     assert detailed[1] == "테스트 A\nP1" and detailed[5].startswith("위험 후보\n")
-    assert not any(table.isColumnHidden(col) for col in range(model.columnCount()))
-    detailed_height = table.rowHeight(row)
+    assert [col for col in range(model.columnCount()) if table.isColumnHidden(col)] == [1]
+    QApplication.processEvents()
+    detailed_height = table.visualRect(index).height()
 
     page.view_toggle.click()
     assert [model.headings[col] for col in range(model.columnCount()) if not table.isColumnHidden(col)] == [
-        "설비명", "Site / 원본 구역", "SW N 판정", "위험 판정",
+        "설비명", "버전", "목표 달성",
     ]
     assert model.rows[row][1] == "테스트 A / P1" and model.rows[row][5] == "위험 후보"
-    assert table.rowHeight(row) < detailed_height
+    assert model.equipment_index(1).siblingAtColumn(3).data() == "v99 / v2"
+    QApplication.processEvents()
+    assert table.visualRect(index).height() < detailed_height
     spy = QSignalSpy(page.equipment_selected)
-    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualRect(model.index(row, 0)).center())
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualRect(index).center())
     assert spy.count() == 1 and spy.at(0)[0].equipment_id == page.selected_id == 1
     window.equipment_drawer.close_panel(restore_focus=False)
 
     for size in ((960, 600), (1600, 960)):
         window.resize(*size)
         QTest.qWait(45)
-        assert window.scroll.horizontalScrollBar().maximum() == table.horizontalScrollBar().maximum() == 0
-        assert table.horizontalHeader().length() == table.viewport().width()
-        assert table.selectionModel().selectedRows(0)[0].row() == row
+        assert window.scroll.horizontalScrollBar().maximum() == 0
+        assert table.header().length() >= table.viewport().width()
+        if table.header().length() > table.viewport().width():
+            assert table.horizontalScrollBar().maximum() > 0
+        assert table.selectionModel().selectedRows(0)[0].data(Qt.ItemDataRole.UserRole) == 1
 
     table.setFocus()
     QTest.keyClick(table, Qt.Key.Key_Return)
     assert spy.count() == 2 and spy.at(1)[0].equipment_id == page.selected_id == 1
     window.equipment_drawer.close_panel(restore_focus=False)
+    compact_height = table.visualRect(index).height()
     page.view_toggle.click()
-    assert not any(table.isColumnHidden(col) for col in range(model.columnCount()))
-    assert model.rows[row] == detailed and table.rowHeight(row) == detailed_height
-    assert table.selectionModel().selectedRows(0)[0].row() == row
-    assert page.list_table.horizontalHeader().defaultAlignment() == Qt.AlignmentFlag.AlignCenter
+    QApplication.processEvents()
+    assert [col for col in range(model.columnCount()) if table.isColumnHidden(col)] == [1]
+    assert model.rows[row] == detailed and table.visualRect(index).height() > compact_height
+    assert table.selectionModel().selectedRows(0)[0].data(Qt.ItemDataRole.UserRole) == 1
+    assert table.header().defaultAlignment() == Qt.AlignmentFlag.AlignCenter
 
 
 def test_default_demo_two_modes_and_catalog_mismatch(app):
@@ -442,11 +479,13 @@ def test_default_demo_two_modes_and_catalog_mismatch(app):
     window.pages["heatmap"].hpa_button.setChecked(True)
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
+    assert page.grouping_mode == "site"
     assert len(page.tile_buttons) == len(page.snapshot.equipment_ids) == 63
     for mode in (0, 1):
         page.view_toggle.setChecked(bool(mode))
         QTest.qWait(60)
         assert all(tile.height() >= tile.minimumSizeHint().height() for tile in page.tile_occurrences)
+        assert all((tile.width(), tile.height()) == (140, 80 if mode else 40) for tile in page.tile_occurrences)
         assert all(grid.height() >= grid.minimumSizeHint().height() for grid in page.tile_grids)
         assert all(grid.rect().contains(tile.geometry()) for grid in page.tile_grids for tile in grid.tiles)
     assert page.tiles[0].multi_sw
@@ -457,7 +496,7 @@ def test_default_demo_two_modes_and_catalog_mismatch(app):
     window.deleteLater()
 
 
-def test_long_raw_version_is_plain_unchanged_and_wraps_inside_tile(window, source, monkeypatch):
+def test_long_raw_version_is_elided_in_fixed_tile_and_preserved_in_tooltip_and_list(window, source, monkeypatch):
     raw = "v90.1.0.41(H) · Hotfix_Etch_2026 + Safety Fix <검토 중> " * 4
     records = tuple(replace(record, pms=tuple(replace(pm, version_raw=raw) if pm.pm_name == "PM1" else pm
                                              for pm in record.pms)) for record in source.records)
@@ -469,7 +508,9 @@ def test_long_raw_version_is_plain_unchanged_and_wraps_inside_tile(window, sourc
     QTest.qWait(100)
     tile = page.tile_buttons[1]
     assert raw in tile.accessibleName() and "<검토 중>" in tile.toolTip()
-    assert raw in tile.version_label.text() and "판단 불가" not in tile.version_label.text()
+    assert (tile.width(), tile.height()) == (140, 80)
+    assert raw not in tile.version_label.text() and "판단 불가" not in tile.version_label.text()
+    assert "…" in tile.version_label.text() and not tile.version_label.wordWrap()
     assert page.tiles[0].families[0].versions[0] == f"PM1 · {raw} · 판단 불가"
     assert window.scroll.horizontalScrollBar().maximum() == 0
     for child in tile.findChildren(QLabel):
@@ -480,7 +521,54 @@ def test_long_raw_version_is_plain_unchanged_and_wraps_inside_tile(window, sourc
         if child.wordWrap():
             assert child.heightForWidth(child.width()) <= child.height()
     page.layout_buttons.button(1).click()
-    assert page.list_model.rows[page.list_model.ids.index(1)][3] == f"{raw}\nv2"
+    assert page.list_model.equipment_index(1).siblingAtColumn(3).data() == f"{raw}\nv2"
+
+
+@pytest.mark.parametrize("mode", [key for key, _ in GROUPING_MODES])
+def test_each_grouping_supports_tree_projection_filter_changes_and_compact_columns(window, mode):
+    window.query_panel.apply_draft()
+    page = window.pages["heatmap"]
+    snapshot = page.snapshot
+    page.set_grouping(mode)
+    page.layout_buttons.button(1).click()
+    table, model = page.list_table, page.list_model
+    assert model.rowCount() and model.index(0, 0).data(model.GROUP_ROLE)
+    assert set(model.ids) == {1, 2, 3, 4, 5}
+    projections = {(index.siblingAtColumn(2).data(), index.siblingAtColumn(3).data())
+                   for index in equipment_indexes(model, 1)}
+    assert projections == {("O2", "v99\nv2"), ("O3", "v2")}
+    first = model.index(0, 0)
+    table.setExpanded(first, False)
+    page._render_tiles()
+    assert not table.isExpanded(model.index(0, 0))
+    for text, ids in (("TEST-1", {1}), ("TEST-2", {2}), ("", {1, 2, 3, 4, 5})):
+        page.search.setText(text)
+        assert set(model.ids) == ids
+        assert page.snapshot is snapshot
+    page.view_toggle.setChecked(False)
+    assert [column for column in range(model.columnCount()) if not table.isColumnHidden(column)] == [0, 3, 4]
+    page.layout_buttons.button(0).click()
+    assert set(page.tile_buttons) == {1, 2, 3, 4, 5}
+    assert all((tile.width(), tile.height()) == (140, 40) for tile in page.tile_occurrences)
+
+
+def test_same_structure_preserves_cards_cells_and_scroll_while_only_changed_tiles_are_restyled(window, source):
+    query = window.query_panel.apply_draft()
+    page = window.pages["heatmap"]
+    body, cards, controls = page.tile_body, tuple(page.group_cards), tuple(page.tile_occurrences)
+    positions = tuple(card.scroll.horizontalScrollBar().value() for card in cards)
+    source.risks = {**source.risks, 1: RiskStatus.NO_RISK}
+    updated = source.snapshot(query)
+    assert page.accept_result(query, updated)
+    assert page.tile_body is body and tuple(page.group_cards) == cards and tuple(page.tile_occurrences) == controls
+    assert tuple(card.scroll.horizontalScrollBar().value() for card in cards) == positions
+    assert all(card.parentWidget() is page.tile_host for card in cards)
+    assert page.rebuilt_tiles == 0
+    assert page.restyled_tiles == sum(tile.data.equipment_id == 1 for tile in controls)
+    assert all(tile.data.risk is RiskStatus.NO_RISK for tile in controls if tile.data.equipment_id == 1)
+    assert page.accept_result(query, updated)
+    assert page.rebuilt_tiles == page.restyled_tiles == 0
+    assert tuple(page.group_cards) == cards and tuple(page.tile_occurrences) == controls
 
 
 @pytest.mark.parametrize("status,steps,tone", [

@@ -1,4 +1,4 @@
-"""설비 정보 패널의 라우트 유지, 실제 판정·관측 버전 표시, 수정 경계 회귀 검사."""
+"""읽기 전용 설비 정보의 라우트·판정·관측 버전과 편집 경계 제거를 검증한다."""
 
 from dataclasses import replace
 from datetime import timedelta
@@ -157,7 +157,8 @@ def test_representative_states_are_real_data_not_figma_demo(window, eid, goal, c
     if eid == 3:
         assert drawer.software_cards[0].observation.current == "미입력"
     assert drawer.info_values["설비명"].text() == f"TEST-{eid}"
-    assert not drawer.edit_button.isEnabled()  # 합성 공급자는 실제 DB 행을 편집할 수 없다.
+    assert not hasattr(drawer, "edit_button")
+    assert not any(control.text() == "버전 정보 수정" for control in drawer.findChildren(QPushButton))
 
 
 def test_panel_shows_actual_equipment_information_in_one_card(window):
@@ -273,14 +274,15 @@ def test_hpa_uses_its_actual_observation_date_and_no_comparison(window, source, 
     drawer = open_tile(window, 4)
     assert drawer.request.base_date == DAY and drawer.request.observation_date == observed
     observation = drawer.software_cards[0].observation
-    assert drawer.goal_badge.text() == GoalState.EXCLUDED.value and observation.current == "HPA 원문"
+    assert drawer.goal_badge is None and drawer.risk_badge is None
+    assert observation.current == "HPA 원문"
     assert observation.target == "해당 없음"
     assert not observation.pms
     assert drawer.info_values["기준일"].text() == str(observed)
     assert "해당 없음" in {label.text() for label in drawer.software_cards[0].findChildren(QLabel)}
 
 
-def test_query_failure_removes_old_panel_and_edit_context(window, source, monkeypatch):
+def test_query_failure_removes_old_panel_and_read_context(window, source, monkeypatch):
     drawer = open_tile(window)
     def fail(_):
         raise RuntimeError("읽기 실패")
@@ -317,23 +319,29 @@ def connected_window(app, source):
     result.query_panel.apply_draft()
     yield result, gateway
     gateway.lookup_gate.set()
-    wait_for(app, lambda: not result.equipment_edit_request.busy)
     result.close()
     result.deleteLater()
     app.processEvents()
 
 
-def test_edit_resolves_actual_db_key_off_thread_then_existing_review_editor(connected_window, app):
+def test_connected_drawer_is_read_only_and_management_route_and_edit_worker_are_absent(connected_window, app):
     window, gateway = connected_window
+    reads = tuple(gateway.threads)
     drawer = open_tile(window, 2)
-    drawer.edit_button.click()
-    wait_for(app, lambda: window.route == "management" and not window.pages["management"].busy)
-    assert gateway.lookups[0][:2] == (2, DAY) and gateway.lookups[0][2] != get_ident()
-    assert window.pages["management"].record.key == {"equipment_version_id": 432}
-    assert drawer.isHidden() and gateway.saves == []
+    assert drawer.is_open and drawer.software_cards[0].observation.current == "v2"
+    assert "management" not in window.pages and "management" not in window.nav
+    assert not hasattr(window, "equipment_edit_request")
+    assert not any(hasattr(drawer, name) for name in ("edit_button", "edit_notice", "edit_menu"))
+    assert not any(control.text() == "버전 정보 수정" for control in drawer.findChildren(QPushButton))
+    with pytest.raises(ValueError):
+        window.navigate("management")
+    assert window.route == "heatmap" and drawer.is_open
+    drawer.close_button.click()
+    wait_for(app, drawer.isHidden)
+    assert not gateway.lookups and not gateway.saves and tuple(gateway.threads) == reads
 
 
-def test_replay_back_closes_drawer_and_edit_uses_carried_observation_date(connected_window, app, source):
+def test_replay_read_only_detail_preserves_carried_observation_date_and_back_closes_drawer(connected_window, app, source):
     window, gateway = connected_window
     replay = window.pages["replay"]
     observed = DAY - timedelta(days=7)
@@ -347,64 +355,54 @@ def test_replay_back_closes_drawer_and_edit_uses_carried_observation_date(connec
     tile = replay.heatmap.tile_buttons[2]
     tile.click()
     drawer = replay.drawer
-    assert drawer.is_open and drawer.edit_button.isEnabled()
+    assert drawer.is_open and not hasattr(drawer, "edit_button")
     assert drawer.request.base_date == DAY and drawer.request.observation_date == observed
+    assert drawer.detail.record.base_date == observed and drawer.info_values["기준일"].text() == str(observed)
     window.back_shortcut.trigger()
     assert window.route == "replay" and not drawer.is_open
     wait_for(app, drawer.isHidden)
 
     tile.click()
-    drawer.edit_button.click()
-    wait_for(app, lambda: window.route == "management" and not window.pages["management"].busy)
-    assert gateway.lookups[0][:2] == (2, observed) and gateway.lookups[0][2] != get_ident()
-    assert window.pages["management"].record.key == {"equipment_version_id": 432}
-    assert drawer.isHidden() and gateway.saves == []
+    assert drawer.is_open and window.route == "replay"
+    assert drawer.request.observation_date == observed
+    assert not gateway.lookups and not gateway.saves
+    window.back_shortcut.trigger()
+    wait_for(app, drawer.isHidden)
 
 
-def test_optional_request_date_uses_validated_record_date_for_editor(connected_window, app):
+def test_optional_request_date_uses_validated_record_date_in_read_only_detail(connected_window, app):
     window, gateway = connected_window
     heatmap = window.pages["heatmap"]
     heatmap.equipment_selected.emit(EquipmentSelection(heatmap.snapshot.query, DAY, 2))
-    window.equipment_drawer.edit_button.click()
-    wait_for(app, lambda: window.route == "management" and not window.pages["management"].busy)
-    assert gateway.lookups[0][:2] == (2, DAY)
+    app.processEvents()
+    drawer = window.equipment_drawer
+    assert drawer.is_open and drawer.detail.record.base_date == DAY
+    assert drawer.info_values["기준일"].text() == str(DAY)
+    assert window.route == "heatmap" and not hasattr(drawer, "edit_button")
+    assert not gateway.lookups and not gateway.saves
 
 
-def test_edit_lookup_failure_and_empty_records_stay_in_heatmap(connected_window, app):
+@pytest.mark.parametrize("choices,error", [
+    ((), None),
+    ((("equipment_version", {"equipment_version_id": 432}, "공통 SW · v2"),), None),
+    ((("equipment_pm", {"pm_id": 98}, "PM1 · v2"), ("equipment_pm", {"pm_id": 99}, "PM2 · v2")), None),
+    ((), RuntimeError("sensitive DB connection string")),
+], ids=["no edit candidates", "one edit candidate", "multiple edit candidates", "edit lookup unavailable"])
+def test_read_only_drawer_never_queries_or_saves_edit_candidates(connected_window, app, choices, error):
     window, gateway = connected_window
+    gateway.choices, gateway.lookup_error = choices, error
+    reads = tuple(gateway.threads)
     drawer = open_tile(window)
-    gateway.lookup_error = RuntimeError("sensitive DB connection string")
-    drawer.edit_button.click()
-    wait_for(app, lambda: not window.equipment_edit_request.busy)
-    assert window.route == "heatmap" and drawer.isVisible() and drawer.edit_button.isEnabled()
-    assert "읽지 못했습니다" in drawer.edit_notice.text() and "sensitive" not in drawer.edit_notice.text()
-    gateway.lookup_error, gateway.choices = None, ()
-    drawer.edit_button.click()
-    wait_for(app, lambda: not window.equipment_edit_request.busy)
-    assert "SW 기록이 없습니다" in drawer.edit_notice.text() and gateway.saves == []
-
-
-def test_edit_multiple_pms_require_explicit_choice_and_cancelled_read_is_ignored(connected_window, app):
-    window, gateway = connected_window
-    gateway.choices = (("equipment_pm", {"pm_id": 98}, "PM1 · v2"), ("equipment_pm", {"pm_id": 99}, "PM2 · v2"))
-    drawer = open_tile(window)
-    drawer.edit_button.click()
-    wait_for(app, lambda: drawer.edit_menu is not None)
-    assert [a.text() for a in drawer.edit_menu.actions()] == ["PM1 · v2", "PM2 · v2"]
-    assert window.route == "heatmap" and gateway.saves == []
-    drawer.edit_menu.close()
-    gateway.lookup_gate.clear()
-    drawer.edit_button.click()
+    assert len(drawer.software_cards) == 3
+    assert not any(hasattr(drawer, name) for name in ("edit_button", "edit_menu", "edit_notice"))
+    captions = [control.text() for control in drawer.findChildren(QLabel)]
+    assert not any("sensitive" in text or "SW 기록이 없습니다" in text for text in captions)
+    assert window.route == "heatmap" and not gateway.lookups and not gateway.saves
     drawer.close_button.click()
-    gateway.lookup_gate.set()
     wait_for(app, drawer.isHidden)
-    assert drawer.isHidden() and window.route == "heatmap" and gateway.saves == []
-
-
-def test_management_lock_blocks_edit_without_leaving_heatmap(connected_window):
-    window, gateway = connected_window
-    drawer = open_tile(window)
-    window.pages["management"].locked = True
-    drawer.edit_button.click()
-    assert not gateway.lookups and window.route == "heatmap"
-    assert "마친 뒤" in drawer.edit_notice.text()
+    assert open_tile(window, 2) is drawer
+    assert drawer.software_cards[0].observation.current == "v2"
+    window.back_shortcut.trigger()
+    wait_for(app, drawer.isHidden)
+    assert window.route == "heatmap"
+    assert not gateway.lookups and not gateway.saves and tuple(gateway.threads) == reads

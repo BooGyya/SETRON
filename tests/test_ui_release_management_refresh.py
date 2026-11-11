@@ -32,7 +32,7 @@ def management_edit(window, storage, release_id, day):
     service = ManagementService(storage, window.release_refresh_context())
     result = service.save((edit(service, "release_version", {"release_version_id": release_id},
                                 {"released_at": day}),))
-    window.pages["management"].saved.emit(result)
+    window.pages["data"].saved.emit(result)
     return result
 
 

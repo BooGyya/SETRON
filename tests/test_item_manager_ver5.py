@@ -21,6 +21,7 @@ from setron.ui.item_analysis import answer_items
 from setron.ui.item_original import OriginalItemRow, original_item_rows
 from setron.ui.item_risk_dialog import ItemRiskDialog
 from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog
+from setron.ui.risk_rule_save import RiskRuleSaveController
 
 from test_ui_items import app, data
 from test_release_revision import revision_storage, all_rows
@@ -100,7 +101,8 @@ def test_query_candidates_and_rule_drilldown(app, data):
     page.result_buttons[1].click()
     assert page.result_rows.indexOf(page.detail_view) + 1 == page.result_rows.indexOf(page.result_buttons[2])
     assert page.title.text() == data.versions.items[0].item.content
-    assert page.equipment_model.ids == (2,) and "미적용 (저장된 버전별 Item 상태)" in page.equipment_model.rows[0][6]
+    assert page.equipment_model.ids == (2,) and "저장된 버전별 Item 상태" in page.equipment_model.rows[0][6]
+    assert "미적용 (" not in page.equipment_model.rows[0][6]
     page.site_filter.setCurrentIndex(1)
     page.refresh_after_save(preserve_detail=True)
     assert page.selected_id == 1 and page.site_filter.currentData() == "Site A"
@@ -309,11 +311,13 @@ def test_item_save_failure_notice_survives_followup_reload(app, data, uncertain)
     window.navigate("items")
     page = window.pages["items"]
     wait_until(lambda: page.data is not None)
+    controller = window.findChild(RiskRuleSaveController)
+    assert controller is not None
     assert page.manager.submit({"risk_reason": "검증"})
-    wait_until(lambda: not window.pages["management"].busy and not page.read_request.busy)
+    wait_until(lambda: not controller.busy and not page.read_request.busy)
     assert "저장 결과 미확인" in page.notice.text() if uncertain else "저장 실패" in page.notice.text()
     assert page.status_host.isVisible()
-    assert window.pages["management"].locked is uncertain
+    assert controller.locked is uncertain
     window.close()
 
 

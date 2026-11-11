@@ -29,6 +29,7 @@ from setron.ui.app import create_window
 from setron.ui.database_source import DatabaseDashboardSource, load_dashboard_source
 from setron.ui.management_data import ManagementGateway
 from setron.ui.query_state import QuerySelection, TargetN
+from setron.ui.risk_rule_save import RiskRuleSaveController
 from setron.ui.theme import install_theme
 
 from test_management_db_source import connected
@@ -70,7 +71,9 @@ def test_interactive_export_failure_explains_locked_save_state(app, monkeypatch)
     window = create_window(management_gateway=FakeGateway())
     messages = []
     try:
-        window.pages["management"].locked = True
+        controller = window.findChild(RiskRuleSaveController)
+        assert controller is not None
+        controller.locked = True
         monkeypatch.setitem(create_window.__globals__, "QFileDialog",
                             SimpleNamespace(getSaveFileName=lambda *args: ("unused.xlsx", "")))
         monkeypatch.setitem(create_window.__globals__, "QMessageBox",
@@ -159,22 +162,19 @@ def running_window(app, storage, *, gateway=None, extra_site=False):
         app.processEvents()
 
 
-def open_record(window, app, table, key):
-    page = window.pages["management"]
-    # 새 기록 요청을 먼저 지정해 첫 showEvent의 기본 조회와 경쟁하지 않는다.
-    assert page.open_record(table, key)
-    window.navigate("management")
-    wait_for(app, lambda: not page.busy and page.record is not None
-             and page.record.table == table and page.record.key == key)
-    return page
-
-
-def save_current(window, app, page):
-    assert page.add_current()
-    assert page.review()
-    assert page.save()
-    wait_for(app, lambda: not page.busy and not window.management_refresh.busy
+def wait_for_save(window, app):
+    page = window.pages["data"]
+    wait_for(app, lambda: not page.save_request.busy and not window.management_refresh.busy
              and not window.management_saving)
+
+
+def save_data_changes(window, app, table, key, changes, *, wait=True):
+    """현행 데이터 관리의 저장 요청과 앱의 저장 후 재조회 연결을 함께 거친다."""
+    page = window.pages["data"]
+    assert page.save_changes(((table, key, changes),), page.sheet_panel)
+    if wait:
+        wait_for_save(window, app)
+    return page
 
 
 def test_real_management_save_refreshes_graphs_items_risk_and_next_ai_reads_db(app, file_storage):
@@ -183,9 +183,8 @@ def test_real_management_save_refreshes_graphs_items_risk_and_next_ai_reads_db(a
         dashboard, heatmap, items, ai = (window.pages[key] for key in ("dashboard", "heatmap", "items", "ai"))
         query = window.query_state.applied
         assert dashboard.snapshot.risky_ids
-        page = open_record(window, app, "release_version_item", {"release_version_id": release_id, "item_id": item_id})
-        page.inputs["item_state"].editor.setCurrentIndex(page.inputs["item_state"].editor.findData("APPLIED"))
-        save_current(window, app, page)
+        save_data_changes(window, app, "release_version_item",
+                          {"release_version_id": release_id, "item_id": item_id}, {"item_state": "APPLIED"})
         wait_for(app, lambda: dashboard.snapshot is not None and items.data is not None and not items.read_request.busy)
         assert dashboard.snapshot.query is query
         assert dashboard.snapshot.risky_ids == ()
@@ -206,21 +205,23 @@ def test_real_management_save_refreshes_graphs_items_risk_and_next_ai_reads_db(a
         assert heatmap.snapshot is dashboard.snapshot
 
 
-def test_release_edit_button_opens_real_management_record_on_first_navigation(app, file_storage):
-    """첫 진입의 비동기 기본 조회 때문에 릴리즈 수정 대상이 유실되지 않는다."""
+def test_release_edit_button_opens_selected_release_form_on_first_navigation(app, file_storage):
+    """첫 진입에 불러온 릴리즈의 수정은 같은 버전 관리 화면에서 대상을 유지한다."""
     with running_window(app, file_storage) as (window, source, calls, release_id, item_id, snapshot):
         versions = window.pages["versions"]
         window.navigate("versions")
         wait_for(app, lambda: versions.catalog is not None and not versions.read_request.busy)
+        versions.select_tab(1)
         versions.open_row(0)
         assert versions.selected_id == release_id
-        versions.open_editor()
-        page = window.pages["management"]
-        wait_for(app, lambda: window.route == "management" and not page.busy
-                 and page.record is not None and page.record.table == "release_version")
-        assert page.record.key == {"release_version_id": release_id}
-        assert "version_raw" in page.inputs
-        assert page.inputs["version_raw"].editor.text() == "v1"
+        versions.edit_button.click()
+        form = versions.release_form
+        assert window.route == "versions" and form.isVisible()
+        assert form.entry.release.release_version_id == release_id
+        assert form.catalog is versions.catalog and form.raw.text() == "v1"
+        assert (form.model_id, form.family_id) == (1, 1)
+        assert "management" not in window.pages and "management" not in window.nav
+        assert all_rows(file_storage, "release_version")[0]["version_raw"] == "v1"
         assert versions.editor is None
 
 
@@ -230,9 +231,8 @@ def test_management_and_current_scope_xlsx_include_latest_saved_values(app, file
         window.query_panel.set_draft(QuerySelection(site_key="hwaseong"))
         window.query_panel.apply_draft()
         assert window.pages["dashboard"].snapshot.summary.equipment_count == 1
-        page = open_record(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id})
-        page.inputs["line"].editor.setText("수정된 화성 라인")
-        save_current(window, app, page)
+        save_data_changes(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id},
+                          {"line": "수정된 화성 라인"})
         wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
         with TemporaryDirectory(prefix="setron-management-output-") as directory:
             management_path, status_path = Path(directory) / "관리.xlsx", Path(directory) / "조회.xlsx"
@@ -266,8 +266,6 @@ def test_line_rename_updates_query_choices_and_reapplies_same_query(app, file_st
         window.query_panel.set_draft(QuerySelection(site_key="hwaseong"))
         window.query_panel.apply_draft()
         before = window.query_state.applied
-        page = open_record(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id})
-        page.inputs["line"].editor.setText("새 화성 라인")
         entered, release = Event(), Event()
         reload_catalog = source.reload_catalog
         def slow_reload():
@@ -276,7 +274,8 @@ def test_line_rename_updates_query_choices_and_reapplies_same_query(app, file_st
             return reload_catalog()
         source.reload_catalog = slow_reload
         try:
-            assert page.add_current() and page.review() and page.save()
+            save_data_changes(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id},
+                              {"line": "새 화성 라인"}, wait=False)
             wait_for(app, entered.is_set)
             progress = window.management_progress
             assert progress.isVisible() and "저장 결과 반영 중" == progress.heading.text()
@@ -299,14 +298,12 @@ def test_line_rename_updates_query_choices_and_reapplies_same_query(app, file_st
 def test_refresh_failure_after_save_blocks_cached_ai_and_old_graphs(app, file_storage):
     """저장 성공 뒤 재조회 실패 시 예전 화면이나 분석 숫자를 다시 사용하지 않는다."""
     with running_window(app, file_storage) as (window, source, calls, release_id, item_id, snapshot):
-        page = open_record(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id})
-        page.inputs["line"].editor.setText("저장 후 연결 실패")
-
         def failed_loader():
             raise DatabaseSaveError("검증용 재조회 실패")
 
         source._loader = failed_loader
-        save_current(window, app, page)
+        save_data_changes(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id},
+                          {"line": "저장 후 연결 실패"})
         assert all_rows(file_storage, "equipment_snapshot")[0]["line"] == "저장 후 연결 실패"
         assert window.pages["dashboard"].snapshot is None
         ai = window.pages["ai"]
@@ -320,16 +317,27 @@ def test_refresh_failure_after_save_blocks_cached_ai_and_old_graphs(app, file_st
 def test_unknown_commit_result_blocks_ai_and_exports_until_reconciliation(app, file_storage):
     """저장 결과 미확인 상태에서는 오래된 자료 분석·중복 저장·내보내기를 허용하지 않는다."""
     class UnknownGateway(ManagementGateway):
-        def save(self, edits, context, applicability=()):
+        def __init__(self, storage):
+            super().__init__(storage)
+            self.attempts = 0
+
+        def create_risk_rule(self, values, context):
+            self.attempts += 1
             raise DatabaseCommitUnknownError("검증용 결과 미확인")
 
-    with running_window(app, file_storage, gateway=UnknownGateway(file_storage)) as (window, source, calls, release_id, item_id, snapshot):
-        page = open_record(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id})
-        page.inputs["line"].editor.setText("결과 미확인 초안")
-        assert page.add_current() and page.review() and page.save()
-        wait_for(app, lambda: not page.busy and page.locked)
+    gateway = UnknownGateway(file_storage)
+    with running_window(app, file_storage, gateway=gateway) as (window, source, calls, release_id, item_id, snapshot):
+        controller = window.findChild(RiskRuleSaveController)
+        assert controller is not None
+        submit = window.pages["items"].manager.submit
+        values = {"rule_type": "SAFETY_REQUIRED", "family_id": 1, "item_id": item_id,
+                  "risk_reason": "결과 미확인 초안", "mapping_status": "VERIFIED"}
+        assert submit(values)
+        wait_for(app, lambda: not controller.busy and controller.locked)
+        assert controller.state == "unknown"
         assert window.pages["dashboard"].snapshot is None
-        assert not page.save()
+        assert not submit(values) and not controller.create_risk_rule(values)
+        assert gateway.attempts == 1
         window.navigate("ai")
         assert not window.pages["ai"].analyze()
         assert calls == []
@@ -345,12 +353,22 @@ def test_confirmed_save_failure_retains_draft_and_reloads_known_old_values(app, 
             raise DatabaseSaveError("검증용 저장 취소")
 
     with running_window(app, file_storage, gateway=FailedGateway(file_storage)) as (window, source, calls, release_id, item_id, snapshot):
-        page = open_record(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id})
-        page.inputs["line"].editor.setText("저장 실패 초안")
-        save_current(window, app, page)
+        page = window.pages["data"]
+        sheet = page.sheet_panel
+        sheet.open_batch(snapshot.batch_id)
+        window.navigate("data")
+        wait_for(app, lambda: not sheet.request.busy and sheet.grid is not None
+                 and sheet.grid.batch_id == snapshot.batch_id)
+        address = next(address for address, binding in sheet.grid.bindings.items()
+                       if binding.table == "equipment_snapshot" and binding.key == {"snapshot_id": snapshot.snapshot_id}
+                       and binding.field == "line")
+        sheet.items[address].setText("저장 실패 초안")
+        assert sheet.pending and sheet.save()
+        wait_for_save(window, app)
         wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
-        assert page.state == "failed" and not page.locked
-        assert page.pending
+        assert not page.saving and sheet.save_button.isEnabled()
+        assert sheet.pending and sheet.edits[address] == "저장 실패 초안"
+        assert sheet.items[address].text() == "저장 실패 초안" and "저장하지 못했습니다" in sheet.notice.text()
         assert all_rows(file_storage, "equipment_snapshot")[0]["line"] == "1라인"
         assert window.pages["dashboard"].snapshot.selected_records[0].line == "1라인"
         assert calls == []

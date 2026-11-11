@@ -4,7 +4,7 @@ from math import floor
 
 from PySide6.QtCore import QEvent, QModelIndex, QRect, QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOption, QStyledItemDelegate, QTreeView
+from PySide6.QtWidgets import QHeaderView, QSizePolicy, QStyle, QStyleOption, QStyledItemDelegate, QTreeView
 
 from setron.ui.appearance import ui_color
 from setron.ui.theme import ACCENT_SOFT, LINE, PRIMARY, TONES, font, paint_font, set_widget_font
@@ -189,6 +189,7 @@ class HeatmapTreeView(QTreeView):
         self.setAccessibleDescription("분류를 펼치거나 접고 설비를 선택합니다. 좌우 방향키로 분류를 탐색합니다.")
         self.setMinimumWidth(0)
         self.setMinimumHeight(260)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         set_widget_font(self, font(13))
         self.setItemDelegate(_HeatmapTreeDelegate(self))
         self.setRootIsDecorated(True)
@@ -211,6 +212,7 @@ class HeatmapTreeView(QTreeView):
         for column, width in enumerate(widths):
             self.setColumnWidth(column, width)
         self.setStyleSheet("QTreeView {background:white;border:0;selection-background-color:#edf0fd;selection-color:#18243c;}"
+                           "QHeaderView {background:#f7f9fc;}"
                            "QHeaderView::section {background:#f7f9fc;color:#5b6880;border:0;padding:8px;}"
                            "QTreeView::item {padding:8px;border:0;}"
                            f"QTreeView:focus {{border:1px solid {PRIMARY};}}")
@@ -309,7 +311,7 @@ class HeatmapTreeView(QTreeView):
                         self.setExpanded(index, False)
         if rebuilt:
             self.select_equipment(equipment_id, preferred_key=preferred_key, reveal=False)
-        columns_changed = self.resize_columns() if rebuilt or self.model().name_changed else False
+        columns_changed = self.resize_columns() if rebuilt or changed_rows else False
         resize = rebuilt or columns_changed or self.compact != self._last_compact
         if not resize:
             for item in changed_rows:
@@ -345,7 +347,7 @@ class HeatmapTreeView(QTreeView):
         self.setCurrentIndex(index)
 
     def _column_widths(self):
-        name_width = 260
+        name_width = 220
         for items in self.model()._equipment_items.values():
             for item in items:
                 index, depth = self.model().indexFromItem(item), int(self.rootIsDecorated())
@@ -355,22 +357,19 @@ class HeatmapTreeView(QTreeView):
                     parent = parent.parent()
                 text_width = QFontMetrics(index.data(Qt.ItemDataRole.FontRole)).horizontalAdvance(item.text())
                 name_width = max(name_width, text_width + depth * self.indentation() + 20)
-        name_width = min(340, name_width)
-        if self.compact:
-            remaining = max(320, self.viewport().width() - name_width)
-            version = max(180, int(remaining * 0.55))
-            widths = {0: name_width, 3: version, 4: remaining - version}
-        else:
-            widths = {column: width for column, width in enumerate(self.base_widths) if not self.isColumnHidden(column)}
-            widths[0], widths[4] = name_width, 140
-            other_width = sum(width for column, width in widths.items() if column != 0)
-            remaining = max(other_width, self.viewport().width() - name_width)
-            others = [column for column in widths if column != 0]
-            allocated = 0
-            for column in others:
-                width = remaining - allocated if column == others[-1] else int(remaining * widths[column] / other_width)
-                widths[column] = width
-                allocated += width
+        limits = {3: (140, 160), 4: (100, 120)} if self.compact else {
+            2: (120, 160), 3: (150, 200), 4: (100, 120), 5: (110, 150)}
+        widths = {0: name_width}
+        for column, (minimum, maximum) in limits.items():
+            if self.isColumnHidden(column):
+                continue
+            required = self.fontMetrics().horizontalAdvance(self.model().headings[column]) + 20
+            for items in self.model()._row_items:
+                item = items[column]
+                index = self.model().indexFromItem(item)
+                metrics = QFontMetrics(index.data(Qt.ItemDataRole.FontRole))
+                required = max(required, *(metrics.horizontalAdvance(line) + 20 for line in (item.text().splitlines() or [""])))
+            widths[column] = max(minimum, min(maximum, required))
         return widths
 
     def resize_columns(self):

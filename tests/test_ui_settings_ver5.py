@@ -23,6 +23,7 @@ from setron.ui.components import label
 from setron.ui.app import create_window
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.query_state import LineOption, QuerySelection
+from setron.ui.risk_rule_save import RiskRuleSaveController
 from setron.ui.settings_location import AddReferenceDialog, LocationPanel
 from setron.ui.settings_page import SettingsPage
 from test_ui_import_ver5 import own, until  # noqa: F401
@@ -731,7 +732,8 @@ def test_settings_preview_scroll_follows_only_in_wide_layout(own, theme):
 
 def test_management_save_progress_success_failure_unknown_and_no_duplicate(own, theme):
     w = own(create_window())
-    management, versions = w.pages["management"], w.pages["versions"]
+    management, versions = w.findChild(RiskRuleSaveController), w.pages["versions"]
+    assert management is not None
     progress = w.management_progress
     management.save_started.emit()
     assert progress.isVisible() and "저장 중" in progress.heading.text()
