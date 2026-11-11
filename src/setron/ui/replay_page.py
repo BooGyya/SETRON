@@ -1,12 +1,12 @@
 """VER5 / 6 Version Replay. 조회한 시점별 설비 현황과 상세를 보여 준다."""
 
-from PySide6.QtCore import QDate, QSignalBlocker, QTimer, Qt, Signal
+from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QProgressBar, QTabBar, QVBoxLayout, QWidget,
+    QDialog, QProgressBar, QVBoxLayout, QWidget,
 )
 
 from setron.ui.components import Card, button, label
-from setron.ui.dashboard import DashboardGrid, TAB_STYLE, _DashboardViewControls
+from setron.ui.dashboard import DashboardGrid, _DashboardViewControls
 from setron.ui.dashboard_charts import series_button_style, series_color
 from setron.ui.dashboard_data import information_gap_reasons
 from setron.ui.equipment import ignore_width
@@ -17,9 +17,10 @@ from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.replay_data import ReplayData, ReplayRequest, can_replay, group_view, load_replay, replay_detail
-from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap
+from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls
 from setron.ui.theme import PRIMARY, SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
+from setron.ui.view_controls import SegmentedControl, bulk_selection_button
 
 
 class ReplayPage(QWidget):
@@ -40,10 +41,12 @@ class ReplayPage(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.advance)
+        self.playback_speed = 1.0
+        self._playback_host = self
         self.legend_buttons, self.legend_tools, self.frames = {}, (), ()  # frames: 지금 재생 간격의 시점들
         self._hidden_groups = set()
         body = QVBoxLayout(self)
-        body.setContentsMargins(0, 0, 0, 0)
+        body.setContentsMargins(0, 0, 0, 88)
         body.setSpacing(16)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.query_panel = QueryPanel(self.state, period=True)
@@ -62,31 +65,28 @@ class ReplayPage(QWidget):
         self.content.body.setSpacing(12)
         self.content.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         # 날짜 칩 대신 재생 간격 (요청 2-1). 하나만 고르는 세그먼트 버튼. 바꾸면 다시 조회하지 않고 시점만 다시 만든다.
-        self.timeline = IntervalSelector("재생 간격", compact=True)
+        self.timeline = IntervalSelector("재생 간격", compact=True, custom_days=True)
         self.interval_group, self.interval_buttons, self.step = self.timeline.group, self.timeline.buttons, None
+        self.timeline.set_saved_days()
         self.timeline.step_changed.connect(self.set_interval)
         self.legend_host = QWidget()
         self.legend_body = QVBoxLayout(self.legend_host)
         self.legend_body.setContentsMargins(0, 0, 0, 0)
         self.content.body.addWidget(self.legend_host)
         # 두 보기에서 같은 재생 상태를 제어한다.
-        playback = QWidget()
-        playback_row = QHBoxLayout(playback)
-        playback_row.setContentsMargins(0, 0, 0, 0)
-        playback_row.setSpacing(8)
-        playback_row.addStretch(1)
-        # 앱 글꼴(IBM Plex Sans KR)에 있는 기호만 쓴다. ⏸·⏮는 글꼴에 없어 네모로 깨진다.
-        self.play_button, self.pause_button, self.restart_button = button("▶", primary=True), button("‖"), button("↺")
-        for control, name in ((self.play_button, "재생"), (self.pause_button, "일시정지"), (self.restart_button, "처음부터")):
-            control.setAccessibleName(name)
-            control.setToolTip(name)
-            set_widget_font(control, font(16, medium=True))
-            control.setStyleSheet("QPushButton {padding:0;min-height:38px;max-height:38px;}"
-                                  "QPushButton:focus {min-height:36px;max-height:36px;}")
-            control.setFixedSize(56, 40)
-            playback_row.addWidget(control)
-        playback_row.addStretch(1)
-        self.content.body.addWidget(playback)
+        self.playback_controls = ReplayPlaybackControls(self)
+        self.play_button = self.playback_controls.play_button
+        self.pause_button = self.playback_controls.pause_button
+        self.restart_button = self.playback_controls.restart_button
+        self.speed_tabs = self.playback_controls.speed_tabs
+        self.playback_controls.speed_changed.connect(self.set_playback_speed)
+        self.speed_buttons = dict(zip(self.playback_controls.SPEEDS, self.speed_tabs.buttons))
+        for speed, control in self.speed_buttons.items():
+            control.setAccessibleName(f"재생 속도 {speed:g}배속")
+            control.setToolTip(f"{speed:g}배속으로 재생")
+        self.installEventFilter(self)
+        if self.drawer is not None:
+            self.drawer.installEventFilter(self)
         self.achievement = label("등록 SW 목표 달성 —", 20, medium=True, wrap=True)
         self.content.body.addWidget(self.achievement)
         self.progress = QProgressBar()
@@ -98,11 +98,10 @@ class ReplayPage(QWidget):
         self.progress.setStyleSheet(f"QProgressBar {{background:#e8ebfc;border:0;border-radius:0;}}"
                                    f"QProgressBar::chunk {{background:{PRIMARY};border-radius:0;}}")
         self.content.body.addWidget(self.progress)
-        self.view_tabs = QTabBar()
+        self.view_tabs = SegmentedControl()
         self.view_tabs.setAccessibleName("리플레이 보기")
         self.view_tabs.setDrawBase(False)
         self.view_tabs.setExpanding(False)
-        self.view_tabs.setStyleSheet(TAB_STYLE)
         set_widget_font(self.view_tabs, font(14, medium=True))
         for caption in ("달성률 추이", "히트맵"):
             self.view_tabs.addTab(caption)
@@ -129,6 +128,48 @@ class ReplayPage(QWidget):
     @property
     def busy(self):
         return self.read_request.busy
+
+    def set_playback_host(self, host):
+        """스크롤 문서 대신 화면 본문의 viewport에 재생 도구를 고정한다."""
+        if host is self._playback_host:
+            return
+        self._playback_host.removeEventFilter(self)
+        self._playback_host = host
+        self.playback_controls.setParent(host)
+        host.installEventFilter(self)
+        self._position_playback()
+
+    def _position_playback(self):
+        if not hasattr(self, "playback_controls"):
+            return
+        host, controls = self._playback_host, self.playback_controls
+        controls.adjustSize()
+        size = controls.size()
+        controls.move(max(12, (host.width() - size.width()) // 2), max(12, host.height() - size.height() - 16))
+        visible = self.isVisible() and not (self.drawer is not None and self.drawer.isVisible())
+        controls.setVisible(visible)
+        if visible:
+            controls.raise_()
+
+    def eventFilter(self, watched, event):
+        if watched is self._playback_host and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._position_playback()
+        elif watched is self.drawer and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
+            QTimer.singleShot(0, self, self._position_playback)
+        return super().eventFilter(watched, event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._position_playback()
+
+    def set_playback_speed(self, speed):
+        if speed not in self.playback_controls.SPEEDS:
+            return False
+        self.playback_speed = float(speed)
+        self.timer.setInterval(round(1000 / speed))
+        with QSignalBlocker(self.speed_tabs):
+            self.speed_tabs.setCurrentIndex(self.playback_controls.SPEEDS.index(speed))
+        return True
 
     @property
     def frame(self):
@@ -160,6 +201,7 @@ class ReplayPage(QWidget):
         self.play_button.setEnabled(ready and can_replay(self.frames) and not self.timer.isActive())
         self.pause_button.setEnabled(ready and self.timer.isActive())
         self.restart_button.setEnabled(ready and bool(self.frames))
+        self.speed_tabs.setEnabled(ready)
         for step, control in self.interval_buttons.items():
             # 간격이 기간보다 길어 시점이 2개 미만이면 그 간격은 고를 수 없다. 저장일마다는 항상 고를 수 있다.
             control.setEnabled(ready and (step is None or can_replay(self.data.frames_for(step))))
@@ -170,6 +212,7 @@ class ReplayPage(QWidget):
         self.view_tabs.setEnabled(not self.busy)
         self.heatmap.setEnabled(ready)
         self.chart.setEnabled(ready)
+        self._position_playback()
 
     def _notice(self, text, *, error=False):
         self.message.setText(text)
@@ -231,7 +274,7 @@ class ReplayPage(QWidget):
         self.frames = data.frames_for(self.step)
         if self.step is not None and not can_replay(self.frames):
             self.step, self.frames = None, data.frames  # 새 기간에 맞지 않는 간격이면 저장일마다로 되돌린다
-            self.interval_buttons[None].setChecked(True)
+        self._sync_interval_selector()
         self.index = max(0, len(self.frames) - 1)
         self.epoch += 1
         if self.frames:
@@ -243,14 +286,21 @@ class ReplayPage(QWidget):
                      "재생하려면 조건에 맞는 실제 관측일이 두 개 이상 필요합니다." if not data.can_replay else "")
         self._sync_controls()
 
+    def _sync_interval_selector(self):
+        if self.step is None:
+            self.timeline.set_saved_days()
+        else:
+            self.timeline.set_step(self.step)
+
     def set_interval(self, step):
         """재생 간격을 바꾼다 (요청 2-1). 다시 조회하지 않고 이미 읽은 자료로 시점만 다시 만든다."""
-        if step not in self.interval_buttons or self.data is None or self.dirty or self.busy or step == self.step:
+        valid_step = step in self.interval_buttons or type(step) is int and step > 0
+        if not valid_step or self.data is None or self.dirty or self.busy or step == self.step:
+            self._sync_interval_selector()
             return False
-        self.interval_buttons[step].setChecked(True)
         frames = self.data.frames_for(step)
         if step is not None and not can_replay(frames):
-            self.interval_buttons[self.step].setChecked(True)
+            self._sync_interval_selector()
             return False
         # 재생 중에 간격을 바꾸면 멈추지 않고, 보던 날짜(또는 그 전 가장 가까운 시점)부터 이어서 재생한다 (11-11 점검).
         playing, current = self.timer.isActive(), self.frame.day if self.frame is not None else None
@@ -259,6 +309,7 @@ class ReplayPage(QWidget):
         if playing and current is not None:
             index = max((i for i, frame in enumerate(frames) if frame.day <= current), default=0)
         self.step, self.frames, self.index = step, frames, index
+        self._sync_interval_selector()
         if playing and index < len(frames) - 1:
             self.timer.start()
         self._make_legend()
@@ -286,11 +337,10 @@ class ReplayPage(QWidget):
                      if len(cell.group_keys) == 1 and cell.equipment_ids}
         if not available:
             return
-        self.toggle_all_button = button("전체 해제")
+        self.toggle_all_button = bulk_selection_button("전체 해제")
         self.toggle_all_button.setCheckable(True)
         self.toggle_all_button.setMinimumWidth(96)
         set_widget_font(self.toggle_all_button, font(13, medium=True))
-        self.toggle_all_button.setStyleSheet(series_button_style(PRIMARY))
         self.toggle_all_button.clicked.connect(self.toggle_all_groups)
         self.legend_tools = (self.toggle_all_button,)
         for group in self.data.source.catalog.groups:
@@ -436,6 +486,7 @@ class ReplayPage(QWidget):
         with QSignalBlocker(self.start), QSignalBlocker(self.end):
             self.start.setDate(QDate.fromString(str(days[0]), "yyyy-MM-dd") if days else QDate.currentDate())
             self.end.setDate(QDate.fromString(str(days[-1]), "yyyy-MM-dd") if days else QDate.currentDate())
+        self.query_panel.sync_period_range()
 
     def reset_filters(self):
         if self.busy:
@@ -486,9 +537,11 @@ class ReplayPage(QWidget):
             return False
         if self.drawer is None:
             self.drawer = EquipmentDrawer(self.window(), object_name="replayEquipmentDrawer")
+            self.drawer.installEventFilter(self)
         snapshot = frame.snapshot
         request = EquipmentSelection(snapshot.query, snapshot.base_date, equipment_id, detail.record.base_date)
         self.drawer.open_detail(request, detail, rows, return_focus=tile, edit_available=self.edit_available)
+        self._position_playback()
         self.drawer_opened.emit()
         return True
 
@@ -506,6 +559,7 @@ class ReplayPage(QWidget):
         self._sync_controls()
 
     def hideEvent(self, event):
+        self.playback_controls.hide()
         self.pause()
         if self.busy:
             self.read_request.cancel()

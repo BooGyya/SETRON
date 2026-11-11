@@ -380,6 +380,9 @@ class MainWindow(QMainWindow):
             self._query_routes.discard(key)
         self.pages[key] = widget
         self.stack.addWidget(widget)
+        playback_host = getattr(widget, "set_playback_host", None)
+        if callable(playback_host):
+            playback_host(self.scroll.viewport())
         self.nav[key].setEnabled(True)
         self.nav[key].setToolTip(self._menus[key].title)
         if key == self.route:

@@ -74,6 +74,7 @@ class ReplayData:
         """재생 간격별 시점 (요청 2-1).
 
         - None: 실제 저장 날짜마다 (기존 동작).
+        - 양의 정수: 시작 날짜부터 지정한 일수 간격. 종료 날짜도 포함한다.
         - 'week' · 'month' · 'quarter': 시작~종료를 간격으로 끊은 날짜마다. 각 시점은 그 날짜까지 설비별 최신 관측이므로
           그 날짜 이전 마지막 저장일의 프레임과 같은 내용이고, 날짜(at)만 다르다. 첫 저장 전 날짜는 뺀다.
         """
@@ -100,6 +101,7 @@ def freeze_source(source):
     result = DashboardSource(
         catalog=source.catalog, bindings=tuple(GroupBinding(k, v) for k, v in source.bindings.items()),
         records=tuple(source.records), locations=dict(source.locations), families=deepcopy(source.families),
+        locations_by_date=dict(source.locations_by_date),
         targets=dict(source.targets), risks=dict(source.risks),
         source_label=source.source_label, risk_evaluator=frozen_risk if evaluator is not None else None,
         risk_rule_state=source.risk_rule_state)

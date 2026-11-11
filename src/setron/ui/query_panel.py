@@ -118,6 +118,7 @@ class QueryPanel(QWidget):
     def __init__(self, state: QueryState, *, period=False, show_group=True, show_search=True):
         super().__init__()
         self.state = state
+        self.period = period
         self.target_describer = None
         self.combos: dict[str, _FilterButton] = {}
         self.filter_popup = None
@@ -154,10 +155,15 @@ class QueryPanel(QWidget):
         self.card.body.addWidget(self.draft_summary)
         self.source_label = label("", 12, color=SECONDARY, wrap=True)
         if period:
-            start_field, self.start_date = self._date_field("시작 날짜")
-            end_field, self.end_date = self._date_field("종료 날짜")
-            fields = [start_field, end_field]
+            date_field, normal_date = self._date_field("기준 날짜")
+            normal_date.hide()
+            normal_date.deleteLater()
+            self.original_date_field = date_field
+            fields = [date_field]
+            # 기존 기간 조회 API는 유지하고 화면에는 공통 날짜 범위 필드 하나만 둔다.
+            self.start_date, self.end_date = DateEdit(self), DateEdit(self)
             for control in (self.start_date, self.end_date):
+                control.hide()
                 control.dateChanged.connect(lambda _day, edit=control: self._confirm_period_edit(edit))
                 control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
                 control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
@@ -243,6 +249,8 @@ class QueryPanel(QWidget):
             if show_search:
                 self.search_button.clicked.connect(self.apply_draft)
         self._render()
+        if period:
+            self.enable_date_range(self.start_date.date().toPython(), self.end_date.date().toPython())
 
     def _filter_options(self, field):
         catalog = self.state.catalog
@@ -253,7 +261,7 @@ class QueryPanel(QWidget):
         fabs = {fab.key: fab.label for fab in catalog.fabs}
         options = [(UNASSIGNED, "미지정", None)]
         if field == "fab_key":
-            options.extend((fab.key, fab.label, sites[fab.site_key]) for fab in self.state.available_fabs())
+            options.extend((fab.key, fab.label, sites.get(fab.site_key)) for fab in self.state.available_fabs())
         else:
             lines = self.state.available_lines()
             label_counts = Counter(line.label for line in lines)
@@ -318,17 +326,31 @@ class QueryPanel(QWidget):
         return field, control
 
     def _confirm_period_edit(self, control):
+        self.sync_period_range()
         if not control.calendarWidget().isVisible():
             self.confirmed.emit()
 
     def _confirm_period_date(self, control, day):
         with QSignalBlocker(control):
             control.setDate(day)
+        self.sync_period_range()
         self.confirmed.emit()
 
-    def enable_date_range(self, start, end):
-        if self.date_edit is None:
+    def sync_period_range(self):
+        """기간 입력을 신호 없이 변경한 호출자도 공통 날짜 표시를 갱신할 수 있다."""
+        if not self.period or self.range_button is None:
             return
+        start, end = self.start_date.date().toPython(), self.end_date.date().toPython()
+        if start <= end:
+            self.range_button.set_range(start, end)
+
+    def enable_date_range(self, start, end):
+        if self.original_date_field is None:
+            return
+        if self.period:
+            for control, value in ((self.start_date, start), (self.end_date, end)):
+                with QSignalBlocker(control):
+                    control.setDate(QDate(value.year, value.month, value.day))
         if self.range_button is None:
             from setron.ui.date_range import DateRangeButton
 
@@ -336,15 +358,16 @@ class QueryPanel(QWidget):
             self.range_button.setAccessibleName("기준 날짜 기간")
             self.range_button.range_changed.connect(self._confirm_date_range)
             self.original_date_field.layout().addWidget(self.range_button)
-        self.range_button.set_range(start, end, maximum=date.today())
-        self.date_edit.hide()
+        self.range_button.set_range(start, end, maximum=None if self.period else date.today())
+        if self.date_edit is not None:
+            self.date_edit.hide()
         self.range_button.show()
         self.original_date_field.layout().itemAt(0).widget().setBuddy(self.range_button)
         self.original_date_field.setMinimumWidth(240)
         self.fields_row.reflow()
 
     def disable_date_range(self):
-        if self.range_button is None:
+        if self.range_button is None or self.period:
             return
         if self.range_button.dialog is not None:
             self.range_button.dialog.reject()
@@ -355,8 +378,13 @@ class QueryPanel(QWidget):
         self.fields_row.reflow()
 
     def _confirm_date_range(self, start, end):
+        if self.period:
+            for control, value in ((self.start_date, start), (self.end_date, end)):
+                with QSignalBlocker(control):
+                    control.setDate(QDate(value.year, value.month, value.day))
         self.date_range_selected.emit(start, end)
-        self.set_as_of(end)
+        if not self.period:
+            self.set_as_of(end)
         self.confirmed.emit()
 
     def _choose_date(self, value):

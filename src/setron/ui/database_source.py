@@ -33,7 +33,7 @@ from setron.features.targets.service import TargetService
 from setron.features.storage.validation import StorageValidationError
 from setron.infrastructure.database import DatabaseError
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, RiskRuleState, family_name, model_name
-from setron.ui.query_state import LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
+from setron.ui.query_state import FabOption, LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
 from setron.ui.target_data import target_pairs
 from setron.ui.version_data import ItemEntry, ModelFamily, ReleaseEntry, SourceReference, VersionCatalog
 
@@ -49,23 +49,31 @@ def database_catalog(snapshots, model_names=None) -> QueryCatalog:
     """저장된 현황의 실제 Site·Line으로 조회 선택지를 만든다.
 
     - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site를 이름 그대로 덧붙인다.
-    - Line: 관측된 (Site, Line) 조합. 키는 "Site 키:Line"이며 Fab은 매핑 자료가 없어 지정하지 않는다.
+    - Fab: 저장된 production_area의 Memory/Foundry이며 Site 공통 선택지다.
+    - Line: 관측된 (Site, Fab, Line) 조합. 생산 영역이 없는 기존 키는 유지한다.
     - 설비군: VER3 선택지 중 :data:`GROUP_MODELS`의 모델이 DB에 등록된 것만 둔다 (``model_names``).
       등록 모델이 없는 설비군(예: Inline Ox·Cluster Ox)은 골라도 항상 0대라 빼고, ``model_names``가 없으면 모두 둔다.
     """
+    snapshots = tuple(snapshots)
     base = preview_catalog()
     known = {option.label for option in base.sites}
     extra = sorted({value.site for value in snapshots if value.site and value.site not in known})
     sites = (*base.sites, *(SiteOption(name, name) for name in extra))
     keys = {option.label: option.key for option in sites}
-    lines = sorted({(keys[value.site], value.line) for value in snapshots if value.site in keys and value.line})
+    lines = sorted({(keys[value.site], value.production_area, value.line) for value in snapshots
+                    if value.site in keys and value.line}, key=lambda value: (value[0], value[1] or "", value[2]))
     return QueryCatalog(
         sites=sites,
-        lines=tuple(LineOption(f"{site}:{line}", line, site, None) for site, line in lines),
+        fabs=(FabOption("MEMORY", "Memory", None), FabOption("FOUNDRY", "Foundry", None)),
+        lines=tuple(LineOption(_line_key(site, fab, line), line, site, fab) for site, fab, line in lines),
         groups=tuple(option for option in base.groups if model_names is None
                      or any(name in model_names for name in GROUP_MODELS.get(option.key, ()))),
-        source_label="DB 저장 현황의 Site·Line · Fab 매핑 미등록",
+        source_label="DB 저장 현황의 Site·Fab(Memory/Foundry)·Line",
     )
+
+
+def _line_key(site, fab, line):
+    return f"{site}:{fab}:{line}" if fab is not None else f"{site}:{line}"
 
 
 def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> DashboardSource:
@@ -118,10 +126,14 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         records.append(record)
     # 과거 관측을 나중에 가져와도 현재 위치는 snapshot ID가 아닌 관측일로 정한다.
     line_keys = {option.key for option in catalog.lines}
+    fab_keys = {option.key for option in catalog.fabs}
+    stored_areas = {(value.base_date, value.equipment_id): value.production_area for value in stored}
 
     def location(record):
-        key = f"{sites[record.site]}:{record.line}"
-        return EquipmentLocation(sites[record.site], record.line, None, key if key in line_keys else None)
+        fab = stored_areas[record.base_date, record.equipment_id]
+        fab = fab if fab in fab_keys else None
+        key = _line_key(sites[record.site], fab, record.line)
+        return EquipmentLocation(sites[record.site], record.line, fab, key if key in line_keys else None)
 
     locations = {r.equipment_id: location(r) for r in sorted(records, key=lambda record: record.base_date)}
 
@@ -162,7 +174,8 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         label += f" · Site·설비군 미연결 또는 확인 필요 {skipped}건 제외"
     source = DashboardSource(catalog=catalog, bindings=bindings, records=tuple(records), locations=locations,
                              families=family_releases, targets={}, risks=risks, source_label=label,
-                             risk_evaluator=risk_status, risk_rule_state=rule_state)
+                             risk_evaluator=risk_status, risk_rule_state=rule_state,
+                             locations_by_date={(r.base_date, r.equipment_id): location(r) for r in records})
     source.applicability = target_catalog.applicability
     # 버전(N) 기준 입력에서 저장한 N 그룹. 형식이 깨진 저장값은 그룹 없이(목표 N 하나로) 계산하고 안내한다.
     source.group_store = GroupStore(storage)

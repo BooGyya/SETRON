@@ -716,14 +716,16 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
     assert [page.tabs.tabText(i) for i in range(page.tabs.count())] == [
         "히트맵", "원형 그래프", "막대 그래프", "꺾은선 그래프",
     ]
-    assert page.content.body.itemAt(0).widget() is page.tabs
+    assert page.content.body.itemAt(0).widget() is page.view_controls
+    assert page.tabs.parentWidget() is page.view_controls
     removed_titles = {"목표 도달 상태 구성비", "원본 구역 · 설비군별 설비 대수", "설비군별 목표 적용 추이"}
     assert not any(label.text() in removed_titles for label in page.content.findChildren(QLabel)
                    if label.isVisibleTo(page.content))
     assert all(page.tabs.rect().contains(page.tabs.tabRect(i)) for i in range(page.tabs.count()))
     assert page.matrix_legend.isVisible() == (mode == 0)
     if mode == 0:
-        tabs, legend = page.tabs.geometry(), page.matrix_legend.geometry()
+        tabs = page.tabs.rect().translated(page.tabs.mapTo(page.content, QPoint()))
+        legend = page.matrix_legend.rect().translated(page.matrix_legend.mapTo(page.content, QPoint()))
         card_body = page.content.contentsRect().marginsRemoved(page.content.body.contentsMargins())
         assert tabs.left() == legend.left() == card_body.left()
         assert tabs.bottom() < legend.top() and legend.right() <= card_body.right()
@@ -736,7 +738,7 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
 
 def test_real_entrypoint_registers_dashboard_and_heatmap_and_does_not_auto_apply(app):
     window = create_window()
-    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "data", "items", "import", "ai", "management", "replay", "reports", "settings"}
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "data", "items", "import", "export", "ai", "management", "replay", "reports", "settings"}
     assert window.query_state.applied is None
     assert "합성 예시" in window.notice.text()
     assert window.nav["heatmap"].isEnabled()

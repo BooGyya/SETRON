@@ -17,6 +17,7 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.heatmap_data import GoalState, Tier
+from setron.ui.observation_interval import interval_days
 from setron.ui.query_state import QuerySelection, QueryState, VersionFilter
 from setron.ui.replay_data import load_replay
 from setron.ui.replay_widgets import CURRENT_MARKER, CURRENT_SUFFIX, FUTURE_SUFFIX, POINT_SUFFIX, ReplayChart
@@ -228,11 +229,22 @@ def test_interval_buttons_rebuild_frames_without_reading_again(own):
     assert "저장 기준" not in page.achievement.text()   # 저장일과 같은 시점은 붙이지 않는다
     page.pause()
     page.interval_buttons[None].click()
-    assert page.frames == page.data.frames and len(calls) == 1
+    dialog = page.timeline.day_dialog
+    assert dialog.isVisible()
+    dialog.setIntValue(10)
+    dialog.accept()
+    assert page.step == 10 and len(calls) == 1
+    assert [frame.day for frame in page.frames] == list(interval_days(page.data.request.start, page.data.request.end, 10))
+    frames = page.frames
+    page.interval_buttons[None].click()
+    page.timeline.day_dialog.setIntValue(3)
+    page.timeline.day_dialog.reject()
+    assert page.frames is frames and page.step == 10
 
 
 def test_interval_too_long_for_period_is_disabled(own):
     page = replay_page(own)
+    assert page.set_interval(3)
     set_period(page, "2026-05-21", "2026-06-21")
     assert page.apply_query()
     until(lambda: not page.busy)
@@ -241,6 +253,14 @@ def test_interval_too_long_for_period_is_disabled(own):
     until(lambda: not page.busy)
     assert not any(page.interval_buttons[s].isEnabled() for s in ("week", "month", "quarter"))
     assert not page.set_interval("week") and page.step is None
+    first = page.interval_buttons[None]
+    assert first.text() == "저장일마다" and page.timeline._current_step is None
+    assert first.toolTip() == "실제 저장된 날짜마다 재생"
+    first.click()
+    page.timeline.day_dialog.setIntValue(3)
+    page.timeline.day_dialog.accept()
+    assert page.step is None and page.timeline._current_step is None
+    assert first.text() == "저장일마다" and first.toolTip() == "실제 저장된 날짜마다 재생"
 
 
 def test_chart_line_and_points_show_dashboard_trend_hover(own):
@@ -264,17 +284,63 @@ def test_chart_line_and_points_show_dashboard_trend_hover(own):
     assert page.chart._active_tooltip is None
 
 
-def test_playback_buttons_are_centered_above_the_view_tabs(own):
+def test_playback_buttons_share_design_and_float_at_body_bottom(own):
     page = replay_page(own)
     page.show()
     QTest.qWait(50)
     y = lambda w: w.mapTo(page, QPoint()).y()  # noqa: E731
-    assert y(page.play_button) + page.play_button.height() <= y(page.view_tabs)
     assert y(page.play_button) == y(page.pause_button) == y(page.restart_button)
-    row = page.play_button.parentWidget()
-    row_center = row.mapTo(page, row.rect().center()).x()
-    buttons_center = page.pause_button.mapTo(page, page.pause_button.rect().center()).x()
-    assert abs(row_center - buttons_center) <= 1
+    controls = page.playback_controls
+    assert abs(controls.geometry().center().x() - page.rect().center().x()) <= 1
+    assert page.height() - controls.geometry().bottom() == 17
+    assert page.content.body.indexOf(controls) == -1
+    assert page.play_button.styleSheet() == page.pause_button.styleSheet() == page.restart_button.styleSheet()
+
+
+def test_playback_speed_changes_active_timer_without_reloading_or_resetting_frame(own):
+    page = replay_page(own)
+    assert page.playback_speed == 1 and page.timer.interval() == 1000
+    page.play()
+    page.advance()
+    frame, data = page.frame, page.data
+    for speed, delay in ((0.5, 2000), (1, 1000), (2, 500), (4, 250)):
+        page.speed_buttons[speed].click()
+        assert page.playback_speed == speed and page.timer.interval() == delay
+        assert page.timer.isActive() and page.frame is frame and page.data is data
+        assert page.speed_buttons[speed].isChecked()
+    assert not page.set_playback_speed(3)
+    page.pause()
+    assert page.playback_speed == 4 and page.timer.interval() == 250
+
+
+def test_playback_overlay_tracks_viewport_and_hides_on_other_pages_and_drawer(own):
+    window = own(create_window())
+    window.resize(1100, 800)
+    window.navigate("replay")
+    page = window.pages["replay"]
+    until(lambda: not page.busy)
+    controls, viewport = page.playback_controls, window.scroll.viewport()
+    assert controls.parentWidget() is viewport and controls.isVisible()
+    assert abs(controls.geometry().center().x() - viewport.rect().center().x()) <= 1
+    initial = controls.geometry()
+    page.view_tabs.setCurrentIndex(1)
+    QTest.qWait(40)
+    window.scroll.verticalScrollBar().setValue(window.scroll.verticalScrollBar().maximum())
+    QTest.qWait(20)
+    assert controls.geometry() == initial
+    page.open_equipment(next(iter(page.heatmap.tile_buttons)))
+    QTest.qWait(20)
+    assert not controls.isVisible()
+    page.drawer.close_panel(restore_focus=False)
+    until(controls.isVisible)
+    window.navigate("dashboard")
+    assert not controls.isVisible()
+    window.navigate("replay")
+    assert controls.isVisible()
+    window.resize(960, 600)
+    QTest.qWait(40)
+    assert abs(controls.geometry().center().x() - viewport.rect().center().x()) <= 1
+    assert viewport.height() - controls.geometry().bottom() == 17
 
 
 def test_view_tabs_show_one_view_and_share_the_selected_frame(own):
@@ -348,14 +414,19 @@ def test_replay_calendar_month_navigation_does_not_apply_until_day_is_confirmed(
     calls = []
     source = demo_dashboard_source()
     page = replay_page(own, loader=lambda request: calls.append(request) or load_replay(source, request))
-    QTest.mouseClick(page.end.lineEdit(), Qt.MouseButton.LeftButton)
-    calendar = page.end.calendarWidget()
+    page.query_panel.range_button.click()
+    dialog = page.query_panel.range_button.dialog
+    calendar = dialog.calendar
     assert calendar.isVisible()
     calendar.previous_button.click()
+    start = page.data.request.start
     chosen = QDate(2026, 9, 21)
     calendar.setSelectedDate(chosen)
     assert len(calls) == 1 and not page.busy
-    calendar.activated.emit(chosen)
+    calendar.clicked.emit(QDate(start.year, start.month, start.day))
+    calendar.clicked.emit(chosen)
+    assert len(calls) == 1 and not page.busy
+    dialog.apply_button.click()
     until(lambda: not page.busy)
     assert len(calls) == 2 and page.data.request.end == chosen.toPython()
 
@@ -555,12 +626,12 @@ def test_initial_layout_has_no_expanded_chart_blank_and_buttons_keep_figma_heigh
     QTest.qWait(100)
     assert page.chart.height() == 300
     assert page.chart.mapTo(window, QPoint()).y() < 750
-    assert all(b.height() == 34 for b in page.interval_buttons.values())
+    assert all(b.height() == 30 for b in page.interval_buttons.values())
     assert all(b.height() == 40 for b in (page.play_button, page.pause_button, page.restart_button))
     page.select_date(0)
     page.legend_buttons["c3"].click()
     QTest.qWait(20)
-    assert page.interval_buttons[None].height() == 34
+    assert page.interval_buttons[None].height() == 30
 
 
 def test_replay_ticks_do_not_jump_scroll_or_leave_a_detail_from_another_date(own):

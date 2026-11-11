@@ -231,7 +231,15 @@ def test_clicking_the_query_date_text_opens_calendar_until_day_confirmation(own)
 def test_each_screen_date_popup_uses_shared_calendar(own, screen):
     if screen == "replay":
         page = own(ReplayPage(demo_dashboard_source()))
-        fields = (page.start, page.end)
+        field = page.query_panel.range_button
+        field.click()
+        calendar = field.dialog.calendar
+        assert isinstance(calendar, CalendarWidget)
+        assert calendar.year_combo.currentText().endswith("년")
+        assert calendar.month_combo.currentText().endswith("월")
+        assert calendar.isVisible()
+        field.dialog.reject()
+        return
     elif screen == "import":
         page = own(ImportPage(excel=DemoExcel()))
         fields = (page.common_date,)
@@ -262,7 +270,7 @@ def test_replay_reset_aligns_with_adjacent_input_fields(own, width):
     QTest.qWait(50)
     panel = page.query_panel
     y = lambda control: control.mapTo(panel.card, QPoint()).y()  # noqa: E731
-    fields = (page.start, page.end, *panel.combos.values())
+    fields = (panel.range_button, *panel.combos.values())
     same_row = [field for field in fields if abs(y(field) - y(page.reset_button)) < 30]
     assert all(y(field) == y(page.reset_button) for field in same_row)
     if width == 1320:

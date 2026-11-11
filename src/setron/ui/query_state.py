@@ -46,7 +46,7 @@ class SiteOption:
 class FabOption:
     key: str
     label: str
-    site_key: str
+    site_key: str | None  # None은 Memory/Foundry처럼 모든 Site에서 쓰는 공통 생산 영역.
 
 
 @dataclass(frozen=True)
@@ -143,13 +143,13 @@ class QueryCatalog:
         sites = {o.key for o in self.sites}
         fabs = {o.key: o for o in self.fabs}
         for fab in self.fabs:
-            if fab.site_key not in sites:
+            if fab.site_key is not None and fab.site_key not in sites:
                 raise ValueError("Fab의 Site가 등록되지 않았습니다.")
         for line in self.lines:
             if line.site_key not in sites:
                 raise ValueError("Line의 Site가 등록되지 않았습니다.")
             if line.fab_key is not None and (
-                line.fab_key not in fabs or fabs[line.fab_key].site_key != line.site_key
+                line.fab_key not in fabs or fabs[line.fab_key].site_key not in (None, line.site_key)
             ):
                 raise ValueError("Line의 Fab과 Site 관계가 올바르지 않습니다.")
 
@@ -214,7 +214,7 @@ class QueryState:
     def available_fabs(self, selection: QuerySelection | None = None) -> tuple[FabOption, ...]:
         selection = selection or self.draft
         return tuple(o for o in self.catalog.fabs
-                     if matches_selection(selection.site_key, o.site_key))
+                     if o.site_key is None or matches_selection(selection.site_key, o.site_key))
 
     def available_lines(self, selection: QuerySelection | None = None) -> tuple[LineOption, ...]:
         selection = selection or self.draft

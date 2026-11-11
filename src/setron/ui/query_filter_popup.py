@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLineEdit, QScrollAr
 from setron.ui.components import button, label
 from setron.ui.theme import ACCENT_SOFT, ASSETS, LINE, PRIMARY, SECONDARY, SOFT, icon
 from setron.ui.version_filter_dialog import VersionChoice
+from setron.ui.view_controls import bulk_selection_button
 
 
 class QueryFilterPopup(QDialog):
@@ -85,7 +86,7 @@ class QueryFilterPopup(QDialog):
         body.addWidget(scroll, 1)
 
         footer = QHBoxLayout()
-        self.all_button = button("전체 선택")
+        self.all_button = bulk_selection_button("전체 선택")
         self.all_button.clicked.connect(self._toggle_all)
         self.confirm_button = button("선택 완료", primary=True)
         self.confirm_button.clicked.connect(self.accept)

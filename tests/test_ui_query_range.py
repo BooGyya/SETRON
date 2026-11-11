@@ -111,11 +111,25 @@ def test_regular_date_confirmation_and_replay_period_signals_stay_independent(pa
         start, end = replay.start_date, replay.end_date
         replay.enable_date_range(START, END)
         replay.disable_date_range()
-        assert replay.range_button is None and replay.date_edit is None
+        assert replay.range_button.isVisible() and replay.date_edit is None
         assert replay.start_date is start and replay.end_date is end
-        assert start.isVisible() and end.isVisible()
+        assert not start.isVisible() and not end.isVisible()
         start.setDate(QDate(2026, 10, 1))
         assert confirmed.count() == 1 and applied.count() == 0
+        assert replay.range_button.start == date(2026, 10, 1)
+        replay.range_button.click()
+        dialog = replay.range_button.dialog
+        dialog.calendar.clicked.emit(QDate(2026, 10, 3))
+        dialog.calendar.clicked.emit(QDate(2026, 10, 17))
+        assert confirmed.count() == 1
+        dialog.apply_button.click()
+        assert confirmed.count() == 2 and applied.count() == 0
+        assert (start.date().toPython(), end.date().toPython()) == (date(2026, 10, 3), date(2026, 10, 17))
+        # 기존 기간 입력이 허용하던 저장 관측일 범위를 새 표시에서도 유지한다.
+        replay.enable_date_range(date(2099, 1, 1), date(2099, 1, 31))
+        assert replay.range_button.end == end.date().toPython() == date(2099, 1, 31)
+        end.setDate(QDate(2099, 2, 1))
+        assert replay.range_button.end == date(2099, 2, 1)
     finally:
         replay.close()
         replay.deleteLater()

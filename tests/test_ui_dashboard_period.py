@@ -206,3 +206,31 @@ def test_narrow_period_controls_and_series_labels_fit_without_overlap(window):
     assert all(control.isVisible() and interval.segment.rect().contains(control.geometry()) for control in controls)
     assert all(not left.geometry().intersects(right.geometry()) for left, right in combinations(controls, 2))
     assert window.scroll.horizontalScrollBar().maximum() == 0
+
+
+def test_bulk_chart_selection_only_changes_visible_series_without_querying(window, source, monkeypatch):
+    panel, page = window.query_panel, window.pages["dashboard"]
+    panel.set_draft(QuerySelection(as_of=DAY2, site_key="s1"))
+    panel.apply_draft()
+    snapshot = page.snapshot
+    applied = window.query_state.applied
+
+    def unexpected_read(_query):
+        raise AssertionError("범례 전체 선택은 자료를 다시 조회하지 않아야 합니다.")
+
+    monkeypatch.setattr(source, "snapshot", unexpected_read)
+    for mode in (2, 3):
+        page.tabs.setCurrentIndex(mode)
+        QTest.qWait(10)
+        assert page.select_all_button.isVisible() and page.clear_all_button.isVisible()
+        visible = [control for control in page.series_widgets if control.isVisible()]
+        assert visible
+        page.clear_all_button.click()
+        assert all(not control.isChecked() for control in visible)
+        assert "inline-o2" in page.visible_groups
+        page.select_all_button.click()
+        assert all(control.isChecked() for control in visible)
+        assert page.snapshot is snapshot and window.query_state.applied is applied
+
+    page.tabs.setCurrentIndex(1)
+    assert not page.select_all_button.isVisible() and not page.clear_all_button.isVisible()

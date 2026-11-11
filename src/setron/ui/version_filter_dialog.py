@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 from setron.ui.components import button, label
 from setron.ui.query_state import VersionFilter
 from setron.ui.theme import SECONDARY, font, set_widget_font
+from setron.ui.view_controls import bulk_selection_button
 
 
 def choice_caption(value):
@@ -65,7 +66,7 @@ class VersionFilterDialog(QDialog):
         tools = QHBoxLayout()
         tools.setContentsMargins(0, 0, 0, 0)
         tools.setSpacing(8)
-        self.all_button = button("전체 선택")
+        self.all_button = bulk_selection_button("전체 선택")
         self.all_button.setAutoDefault(False)
         self.all_button.setFixedSize(120, 40)
         self.all_button.clicked.connect(self._toggle_all)

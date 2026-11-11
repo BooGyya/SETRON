@@ -183,7 +183,7 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
     for record in records:
         loc = (hpa_locations[record.equipment_id] if record.is_hpa and hpa_locations is not None
                and record.equipment_id in hpa_locations
-               else source.locations[record.equipment_id])
+               else source.location_for(record))
         status = analyzed.get(record.equipment_id)
         families = () if status is None else status.families
         if record.is_hpa:

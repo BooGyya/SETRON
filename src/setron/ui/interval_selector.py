@@ -1,11 +1,12 @@
 """저장일·주·월 간격을 고르는 공통 세그먼트 도구."""
 
 from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtWidgets import QButtonGroup, QGridLayout, QInputDialog, QLayout, QSizePolicy, QWidget
+from PySide6.QtWidgets import QGridLayout, QInputDialog, QLayout, QSizePolicy, QWidget
 
-from setron.ui.components import button, label
+from setron.ui.components import label
 from setron.ui.observation_interval import INTERVALS
-from setron.ui.theme import LINE, PRIMARY, SECONDARY
+from setron.ui.theme import SECONDARY
+from setron.ui.view_controls import SegmentedControl
 
 
 class IntervalSelector(QWidget):
@@ -18,45 +19,26 @@ class IntervalSelector(QWidget):
         self.day_value = 1
         self._current_step = 1 if custom_days else None
         self.day_dialog = None
-        self._segment_margin = 1 if compact else 3
         self.caption_label = label(caption, 14, medium=True, color=SECONDARY)
-        self.segment = QWidget()
-        self.segment.setObjectName("replayInterval")
-        self.segment.setStyleSheet(f"QWidget#replayInterval {{background:#f3f5f8;border:1px solid {LINE};border-radius:10px;}}")
-        self.segment.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
-        self._segments = QGridLayout(self.segment)
-        self._segments.setContentsMargins(*([self._segment_margin] * 4))
-        self._segments.setSpacing(2)
-        self.group = QButtonGroup(self)
-        self.group.setExclusive(True)
+        self.segment = SegmentedControl(compact=compact)
+        self._segment_margin = self.segment.margin
+        self._segments = self.segment.grid
+        self.group = self.segment.group
         self.buttons = {}
         action = "재생" if caption == "재생 간격" else "표시"
         self._action = action
         for step, text in INTERVALS.items():
             if step is None and custom_days:
                 text = "지정일마다"
-            control = button(text)
-            control.setCheckable(True)
+            index = self.segment.addTab(text)
+            control = self.segment.buttons[index]
             control.setChecked(step is None)
             control.setFixedSize(96 if step is None else 72, 30 if compact else 34)
             control.setAccessibleName(f"{caption} {text}")
             control.setToolTip(f"시작 날짜부터 {self.day_value}일 간격으로 {action}" if step is None and custom_days else
                                f"실제 저장된 날짜마다 {action}" if step is None else
                                f"시작 날짜부터 {text} 간격으로 {action} · 저장되지 않은 날짜는 그 전 마지막 관측으로 계산")
-            if compact:
-                control.setStyleSheet(f"QPushButton {{background:transparent;color:{SECONDARY};border:1px solid transparent;"
-                                      "border-radius:8px;padding:0;min-height:28px;max-height:28px;}"
-                                      "QPushButton:disabled {color:#b8bec9;}"
-                                      f"QPushButton:checked {{background:{PRIMARY};color:white;border-color:{PRIMARY};}}"
-                                      f"QPushButton:focus {{border-color:{PRIMARY};}}")
-            else:
-                control.setStyleSheet(f"QPushButton {{background:transparent;color:{SECONDARY};border:0;border-radius:8px;padding:0;"
-                                      "min-height:34px;max-height:34px;}"
-                                      f"QPushButton:checked {{background:white;color:{PRIMARY};border:1px solid {PRIMARY};}}"
-                                      "QPushButton:disabled {color:#b8bec9;}"
-                                      f"QPushButton:focus {{border:2px solid {PRIMARY};}}")
             control.clicked.connect(lambda checked=False, value=step: self._select_step(value))
-            self.group.addButton(control)
             self.buttons[step] = control
         self._body = QGridLayout(self)
         self._body.setContentsMargins(0, 0, 0, 0)
@@ -90,14 +72,29 @@ class IntervalSelector(QWidget):
             self.buttons[selected].setChecked(True)
             self._current_step = step
             if self.custom_days:
+                self.buttons[None].setText("지정일마다")
+                self.buttons[None].setAccessibleName(f"{self.caption_label.text()} 지정일마다")
                 self.buttons[None].setToolTip(f"시작 날짜부터 {self.day_value}일 간격으로 {self._action}")
+
+    def set_saved_days(self):
+        """지정 일수와 구별해서 실제 저장된 날짜를 선택한 상태로 표시한다."""
+        with QSignalBlocker(self):
+            control = self.buttons[None]
+            control.setChecked(True)
+            control.setText("저장일마다")
+            control.setAccessibleName(f"{self.caption_label.text()} 저장일마다")
+            control.setToolTip(f"실제 저장된 날짜마다 {self._action}")
+            self._current_step = None
 
     def _active_controls(self):
         return list(self.buttons.values())
 
     def _select_step(self, step):
         if self.custom_days and step is None:
-            self.set_step(self._current_step)
+            if self._current_step is None:
+                self.set_saved_days()
+            else:
+                self.set_step(self._current_step)
             self._open_day_dialog()
         else:
             self.set_step(step)
@@ -166,3 +163,8 @@ class IntervalSelector(QWidget):
     def resizeEvent(self, event):
         self._reflow()
         super().resizeEvent(event)
+
+    def hideEvent(self, event):
+        if self.day_dialog is not None and self.day_dialog.isVisible():
+            self.day_dialog.reject()
+        super().hideEvent(event)

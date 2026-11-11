@@ -102,6 +102,23 @@ def test_interval_frames_reuse_last_saved_state_and_seed_covers_start_between_sa
     assert early.seed is None and early.frames_for("week")[0].day == date(2026, 5, 22)
 
 
+def test_custom_day_interval_keeps_period_end_and_uses_only_observations_at_or_before_each_day():
+    source = demo_dashboard_source()
+    value = load_replay(source, request(source, start=date(2026, 6, 1), end=date(2026, 8, 31)))
+    frames = value.frames_for(10)
+    assert tuple(frame.day for frame in frames) == interval_days(value.request.start, value.request.end, 10)
+    known = (value.seed, *value.frames)
+    for frame in frames:
+        expected = max((stored for stored in known if stored.snapshot.base_date <= frame.day),
+                       key=lambda stored: stored.snapshot.base_date)
+        assert frame.snapshot is expected.snapshot
+        assert all(record.base_date <= frame.day for record in frame.snapshot.selected_records)
+    assert [frame.day for frame in value.frames_for(2_147_483_647)] == [value.request.start, value.request.end]
+    for invalid in (0, -1, True):
+        with pytest.raises(ValueError):
+            value.frames_for(invalid)
+
+
 def test_group_view_and_completion_count_selected_groups_only():
     """요청 2-2·3-2: 고른 설비군만의 집계와 설비군별 완료 설비 수."""
     source = demo_dashboard_source()

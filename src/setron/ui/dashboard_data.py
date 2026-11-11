@@ -266,9 +266,11 @@ class DashboardSource:
                  families: Mapping[int, FamilyReleases], targets: Mapping[tuple[int, int], int],
                  risks: Mapping[int, RiskStatus], source_label: str,
                  risk_evaluator: Callable[[EquipmentRecord], RiskStatus] | None = None,
-                 risk_rule_state: RiskRuleState | None = None):
+                 risk_rule_state: RiskRuleState | None = None,
+                 locations_by_date: Mapping[tuple[date, int], EquipmentLocation] | None = None):
         self.catalog, self.records = catalog, tuple(records)
         self.locations, self.families = dict(locations), dict(families)
+        self.locations_by_date = dict(locations_by_date or {})
         self.targets, self.risks = dict(targets), dict(risks)
         self.risk_evaluator = risk_evaluator
         self.risk_rule_state = risk_rule_state
@@ -293,10 +295,10 @@ class DashboardSource:
                 raise ValueError("설비의 명시적 위치 매핑이 필요합니다.")
             if any(pm.group_id not in models for pm in record.pms) and not record.is_hpa:
                 raise ValueError("등록되지 않은 모델 매핑입니다.")
-        for loc in self.locations.values():
+        for loc in (*self.locations.values(), *self.locations_by_date.values()):
             if loc.site_key not in sites:
                 raise ValueError("등록되지 않은 Site 매핑입니다.")
-            if loc.fab_key is not None and (loc.fab_key not in fabs or fabs[loc.fab_key].site_key != loc.site_key):
+            if loc.fab_key is not None and (loc.fab_key not in fabs or fabs[loc.fab_key].site_key not in (None, loc.site_key)):
                 raise ValueError("Fab 매핑의 부모 Site가 다릅니다.")
             if loc.line_key is not None and (loc.line_key not in lines or
                 lines[loc.line_key].site_key != loc.site_key or lines[loc.line_key].fab_key != loc.fab_key):
@@ -305,6 +307,10 @@ class DashboardSource:
             raise ValueError("위험 판정 상태 형식이 올바르지 않습니다.")
         self.dates = tuple(sorted({r.base_date for r in self.records}))
         self.analysis_dates = tuple(sorted({r.base_date for r in self.records if not r.is_hpa}))
+
+    def location_for(self, record):
+        """관측일에 저장된 생산 영역·Line을 쓰고, 기존 공급자는 명시적 매핑을 유지한다."""
+        return self.locations_by_date.get((record.base_date, record.equipment_id), self.locations[record.equipment_id])
 
     def current_records(self, as_of: date | None = None) -> tuple[EquipmentRecord, ...]:
         """기준일(포함) 이전 관측 중 설비마다 가장 최근 관측을 돌려준다 (QA Q-01).
@@ -379,7 +385,7 @@ class DashboardSource:
         sites = {option.label: option.key for option in self.catalog.sites}
         records, locations = [], []
         for record in latest:
-            previous = self.locations[record.equipment_id]
+            previous = self.location_for(record)
             site_key = sites.get(record.site, previous.site_key)
             stale_mapping = site_key != previous.site_key or previous.raw_area != record.line
             location = EquipmentLocation(site_key, record.line,
@@ -426,7 +432,7 @@ class DashboardSource:
                 if record.is_hpa or not pms:
                     continue
                 record = replace(record, pms=pms)
-            loc = self.locations[record.equipment_id]
+            loc = self.location_for(record)
             if not _matches_location(selection, loc):
                 continue
             if position is not None and (loc.site_key, loc.raw_area) != position:
@@ -477,7 +483,7 @@ class DashboardSource:
             scoped = DashboardSource(catalog=self.catalog, bindings=tuple(GroupBinding(k, v) for k, v in self.bindings.items()),
                                      records=self.records, locations=self.locations, families=self.families, targets=targets,
                                      risks=self.risks, source_label=self.source_label, risk_evaluator=self.risk_evaluator,
-                                     risk_rule_state=self.risk_rule_state)
+                                     risk_rule_state=self.risk_rule_state, locations_by_date=self.locations_by_date)
             scoped.saved_groups = self.saved_groups
             scoped.carry_forward = self.carry_forward
             return scoped._snapshot(query)
@@ -501,7 +507,7 @@ class DashboardSource:
         selected = self._scope_records(current, query)
         hpa_lookup, hpa_locations = self._hpa_lookup(query)
         latest_location_ids = {equipment_id for equipment_id, _ in hpa_locations}
-        hpa_locations += tuple((r.equipment_id, replace(self.locations[r.equipment_id], raw_area=r.line))
+        hpa_locations += tuple((r.equipment_id, replace(self.location_for(r), raw_area=r.line))
                                for r in selected if r.is_hpa and r.equipment_id not in latest_location_ids)
         total = self._cell("전체", tuple(self.bindings), selected)
         groups = tuple(self._cell(o.label, (o.key,), self._scope_records(current, query, (o.key,)))
@@ -513,7 +519,7 @@ class DashboardSource:
         columns.append(("전체", None))
         site_names = {o.key: o.label for o in self.catalog.sites}
         site_order = {o.key: index for index, o in enumerate(self.catalog.sites)}
-        positions = sorted({(self.locations[r.equipment_id].site_key, self.locations[r.equipment_id].raw_area)
+        positions = sorted({(self.location_for(r).site_key, self.location_for(r).raw_area)
                             for r in selected}, key=lambda p: (site_order[p[0]], p[1] is None, p[1] or ""))
         rows = []
         for position in (*positions, None):

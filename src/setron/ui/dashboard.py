@@ -5,7 +5,7 @@ from html import escape
 from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QBoxLayout, QPushButton, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QScrollArea,
-    QSizePolicy, QTabBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from setron.features.aggregation.service import summarize
@@ -22,17 +22,13 @@ from setron.ui.dashboard_data import (
 from setron.ui.interval_selector import IntervalSelector
 from setron.ui.query_panel import QueryPanel
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
+from setron.ui.view_controls import SegmentedControl, bulk_selection_button
 
 OUTLINE_BUTTON = (f"QPushButton {{background:white;border:1px solid {LINE};border-radius:8px;padding:0 16px;"
                   "min-height:32px;max-height:32px;}"
                   f"QPushButton:hover {{background:{ACCENT_SOFT};border-color:{PRIMARY};}}"
                   f"QPushButton:focus {{border:2px solid {PRIMARY};}}"
                   "QPushButton:disabled {color:#8b95a8;background:#f9fafb;border-color:#e9eef6;}")
-TAB_STYLE = (f"QTabBar::tab {{background:white;color:{INK};border:1px solid {LINE};border-radius:8px;"
-             "min-width:84px;min-height:32px;max-height:32px;padding:0 8px;margin-right:6px;}"
-             f"QTabBar::tab:selected {{background:{PRIMARY};color:white;border-color:{PRIMARY};}}"
-             f"QTabBar::tab:hover:!selected {{background:{ACCENT_SOFT};}}"
-             f"QTabBar:focus {{outline:none;}}")
 
 
 def _outline_button(text, width=118):
@@ -199,6 +195,29 @@ class _DashboardViewControls(QWidget):
         super().resizeEvent(event)
 
 
+class _ChartSeriesControls(QWidget):
+    """전체 선택 도구를 필터의 왼쪽에 두고 좁은 폭에서는 위에 놓는다."""
+
+    def __init__(self, tools, series):
+        super().__init__()
+        self.tools, self.series = tools, series
+        self.body = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(12)
+        self.body.addWidget(tools, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.body.addWidget(series, 1)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+
+    def minimumSizeHint(self):
+        return QSize(0, self.body.minimumSize().height())
+
+    def resizeEvent(self, event):
+        width = self.tools.sizeHint().width() + 12 + 2 * self.series.minimum_width + self.series.spacing
+        direction = QBoxLayout.Direction.LeftToRight if event.size().width() >= width else QBoxLayout.Direction.TopToBottom
+        self.body.setDirection(direction)
+        super().resizeEvent(event)
+
+
 class DashboardKpi(Card):
     """VER4 대시보드 상단의 간결한 지표 카드. 첫 카드(달성률)는 강조색으로 채운다."""
 
@@ -271,14 +290,8 @@ class DashboardPage(QWidget):
         # 대시보드의 집계 보기 전환 카드
         self.content = Card(padding=20)
         self.content.body.setSpacing(12)
-        self.tabs = QTabBar()
+        self.tabs = SegmentedControl()
         self.tabs.setAccessibleName("대시보드 보기 방식")
-        self.tabs.setExpanding(False)
-        self.tabs.setDrawBase(False)
-        self.tabs.setUsesScrollButtons(False)
-        self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
-        set_widget_font(self.tabs, font(14, medium=True))
-        self.tabs.setStyleSheet(TAB_STYLE)
         for title in ("히트맵", "원형 그래프", "막대 그래프", "꺾은선 그래프"):
             self.tabs.addTab(title)
         self.trend_filters = QWidget()
@@ -333,7 +346,18 @@ class DashboardPage(QWidget):
                                   self._toggle_group(key, checked) if control.isEnabled() else None)
             self.series_widgets.append(check)
         self.series_grid = DashboardGrid(self.series_widgets, minimum_width=96, maximum_columns=9, spacing=8)
-        self.content.body.addWidget(self.series_grid)
+        self.series_tools = QWidget()
+        tools_body = QHBoxLayout(self.series_tools)
+        tools_body.setContentsMargins(0, 0, 0, 0)
+        tools_body.setSpacing(8)
+        self.select_all_button = bulk_selection_button("전체 선택")
+        self.clear_all_button = bulk_selection_button("전체 해제")
+        self.select_all_button.clicked.connect(lambda: self._set_all_groups(True))
+        self.clear_all_button.clicked.connect(lambda: self._set_all_groups(False))
+        tools_body.addWidget(self.select_all_button)
+        tools_body.addWidget(self.clear_all_button)
+        self.series_controls = _ChartSeriesControls(self.series_tools, self.series_grid)
+        self.content.body.addWidget(self.series_controls)
         self.matrix_scroll = QScrollArea()
         self.matrix_scroll.setWidgetResizable(True)
         self.matrix_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -566,6 +590,15 @@ class DashboardPage(QWidget):
         if self.tabs.currentIndex() in (2, 3):
             self._render_view()
 
+    def _set_all_groups(self, checked):
+        for group, control in zip(self.source.catalog.groups, self.series_widgets):
+            if control.isEnabled() and control.isVisible():
+                if checked:
+                    self.visible_groups.add(group.key)
+                else:
+                    self.visible_groups.discard(group.key)
+        self._render_view()
+
     def _render_view(self, *_):
         mode = self.tabs.currentIndex()
         data = self.snapshot
@@ -648,6 +681,8 @@ class DashboardPage(QWidget):
                 check.setChecked(present and group.key in self.visible_groups)
         self.series_grid.set_visible_widgets(visible)
         self.series_grid.setVisible(bool(visible))
+        self.series_controls.setVisible(bool(visible))
+        self.series_tools.setEnabled(bool(visible))
 
     def _render_composition_legend(self, data):
         _clear_layout(self.composition_rows)

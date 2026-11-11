@@ -6,21 +6,62 @@ from functools import partial
 from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 from setron.ui.appearance import ui_color
-from setron.ui.components import label
+from setron.ui.components import button, label
 from setron.ui.dashboard_charts import DashboardChart, series_color, trend_tooltip
 from setron.ui.equipment import FlowGrid
 from setron.ui.heatmap import HeatmapGroupCard, HeatmapLegend, TileButton
 from setron.ui.heatmap_data import GoalState
-from setron.ui.theme import SECONDARY
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font, set_widget_font
+from setron.ui.view_controls import SegmentedControl
 
 # 그래프 시리즈 이름. 범례는 숨겨져 있고, 테스트·접근성에서 선의 역할을 구분하는 데 쓴다.
 CURRENT_MARKER = "현재 시점"
 FUTURE_SUFFIX = " · 이후"
 CURRENT_SUFFIX = " · 현재"
 POINT_SUFFIX = " · 시점"  # 실제 시점마다 찍는 점. 누르기·마우스 올리기는 이 점에서 받는다.
+
+
+class ReplayPlaybackControls(QFrame):
+    """보기와 스크롤 위치에 관계없이 공유하는 재생 도구 모음."""
+
+    speed_changed = Signal(float)
+    SPEEDS = (0.5, 1, 2, 4)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("replayPlaybackControls")
+        self.setAccessibleName("리플레이 재생 도구")
+        self.setStyleSheet(f"QFrame#replayPlaybackControls {{background:white;border:1px solid {LINE};border-radius:14px;}}")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 10, 12, 10)
+        row.setSpacing(8)
+        style = (f"QPushButton {{background:white;color:{INK};border:1px solid {LINE};border-radius:8px;"
+                 "padding:0;min-height:38px;max-height:38px;}"
+                 f"QPushButton:hover, QPushButton:focus {{background:#e8ebfc;color:{PRIMARY};border-color:{PRIMARY};}}"
+                 f"QPushButton:pressed {{background:{PRIMARY};color:white;border-color:{PRIMARY};}}"
+                 "QPushButton:disabled {background:#f9fafb;color:#a9b1bf;border-color:#e4e7ed;}")
+        self.play_button, self.pause_button, self.restart_button = button("▶"), button("‖"), button("↺")
+        for control, name in ((self.play_button, "재생"), (self.pause_button, "일시정지"), (self.restart_button, "처음부터")):
+            control.setAccessibleName(name)
+            control.setToolTip(name)
+            set_widget_font(control, font(16, medium=True))
+            control.setStyleSheet(style)
+            control.setFixedSize(44, 40)
+            row.addWidget(control)
+        divider = QFrame()
+        divider.setFixedSize(1, 28)
+        divider.setStyleSheet(f"background:{LINE};border:0;")
+        row.addWidget(divider)
+        self.speed_tabs = SegmentedControl()
+        self.speed_tabs.setAccessibleName("재생 속도")
+        for speed in self.SPEEDS:
+            self.speed_tabs.addTab(f"{speed:g}×")
+        self.speed_tabs.setCurrentIndex(1)
+        self.speed_tabs.currentChanged.connect(lambda index: self.speed_changed.emit(self.SPEEDS[index]))
+        row.addWidget(self.speed_tabs)
 
 
 class ReplayChart(DashboardChart):
