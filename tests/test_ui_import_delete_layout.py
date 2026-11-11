@@ -101,7 +101,8 @@ def test_quick_chips_match_figma_and_list_loads_without_reload_button(own, width
     assert [b.text() for b in page.quick_buttons] == ["가장 최근 기준일", "최근 1개월", "최근 3개월", "직접 선택"]
     assert all(b.height() == 32 and "border-radius:16px" in b.styleSheet() for b in page.quick_buttons)
     assert page.quick_buttons[-1].isChecked()
-    assert not page.reload_button.isVisibleTo(page)  # 11-11: 목록은 화면에 들어올 때 읽는다 (조회 버튼 없음)
+    assert not page.reload_button.isVisibleTo(page)  # 11-11: 목록은 화면에 들어올 때 읽는다
+    assert page.search_button.text() == "검색" and page.search_button.parentWidget() is page.quick_choices  # 직접 선택 오른쪽
     assert not page.reload() and page.catalog is None  # 배치 변경으로 외부 서비스가 연결되지 않는다.
 
 
@@ -117,6 +118,7 @@ def test_quick_date_buttons_use_catalog_ranges_and_manual_edit_changes_selection
     assert page.start.text() == "2026-07-21" and page.quick_buttons[2].isChecked()
     page.start.selectAll()
     QTest.keyClicks(page.start, "20260821")
+    page.search()
     page.select_all.click()
     assert page.quick_buttons[-1].isChecked() and page.plan().start == date(2026, 8, 21)
     page.quick_buttons[-1].click()
@@ -134,6 +136,7 @@ def test_impact_groups_and_backup_tip_match_source_data_without_inventing_counts
     assert page.impact_stats.accessibleName() == page.counts.text()
     page.kind_combo.setCurrentIndex(1)
     page.family_combo.setCurrentIndex(page.family_combo.findData("C4"))
+    page.search()
     page.checks["release"].click()
     assert [v.text() for v in page.stat_values[:2]] == ["1개", "900행"]
     assert not page.stat_boxes[2].isVisibleTo(page)

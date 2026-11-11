@@ -183,3 +183,46 @@ def _c4_family(storage):
         group = next(g for g in repository.rows(tx, "equipment_group") if g["group_name"] == "M-C4")
         families = repository.rows(tx, "version_family", group_id=group["group_id"])
     return next(f["family_id"] for f in families if "파운드리" not in f["family_name"])
+
+
+def test_apply_rows_adds_and_deletes_together_and_undo_rows_reverses_both(storage):
+    service = DataAdminService(storage)
+    service.add_site("QA일괄")
+    batch = service.create_sheet("QA일괄", date(2026, 11, 4))
+    first = service.add_row(batch, {"model_name": "M-C4", "equipment_code": "QA-B1", "version_raw": "v1"}, 2)
+    result = service.apply_rows(batch, [({"line": "L2", "model_name": "M-C4", "equipment_code": "QA-B2",
+                                          "version_raw": "v2"}, 3)], [first])
+    grid = service.sheet_grid(batch)
+    assert result["journal"] and len(result["added"]) == 1 and grid.owners.get("D3") == result["added"][0]
+    assert "D2" not in grid.bindings and grid.deleted.get("D2") == "삭제됨 · QA-B1"
+    with pytest.raises(StorageValidationError):  # 한 트랜잭션: 하나라도 틀리면 아무것도 바꾸지 않는다
+        service.apply_rows(batch, [({"model_name": "없는설비군", "equipment_code": "QA-B3", "version_raw": "v3"}, 4)],
+                           [result["added"][0]])
+    assert service.sheet_grid(batch).owners.get("D3") == result["added"][0]
+    service.undo_rows(batch, result["added"], result["journal"])
+    grid = service.sheet_grid(batch)
+    assert grid.owners.get("D2") and "D3" not in grid.owners and not grid.deleted
+
+
+def test_release_rows_newest_first_reorder_and_delete(storage):
+    service = DataAdminService(storage)
+    family = _c4_family(storage)
+    old = service.add_release_version(family, "v8.0.0.1", date(2026, 1, 1))
+    new = service.add_release_version(family, "v8.0.0.2", date(2026, 2, 1))
+    order = [r.version_raw for r in service.release_rows(family) if r.first_of_version]
+    assert order.index("v8.0.0.2") < order.index("v8.0.0.1")  # 최신 버전이 위
+    a = service.add_release_item(new, "첫째")
+    b = service.add_release_item(new, "둘째")
+    rows = [r for r in service.release_rows(family) if r.release_version_id == new]
+    assert [(r.item_no, r.content) for r in rows] == [("1", "첫째"), ("2", "둘째")]  # 번호는 맨 뒤 다음
+    service.reorder_items(new, [b, a])
+    rows = [r for r in service.release_rows(family) if r.release_version_id == new]
+    assert [(r.item_no, r.content) for r in rows] == [("1", "둘째"), ("2", "첫째")]
+    with pytest.raises(StorageValidationError, match="바뀌었습니다"):
+        service.reorder_items(new, [a])
+    assert service.delete_release_rows(new, a).startswith("v8.0.0.2 · Item")
+    assert [r.content for r in service.release_rows(family) if r.release_version_id == new] == ["둘째"]
+    service.delete_release_rows(old)
+    assert all(r.release_version_id != old for r in service.release_rows(family))
+    kinds = [(e.kind, e.field) for e in service.history()[:4]]
+    assert ("삭제", "릴리즈 버전") in kinds and ("삭제", "릴리즈 Item") in kinds and ("수정", "Item 순서") in kinds

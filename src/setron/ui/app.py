@@ -271,7 +271,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     risk_save = RiskRuleSaveController(management_gateway, context_provider=release_refresh_context, parent=window)
     # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 고치기·더하기·지우기는 바로 DB에 반영하고
     # 같은 관리 저장 흐름(after_management_save)으로 조회 선택지와 화면을 다시 읽는다. 위험 지정은 아이템 매니저에서만 한다 (11-11).
-    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context)
+    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context,
+                                   drawer_parent=window.centralWidget())  # 변경 이력 세부 정보는 대시보드처럼 창 오른쪽에서
     # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 가져온 엑셀 삭제로 옮긴다 (같은 객체·연결 유지).
     data_page.attach_deletion(importer.deletion)
     importer.tabs.setTabVisible(1, False)

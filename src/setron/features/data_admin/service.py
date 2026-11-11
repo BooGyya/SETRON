@@ -376,43 +376,46 @@ class DataAdminService:
         return
         - 삭제 기록의 입력 작업 ID (되돌리기에서 :meth:`restore_rows`로 되살린다).
         """
+        with self.storage.transaction() as tx:
+            return self._delete_rows_in(tx, batch_id, snapshot_ids, undo_add=undo_add)
+
+    def _delete_rows_in(self, tx, batch_id, snapshot_ids, *, undo_add=False):
         ids = tuple(dict.fromkeys(int(i) for i in snapshot_ids))
         require(bool(ids), "지울 행을 골라 주세요.")
-        with self.storage.transaction() as tx:
-            batch = tx.get("import_batch", {"batch_id": batch_id})
-            sheet = (sheet_names(_raw(batch.get("raw_data"))) or ("",))[0]
-            equipment = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")}
-            removed = []
-            for sid in ids:
-                found = self.rows.rows(tx, "equipment_snapshot", snapshot_id=sid)
-                require(bool(found) and found[0].get("batch_id") == batch_id,
-                        "이미 지웠거나 이 현황표의 행이 아닙니다. 목록을 다시 읽어 주세요.")
-                snapshot = found[0]
-                versions = self.rows.rows(tx, "equipment_version", snapshot_id=sid)
-                pms = self.rows.rows(tx, "equipment_pm", snapshot_id=sid)
-                cells = {}
-                for row in (snapshot, *versions, *pms):
-                    for name in (row.get("source_reference") or {}):
-                        if name not in row and name != "equipment_code":
-                            continue  # 현황표에 보이지 않는 출처 칸(예: 설비군 이름)은 삭제 표시에서 뺀다
-                        for location in _locations(row, name):
-                            if location.get("sheet") == sheet and location.get("batch_id", row.get("batch_id")) == batch_id:
-                                cells.update(dict.fromkeys(location.get("cells") or ()))
-                code = equipment.get(snapshot["equipment_id"], "")
-                for pm in pms:
-                    tx.repository.delete(tx.session, "equipment_pm", {"pm_id": pm["pm_id"]})
-                for version in versions:
-                    tx.repository.delete(tx.session, "equipment_version", {"equipment_version_id": version["equipment_version_id"]})
-                tx.repository.delete(tx.session, "equipment_snapshot", {"snapshot_id": sid})
-                removed.append({"snapshot_id": sid, "equipment_code": code, "base_date": _text(snapshot.get("base_date")),
-                                "site": _text(snapshot.get("site")), "line": _text(snapshot.get("line")),
-                                "versions": [_text(v.get("version_raw")) for v in versions],
-                                "cells": sorted(cells, key=_cell_order),
-                                "data": {"snapshot": _plain(snapshot), "versions": [_plain(v) for v in versions],
-                                         "pms": [_plain(p) for p in pms]}})
-            journal = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_delete": {
-                "table": "equipment_snapshot", "batch_id": batch_id, "sheet": sheet, "rows": removed,
-                **({"undo_add": True} if undo_add else {})}}})
+        batch = tx.get("import_batch", {"batch_id": batch_id})
+        sheet = (sheet_names(_raw(batch.get("raw_data"))) or ("",))[0]
+        equipment = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")}
+        removed = []
+        for sid in ids:
+            found = self.rows.rows(tx, "equipment_snapshot", snapshot_id=sid)
+            require(bool(found) and found[0].get("batch_id") == batch_id,
+                    "이미 지웠거나 이 현황표의 행이 아닙니다. 목록을 다시 읽어 주세요.")
+            snapshot = found[0]
+            versions = self.rows.rows(tx, "equipment_version", snapshot_id=sid)
+            pms = self.rows.rows(tx, "equipment_pm", snapshot_id=sid)
+            cells = {}
+            for row in (snapshot, *versions, *pms):
+                for name in (row.get("source_reference") or {}):
+                    if name not in row and name != "equipment_code":
+                        continue  # 현황표에 보이지 않는 출처 칸(예: 설비군 이름)은 삭제 표시에서 뺀다
+                    for location in _locations(row, name):
+                        if location.get("sheet") == sheet and location.get("batch_id", row.get("batch_id")) == batch_id:
+                            cells.update(dict.fromkeys(location.get("cells") or ()))
+            code = equipment.get(snapshot["equipment_id"], "")
+            for pm in pms:
+                tx.repository.delete(tx.session, "equipment_pm", {"pm_id": pm["pm_id"]})
+            for version in versions:
+                tx.repository.delete(tx.session, "equipment_version", {"equipment_version_id": version["equipment_version_id"]})
+            tx.repository.delete(tx.session, "equipment_snapshot", {"snapshot_id": sid})
+            removed.append({"snapshot_id": sid, "equipment_code": code, "base_date": _text(snapshot.get("base_date")),
+                            "site": _text(snapshot.get("site")), "line": _text(snapshot.get("line")),
+                            "versions": [_text(v.get("version_raw")) for v in versions],
+                            "cells": sorted(cells, key=_cell_order),
+                            "data": {"snapshot": _plain(snapshot), "versions": [_plain(v) for v in versions],
+                                     "pms": [_plain(p) for p in pms]}})
+        journal = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_delete": {
+            "table": "equipment_snapshot", "batch_id": batch_id, "sheet": sheet, "rows": removed,
+            **({"undo_add": True} if undo_add else {})}}})
         return journal["batch_id"]
 
     def restore_rows(self, journal_id) -> int:
@@ -421,36 +424,39 @@ class DataAdminService:
         같은 설비의 같은 기준일 관측이 그사이 다시 생겼거나 이미 되살렸으면 거부한다.
         """
         with self.storage.transaction() as tx:
-            removed = _raw(tx.get("import_batch", {"batch_id": journal_id}).get("raw_data")).get("management_delete")
-            require(isinstance(removed, dict), "되살릴 삭제 기록이 아닙니다.")
-            require(all(value.get("batch_id") != journal_id for _, value in self._journals(tx, "management_restore")),
-                    "이미 되살린 삭제입니다.")
-            count = 0
-            for row in removed.get("rows") or ():
-                data = row.get("data") or {}
-                snapshot = dict(data.get("snapshot") or {})
-                require(bool(snapshot), "이 삭제 기록에는 되살릴 자료가 없습니다.")
-                snapshot.pop("snapshot_id", None)
-                snapshot["base_date"] = date.fromisoformat(snapshot["base_date"])
-                require(not self.rows.rows(tx, "equipment_snapshot", equipment_id=snapshot["equipment_id"],
-                                           base_date=snapshot["base_date"]),
-                        f"{row.get('equipment_code')}의 같은 기준일 현황이 이미 있어 되살릴 수 없습니다.")
-                created = tx.insert("equipment_snapshot", snapshot)
-                version_ids = {}
-                for version in data.get("versions") or ():
-                    values = {k: v for k, v in version.items() if k != "equipment_version_id"}
-                    values["snapshot_id"] = created["snapshot_id"]
-                    version_ids[version["equipment_version_id"]] = tx.insert("equipment_version", values)["equipment_version_id"]
-                for pm in data.get("pms") or ():
-                    values = {k: v for k, v in pm.items() if k != "pm_id"}
-                    values["snapshot_id"] = created["snapshot_id"]
-                    values["equipment_version_id"] = version_ids.get(pm.get("equipment_version_id"))
-                    tx.insert("equipment_pm", values)
-                count += 1
-            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_restore": {
-                "batch_id": journal_id, "sheet": removed.get("sheet"), "source": removed.get("batch_id"),
-                "codes": [row.get("equipment_code") for row in removed.get("rows") or ()],
-                "undo_add": bool(removed.get("undo_add"))}}})
+            return self._restore_rows_in(tx, journal_id)
+
+    def _restore_rows_in(self, tx, journal_id):
+        removed = _raw(tx.get("import_batch", {"batch_id": journal_id}).get("raw_data")).get("management_delete")
+        require(isinstance(removed, dict), "되살릴 삭제 기록이 아닙니다.")
+        require(all(value.get("batch_id") != journal_id for _, value in self._journals(tx, "management_restore")),
+                "이미 되살린 삭제입니다.")
+        count = 0
+        for row in removed.get("rows") or ():
+            data = row.get("data") or {}
+            snapshot = dict(data.get("snapshot") or {})
+            require(bool(snapshot), "이 삭제 기록에는 되살릴 자료가 없습니다.")
+            snapshot.pop("snapshot_id", None)
+            snapshot["base_date"] = date.fromisoformat(snapshot["base_date"])
+            require(not self.rows.rows(tx, "equipment_snapshot", equipment_id=snapshot["equipment_id"],
+                                       base_date=snapshot["base_date"]),
+                    f"{row.get('equipment_code')}의 같은 기준일 현황이 이미 있어 되살릴 수 없습니다.")
+            created = tx.insert("equipment_snapshot", snapshot)
+            version_ids = {}
+            for version in data.get("versions") or ():
+                values = {k: v for k, v in version.items() if k != "equipment_version_id"}
+                values["snapshot_id"] = created["snapshot_id"]
+                version_ids[version["equipment_version_id"]] = tx.insert("equipment_version", values)["equipment_version_id"]
+            for pm in data.get("pms") or ():
+                values = {k: v for k, v in pm.items() if k != "pm_id"}
+                values["snapshot_id"] = created["snapshot_id"]
+                values["equipment_version_id"] = version_ids.get(pm.get("equipment_version_id"))
+                tx.insert("equipment_pm", values)
+            count += 1
+        tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_restore": {
+            "batch_id": journal_id, "sheet": removed.get("sheet"), "source": removed.get("batch_id"),
+            "codes": [row.get("equipment_code") for row in removed.get("rows") or ()],
+            "undo_add": bool(removed.get("undo_add"))}}})
         return count
 
     # --- 현황표 행 추가 · 빈 현황표 (11-11) ------------------------------------------------
@@ -500,39 +506,65 @@ class DataAdminService:
         return
         - 새 설비 현황 ID.
         """
+        with self.storage.transaction() as tx:
+            return self._add_row_in(tx, batch_id, values, row_number)
+
+    def _add_row_in(self, tx, batch_id, values, row_number):
         values = {k: (v or "").strip() for k, v in values.items()}
         code, model, version, line = (values.get(k, "") for k in ("equipment_code", "model_name", "version_raw", "line"))
         require(bool(code) and bool(model) and bool(version), "호기 · 설비군 · SW 버전을 모두 적어 주세요.")
-        with self.storage.transaction() as tx:
-            sheet, site, base_date, raw = self._sheet_place(tx, batch_id)
-            columns = {name: letter for letter, name in self._columns(raw, self._bound_fields(tx, batch_id, sheet)).items()}
-            group = next((g for g in self.rows.rows(tx, "equipment_group")
-                          if _text(g["group_name"]).casefold() == model.casefold()), None)
-            require(group is not None, f"설비군 '{model}'이(가) 없습니다. 먼저 등록해 주세요.")
-            found = next((e for e in self.rows.rows(tx, "equipment") if _text(e["equipment_code"]) == code), None)
-            equipment = found or tx.insert("equipment", {"equipment_code": code})
-            require(not self.rows.rows(tx, "equipment_snapshot", equipment_id=equipment["equipment_id"], base_date=base_date),
-                    f"'{code}'은(는) 이 기준일 현황에 이미 있습니다.")
-            family = self._family_for(tx, batch_id, group, line)
-            release = next((r["release_version_id"] for r in self.rows.rows(tx, "release_version", family_id=family)
-                            if _text(r["version_raw"]) == version), None)
-            refs = {name: {"sheet": sheet, "cells": [f"{columns[name]}{row_number}"]} for name in ROW_FIELDS if name in columns}
-            areas = {s.get("production_area") for s in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id)
-                     if _text(s.get("line")) == line and s.get("production_area")}
-            snapshot = tx.insert("equipment_snapshot", {
-                "equipment_id": equipment["equipment_id"], "base_date": base_date, "site": site, "line": line or None,
-                "model_name": _text(group["group_name"]), "group_id": group["group_id"],
-                "production_area": next(iter(areas)) if len(areas) == 1 else None, "batch_id": batch_id,
-                "source_reference": {k: v for k, v in refs.items() if k != "version_raw"}})
-            tx.insert("equipment_version", {"snapshot_id": snapshot["snapshot_id"], "family_id": family, "version_raw": version,
-                                            "release_version_id": release, "batch_id": batch_id,
-                                            "source_reference": {k: v for k, v in refs.items() if k == "version_raw"}})
-            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_create": {
-                "table": "equipment_snapshot", "values": {
-                    "snapshot_id": snapshot["snapshot_id"], "label": code, "batch_id": batch_id, "sheet": sheet,
-                    "cells": sorted((c for ref in refs.values() for c in ref["cells"]), key=_cell_order),
-                    "summary": " · ".join(v for v in (site, line, base_date.isoformat(), _text(group["group_name"]), version) if v)}}}})
+        sheet, site, base_date, raw = self._sheet_place(tx, batch_id)
+        columns = {name: letter for letter, name in self._columns(raw, self._bound_fields(tx, batch_id, sheet)).items()}
+        group = next((g for g in self.rows.rows(tx, "equipment_group")
+                      if _text(g["group_name"]).casefold() == model.casefold()), None)
+        require(group is not None, f"설비군 '{model}'이(가) 없습니다. 먼저 등록해 주세요.")
+        found = next((e for e in self.rows.rows(tx, "equipment") if _text(e["equipment_code"]) == code), None)
+        equipment = found or tx.insert("equipment", {"equipment_code": code})
+        require(not self.rows.rows(tx, "equipment_snapshot", equipment_id=equipment["equipment_id"], base_date=base_date),
+                f"'{code}'은(는) 이 기준일 현황에 이미 있습니다.")
+        family = self._family_for(tx, batch_id, group, line)
+        release = next((r["release_version_id"] for r in self.rows.rows(tx, "release_version", family_id=family)
+                        if _text(r["version_raw"]) == version), None)
+        refs = {name: {"sheet": sheet, "cells": [f"{columns[name]}{row_number}"]} for name in ROW_FIELDS if name in columns}
+        areas = {s.get("production_area") for s in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id)
+                 if _text(s.get("line")) == line and s.get("production_area")}
+        snapshot = tx.insert("equipment_snapshot", {
+            "equipment_id": equipment["equipment_id"], "base_date": base_date, "site": site, "line": line or None,
+            "model_name": _text(group["group_name"]), "group_id": group["group_id"],
+            "production_area": next(iter(areas)) if len(areas) == 1 else None, "batch_id": batch_id,
+            "source_reference": {k: v for k, v in refs.items() if k != "version_raw"}})
+        tx.insert("equipment_version", {"snapshot_id": snapshot["snapshot_id"], "family_id": family, "version_raw": version,
+                                        "release_version_id": release, "batch_id": batch_id,
+                                        "source_reference": {k: v for k, v in refs.items() if k == "version_raw"}})
+        tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_create": {
+            "table": "equipment_snapshot", "values": {
+                "snapshot_id": snapshot["snapshot_id"], "label": code, "batch_id": batch_id, "sheet": sheet,
+                "cells": sorted((c for ref in refs.values() for c in ref["cells"]), key=_cell_order),
+                "summary": " · ".join(v for v in (site, line, base_date.isoformat(), _text(group["group_name"]), version) if v)}}}})
         return snapshot["snapshot_id"]
+
+    def apply_rows(self, batch_id, adds=(), deletes=()) -> dict:
+        """현황표 [저장]의 행 추가 · 삭제를 한 트랜잭션으로 반영한다 (11-11 4차: 행 추가 · 삭제도 저장할 때 한꺼번에).
+
+        param
+        - adds: [(값 dict, 새 행 번호)] — :meth:`add_row`와 같은 값.
+        - deletes: 지울 설비 현황 ID 목록.
+
+        return
+        - {"added": [새 설비 현황 ID], "journal": 삭제 기록 ID 또는 None}
+        """
+        with self.storage.transaction() as tx:
+            journal = self._delete_rows_in(tx, batch_id, deletes) if deletes else None
+            added = [self._add_row_in(tx, batch_id, values, row) for values, row in adds]
+        return {"added": added, "journal": journal}
+
+    def undo_rows(self, batch_id, added=(), journal=None) -> None:
+        """[저장]으로 반영한 행 추가 · 삭제를 한 트랜잭션으로 되돌린다 (추가한 행 지우기 · 지운 행 되살리기)."""
+        with self.storage.transaction() as tx:
+            if added:
+                self._delete_rows_in(tx, batch_id, added, undo_add=True)
+            if journal is not None:
+                self._restore_rows_in(tx, journal)
 
     def _bound_fields(self, tx, batch_id, sheet):
         """열 위치를 정하려고 쓰는 가벼운 연결 정보 (주소 → CellBinding)."""
@@ -597,6 +629,11 @@ class DataAdminService:
 
         content = (content or "").strip()
         require(bool(content), "Item 내용을 적어 주세요.")
+        if item_no is None:  # 번호는 적지 않고 그 버전의 맨 뒤 번호 다음 (순서는 끌어서 바꾼다)
+            with self.storage.transaction() as tx:
+                numbers = [tx.get("item", {"item_id": link["item_id"]}).get("item_no") for link in
+                           self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)]
+            item_no = max((n for n in numbers if isinstance(n, int)), default=0) + 1
         service = ReleaseService(self.storage)
         item = service.register_item(release_version_id, ItemInput(content=content, item_no=item_no))
         item_id = item.current["item_id"]
@@ -609,6 +646,54 @@ class DataAdminService:
                 "table": "item", "values": {"label": content[:40], "item_id": item_id,
                                             "release_version_id": release_version_id}}}})
         return item_id
+
+    def delete_release_rows(self, release_version_id, item_id=None) -> str:
+        """릴리즈노트 줄 삭제. ``item_id``가 있으면 그 버전에서 Item 하나를, 없으면 버전과 그 Item 연결을 모두 지운다.
+
+        다른 버전에 연결되지 않은 Item은 함께 지운다. 위험 지정이 가리키던 버전 · Item은 근거를 남기고 '연결 미확인'으로
+        바꾸며(StorageTransaction.delete_release_*), 설비 SW의 릴리즈 연결은 DB 규칙대로 비워진다.
+
+        return
+        - 지운 줄 이름 (안내용).
+        """
+        with self.storage.transaction() as tx:
+            release = tx.get("release_version", {"release_version_id": release_version_id})
+            links = self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)
+            targets = [link for link in links if item_id is None or link["item_id"] == item_id]
+            require(bool(targets) or item_id is None, "이미 지운 Item입니다. 다시 읽어 주세요.")
+            removed = []
+            for link in targets:
+                item = tx.get("item", {"item_id": link["item_id"]})
+                removed.append({"item_id": link["item_id"], "item_no": item.get("item_no"), "content": _text(item.get("content"))})
+                tx.repository.delete(tx.session, "release_version_item",
+                                     {"release_version_id": release_version_id, "item_id": link["item_id"]})
+                if not self.rows.rows(tx, "release_version_item", item_id=link["item_id"]):
+                    tx.delete_release_item(link["item_id"])
+            if item_id is None:
+                tx.delete_release_version(release_version_id)
+            label = _text(release["version_raw"]) + (f" · Item {removed[0]['content'][:30]}" if item_id is not None else "")
+            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_delete_release": {
+                "release_version_id": release_version_id, "family_id": release["family_id"], "version_raw": _text(release["version_raw"]),
+                "item_id": item_id, "items": removed, "label": label}}})
+        return label
+
+    def reorder_items(self, release_version_id, item_ids) -> None:
+        """버전 안 Item 순서를 바꾼다 (끌어서 놓기). 주어진 순서대로 Item 번호를 1부터 다시 매긴다."""
+        ids = [int(i) for i in item_ids]
+        with self.storage.transaction() as tx:
+            links = {link["item_id"] for link in self.rows.rows(tx, "release_version_item", release_version_id=release_version_id)}
+            require(set(ids) == links and len(ids) == len(links), "Item 목록이 바뀌었습니다. 다시 읽어 주세요.")
+            before = []
+            for number, item_id in enumerate(ids, 1):
+                item = tx.get("item", {"item_id": item_id})
+                before.append((item.get("item_no"), _text(item.get("content"))[:20]))
+                if item.get("item_no") != number:
+                    tx.update("item", {"item_id": item_id}, {"item_no": number})
+            release = tx.get("release_version", {"release_version_id": release_version_id})
+            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_reorder": {
+                "release_version_id": release_version_id, "version_raw": _text(release["version_raw"]),
+                "before": [f"{n}. {c}" for n, c in sorted(before, key=lambda pair: (pair[0] is None, pair[0] or 0))],
+                "after": [f"{i}. {c}" for i, (_, c) in enumerate(before, 1)]}}})
 
     # --- 설비·설비군 -------------------------------------------------------------------
     def equipment_overview(self) -> tuple[tuple[GroupRow, ...], tuple[EquipmentRow, ...]]:
@@ -715,8 +800,8 @@ class DataAdminService:
                         items[link["item_id"]] = tx.get("item", {"item_id": link["item_id"]})
         item_risk = {r["item_id"]: RULE_LABELS.get(_text(r["rule_type"]), "위험") for r in rules if r.get("item_id")}
         version_risk = {r["release_version_id"]: "위험 버전" for r in rules if r.get("release_version_id")}
-        versions.sort(key=lambda v: (v.get("version_order") is None, v.get("version_order") or 0,
-                                     _text(v.get("released_at")), v["release_version_id"]))
+        # 최신 버전이 위로 (11-11 4차: 내림차순). 순서가 없는 버전은 맨 아래.
+        versions.sort(key=lambda v: (v.get("version_order") is None, -(v.get("version_order") or 0), -v["release_version_id"]))
         rows = []
         for version in versions:
             vid = version["release_version_id"]
@@ -819,6 +904,20 @@ class DataAdminService:
                         "추가 취소" if removed.get("undo_add") else "삭제",
                         _workbook(raws.get(source)), removed.get("sheet"),
                         f"{cells[0]}~{cells[-1]}" if len(cells) > 1 else (cells[0] if cells else None)))
+            dropped = raw.get("management_delete_release")
+            if isinstance(dropped, dict):
+                items = dropped.get("items") or []
+                result.append(HistoryEntry(
+                    batch["batch_id"], at, "삭제", "release_version_item" if dropped.get("item_id") else "release_version",
+                    {}, _text(dropped.get("label")), "릴리즈 Item" if dropped.get("item_id") else "릴리즈 버전",
+                    " · ".join(f"{i.get('item_no') or '-'}. {i.get('content', '')[:20]}" for i in items[:3])
+                    + (f" 외 {len(items) - 3}개" if len(items) > 3 else "") or _text(dropped.get("version_raw")), "삭제",
+                    None, None, None))
+            reordered = raw.get("management_reorder")
+            if isinstance(reordered, dict):
+                result.append(HistoryEntry(
+                    batch["batch_id"], at, "수정", "item", {}, _text(reordered.get("version_raw")), "Item 순서",
+                    " / ".join(reordered.get("before") or []), " / ".join(reordered.get("after") or []), None, None, None))
             restored = raw.get("management_restore")
             if isinstance(restored, dict):
                 result.append(HistoryEntry(
