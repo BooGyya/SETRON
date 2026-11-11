@@ -5,7 +5,7 @@ from datetime import timedelta
 from threading import Event, get_ident
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QDate, QPoint, QSignalBlocker, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
@@ -329,6 +329,34 @@ def test_edit_resolves_actual_db_key_off_thread_then_existing_review_editor(conn
     drawer.edit_button.click()
     wait_for(app, lambda: window.route == "management" and not window.pages["management"].busy)
     assert gateway.lookups[0][:2] == (2, DAY) and gateway.lookups[0][2] != get_ident()
+    assert window.pages["management"].record.key == {"equipment_version_id": 432}
+    assert drawer.isHidden() and gateway.saves == []
+
+
+def test_replay_back_closes_drawer_and_edit_uses_carried_observation_date(connected_window, app, source):
+    window, gateway = connected_window
+    replay = window.pages["replay"]
+    observed = DAY - timedelta(days=7)
+    source.records = tuple(replace(row, base_date=observed) if row.equipment_id == 2 else row for row in source.records)
+    with QSignalBlocker(replay.start):
+        replay.start.setDate(QDate.fromString(observed.isoformat(), "yyyy-MM-dd"))
+    assert window.navigate("replay")
+    wait_for(app, lambda: not replay.busy and replay.data is not None)
+    assert replay.frame.day == DAY
+    replay.view_tabs.setCurrentIndex(1)
+    tile = replay.heatmap.tile_buttons[2]
+    tile.click()
+    drawer = replay.drawer
+    assert drawer.is_open and drawer.edit_button.isEnabled()
+    assert drawer.request.base_date == DAY and drawer.request.observation_date == observed
+    window.back_shortcut.trigger()
+    assert window.route == "replay" and not drawer.is_open
+    wait_for(app, drawer.isHidden)
+
+    tile.click()
+    drawer.edit_button.click()
+    wait_for(app, lambda: window.route == "management" and not window.pages["management"].busy)
+    assert gateway.lookups[0][:2] == (2, observed) and gateway.lookups[0][2] != get_ident()
     assert window.pages["management"].record.key == {"equipment_version_id": 432}
     assert drawer.isHidden() and gateway.saves == []
 

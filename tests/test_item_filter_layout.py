@@ -4,7 +4,9 @@ from dataclasses import replace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint
+from PySide6.QtGui import QFont
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QStyleOptionViewItem
 
 from setron.ui.app import create_window
 from setron.ui.version_data import ModelFamily
@@ -50,13 +52,13 @@ def test_family_dropdown_replaces_chips_and_selects_family(window, width):
     window.resize(width, 900)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    assert page.family_title.text() == "SW 계열" and page.family_combo.accessibleName() == "SW 계열"
+    assert not hasattr(page, "family_title") and page.family_combo.accessibleName() == "SW 계열"
     assert page.family_combo.count() == 15 and page.family_combo.width() >= 220
     page.family_combo.setCurrentIndex(page.family_combo.findData(22))
     assert page.family_id == 22 and page.family_combo.currentData() == 22
     page.render_families()
     assert page.family_id == 22 and page.family_combo.currentData() == 22
-    assert page.count.text() == "O2 (Foundry)"  # 자료 없는 계열은 '전체 0건' 없이 표시 이름만
+    assert page.count.text() == "검색 결과 0건"
 
 
 @pytest.mark.parametrize("width", [1280, 1920])
@@ -67,15 +69,43 @@ def test_toolbar_is_one_row_with_search_on_the_right(window, width):
     assert window.scroll.horizontalScrollBar().maximum() == 0
     bar = page.search
     assert bar.width() == 280 and bar.isVisible()
+    assert page.family_combo.size() == bar.size()
     assert page.ai_search in bar.actions() and not page.ai_search.icon().isNull()
     origin = lambda w: w.mapTo(page.results_card, QPoint())
     mid = lambda w: origin(w).y() + w.height() // 2
     assert abs(mid(page.family_combo) - mid(bar)) <= 4 and abs(mid(page.registered_only) - mid(bar)) <= 4
-    assert origin(page.family_combo).x() < origin(page.registered_only).x() < origin(bar).x()
-    assert origin(page.count).y() > origin(bar).y() + bar.height()  # 결과 제목은 툴바 아래
+    assert origin(page.count).x() < origin(page.registered_only).x() < origin(page.family_combo).x() < origin(bar).x()
+    assert abs(mid(page.count) - mid(bar)) <= 4
+    assert origin(page.count).x() == origin(page.toolbar).x()
+    assert origin(bar).x() + bar.width() == origin(page.toolbar).x() + page.toolbar.width()
+    assert origin(bar).x() - origin(page.family_combo).x() - page.family_combo.width() == 12
+    assert origin(page.family_combo).x() - origin(page.registered_only).x() - page.registered_only.width() == 12
     assert page.registered_only.text() == "위험 등록된 Item"
     assert page.registered_only.styleSheet() == window.pages["heatmap"].below_filter.styleSheet()
     assert page.manager.isHidden()
+
+
+def test_dropdown_and_popup_typography_matches_search(window):
+    page = window.pages["items"]
+    expected = page.search.font()
+    page.result_buttons[1].click()
+    for combo in (page.family_combo, page.site_filter, page.state_filter, page.distribution_view):
+        window.scroll.ensureWidgetVisible(combo)
+        combo.showPopup()
+        QTest.qWait(20)
+        assert combo.view().window().isVisible()
+        for widget in (combo, combo.view()):
+            actual = widget.font()
+            assert actual.family() == expected.family() and actual.pixelSize() == expected.pixelSize()
+            assert actual.weight() == expected.weight() == QFont.Weight.Normal
+            assert widget.property("setronBaseFont").pixelSize() == 14
+        for row in range(combo.count()):
+            option = QStyleOptionViewItem()
+            option.initFrom(combo.view())
+            combo.itemDelegate().initStyleOption(option, combo.model().index(row, combo.modelColumn()))
+            assert option.font.family() == expected.family() and option.font.pixelSize() == expected.pixelSize()
+            assert option.font.weight() == QFont.Weight.Normal
+        combo.hidePopup()
 
 
 def test_toolbar_wraps_search_below_on_narrow_width_without_clipping(app, data):
@@ -86,10 +116,12 @@ def test_toolbar_wraps_search_below_on_narrow_width_without_clipping(app, data):
         QTest.qWait(60)
         assert window.scroll.horizontalScrollBar().maximum() == 0
         bar = page.search
+        assert page.family_combo.size() == bar.size()
         assert page.toolbar.stacked
         assert bar.mapTo(page.toolbar, QPoint()).y() >= page.family_combo.mapTo(page.toolbar, QPoint()).y() + page.family_combo.height()
         for widget in (page.family_combo, page.registered_only, bar):
             assert page.toolbar.rect().contains(widget.geometry().translated(widget.parentWidget().mapTo(page.toolbar, QPoint())))
+        assert bar.mapTo(page.toolbar, QPoint()).x() + bar.width() == page.toolbar.width()
     finally:
         _close(window)
 
@@ -107,7 +139,7 @@ def test_dropdown_popup_keeps_long_names_and_scrolls_with_many_families(app, dat
         assert combo.view().window().isVisible()
         combo.hidePopup()
         combo.setCurrentIndex(29)
-        assert page.family_id == combo.currentData() and page.count.text() == "C29 통합UI (Foundry)"
+        assert page.family_id == combo.currentData() and page.count.text() == "검색 결과 0건"
     finally:
         _close(window)
 
@@ -136,7 +168,7 @@ def test_empty_and_reloaded_family_dropdown_keep_label_and_single_message(window
     original = page.data
     page.data = None
     page.render_families()
-    assert page.family_title.text() == "SW 계열"
+    assert page.family_combo.accessibleName() == "SW 계열"
     assert page.family_combo.currentText() == "조회 결과 미확인" and page.family_combo.count() == 1
     assert not page.family_combo.isEnabled()
     page.data = original

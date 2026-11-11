@@ -283,8 +283,8 @@ class HeatmapPage(QWidget):
         filter_column = QVBoxLayout(self.filter_bar)
         filter_column.setContentsMargins(0, 0, 0, 0)
         filter_column.setSpacing(2)
-        self.risk_button = filter_checkbox("위험 후보만")
-        self.below_filter = filter_checkbox("목표 미달만")
+        self.risk_button = filter_checkbox("위험 후보")
+        self.below_filter = filter_checkbox("목표 미달")
         for checkbox in (self.risk_button, self.below_filter):
             checkbox.setEnabled(False)
             checkbox.toggled.connect(self._render_tiles)
@@ -505,13 +505,13 @@ class HeatmapPage(QWidget):
         filtered = tuple(t for t in risk_filtered if self._matches(t, text))
         self.visible_ids = tuple(t.equipment_id for t in filtered)
         self.view_count.setText("표시할 조회 결과가 없습니다." if self.snapshot is None else
-                                f"{'목표 미달' if below_only else '전체'}{' · 위험 후보만' if risk_only else ''}{' · 검색 적용' if text else ''}"
+                                f"{'목표 미달' if below_only else '전체'}{' · 위험 후보' if risk_only else ''}{' · 검색 적용' if text else ''}"
                                 f" · 표시 {len(filtered)}대 / 선택 범위 {len(self.tiles)}대 · 요약은 선택 범위 전체 기준")
         self.message.setVisible(not filtered)
         if self.snapshot is not None:
             self.message.setText("조건에 맞는 설비가 없습니다. 날짜나 필터를 다시 선택해 주세요." if not self.tiles else
                                  "목표 미달 설비가 없습니다." if not scoped else
-                                 "위험 후보가 없습니다. '위험 후보만'을 해제해 주세요." if not risk_filtered else
+                                 "위험 후보가 없습니다. '위험 후보'를 해제해 주세요." if not risk_filtered else
                                  f"'{self.search.text().strip()}' 검색 결과가 없습니다. 검색어를 지우면 전체 설비가 보입니다.")
         self.list_table.setVisible(list_mode and bool(filtered))
         self.tile_host.setVisible(not list_mode)

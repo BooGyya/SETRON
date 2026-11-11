@@ -1,5 +1,6 @@
 """대시보드 읽기 어댑터. 확정된 위치/설비군 매핑과 기존 BE 집계를 사용한다. DB 접근 없음."""
 
+from bisect import bisect_right
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import date
@@ -13,6 +14,7 @@ from setron.features.targets.groups import with_saved_groups
 from setron.features.version.groups import VersionGroups
 from setron.features.version.schemas import CompareReason, CompareStatus
 from setron.features.version.service import FamilyReleases
+from setron.ui.observation_interval import INTERVALS, interval_days
 from setron.ui.query_state import AppliedQuery, QueryCatalog, TargetN, matches_selection, selection_keys
 from setron.ui.version_filter import matches_versions
 
@@ -90,6 +92,7 @@ class TrendPoint:
     day: date
     summary: Summary
     missing_equipment: int
+    source_day: date | None = None  # 간격 시점의 집계가 나온 실제 관측일. 원래 관측점은 None.
 
     @property
     def denominator_equipment_ids(self) -> tuple[int, ...]:
@@ -134,6 +137,32 @@ class DashboardSnapshot:
         """드릴다운에서도 조회 당시와 같은 모델·계열별 기준으로 비교한다."""
         single = {(target.model_id, target.family_id): target.release_id for target in self.target_values}
         return with_saved_groups(single, dict(self.saved_groups))
+
+
+def trend_window(snapshot: DashboardSnapshot, start: date, end: date, step=None) -> DashboardSnapshot:
+    """기준 설비 집합과 집계는 유지하고 추이의 표시 기간·시점만 선택한다.
+
+    저장일마다는 실제 관측점만 남긴다. 간격 시점은 그 시점 이전 마지막 관측을 사용하며,
+    마지막 관측의 달성률이 계산 불가이면 그대로 둔다. 이전의 계산 가능한 관측으로 건너뛰지 않는다.
+    """
+    if type(start) is not date or type(end) is not date or start > end:
+        raise ValueError("시작 날짜와 종료 날짜를 확인해 주세요.")
+    if step is not None and (not isinstance(step, str) or step not in INTERVALS):
+        raise ValueError("관측 간격을 확인해 주세요.")
+    days = tuple(point.day for point in snapshot.observations)
+    if step is None:
+        selected = tuple((day, index) for index, day in enumerate(days) if start <= day <= end)
+    else:
+        selected = tuple((day, index) for day in interval_days(start, end, step)
+                         if (index := bisect_right(days, day) - 1) >= 0)
+
+    def points_for(points):
+        return tuple(points[index] if step is None else
+                     replace(points[index], day=day, source_day=points[index].source_day or points[index].day)
+                     for day, index in selected)
+
+    return replace(snapshot, observations=points_for(snapshot.observations),
+                   trends=tuple(replace(group, points=points_for(group.points)) for group in snapshot.trends))
 
 
 @dataclass(frozen=True)

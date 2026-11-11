@@ -4,12 +4,14 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCharts import QLineSeries, QScatterSeries
 from PySide6.QtCore import QPointF
 from PySide6.QtTest import QTest
 import pytest
 
 from setron.ui import dashboard_charts
 from setron.ui.dashboard_charts import DashboardChart, bar_plot, equipment_count_tooltip, equipment_tooltip
+from setron.ui.query_state import QuerySelection
 from test_ui_dashboard import DAY1, DAY2, app, applied, source
 
 
@@ -86,29 +88,32 @@ def test_composition_shows_aggregates_and_bar_uses_clicked_cohort(chart_tooltip,
 def test_native_line_segment_hover_uses_nearest_days_summary(chart_tooltip, source):
     view, tooltip = chart_tooltip
     data = source.snapshot(applied(source))
-    view.trend(data, {"o3"})
+    view.trend(data, {"o2"})
     QTest.qWait(30)
     chart = view.chart()
     series = chart.series()[0]
-    assert len(series.points()) == 2
+    assert isinstance(series, QLineSeries)
+    assert [(point.x(), point.y()) for point in series.points()] == [(0, 0), (1, 50)]
 
     def move(value):
         position = chart.mapToScene(chart.mapToPosition(value, series))
         QTest.mouseMove(view.viewport(), view.mapFromScene(position))
         QTest.qWait(10)
 
-    move(QPointF(0.25, 100))
-    assert tooltip.value == f"<qt>{DAY1:%Y.%m.%d} · O3<br>목표 달성 1 / 1건 (100.0%)<br>설비 1대</qt>"
-    move(QPointF(0.75, 100))
-    assert tooltip.value == f"<qt>{DAY2:%Y.%m.%d} · O3<br>목표 달성 1 / 1건 (100.0%)<br>설비 1대</qt>"
-    move(QPointF(0.75, 25))
+    move(QPointF(0.25, 12.5))
+    assert tooltip.value == f"<qt>{DAY1:%Y.%m.%d} · O2<br>목표 달성 0 / 1건 (0.0%)<br>미관측 1대<br>설비 1대</qt>"
+    move(QPointF(0.75, 37.5))
+    assert tooltip.value == f"<qt>{DAY2:%Y.%m.%d} · O2<br>목표 달성 1 / 2건 (50.0%)<br>설비 2대</qt>"
+    move(QPointF(0.75, 90))
     assert tooltip.value == ""
 
 
 def test_scatter_hover_counts_only_the_determined_equipment(chart_tooltip, source):
     view, tooltip = chart_tooltip
-    view.trend(source.snapshot(applied(source)), {"o2"})
-    series = view.chart().series()[0]
+    data = source.snapshot(applied(source, QuerySelection(as_of=DAY1)))
+    view.trend(data, {"o2"})
+    series, = view.chart().series()
+    assert isinstance(series, QScatterSeries)
     assert len(series.points()) == 1
     series.hovered.emit(series.points()[0], True)
-    assert tooltip.value == f"<qt>{DAY2:%Y.%m.%d} · O2<br>목표 달성 1 / 2건 (50.0%)<br>설비 2대</qt>"
+    assert tooltip.value == f"<qt>{DAY1:%Y.%m.%d} · O2<br>목표 달성 0 / 1건 (0.0%)<br>설비 1대</qt>"

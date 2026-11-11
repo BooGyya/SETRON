@@ -88,13 +88,14 @@ def test_observation_state_is_explicit_not_label(app, connected):
                            observations_connected=connected)
     page = ItemsPage(lambda: data)
     try:
-        page.open_row(0)
-        text = page.observation_note.text()
-        assert "설명 미제공" in text
+        assert page.open_item_id(1)
+        assert page.title.text() == "내용" and not hasattr(page, "observation_note")
+        text = page.no_data_reason.text()
+        assert not page.no_data_notice.isHidden() and page.summary.isHidden()
         if connected:
-            assert "2026-11-02" in text and "0대" in text and "미연결" not in text
+            assert "연결된 릴리즈가 없어" in text and "설비 관측 자료가 없어" not in text
         else:
-            assert "미연결" in text and "관측 기준일" not in text
+            assert "설비 관측 자료가 없어" in text
     finally:
         page.close()
 

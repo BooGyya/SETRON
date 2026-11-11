@@ -889,7 +889,6 @@ class HistoryPanel(_Panel):
         _fill(self.table, [(_text(e.at)[:16].replace("T", " ") if e.at else "", e.place, e.target, e.field, e.before, e.after)
                            for e in rows], list(range(len(rows))))
         self._shown = rows
-        self.page.update_history_badge(len(self.entries))
 
     def _render_detail(self):
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
@@ -1004,9 +1003,6 @@ class DataManagementPage(QWidget):
         self.delete_layout.removeWidget(self.delete_placeholder)
         self.delete_placeholder.deleteLater()
         self.delete_layout.addWidget(widget)
-
-    def update_history_badge(self, count):
-        self.tabs.setTabText(2, f"변경 이력  {count}" if count else "변경 이력")
 
     def invalidate(self, *_):
         """다른 화면에서 저장·삭제·가져오기를 하면 다음에 볼 때 다시 읽는다."""

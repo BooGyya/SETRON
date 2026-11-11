@@ -173,7 +173,7 @@ def test_candidate_filter_empty_message_does_not_hide_unknown_as_safe(window):
     page = window.pages["heatmap"]
     page.risk_button.click()
     assert not page.risk_button.isEnabled()
-    assert page.risk_button.text() == "위험 후보만"
+    assert page.risk_button.text() == "위험 후보"
     assert page.risk_button.toolTip() == "위험 미확인 1대"
     assert tuple(page.tile_buttons) == (3, 4)
 
@@ -195,7 +195,7 @@ def test_risk_filter_after_requery(window, source, state, risks, disabled_reason
     source.risks = risks
     window.query_panel.apply_draft()
     assert page.snapshot.risk_rule_state is state
-    assert page.risk_button.text() == "위험 후보만"
+    assert page.risk_button.text() == "위험 후보"
     assert page.risk_button.toolTip() == page.risk_button.accessibleDescription() == disabled_reason
     assert not page.risk_button.isEnabled() and not page.risk_button.isChecked()
     assert set(page.visible_ids) == {1, 2, 3, 4, 5}
@@ -233,7 +233,9 @@ def test_tiles_show_risk_border_and_tooltip_with_matching_filter_checks(window):
     assert page.tile_buttons[2].data.risk is RiskStatus.RISK and page.tile_buttons[3].data.risk is RiskStatus.UNKNOWN
     assert "위험 후보" in page.tile_buttons[2].toolTip()
     assert page.tile_buttons[2].data.goal is GoalState.MET
-    assert page.risk_button.text() == "위험 후보만" and page.risk_button.icon().isNull()
+    assert page.risk_button.text() == page.risk_button.accessibleName() == "위험 후보"
+    assert page.below_filter.text() == page.below_filter.accessibleName() == "목표 미달"
+    assert page.risk_button.icon().isNull()
     assert page.risk_button.styleSheet() == page.below_filter.styleSheet()
     assert "checkbox-tick.svg" in page.risk_button.styleSheet()
     tile = page.tile_buttons[1]

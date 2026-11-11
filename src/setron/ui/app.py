@@ -207,6 +207,19 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         lambda catalog: window.query_panel.goal_button.setEnabled(catalog.is_view_of(source.catalog))
     )
     dashboard = DashboardPage(window.query_state, source)
+    window.query_panel.reset_button.clicked.connect(dashboard.reset_trend_period)
+
+    def sync_dashboard_date_mode(*_):
+        if window.route == "dashboard" and dashboard.tabs.currentIndex() == 3 and dashboard.snapshot is not None:
+            window.query_panel.enable_date_range(dashboard.trend_start.date().toPython(),
+                                                dashboard.trend_end.date().toPython())
+        else:
+            window.query_panel.disable_date_range()
+
+    window.query_panel.date_range_selected.connect(dashboard.set_trend_period)
+    dashboard.trend_period_changed.connect(sync_dashboard_date_mode)
+    dashboard.tabs.currentChanged.connect(sync_dashboard_date_mode)
+    window.page_changed.connect(sync_dashboard_date_mode)
     heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
     equipment = EquipmentPage(window.query_state, source)
     custom_versions = version_loader is not None
@@ -257,7 +270,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         applied = window.query_state.applied
         return (applied.targets if applied is not None and applied.targets is not None else
                 initial_targets(source))
-    replay = ReplayPage(source, targets_provider=replay_targets, drawer_parent=window.centralWidget())
+    replay = ReplayPage(source, targets_provider=replay_targets, drawer_parent=window.centralWidget(),
+                        edit_available=callable(getattr(management_gateway, "equipment_versions", None)))
     replay.query_panel.goal_button.setEnabled(True)
     replay.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
     replay.query_panel.goal_button.clicked.connect(open_groups)
@@ -426,8 +440,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
     list_drawer = window.equipment_list_drawer = EquipmentListDrawer(window.centralWidget())
     window.equipment_edit_request = ReadRequest(window)
-    drawer.closed.connect(window.equipment_edit_request.cancel)
-    list_drawer.closed.connect(window.equipment_edit_request.cancel)
 
     def close_drawer(*_):
         drawer.close_panel(restore_focus=False)
@@ -443,11 +455,12 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.destroyed.connect(window.equipment_edit_request.cancel)
 
     def active_detail_drawer():
-        panel = {"dashboard": list_drawer, "heatmap": drawer}.get(window.route)
-        if (panel is not None and panel.is_open and panel.request is not None
-                and window.query_state.is_current(panel.request.query)):
-            return panel
-        return None
+        panel = {"dashboard": list_drawer, "heatmap": drawer, "replay": replay.drawer}.get(window.route)
+        if panel is None or not panel.is_open or panel.request is None:
+            return None
+        current = (replay.is_current_equipment_selection(panel.request) if window.route == "replay"
+                   else window.query_state.is_current(panel.request.query))
+        return panel if current else None
 
     def open_installed_version_editor(panel, table, key):
         if (panel is not active_detail_drawer() or window.management_saving
@@ -480,7 +493,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         else:
             panel.choose_edit_record(choices)
 
-    for panel in (drawer, list_drawer):
+    for panel in (drawer, list_drawer, replay.drawer):
+        panel.closed.connect(window.equipment_edit_request.cancel)
         panel.edit_requested.connect(lambda panel=panel: request_installed_version_editor(panel))
         panel.record_requested.connect(lambda table, key, panel=panel: open_installed_version_editor(panel, table, key))
     window.equipment_edit_request.completed.connect(installed_version_choices)
@@ -495,6 +509,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             action = equipment.return_to_list if list_drawer.request is not None else list_drawer.close_panel
         elif window.route == "heatmap" and drawer.is_open:
             action = drawer.close_panel
+        elif window.route == "replay" and replay.drawer.is_open:
+            action = replay.drawer.close_panel
         elif window.route == "equipment" and equipment.mode == "detail":
             action = equipment.back_button.click
         elif window.route == "items" and items.mode == "detail":
@@ -502,7 +518,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         elif window.route == "versions" and versions.active_tab == 1 and versions.mode == "detail":
             action = versions.back_to_list
         # 아이템 매니저는 헤더의 ← 버튼을 쓰지 않는다(상세는 같은 행을 다시 눌러 닫는다). 뒤로가기 단축키는 유지한다.
-        window.set_page_back(action, subpage=action is not None and window.route not in ("dashboard", "heatmap", "items"))
+        window.set_page_back(action, subpage=action is not None and window.route not in ("dashboard", "heatmap", "replay", "items"))
 
     def sync_mode(*_):
         sync_back()
@@ -805,6 +821,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     list_drawer.back_requested.connect(equipment.return_to_list)
     list_drawer.closed.connect(sync_back)
     drawer.closed.connect(sync_back)
+    replay.drawer.closed.connect(sync_back)
+    replay.drawer_opened.connect(sync_back)
     equipment.back_requested.connect(go_back)
     equipment.mode_changed.connect(equipment_mode_changed)
     equipment.mode_changed.connect(sync_mode)

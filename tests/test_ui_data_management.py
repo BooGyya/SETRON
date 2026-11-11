@@ -81,7 +81,8 @@ def test_three_fixed_tabs_and_status_subtabs_load_lazily(own):
     assert gateway.calls == ["status_sheets", "sheet_grid"]  # 처음에는 보이는 현황표만 읽는다
     page.select_tab(2)
     settle(page)
-    assert "history" in gateway.calls and page.tabs.tabText(2) == "변경 이력  2"
+    assert "history" in gateway.calls and len(page.history_panel.entries) == 2
+    assert page.tabs.tabText(2) == "변경 이력"
 
 
 def test_sheet_grid_keeps_excel_layout_and_only_bound_cells_are_editable(own):

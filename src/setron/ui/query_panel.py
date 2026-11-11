@@ -57,13 +57,17 @@ class _WrapRow(QWidget):
         self.columns = columns
         self.updateGeometry()
 
-    def resizeEvent(self, event):
-        columns = max(1, min(len(self.widgets), (event.size().width() + 12) // (self.minimum_width + 12)))
+    def reflow(self, width=None):
+        width = self.width() if width is None else width
+        columns = max(1, min(len(self.widgets), (width + 12) // (self.minimum_width + 12)))
         if self.fields:
             needed = sum(max(w.minimumWidth(), self.minimum_width) if w.maximumWidth() >= 10000 else w.maximumWidth()
                          for w in self.widgets) + 12 * (len(self.widgets) - 1)
-            columns = len(self.widgets) if event.size().width() >= needed else min(3, columns)
+            columns = len(self.widgets) if width >= needed else min(3, columns)
         self._arrange(columns)
+
+    def resizeEvent(self, event):
+        self.reflow(event.size().width())
         super().resizeEvent(event)
 
 
@@ -109,6 +113,7 @@ class QueryPanel(QWidget):
     draft_changed = Signal(object)  # QuerySelection
     catalog_changed = Signal(object)  # QueryCatalog
     targets_changed = Signal(object)  # 목표 초안 변경. 조회 적용과 별개
+    date_range_selected = Signal(object, object)  # start, end: 조회 적용 전에 기간 메타데이터를 전달한다.
 
     def __init__(self, state: QueryState, *, period=False, show_group=True, show_search=True):
         super().__init__()
@@ -117,6 +122,8 @@ class QueryPanel(QWidget):
         self.combos: dict[str, _FilterButton] = {}
         self.filter_popup = None
         self.date_edit = None
+        self.original_date_field = None
+        self.range_button = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(12)
@@ -156,6 +163,7 @@ class QueryPanel(QWidget):
                 control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
         else:
             date_field, self.date_edit = self._date_field("기준 날짜")
+            self.original_date_field = date_field
             self.date_edit.setObjectName("query_as_of")
             self.date_edit.setToolTip("클릭하여 날짜를 선택합니다. 선택한 날짜까지 저장된 관측 중 가장 최근 자료로 계산합니다.")
             self.date_edit.dateChanged.connect(self._choose_date)
@@ -316,6 +324,39 @@ class QueryPanel(QWidget):
     def _confirm_period_date(self, control, day):
         with QSignalBlocker(control):
             control.setDate(day)
+        self.confirmed.emit()
+
+    def enable_date_range(self, start, end):
+        if self.date_edit is None:
+            return
+        if self.range_button is None:
+            from setron.ui.date_range import DateRangeButton
+
+            self.range_button = DateRangeButton(self.original_date_field)
+            self.range_button.setAccessibleName("기준 날짜 기간")
+            self.range_button.range_changed.connect(self._confirm_date_range)
+            self.original_date_field.layout().addWidget(self.range_button)
+        self.range_button.set_range(start, end, maximum=date.today())
+        self.date_edit.hide()
+        self.range_button.show()
+        self.original_date_field.layout().itemAt(0).widget().setBuddy(self.range_button)
+        self.original_date_field.setMinimumWidth(240)
+        self.fields_row.reflow()
+
+    def disable_date_range(self):
+        if self.range_button is None:
+            return
+        if self.range_button.dialog is not None:
+            self.range_button.dialog.reject()
+        self.range_button.hide()
+        self.date_edit.show()
+        self.original_date_field.layout().itemAt(0).widget().setBuddy(self.date_edit)
+        self.original_date_field.setMinimumWidth(128)
+        self.fields_row.reflow()
+
+    def _confirm_date_range(self, start, end):
+        self.date_range_selected.emit(start, end)
+        self.set_as_of(end)
         self.confirmed.emit()
 
     def _choose_date(self, value):

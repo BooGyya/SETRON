@@ -99,8 +99,8 @@ def test_query_candidates_and_rule_drilldown(app, data):
     assert page.detail_view.isHidden()
     page.result_buttons[1].click()
     assert page.result_rows.indexOf(page.detail_view) + 1 == page.result_rows.indexOf(page.result_buttons[2])
-    assert "EQ-2" in page.inline_equipment.text() and "미적용으로 기록" in page.inline_equipment.text()
-    assert "v99" in page.content.text() and page.equipment_model.ids == (2,)
+    assert page.title.text() == data.versions.items[0].item.content
+    assert page.equipment_model.ids == (2,) and "미적용 (저장된 버전별 Item 상태)" in page.equipment_model.rows[0][6]
     page.site_filter.setCurrentIndex(1)
     page.refresh_after_save(preserve_detail=True)
     assert page.selected_id == 1 and page.site_filter.currentData() == "Site A"
@@ -118,13 +118,12 @@ def test_query_candidates_and_rule_drilldown(app, data):
     assert page.mode == "list" and page.verdict_dialog.item_id == 1 and page.verdict_dialog.rule.risk_rule_id == 9
     page.verdict_dialog.deleteLater()
     page.result_buttons[1].click()
-    page.more_button.setChecked(True)
-    assert page.selected_id == 1 and page.more_button.isChecked()
-    assert "필수 기능" in page.content_rules.text() and "위험 규칙" not in page.content.text()
+    assert page.selected_id == 1 and page.application_details.isVisible()
+    assert "필수 기능" in page.content_rules.text() and "위험 규칙" not in page.title.text()
     assert "필수 기능" in page.inline_rules.text() and not page.inline_rules.isHidden()
     # '위험 등록된 Item' 필터
     page.registered_only.setChecked(True)
-    assert tuple(page.result_buttons) == (1,) and "검색 결과 1건 · 위험 기준 등록만" == page.count.text()
+    assert tuple(page.result_buttons) == (1,) and page.count.text() == "검색 결과 1건"
     page.registered_only.setChecked(False)
     assert tuple(page.result_buttons) == (1, 2)
     window.close()
@@ -304,10 +303,9 @@ def test_full_detail_without_observations_shows_one_notice_and_no_filters(app, d
     window.navigate("items")
     page = window.pages["items"]
     page.open_row(0)
-    page.more_button.setChecked(True)
     assert not page.no_data_notice.isHidden() and "설비 관측 자료가 없어" in page.no_data_reason.text()
-    assert page.summary.isHidden() and page.filter_row.isHidden() and page.scope_count.isHidden() and page.equipment_empty.isHidden()
-    assert page.observation_note.isHidden()
+    assert page.summary.isHidden() and page.filter_row.isHidden() and page.equipment_empty.isHidden()
+    assert not hasattr(page, "observation_note") and page.application_details.isVisible()
     window.close()
 
 

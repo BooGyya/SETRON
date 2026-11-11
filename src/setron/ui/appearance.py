@@ -553,7 +553,6 @@ class ThemeManager(QObject):
                 for part in series.slices():
                     if key := part.property("dashboardCompositionColor"):
                         part.setColor(QColor(t[key]))
-                        part.setBorderColor(QColor(surface_edge(t[key], t["surface"], t[key])))
             if hasattr(series, "barSets"):
                 for bar_set in series.barSets():
                     chart_font(bar_set, "labelFont")

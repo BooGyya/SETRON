@@ -7,7 +7,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCharts import QBarSeries, QLineSeries, QPieSeries
+from PySide6.QtCharts import QBarSeries, QLineSeries, QPieSeries, QScatterSeries
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtTest import QSignalSpy, QTest
@@ -20,6 +20,7 @@ from setron.features.version.service import FamilyReleases
 from setron.ui import dashboard
 from setron.ui.app import create_window
 from setron.ui.dashboard import DashboardPage
+from setron.ui.dashboard_charts import DashboardChart
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, missing_sw_count
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.main_window import MainWindow
@@ -485,13 +486,16 @@ def test_trend_legend_requires_a_plottable_point_on_any_observation_day(window, 
     o2, _, inline = page.series_widgets
     o2_trend, _, inline_trend = page.snapshot.trends
     assert all(point.summary.rate is not None and point.missing_equipment for point in o2_trend.points)
-    assert not o2.isEnabled()  # 분모가 있어도 선택 설비의 관측이 빠진 날짜는 차트에 점이 없다.
+    assert o2.isVisible() and o2.isEnabled() and o2.isChecked()
+    o2_series, = [series for series in page.chart.chart().series() if series.name() == "O2"]
+    assert isinstance(o2_series, QLineSeries)
+    assert [(point.x(), point.y()) for point in o2_series.points()] == [(0, 100), (1, 0)]
     assert inline_trend.points[0].summary.rate == 0
     assert inline_trend.points[-1].summary.rate is None
     assert inline.isEnabled()  # 마지막 날짜의 분모가 없어도 이전의 유효한 점은 표시한다.
-    assert {series.name() for series in page.chart.chart().series()} == {"O3", "Inline O2"}
+    assert {series.name() for series in page.chart.chart().series()} == {"O2", "O3", "Inline O2"}
     page.tabs.setCurrentIndex(2)
-    assert o2.isEnabled() and o2.isChecked()  # 추이에서 표시할 점이 없어도 막대의 물리 대수는 있다.
+    assert o2.isEnabled() and o2.isChecked()
 
 
 def test_search_applies_all_location_date_and_group_filters_to_every_view(app, source):
@@ -539,13 +543,33 @@ def test_bar_click_does_not_inherit_global_or_risk_only_scope(window):
     assert spy.count() == 1
 
 
-def test_missing_observation_breaks_trend_line_instead_of_zero_or_forward_fill(window):
-    page = window.pages["dashboard"]
-    window.query_panel.apply_draft()
-    page.tabs.setCurrentIndex(3)
-    assert not any(isinstance(series, QLineSeries) and series.name() == "O2"
-                   for series in page.chart.chart().series())
-    assert "미관측 1대" in page.observations.text()
+@pytest.mark.parametrize("gap", ("no_observation", "undetermined"))
+def test_unavailable_rate_breaks_trend_without_zero_or_forward_fill(app, source, gap):
+    gap_day, later_day = date(2026, 9, 28), date(2026, 10, 7)
+    records = {record.equipment_id: record for record in source.records if record.base_date == DAY1}
+    # 다른 설비군의 관측일에도 O2가 없거나 모두 판단 불가면 O2 선을 끊는다.
+    extra = (replace(records[5], base_date=gap_day), replace(records[1], base_date=later_day))
+    if gap == "undetermined":
+        extra += (replace(records[3], base_date=gap_day),)
+    source = test_source(records=source.records + extra)
+    data = source.snapshot(applied(source))
+    o2 = next(group for group in data.trends if group.group_key == "o2")
+    assert [point.day for point in o2.points] == [DAY1, gap_day, later_day, DAY2]
+    assert [point.summary.rate for point in o2.points] == [0, None, 0, 0.5]
+    assert o2.points[1].summary.equipment_count == (1 if gap == "undetermined" else 0)
+    assert [point.missing_equipment for point in o2.points] == [1, 2 if gap == "undetermined" else 3, 2, 0]
+
+    chart = DashboardChart()
+    try:
+        chart.trend(data, {"o2"})
+        isolated, connected = chart.chart().series()
+        assert isinstance(isolated, QScatterSeries)
+        assert [(point.x(), point.y()) for point in isolated.points()] == [(0, 0)]
+        assert isinstance(connected, QLineSeries)
+        assert [(point.x(), point.y()) for point in connected.points()] == [(2, 0), (3, 50)]
+    finally:
+        chart.deleteLater()
+        app.processEvents()
 
 
 def test_empty_scope_is_not_an_error_or_fake_success(window):

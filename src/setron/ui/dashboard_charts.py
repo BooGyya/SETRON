@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
 
 from setron.features.aggregation.schemas import Summary
 from setron.features.version.schemas import CompareStatus
-from setron.ui.appearance import chart_font, chart_text_font, manager, surface_edge, ui_color
+from setron.ui.appearance import chart_font, chart_text_font, manager, ui_color
 from setron.ui.appearance_data import Appearance
 from setron.ui.dashboard_data import denominator_equipment_ids
 from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, SOFT, font
@@ -31,15 +31,10 @@ def series_color(key, index=0):
 def series_button_style(color):
     fill = QColor.fromRgbF(*(0.4 + 0.6 * channel for channel in QColor(color).getRgbF()[:3])).name()
     return (f"QPushButton {{color:{INK};background:white;border:1px solid {color};border-radius:8px;"
-            "padding:6px 12px;min-height:0;}"
+            "padding:6px 12px;min-height:20px;max-height:20px;}"
             f"QPushButton:checked:enabled {{background:{fill};border-color:{color};}}"
             f"QPushButton:disabled {{color:#8b95a8;background:{SOFT};border-color:{LINE};}}"
             f"QPushButton:focus {{border-color:{PRIMARY};}}")
-
-
-def trend_point_rate(point):
-    """관측이 부족하거나 비교 분모가 없으면 차트에 찍을 값이 없다."""
-    return None if point.missing_equipment else point.summary.rate
 
 
 def bar_plot(snapshot):
@@ -70,9 +65,13 @@ def equipment_count_tooltip(title: str, equipment_ids: Iterable[int]) -> str:
     return "<qt>" + "<br>".join(map(escape, lines)) + "</qt>"
 
 
-def trend_tooltip(day, label, summary):
+def trend_tooltip(day, label, summary, *, missing_equipment=0, source_day=None):
     decided = summary.compliant + summary.below
     title = f"{day:%Y.%m.%d} · {label}\n목표 달성 {summary.compliant} / {decided}건 ({summary.rate:.1%})"
+    if source_day is not None and source_day != day:
+        title += f"\n마지막 관측일 {source_day:%Y.%m.%d}"
+    if missing_equipment:
+        title += f"\n미관측 {missing_equipment}대"
     return equipment_count_tooltip(title, denominator_equipment_ids(summary))
 
 
@@ -154,7 +153,7 @@ class DashboardChart(QChartView):
                 part = series.append(f"{title} {count}건 ({count / total:.1%})", count)
                 part.setProperty("dashboardCompositionColor", key)
                 part.setColor(QColor(colors[key]))
-                part.setBorderColor(QColor(surface_edge(colors[key], colors["surface"], colors[key])))
+                part.setPen(QPen(Qt.PenStyle.NoPen))
                 tooltip = equipment_count_tooltip(part.label(), ids)
                 part.hovered.connect(lambda hovered, target=part, text=tooltip: self._hover_tooltip(chart, target, text if hovered else ""))
         chart.addSeries(series)
@@ -237,7 +236,9 @@ class DashboardChart(QChartView):
         # 선분 위에서는 그 선분을 실제로 구성하는 관측일 중 가장 가까운 값을 보여준다.
         index, _ = min(segment, key=lambda item: abs(item[0] - position.x()))
         point = group.points[index]
-        self._hover_tooltip(chart, series, trend_tooltip(point.day, group.label, point.summary))
+        text = trend_tooltip(point.day, group.label, point.summary, missing_equipment=point.missing_equipment,
+                             source_day=point.source_day)
+        self._hover_tooltip(chart, series, text)
 
     def trend(self, snapshot, visible_groups):
         chart = self._chart()
@@ -257,14 +258,14 @@ class DashboardChart(QChartView):
                 continue
             segments, current = [], []
             for i, point in enumerate(group.points):
-                rate = trend_point_rate(point)
-                # 관측 부족/분모 없음은 선을 끊는다. 이전 값이나 0%로 채우지 않는다.
-                if rate is None:
-                    if current:
-                        segments.append(current)
-                    current = []
-                else:
+                rate = point.summary.rate
+                # 관측된 설비로 계산 가능한 값은 연결하고, 계산할 값이 없는 날짜에서만 끊는다.
+                if rate is not None:
                     current.append((i, rate * 100))
+                    continue
+                if current:
+                    segments.append(current)
+                    current = []
             if current:
                 segments.append(current)
             for segment in segments:

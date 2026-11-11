@@ -2,7 +2,7 @@
 
 from html import escape
 
-from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QBoxLayout, QPushButton, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QScrollArea,
     QSizePolicy, QTabBar, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -13,12 +13,14 @@ from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import readable_color, set_color_style, surface_edge
 from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.dashboard_charts import (
-    DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, series_button_style, series_color, trend_point_rate,
+    DashboardChart, bar_plot, composition_cohorts, equipment_count_tooltip, series_button_style, series_color,
 )
 from setron.ui.dashboard_data import (
     DashboardDrilldown, DashboardSource, HpaClassificationConflict, NoObservationBefore, RiskRuleState, count_value,
-    information_gap_reasons, missing_sw_count,
+    information_gap_reasons, missing_sw_count, trend_window,
 )
+from setron.ui.interval_selector import IntervalSelector
+from setron.ui.query_panel import QueryPanel
 from setron.ui.theme import ACCENT_SOFT, CANVAS, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
 
 OUTLINE_BUTTON = (f"QPushButton {{background:white;border:1px solid {LINE};border-radius:8px;padding:0 16px;"
@@ -191,11 +193,14 @@ class DashboardKpi(Card):
 
 class DashboardPage(QWidget):
     drilldown_requested = Signal(object)
+    trend_period_changed = Signal(object, object)
 
     def __init__(self, state, source: DashboardSource):
         super().__init__()
         self.setObjectName("canvas")
         self.state, self.source, self.snapshot = state, source, None
+        self.trend_snapshot, self.trend_step = None, None
+        self._trend_period_edited = False
         self.visible_groups = {o.key for o in source.catalog.groups}
         self.metrics = {}
         self.matrix_buttons, self.risk_buttons = {}, {}
@@ -234,6 +239,26 @@ class DashboardPage(QWidget):
         for title in ("히트맵", "원형 그래프", "막대 그래프", "꺾은선 그래프"):
             self.tabs.addTab(title)
         self.content.body.addWidget(self.tabs, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.trend_filters = QWidget()
+        period_body = QVBoxLayout(self.trend_filters)
+        period_body.setContentsMargins(0, 0, 0, 0)
+        start_field, self.trend_start = QueryPanel._date_field("시작 날짜")
+        end_field, self.trend_end = QueryPanel._date_field("종료 날짜")
+        self._trend_date_fields = (start_field, end_field)
+        for field in self._trend_date_fields:
+            field.setParent(self.trend_filters)
+            field.hide()
+        self.trend_interval = IntervalSelector("데이터 간격")
+        period_body.addWidget(self.trend_interval)
+        for control in (self.trend_start, self.trend_end):
+            control.dateChanged.connect(lambda _day, edit=control: self._change_trend_date(edit))
+            control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
+            control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
+        self.trend_interval.step_changed.connect(self._set_trend_interval)
+        self.content.body.addWidget(self.trend_filters)
+        self.trend_notice = label("", 13, color=SECONDARY, wrap=True)
+        self.trend_notice.hide()
+        self.content.body.addWidget(self.trend_notice)
         self.matrix_legend = QWidget()
         legend_body = QHBoxLayout(self.matrix_legend)
         legend_body.setContentsMargins(0, 0, 0, 0)
@@ -368,6 +393,7 @@ class DashboardPage(QWidget):
         self.message.setText("선택지가 변경되었습니다. 위에서 조회 조건을 다시 선택해 주세요.")
 
     def _clear_values(self):
+        self.trend_snapshot = None
         for card in self.metrics.values():
             card.value.setText("—")
         self.candidate_button.setEnabled(False)
@@ -413,6 +439,7 @@ class DashboardPage(QWidget):
         if not self.state.is_current(query) or result.query is not query:
             return False
         self.snapshot = result
+        self._sync_trend_period(result)
         summary = result.summary
         unresolved = sum(1 for status in summary.equipment if _equipment_state(status)[0] in ("미확인", "확인 필요"))
         self.result_status.setText(f"{self._result_label()} · " + ("조건에 맞는 설비 없음" if not result.equipment_ids else "조회 적용됨"))
@@ -428,13 +455,50 @@ class DashboardPage(QWidget):
             self.metrics[key].value.setText(value)
         self.candidate_button.setText(f"전체 {len(result.risky_ids)}대")
         self.candidate_button.setEnabled(bool(result.risky_ids))
-        self.observations.setText("같은 기준일 설비 집합·목표 N 고정 · 관측 없는 자료는 이전 값으로 채우지 않음\n" + "\n".join(
-            f"{point.day} · N 이상 {point.summary.compliant}/{point.summary.compliant + point.summary.below}건 · "
-            + (f"{point.summary.rate:.1%}" if point.summary.rate is not None else "계산 불가")
-            + f" · 판단 불가 {point.summary.undetermined}건 · 미관측 {point.missing_equipment}대"
-            for point in result.observations))
         self._render_view()
         return True
+
+    def _sync_trend_period(self, data):
+        end = data.query.selection.as_of or data.base_date
+        start = data.observations[0].day if data.observations else end
+        for control, default in ((self.trend_start, start), (self.trend_end, end)):
+            with QSignalBlocker(control):
+                control.setMaximumDate(QDate(end.year, end.month, end.day))
+                if not self._trend_period_edited:
+                    control.setDate(QDate(default.year, default.month, default.day))
+        self.trend_period_changed.emit(self.trend_start.date().toPython(), self.trend_end.date().toPython())
+
+    def set_trend_period(self, start, end):
+        self._trend_period_edited = True
+        for control, value in ((self.trend_start, start), (self.trend_end, end)):
+            with QSignalBlocker(control):
+                control.setMaximumDate(QDate(end.year, end.month, end.day))
+                control.setDate(QDate(value.year, value.month, value.day))
+        self.trend_period_changed.emit(start, end)
+
+    def _change_trend_date(self, control):
+        if not control.calendarWidget().isVisible():
+            self._trend_period_edited = True
+            self._render_view()
+
+    def _confirm_trend_date(self, control, day):
+        with QSignalBlocker(control):
+            control.setDate(day)
+        self._trend_period_edited = True
+        self._render_view()
+
+    def _set_trend_interval(self, step):
+        self.trend_step = step
+        self.trend_interval.set_step(step)
+        self._render_view()
+
+    def reset_trend_period(self):
+        self._trend_period_edited = False
+        self.trend_step = None
+        self.trend_interval.set_step(None)
+        if self.snapshot is not None:
+            self._sync_trend_period(self.snapshot)
+        self._render_view()
 
     def _select(self, title, ids, *, risk_only=False):
         if self.snapshot is None or not self.state.is_current(self.snapshot.query) or not ids:
@@ -461,8 +525,22 @@ class DashboardPage(QWidget):
     def _render_view(self, *_):
         mode = self.tabs.currentIndex()
         data = self.snapshot
+        trend_data, trend_problem = None, ""
+        if mode == 3 and data is not None:
+            try:
+                trend_data = trend_window(data, self.trend_start.date().toPython(),
+                                         self.trend_end.date().toPython(), self.trend_step)
+            except ValueError:
+                trend_problem = "시작 날짜는 종료 날짜와 같거나 앞서야 합니다."
+        self.trend_snapshot = trend_data
+        has_trend = trend_data is not None and any(
+            point.summary.rate is not None for group in trend_data.trends for point in group.points)
         has_data = data is not None and bool(data.equipment_ids)
         has_analysis = has_data and bool(data.summary.equipment_count)
+        self.trend_filters.setVisible(mode == 3)
+        self.trend_filters.setEnabled(data is not None)
+        self.trend_notice.setVisible(mode == 3 and has_analysis and not has_trend)
+        self.trend_notice.setText(trend_problem or "선택한 기간에 달성률을 계산할 수 있는 관측 자료가 없습니다.")
         bars = bar_plot(data) if has_analysis and mode == 2 else ((), {})
         self.matrix_scroll.setVisible(has_data and mode == 0)
         self.chart.setVisible(has_analysis and mode != 0)
@@ -481,9 +559,9 @@ class DashboardPage(QWidget):
         self.site_button.setEnabled(has_data)
         self.message.setVisible(not has_data or (not has_analysis and mode != 0))
         self.data_table.setVisible(has_analysis and mode != 0 and self.data_toggle.isChecked())
-        self._style_series(mode, bars[1])
+        self._style_series(mode, bars[1], trend_data)
         self._render_attention()
-        self._render_observations()
+        self._render_observations(trend_data if mode == 3 else data)
         self._render_sites()
         if not has_data:
             if data is not None:
@@ -502,14 +580,19 @@ class DashboardPage(QWidget):
         elif mode == 2:
             self.chart.bars(bars, self._select, self.visible_groups)
         else:
-            self.chart.trend(data, self.visible_groups)
+            if not has_trend:
+                self.chart.clear()
+                self.chart.hide()
+                self.data_table.hide()
+                return
+            self.chart.trend(trend_data, self.visible_groups)
         self._show_data_table()
 
-    def _style_series(self, mode, bar_groups):
+    def _style_series(self, mode, bar_groups, trend_data):
         """현재 차트에 그릴 값이 있는 설비군만 표시 여부를 선택할 수 있다."""
-        trends = self.snapshot.trends if mode == 3 and self.snapshot is not None else ()
+        trends = trend_data.trends if mode == 3 and trend_data is not None else ()
         available = bar_groups if mode == 2 else {group.group_key for group in trends
-                                                 if any(trend_point_rate(point) is not None for point in group.points)}
+                                                 if any(point.summary.rate is not None for point in group.points)}
         visible = []
         for group, check in zip(self.source.catalog.groups, self.series_widgets):
             present = group.key in available
@@ -610,16 +693,25 @@ class DashboardPage(QWidget):
             self.attention_list.addWidget(label(f"외 {len(data.risky_ids) - len(shown)}대 · '전체 {len(data.risky_ids)}대'에서 모두 볼 수 있습니다.",
                                                 11, color=SECONDARY, wrap=True))
 
-    def _render_observations(self):
+    def _render_observations(self, data):
         _clear_layout(self.observation_bars_layout)
-        data = self.snapshot
+        sampled = self.tabs.currentIndex() == 3 and self.trend_step is not None
+        description = ("간격 기준일 이전의 마지막 관측 집계" if sampled else
+                       "관측 없는 자료는 이전 값으로 채우지 않음")
+        self.observations.setText("표시할 결과가 없습니다." if data is None else
+            "같은 기준일 설비 집합·목표 N 고정 · " + description + "\n" + "\n".join(
+                f"{point.day} · N 이상 {point.summary.compliant}/{point.summary.compliant + point.summary.below}건 · "
+                + (f"{point.summary.rate:.1%}" if point.summary.rate is not None else "계산 불가")
+                + f" · 판단 불가 {point.summary.undetermined}건 · 미관측 {point.missing_equipment}대"
+                + (f" · 마지막 관측일 {point.source_day}" if point.source_day and point.source_day != point.day else "")
+                for point in data.observations))
         self.observation_bars.setToolTip(self.observations.text())
         if data is None or not data.observations:
             self.observation_caption.setText("조회 적용 후 저장 관측 시점별 달성률을 표시합니다." if data is None
                                              else "저장 관측이 없습니다.")
             return
         self.observation_caption.setText(f"선택 범위 {data.summary.equipment_count}대 · 저장 관측 시점별 달성률"
-                                         " · 관측 없는 자료는 이전 값으로 채우지 않음")
+                                         " · " + description)
         points = data.observations[-6:]
         for index, point in enumerate(points):
             latest = index == len(points) - 1
@@ -847,7 +939,8 @@ class DashboardPage(QWidget):
         return main
 
     def _show_data_table(self, *_):
-        data, mode = self.snapshot, self.tabs.currentIndex()
+        mode = self.tabs.currentIndex()
+        data = self.trend_snapshot if mode == 3 else self.snapshot
         visible = data is not None and bool(data.equipment_ids) and mode != 0 and self.data_toggle.isChecked()
         self.data_table.setVisible(visible)
         if not visible:
@@ -867,6 +960,10 @@ class DashboardPage(QWidget):
             rows = [(str(p.day), group.label, f"{p.summary.compliant}/{p.summary.compliant + p.summary.below}",
                      f"{p.summary.rate:.1%}" if p.summary.rate is not None else "—", str(p.summary.undetermined), str(p.missing_equipment))
                     for group in data.trends if group.group_key in self.visible_groups for p in group.points]
+            if self.trend_step is not None:
+                headers = ("기준일", "마지막 관측일", *headers[1:])
+                rows = [(row[0], str(point.source_day or point.day), *row[1:]) for row, point in zip(
+                    rows, (point for group in data.trends if group.group_key in self.visible_groups for point in group.points))]
         self.data_table.clear()
         self.data_table.setColumnCount(len(headers))
         self.data_table.setRowCount(len(rows))

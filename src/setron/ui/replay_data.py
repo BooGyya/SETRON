@@ -6,7 +6,7 @@
 from copy import deepcopy
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import date
 
 from setron.features.aggregation.service import summarize
 from setron.features.targets.groups import with_saved_groups
@@ -14,6 +14,7 @@ from setron.features.version.schemas import CompareStatus
 from setron.ui.dashboard_data import DashboardSnapshot, DashboardSource, GroupBinding, family_name
 from setron.ui.equipment_data import EquipmentDetail
 from setron.ui.heatmap_data import EquipmentTile, record_tiles
+from setron.ui.observation_interval import INTERVALS, interval_days
 from setron.ui.query_state import AppliedQuery, QueryState, TargetN
 from setron.ui.target_data import target_map, target_pairs, validate_targets
 
@@ -55,33 +56,6 @@ class ReplayFrame:
 def can_replay(frames):
     """재생하려면 설비가 있는 시점이 두 개 이상 필요하다."""
     return sum(frame.snapshot.summary.equipment_count > 0 for frame in frames) >= 2
-
-
-# 재생 간격: None = 저장일마다(실제 저장 날짜), 나머지는 (일, 개월) 간격.
-INTERVALS = {None: "저장일마다", "week": "1주", "month": "1개월", "quarter": "3개월"}
-_STEPS = {"week": (7, 0), "month": (0, 1), "quarter": (0, 3)}
-
-
-def _add_months(day, months):
-    month = day.month - 1 + months
-    year, month = day.year + month // 12, month % 12 + 1
-    last = (date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)).day
-    return date(year, month, min(day.day, last))
-
-
-def interval_days(start, end, step):
-    """시작 날짜부터 간격마다의 날짜. 마지막 간격이 종료 날짜에 딱 맞지 않으면 종료 날짜를 끝에 더한다."""
-    days_step, months_step = _STEPS[step]
-    result, k = [], 0
-    while True:
-        day = start + timedelta(days=days_step * k) if days_step else _add_months(start, months_step * k)
-        if day > end:
-            break
-        result.append(day)
-        k += 1
-    if result and result[-1] != end:
-        result.append(end)
-    return tuple(result)
 
 
 @dataclass(frozen=True)

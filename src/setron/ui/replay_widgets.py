@@ -157,7 +157,7 @@ class ReplayChart(DashboardChart):
 
 
 class ReplayHeatmap(QWidget):
-    equipment_selected = Signal(int)
+    equipment_selected = Signal(int, object)
 
     def __init__(self):
         super().__init__()
@@ -169,12 +169,14 @@ class ReplayHeatmap(QWidget):
         self.body = QVBoxLayout()
         root.addLayout(self.body)
         self.tile_buttons, self.tile_occurrences, self.group_cards = {}, [], []
+        self.selected_tile = None
         self.visible_ids = ()
         self._titles, self._cards, self._grid = None, [], None  # 날짜를 넘길 때 다시 쓰는 카드 (QA R-04)
         self.rebuilt_tiles = 0  # 마지막 show_frame에서 새로 만든 타일 수 (재사용 확인용)
         self.restyled_tiles = 0  # 위젯은 그대로 두고 색·글자만 바꾼 타일 수
 
     def clear(self):
+        self.select_tile(None)
         self.tile_buttons, self.tile_occurrences, self.group_cards = {}, [], []
         self.visible_ids = ()
         self._titles, self._cards, self._grid = None, [], None
@@ -185,11 +187,18 @@ class ReplayHeatmap(QWidget):
 
     def _tile(self, tile, families):
         control = TileButton(tile, expanded=True, families=families)
-        control.clicked.connect(lambda: self.equipment_selected.emit(control.data.equipment_id))
+        control.clicked.connect(lambda: self.equipment_selected.emit(control.data.equipment_id, control))
         # 타일에 보이는 내용만 비교한다. 관측일·위험 근거는 상세에서만 쓰므로 바뀌어도 다시 그리지 않는다.
         control.visual = (replace(tile, observation_date=None, findings=()), families)
         self.rebuilt_tiles += 1
         return control
+
+    def select_tile(self, tile):
+        if self.selected_tile is not None and self.selected_tile is not tile:
+            self.selected_tile.setChecked(False)
+        self.selected_tile = tile
+        if tile is not None:
+            tile.setChecked(True)
 
     def _card(self, title, lines):
         """설비군 카드 하나. 돌려주는 slots는 카드 안 타일 자리(TileGrid, 번호) 목록이다."""
@@ -264,6 +273,7 @@ class ReplayHeatmap(QWidget):
 
         selected: 설비군 칩에서 고른 설비군 키. None이면 전체.
         """
+        self.select_tile(None)
         self.rebuilt_tiles = self.restyled_tiles = 0
         plan = self._plan(data, frame, selected)
         tiles = tuple({tile.equipment_id: tile for _, lines in plan for _, items in lines for tile, _ in items}.values())

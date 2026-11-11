@@ -107,8 +107,8 @@ def test_mixed_pm_missing_sw_and_unregistered_remain_explicit(window, data):
     page = window.pages["items"]
     original = data.records[0]
     records = (
-        replace(original, pms=(original.pms[0], data.records[1].pms[0])),
-        replace(original, equipment_id=20, pms=(PmVersion("PM2", 1, 10, "unregistered"),)),
+        replace(original, pms=(original.pms[0], replace(data.records[1].pms[0], pm_name="PM2"))),
+        replace(original, equipment_id=20, pms=(PmVersion("PM2", 1, 10, "unregistered raw "),)),
         replace(original, equipment_id=21, pms=(PmVersion("PM2", 1, 10, None),)),
         replace(original, equipment_id=22, pms=()),
     )
@@ -116,10 +116,15 @@ def test_mixed_pm_missing_sw_and_unregistered_remain_explicit(window, data):
     page.reload()
     page.open_row(0)
     rows = page.equipment_model.rows
-    assert [r[3] for r in rows] == ["미적용", "미확인", "미확인"]
-    assert "v99" in rows[0][4] and "v2" in rows[0][4]
-    assert "등록 릴리즈 대응 없음" in rows[1][4]
-    assert "관측 SW 버전 없음" in rows[2][4]
+    assert page.equipment_model.headings == ("설비", "Site", "Line", "모델", "적용 상태", "버전", "비고")
+    assert [r[4] for r in rows] == ["미적용", "미확인", "미확인"]
+    assert rows[0][0:3] == ("EQ-1", "Site A", "미지정")
+    assert rows[0][5].splitlines() == ["PM1 · v99", "PM2 · v2"]
+    assert [line.partition(" · ")[0] for line in rows[0][6].splitlines()] == ["PM1", "PM2"]
+    assert rows[1][5] == "PM2 · unregistered raw "
+    assert "등록 릴리즈 대응 없음" in rows[1][6]
+    assert "관측 SW 버전 없음" in rows[2][6]
+    assert all("SW A" not in cell and "ID " not in cell for row in rows for cell in row)
     assert 22 not in page.equipment_model.ids  # 선택 계열의 PM이 없는 설비
 
 
@@ -138,7 +143,7 @@ def test_connected_empty_observations_are_zero_not_disconnected(window, data):
     assert not page.equipment_model.rows
 
 
-def test_detail_keyboard_sources_four_states_and_return(window):
+def test_detail_keyboard_four_states_and_return(window):
     page = window.pages["items"]
     page.search.setText("7")
     page.result_buttons[1].setFocus()
@@ -146,17 +151,16 @@ def test_detail_keyboard_sources_four_states_and_return(window):
     assert page.mode == "detail" and page.selected_id == 1
     assert page.title.text() == "Alarm <원문> & 보존"
     assert page.title.textFormat() == Qt.TextFormat.PlainText
-    assert "C9" in page.source_model.rows[0][2]
-    assert "미확인 · 저장 행 없음" in page.release_model.rows[-1]
+    assert not hasattr(page, "source_button") and not hasattr(page, "source_model")
     assert page.state_filter.currentData() == Application.NOT_APPLIED
-    assert {row[3] for row in page.equipment_model.rows} == {"미적용"}
+    assert {row[4] for row in page.equipment_model.rows} == {"미적용"}
     page.state_filter.setCurrentIndex(0)
-    assert {row[3] for row in page.equipment_model.rows} == {"적용", "미적용", "미확인", "대상 외"}
+    assert {row[4] for row in page.equipment_model.rows} == {"적용", "미적용", "미확인", "대상 외"}
     assert "HPA 제외 1대" in chips(page)
-    assert "2026-01-02" in page.observation_note.text()
+    assert page.summary.isVisible() and page.application_details.isVisible()
     page.state_filter.setCurrentIndex(page.state_filter.findData(Application.UNKNOWN))
     assert len(page.equipment_model.rows) == 2
-    assert all(row[3] == "미확인" for row in page.equipment_model.rows)
+    assert all(row[4] == "미확인" for row in page.equipment_model.rows)
     QTest.mouseClick(page.result_buttons[1], Qt.MouseButton.LeftButton)
     assert page.search.text() == "7" and page.mode == "list"
     assert page.isAncestorOf(page.result_buttons[1]) and not page.result_buttons[1].isChecked()
@@ -189,7 +193,7 @@ def test_family_list_filters_in_place_and_restores_on_clear(window, data):
         version_items=(*data.versions.version_items, VersionItem(5, 3, ItemState.APPLIED, TargetScope.ALL)))
     page.loader = lambda: replace(data, versions=versions)
     page.reload()
-    assert page.results_card.isVisible() and page.count.text() == "SW A 아이템 전체 2건"
+    assert page.results_card.isVisible() and page.count.text() == "검색 결과 2건"
     assert tuple(page.result_buttons) == (1, 2)
     page.result_buttons[1].click()
     assert page.result_rows.indexOf(page.detail_view) == page.result_rows.indexOf(page.result_buttons[1]) + 1
@@ -198,17 +202,19 @@ def test_family_list_filters_in_place_and_restores_on_clear(window, data):
     page.search.clear()
     assert tuple(page.result_buttons) == (1, 2)
     page.select_family(20)
-    assert page.count.text() == "SW B 아이템 전체 1건" and tuple(page.result_buttons) == (3,)
+    assert page.count.text() == "검색 결과 1건" and tuple(page.result_buttons) == (3,)
 
 
 def test_unlinked_item_does_not_claim_all_equipment_not_target(window):
     page = window.pages["items"]
     assert not page.open_row(2) and 3 not in page.result_buttons
     assert page.open_item_id(3)
+    assert page.application_details.parentWidget() is page.full_detail
+    assert page.full_detail.isVisible() and page.title.isVisible() and page.back.isVisible()
     assert not page.equipment_model.rows
     assert page.summary.isHidden() and not page.no_data_notice.isHidden() and "연결된 릴리즈가 없어" in page.no_data_reason.text()
     assert not page.state_filter.isEnabled()
-    assert "연결된 릴리즈가 없습니다" in page.release_note.text()
+    assert not hasattr(page, "release_model")
 
 
 def test_custom_version_catalog_does_not_use_demo_observations(app, data):
@@ -229,8 +235,8 @@ def test_failure_retry_and_removed_items_clear_detail(window, data):
     page.loader = fail
     page.reload()
     assert page.data is None and page.mode == "list" and page.selected_id is None
-    assert not page.release_model.rows and not page.equipment_model.rows
-    assert page.content.text() == ""
+    assert not page.equipment_model.rows
+    assert page.title.text() == ""
     assert "private" not in page.notice.text()
     page.loader = lambda: data
     QTest.mouseClick(page.refresh, Qt.MouseButton.LeftButton)

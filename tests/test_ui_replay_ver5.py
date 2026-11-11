@@ -373,6 +373,55 @@ def test_empty_single_date_and_zero_match_are_not_playable_or_fake_zero_percent(
     assert page.heatmap.visible_ids == () and not page.play()
 
 
+def test_requery_keeps_previous_display_until_latest_filters_are_loaded(own):
+    page = replay_page(own)
+    page.view_tabs.setCurrentIndex(1)
+    chart = page.chart.chart()
+    tiles, legend = page.heatmap.tile_buttons, page.legend_buttons
+    achievement, progress = page.achievement.text(), page.progress.value()
+    gates, requests = (Event(), Event()), []
+
+    def load(request):
+        gate = gates[len(requests)]
+        requests.append(request)
+        assert gate.wait(5)
+        return load_replay(page.source, request)
+
+    def assert_previous_display():
+        assert page.busy and page.data is None
+        assert page.chart.chart() is chart and page.heatmap.tile_buttons is tiles
+        assert page.heatmap.isVisibleTo(page) and page.legend_buttons is legend
+        assert page.achievement.text() == achievement and page.progress.value() == progress
+        assert page.message.isHidden()
+        assert not page.view_tabs.isEnabled() and not page.play_button.isEnabled()
+        assert not page.chart.isEnabled() and not page.heatmap.isEnabled()
+        assert all(not control.isEnabled() for control in legend.values())
+        assert not page.select_date(0) and not page.open_equipment(next(iter(tiles)))
+
+    page.loader = load
+    page.query_panel.select("site_key", "hwaseong")
+    try:
+        assert page.apply_query()
+        until(lambda: len(requests) == 1)
+        assert_previous_display()
+        set_period(page, "2026-06-01", "2026-08-21")
+        gates[0].set()
+        until(lambda: len(requests) == 2)
+        assert_previous_display()
+        gates[1].set()
+        until(lambda: not page.busy)
+    finally:
+        for gate in gates:
+            gate.set()
+
+    assert page.data.request is requests[1] and page.chart.chart() is not chart
+    assert page.chart.days[-1] == date(2026, 8, 21)
+    assert page.heatmap.tile_buttons is not tiles and page.legend_buttons is not legend
+    assert all(tile.data.site_key == "hwaseong" for tile in page.heatmap.tile_buttons.values())
+    assert "2026-08-21" in page.achievement.toolTip()
+    assert page.view_tabs.isEnabled() and page.heatmap.isEnabled()
+
+
 def test_slow_request_is_responsive_blocks_duplicate_and_ignores_late_result_after_exit(own):
     gate, ticks = Event(), []
     source = demo_dashboard_source()
@@ -397,10 +446,12 @@ def test_slow_request_is_responsive_blocks_duplicate_and_ignores_late_result_aft
 
 
 def test_loader_failure_is_sanitized_and_can_retry(own):
-    page = own(ReplayPage(demo_dashboard_source(), loader=lambda _: (_ for _ in ()).throw(RuntimeError("secret-token"))))
+    page = replay_page(own)
+    page.loader = lambda _: (_ for _ in ()).throw(RuntimeError("secret-token"))
     assert page.apply_query()
     until(lambda: not page.busy)
     assert page.data is None and "다시 조회" in page.message.text() and "secret" not in page.message.text()
+    assert not page.chart.values and not page.heatmap.visible_ids and not page.legend_buttons
     assert page.reset_button.isEnabled() and not page.play_button.isEnabled()
     page.loader = None
     page.reset_button.click()
@@ -416,7 +467,9 @@ def test_tile_opens_same_observation_readonly_drawer_without_navigation_or_write
     until(lambda: not page.busy)
     page.select_date(0)
     page.view_tabs.setCurrentIndex(1)
-    tile = page.heatmap.tile_buttons[1]
+    tile = next(control for control in page.heatmap.tile_occurrences
+                if control.data.equipment_id == 1 and control is not page.heatmap.tile_buttons[1])
+    QTest.qWait(30)
     window.scroll.ensureWidgetVisible(tile)
     QTest.qWait(30)
     before = page.data, page.index, page.state.draft
@@ -426,11 +479,22 @@ def test_tile_opens_same_observation_readonly_drawer_without_navigation_or_write
     assert page.drawer.request.equipment_id == 1
     assert page.drawer.detail.record.base_date == page.frame.day
     assert len(page.drawer.software_cards) == 3 and not page.drawer.edit_available
-    page.drawer.close_panel()
+    assert [control for control in page.heatmap.tile_occurrences if control.isChecked()] == [tile]
+    window.back_shortcut.trigger()
+    until(page.drawer.isHidden)
+    assert window.route == "replay" and tile.hasFocus()
     assert (page.data, page.index, page.state.draft) == before
     assert not page.timer.isActive()
 
+    next_tile = next(control for control in page.heatmap.tile_occurrences if control.data.equipment_id != 1)
+    QTest.mouseClick(next_tile, Qt.MouseButton.LeftButton)
+    assert page.drawer.request.equipment_id == next_tile.data.equipment_id
+    assert [control for control in page.heatmap.tile_occurrences if control.isChecked()] == [next_tile]
+    page.drawer.close_button.click()
+    assert next_tile.hasFocus()
+
     assert page.set_interval("week") and page.select_date(1)
+    assert not any(control.isChecked() for control in page.heatmap.tile_occurrences)
     assert page.frame.day == date(2026, 5, 28) and page.open_equipment(1)
     observation = date(2026, 5, 21)
     assert page.drawer.request.query is page.frame.snapshot.query
