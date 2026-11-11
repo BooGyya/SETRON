@@ -249,6 +249,7 @@ def test_changing_criterion_keeps_name_and_category_follows_criterion(app, data)
     assert item_name and dialog.values()["item_manager"]["category"] == "환경안전 필수"
     dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
     version = dialog.start.currentText().split(" · ")[0]
+    assert "순서" not in dialog.start.currentText()   # 순서가 확인된 버전은 이름만 보인다 (11-11)
     assert dialog.name.text() == f"{dialog.family.currentText()} {version} 사용 위험"
     assert dialog.values()["item_manager"]["category"] == "결함 버전"
     wait_until(lambda: dialog.preview_valid)
