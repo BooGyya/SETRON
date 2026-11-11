@@ -304,20 +304,7 @@ class SheetPanel(_Panel):
         self.create_button.setToolTip("Site · 기준일을 골라 빈 현황표를 만듭니다. 그 Site의 설비는 그 현황표에서 [＋ 행 추가]로 넣습니다. "
                                       "목록에 없는 Site는 위치 탭에서 먼저 추가합니다.")
         self.create_button.clicked.connect(self.create_sheet)
-        self.guide = None
-        self.help_button = button("?")
-        self.help_button.setAccessibleName("새 위치에 설비 넣기 가이드")
-        self.help_button.setToolTip("새 Site · 라인을 만들고 설비 값까지 입력하는 순서를 봅니다.")
-        self.help_button.setFixedSize(34, 34)
-        self.help_button.setStyleSheet(f"QPushButton {{background:white;border:1px solid {LINE};border-radius:17px;padding:0;"
-                                       "min-width:32px;max-width:32px;min-height:32px;max-height:32px;"
-                                       f"color:{PRIMARY};font-size:16px;font-weight:600;}}"
-                                       "QPushButton:hover {background:#e8ebfc;border-color:#9aa8f5;}")
-        self.help_button.clicked.connect(self.show_guide)
-        help_row = QHBoxLayout()
-        help_row.addStretch()
-        help_row.addWidget(self.help_button)
-        card.body.addLayout(help_row)  # [저장] 위 (11-11)
+        self.guide = None  # [?] 가이드 패널 (버튼은 설비현황 하위 탭 줄에 있다)
         row.addWidget(self.sheet_combo)
         row.addWidget(self.create_button)
         row.addStretch()
@@ -1486,7 +1473,13 @@ class LocationPanel(_Panel):
             return False
         return self.page.change(lambda: self.page.gateway.data_admin("create_sheet", site, base_date), self,
                                 message="빈 현황표를 만들고 있습니다…",
-                                done=lambda batch_id: self.page.open_sheet(batch_id, f"{site} · {base_date} 빈 현황표를 만들었습니다. "))
+                                done=lambda batch_id: self._sheet_created(batch_id, site, base_date))
+
+    def _sheet_created(self, batch_id, site, base_date):
+        """만들기만 하고 위치 탭에 머문다 (11-11). 현황표 탭에 가면 만든 현황표가 골라져 있다."""
+        self.page.sheet_panel.open_batch(batch_id)
+        self._changed(f"{site} · {base_date} 빈 현황표를 만들었습니다 · 라인을 더 추가한 뒤 현황표 탭에서 [＋ 행 추가]로 설비를 넣습니다. ",
+                      ("site", site))
 
     def add_line(self):
         if self.page.gateway is None or self.page.saving or not self.site_names():
@@ -2459,6 +2452,17 @@ class DataManagementPage(QWidget):
         status_body.addWidget(sub)
         self.status_stack = QStackedWidget()
         self.sheet_panel, self.equipment_panel, self.location_panel = SheetPanel(self), EquipmentPanel(self), LocationPanel(self)
+        # [?] '새 위치에 설비 넣기' 가이드: 설비현황의 어느 하위 탭에서도 보이게 하위 탭 줄 오른쪽에 둔다 (11-11)
+        self.help_button = button("?")
+        self.help_button.setAccessibleName("새 위치에 설비 넣기 가이드")
+        self.help_button.setToolTip("새 Site · 라인을 만들고 설비 값까지 입력하는 순서를 봅니다.")
+        self.help_button.setFixedSize(34, 34)
+        self.help_button.setStyleSheet(f"QPushButton {{background:white;border:1px solid {LINE};border-radius:17px;padding:0;"
+                                       "min-width:32px;max-width:32px;min-height:32px;max-height:32px;"
+                                       f"color:{PRIMARY};font-size:16px;font-weight:600;}}"
+                                       "QPushButton:hover {background:#e8ebfc;border-color:#9aa8f5;}")
+        self.help_button.clicked.connect(self.sheet_panel.show_guide)
+        sub.layout().addWidget(self.help_button)
         # 삭제 화면은 따로 스크롤 영역에 넣지 않는다. 창 전체 스크롤 안에 스크롤 영역을 또 두면 크기 맞춤이 끝없이 반복된다.
         self.delete_host = QWidget()
         self.delete_layout = QVBoxLayout(self.delete_host)
