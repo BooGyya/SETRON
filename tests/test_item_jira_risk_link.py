@@ -199,7 +199,7 @@ def test_registered_risk_save_refreshes_items_and_dashboard(app, data):
     assert page.manager.submit({"risk_reason": "필수 기능"})
     wait_until(lambda: saved["done"] and not window.management_saving and not window.management_refresh.busy
                and not page.read_request.busy and page.data is not None and page.data.risk_rules)
-    assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건 ›"
+    assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건"
     page.registered_only.setChecked(True)
     assert tuple(page.result_buttons) == (1,)
     # 저장 시작 시 대시보드 판정을 무효화하고, 같은 조회 조건으로 새 위험 판정 결과를 다시 받는다.

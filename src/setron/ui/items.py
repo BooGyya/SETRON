@@ -95,7 +95,17 @@ class _ItemResultButton(QPushButton):
         self._badge.setStyleSheet(f"QPushButton {{background:{TONES['warning'][0]};color:{TONES['warning'][1]};border:1px solid {TONES['warning'][2]};border-radius:4px;padding:2px 8px;min-height:23px;max-height:23px;}}")
         self._single_rule = None
         self._badge.clicked.connect(self._badge_clicked)
-        row.addWidget(self._badge)
+        # 배지는 페이지 공통 폭의 고정 슬롯에 둔다. 배지가 없는 행도 같은 폭을 비워 두어 Jira 칸이 모든 행에서 같은 x에 온다.
+        self.badge_slot = QWidget()
+        self.badge_slot.setStyleSheet("background:transparent;")
+        badge_row = QHBoxLayout(self.badge_slot)
+        badge_row.setContentsMargins(0, 0, 0, 0)
+        badge_row.addWidget(self._badge)
+        badge_row.addStretch(1)
+        self.badge_slot_width = 0
+        self.badge_slot.setFixedWidth(0)
+        row.addWidget(self.badge_slot)
+        self.badge_slot.hide()
         self._badge.hide()
         row.addWidget(self.arrow)
         self.rule_badge = None  # 위험 기준이 있는 행에서만 배지 위젯을 가리킨다.
@@ -133,7 +143,8 @@ class _ItemResultButton(QPushButton):
         self._single_rule = rules[0].risk_rule_id if len(rules) == 1 else None
         self._badge.setMenu(None)
         if rules:
-            self._badge.setText(f"위험 기준 {len(rules)}건 ›")
+            # 끝의 '›' 문자는 일부 글꼴에서 네모(tofu)로 보여 뺀다. 경고 아이콘과 손가락 커서로 누를 수 있음을 알린다.
+            self._badge.setText(f"위험 기준 {len(rules)}건")
             if len(rules) > 1:
                 menu = QMenu(self._badge)
                 for rule in rules:
@@ -148,7 +159,15 @@ class _ItemResultButton(QPushButton):
             self._badge.setToolTip(names)
         self._badge.setVisible(bool(rules))
         self.rule_badge = self._badge if rules else None
+        self.set_badge_slot(self._badge.sizeHint().width() if rules else 0)
         self.setChecked(False)
+        self._elide()
+
+    def set_badge_slot(self, width):
+        """배지 칸 폭을 정한다. 페이지가 보이는 행 중 가장 넓은 배지 폭으로 모든 행을 맞춘다."""
+        self.badge_slot_width = width
+        self.badge_slot.setFixedWidth(width)
+        self.badge_slot.setVisible(width > 0)
         self._elide()
 
     def _mark_keyboard_focus(self, enabled):
@@ -186,10 +205,10 @@ class _ItemResultButton(QPushButton):
     def _elide(self):
         layout = self.layout()
         margins = layout.contentsMargins()
-        badge_width = self._badge.sizeHint().width() if self.rule_badge else 0
+        badge_width = self.badge_slot_width
         version_width = self.version_slot_width
         jira_width = self.jira_slot_width
-        gaps = 1 + bool(self.rule_badge) + bool(version_width) + bool(jira_width)
+        gaps = 1 + bool(badge_width) + bool(version_width) + bool(jira_width)
         available = max(0, self.width() - margins.left() - margins.right() - self.arrow.width()
                         - badge_width - version_width - jira_width - gaps * layout.spacing() - 3)
         self.caption.setText(self.caption.fontMetrics().elidedText(self.display_content, Qt.TextElideMode.ElideRight, available))
@@ -594,9 +613,17 @@ class ItemsPage(QWidget):
         self.rules_box = QFrame()
         self.rules_box.setObjectName("registeredRules")
         self.rules_box.setStyleSheet(f"QFrame#registeredRules {{background:#fff9e6;border:0;border-left:3px solid {TONES['warning'][2]};border-radius:4px;}}")
-        rules_row = QHBoxLayout(self.rules_box)
-        rules_row.setContentsMargins(12, 8, 12, 8)
+        # 두 줄로 나눈다: 기준 정보(등록 건수·종류·기준명) / 위험 후보 대수와 대시보드 이동 버튼.
+        # 한 줄이면 좁은 폭에서 기준명이 잘리고 버튼이 상자 끝에 붙는다.
+        rules_lines = QVBoxLayout(self.rules_box)
+        rules_lines.setContentsMargins(12, 8, 12, 8)
+        rules_lines.setSpacing(8)
+        rules_row = QHBoxLayout()
         rules_row.setSpacing(8)
+        candidates_row = QHBoxLayout()
+        candidates_row.setSpacing(8)
+        rules_lines.addLayout(rules_row)
+        rules_lines.addLayout(candidates_row)
         self.rules_chip = StatusBadge("", "warning")
         self.inline_rules = _ClampLabel(1)
         set_widget_font(self.inline_rules, font(13, medium=True))
@@ -615,9 +642,9 @@ class ItemsPage(QWidget):
         rules_row.addWidget(self.rules_chip)
         rules_row.addWidget(self.rules_kinds)
         rules_row.addWidget(self.inline_rules, 1)
-        rules_row.addStretch(0)
-        rules_row.addWidget(self.rules_risk)
-        rules_row.addWidget(self.rules_dashboard)
+        candidates_row.addWidget(self.rules_risk)
+        candidates_row.addWidget(self.rules_dashboard)
+        candidates_row.addStretch(1)
         self.rules_box.hide()
         inline.addWidget(self.rules_box)
         detail.addWidget(self.inline_box)
@@ -1069,6 +1096,11 @@ class ItemsPage(QWidget):
                                 jira=jira.get(entry.item.item_id), jira_width=jira_width)
             control.show()
             self.result_buttons[entry.item.item_id] = control
+        # 배지 칸은 페이지 공통 폭으로 맞춰 Jira 칸이 배지 유무와 관계없이 같은 세로줄에 오게 한다.
+        visible_controls = self.row_pool[:len(self.visible_entries)]
+        badge_width = max((c.badge_slot_width for c in visible_controls), default=0)
+        for control in visible_controls:
+            control.set_badge_slot(badge_width)
         for control in self.row_pool[len(self.visible_entries):]:
             control.hide()
             control.setChecked(False)
