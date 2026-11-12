@@ -12,7 +12,7 @@ from sqlalchemy import Date, DateTime
 
 from setron.features.storage.validation import JSON_COLUMNS, TABLE_NAMES, decode_record, encode_record
 
-from .dump import DUMP_COLUMNS, OPTIONAL_TRAILING, allowed_columns
+from .dump import DUMP_COLUMNS, DumpFormatError, allowed_columns, project_row, with_legacy_jira
 from .group_settings import group_history_prune
 from .references import ReferenceConflict, rewrite_json
 
@@ -81,12 +81,10 @@ def fingerprint(rows, next_ids):
 
 
 def _normalized(table, row, repository):
-    values = dict(row)
-    for name in OPTIONAL_TRAILING.get(table.name, ()):          # 예전 내보내기 → 대상 DB에 더한 칸은 빈 값(11/12)
-        if name in table.columns and name not in values:
-            values[name] = None
-        if name not in table.columns:                          # 칸을 아직 못 더한 DB → 내보내기의 값은 쓰지 않는다
-            values.pop(name, None)
+    try:
+        values = project_row(table.name, row, tuple(table.columns.keys()))
+    except DumpFormatError as error:
+        raise SqlImportError(str(error)) from None
     for column in table.columns:
         value = values[column.name]
         if isinstance(value, str):
@@ -99,6 +97,10 @@ def _normalized(table, row, repository):
                 raise SqlImportError(f"{table.name}.{column.name}의 날짜 형식이 올바르지 않습니다.") from None
     # 기존 관리 서비스와 같은 원문·JSON·상태값 검증을 적용한다.
     validated = encode_record(table.name, decode_record(table.name, values))
+    try:
+        validated = project_row(table.name, validated, tuple(table.columns.keys()))
+    except DumpFormatError as error:
+        raise SqlImportError(str(error)) from None
     repository.validate_columns(table, validated, inserting=True)
     return validated
 
@@ -139,9 +141,13 @@ class _Planner:
     def __init__(self, source, target, next_ids, repository, mode):
         self.target, self.next_ids, self.mode = target, next_ids, mode
         self.tables = {name: repository.table(name) for name in TABLE_NAMES}
-        if any(set(table.columns.keys()) not in [set(columns) for columns in allowed_columns(name)]
+        if any(tuple(table.columns.keys()) not in allowed_columns(name)
                for name, table in self.tables.items()):
             raise SqlImportError("대상 DB의 테이블 구조와 지원하는 SETRON 백업 형식이 다릅니다.")
+        try:
+            source = with_legacy_jira(source, tuple(self.tables["item"].columns.keys()))
+        except DumpFormatError as error:
+            raise SqlImportError(str(error)) from None
         self.primary = {name: tuple(table.primary_key.columns.keys()) for name, table in self.tables.items()}
         self.foreign = {name: tuple(sorted((fk.parent.name, fk.column.table.name, fk.column.name)
                                           for fk in table.foreign_keys)) for name, table in self.tables.items()}

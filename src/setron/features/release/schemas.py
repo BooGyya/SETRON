@@ -56,6 +56,7 @@ class ItemInput:
     source_reference: dict | None = None
     edited_fields: tuple[str, ...] = ()
     jira_code: str | None = None
+    jira_key: str | None = None  # 이전 요청 입력만 호환하며 저장 전 jira_code로 변환한다.
 
 
 @dataclass(frozen=True, kw_only=True)

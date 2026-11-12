@@ -18,8 +18,12 @@ from __future__ import annotations
 import inspect
 
 from collections.abc import Callable
+from copy import copy, deepcopy
 from dataclasses import replace
+from functools import lru_cache
 from threading import RLock
+
+from sqlalchemy import select
 
 from setron.features.data_admin.service import registered_lines, registered_sites
 from setron.features.reference_data import default_area, use_registered_lines
@@ -33,7 +37,7 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.risk.service import RiskAssessor
 from setron.features.targets.groups import GroupStore
 from setron.features.targets.service import TargetService
-from setron.features.storage.validation import StorageValidationError
+from setron.features.storage.validation import StorageValidationError, decode_record
 from setron.infrastructure.database import DatabaseError
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, RiskRuleState, family_name, model_name
 from setron.ui.query_state import FabOption, GroupOption, LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
@@ -48,7 +52,24 @@ GROUP_MODELS = {
 SOURCE_LABEL = "MySQL DB 저장 자료 · 조회 적용 시 목표 N·위험 기준 재확인"
 
 
-def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_sites=(), extra_lines=()) -> QueryCatalog:
+class _LoadedRiskAssessor(RiskAssessor):
+    """한 번 읽은 DB 자료 안에서만 동일한 날짜·PM 관측의 위험 결과를 재사용한다."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self._cached_equipment_risk = lru_cache(maxsize=8192)(super().equipment_risk)
+        self._cache_inputs = self.rules, self.catalog, self.families
+
+    def equipment_risk(self, record):
+        inputs = self.rules, self.catalog, self.families
+        if any(current is not previous for current, previous in zip(inputs, self._cache_inputs)):
+            self._cached_equipment_risk.cache_clear()
+            self._cache_inputs = inputs
+        return self._cached_equipment_risk(record)
+
+
+def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_sites=(), extra_lines=(),
+                     area_resolver=None) -> QueryCatalog:
     """저장된 현황의 실제 Site·Line으로 조회 선택지를 만든다.
 
     - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site와 데이터 관리에서 등록한 Site(``extra_sites``)를
@@ -61,13 +82,14 @@ def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_site
       데이터 관리에서 등록한 새 기본형 설비군(``extra_groups``, :func:`registered_group_options`)은 같은 분류 뒤에 넣는다.
     """
     snapshots = tuple(snapshots)
+    area_for = area_resolver or line_area
     base = preview_catalog()
     known = {option.label for option in base.sites}
     extra = sorted({value.site for value in snapshots if value.site and value.site not in known}
                    | {name for name in extra_sites if name and name not in known})
     sites = (*base.sites, *(SiteOption(name, name) for name in extra))
     keys = {option.label: option.key for option in sites}
-    lines = sorted({(keys[value.site], line_area(value.production_area, value.site, value.line), value.line)
+    lines = sorted({(keys[value.site], area_for(value.production_area, value.site, value.line), value.line)
                     for value in snapshots if value.site in keys and value.line}
                    | {(keys[entry["site"]], entry["fab"], entry["line"]) for entry in extra_lines if entry["site"] in keys},
                    key=lambda value: (value[0], value[1] or "", value[2]))
@@ -122,14 +144,72 @@ def line_area(stored, site, line):
     return stored or default_area(site, line)
 
 
+def _line_area_resolver(entries):
+    """다른 워커의 전역 갱신과 섞이지 않도록 이번 DB 읽기의 등록 라인만 사용한다."""
+    from setron.features.reference_data import LINE_AREAS, _clean_line
+
+    areas = {(str(entry["site"]).strip(), _clean_line(entry["line"])): entry["fab"] for entry in entries
+             if entry.get("fab") in {"MEMORY", "FOUNDRY"}}
+
+    def resolve(stored, site, line):
+        if stored:
+            return stored
+        if not site or not line:
+            return None
+        key = site.strip(), _clean_line(line)
+        return areas.get(key) or LINE_AREAS.get(key)
+
+    return resolve
+
+
 def _line_key(site, fab, line):
     return f"{site}:{fab}:{line}" if fab is not None else f"{site}:{line}"
 
 
-def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> DashboardSource:
+class _TargetReadView:
+    """현재 읽기 트랜잭션의 전체 원본 행을 공유 노트 지문 검사에서 재사용한다.
+
+    저장 서비스에는 전달하지 않는다. 다음 조회는 새 행을 읽으며 없는 기본 키는
+    원래 get과 같이 LookupError다. DTO로 줄이지 않아 지문에 쓰이는 모든 필드를 보존한다.
+    """
+
+    def __init__(self, tx, rows):
+        self.repository, self.session = tx.repository, tx.session
+        self._tx = tx
+        self._keys = {name: tuple(column.name for column in tx.repository.table(name).primary_key.columns)
+                      for name in rows}
+        self._rows = {name: {tuple(row[key] for key in self._keys[name]): row for row in values}
+                      for name, values in rows.items()}
+        table = tx.repository.table("app_setting")
+        prefix = b"shared_note_item_models.v1:"
+        query = select(table).where(table.c.setting_key >= prefix, table.c.setting_key < b"shared_note_item_models.v1;")
+        self._shared_raw = {saved["setting_key"]: dict(saved) for saved in tx.session.execute(query).mappings()}
+        self._shared = {}
+
+    def get(self, table, key):
+        if table in self._rows:
+            identity = tuple(key[name] for name in self._keys[table])
+            try:
+                return deepcopy(self._rows[table][identity])
+            except KeyError:
+                raise LookupError("현재 읽기 자료에 해당 행이 없습니다.") from None
+        if table == "app_setting" and isinstance(key.get("setting_key"), str) and key["setting_key"].startswith("shared_note_item_models.v1:"):
+            name = key["setting_key"]
+            if name not in self._shared:
+                raw = self._shared_raw.get(name.encode("utf-8"), self._shared_raw.get(name))
+                if raw is None:
+                    raise LookupError("현재 읽기 자료에 해당 설정이 없습니다.")
+                self._shared[name] = decode_record("app_setting", raw)
+            return deepcopy(self._shared[name])
+        return self._tx.get(table, key)
+
+
+def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publish_lines=True) -> DashboardSource:
     """DB를 한 번 읽어 대시보드 공급자를 만든다. 연결할 수 없는 현황은 빼고 ``source_label``에 건수를 적는다.
 
     ``catalog``를 주면 그 선택지를 그대로 쓰고(조회 중 선택지 고정), 없으면 저장 현황으로 새로 만든다.
+    워커의 ``publish_lines=False`` 읽기는 등록 라인을 전역에 반영하지 않는다. 라인 자료는 공급자에
+    보관하고 화면이 완성된 조회를 채택할 때 반영한다.
     """
     repository = EquipmentRepository()
     with storage.transaction() as tx:
@@ -137,8 +217,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         families = repository.rows(tx, "version_family")
         releases = repository.rows(tx, "release_version")
         equipment = {row["equipment_id"]: row for row in repository.rows(tx, "equipment")}
-        stored = tuple(repository.load(tx, equipment[row["equipment_id"]], row)
-                       for row in repository.rows(tx, "equipment_snapshot"))
+        stored = repository.load_all(tx, equipment)
         links = repository.rows(tx, "release_version_item")
         items = repository.rows(tx, "item")
         from setron.ui.item_original import original_item_rows
@@ -147,16 +226,20 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         pairs = tuple(sorted({(model_id, sw.family_id) for value in stored for sw in value.software
                               for model_id in ([pm.group_id for pm in sw.pms] if sw.pms else [value.group_id])
                               if model_id is not None}))
-        target_catalog = TargetService(None).read_in(tx, pairs, {pair: None for pair in pairs})
+        target_read = (_TargetReadView(tx, {"equipment_group": groups, "version_family": families,
+            "release_version": releases, "release_version_item": links, "item": items}) if pairs else tx)
+        target_catalog = TargetService(None).read_in(target_read, pairs, {pair: None for pair in pairs})
         # 노후도 기간 기준 (BE-016). 저장값이 잘못되면 None이며 화면은 '기준 설정 오류'로 보인다.
         age_thresholds = thresholds_in(tx).thresholds
         extra_sites = registered_sites(tx)
         extra_lines = registered_lines(tx)
-    use_registered_lines(extra_lines)  # 가져오기 · AI 분석의 메모리/파운드리 판정도 같은 등록 라인을 쓴다
+    if publish_lines:
+        use_registered_lines(extra_lines)  # 가져오기 · AI 분석도 채택한 등록 라인을 쓴다
+    area_for = _line_area_resolver(extra_lines)
     keys = group_keys(groups)
     catalog = catalog or database_catalog(stored, {group["group_name"] for group in groups},
                                           extra_groups=registered_group_options(groups, keys), extra_sites=extra_sites,
-                                          extra_lines=extra_lines)
+                                          extra_lines=extra_lines, area_resolver=area_for)
 
     # 개조형은 상위 설비군의 선택지에 함께 묶는다 (데이터 관리에서 등록한 개조형 포함, 11-11).
     bindings = tuple(GroupBinding(option.key, tuple(sorted(gid for gid, key in keys.items() if key == option.key)))
@@ -183,7 +266,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
     stored_areas = {(value.base_date, value.equipment_id): value.production_area for value in stored}
 
     def location(record):
-        fab = line_area(stored_areas[record.base_date, record.equipment_id], record.site, record.line)
+        fab = None if record.is_hpa else area_for(stored_areas[record.base_date, record.equipment_id], record.site, record.line)
         fab = fab if fab in fab_keys else None
         key = _line_key(sites[record.site], fab, record.line)
         return EquipmentLocation(sites[record.site], record.line, fab, key if key in line_keys else None)
@@ -196,7 +279,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         TargetScope(row["target_scope"]), tuple(row["target_group_ids"] or ()),
     ) for row in links))
     all_rules = tuple(rule_from_row(row, family_releases, links) for row in rules)
-    assessor = RiskAssessor(family_releases, item_catalog, all_rules)
+    assessor = _LoadedRiskAssessor(family_releases, item_catalog, all_rules)
 
     def risk_status(record):
         """표시하는 모델의 PM만 포함한 관측을 현재 위험 규칙으로 다시 판정한다.
@@ -230,6 +313,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
                              risk_evaluator=risk_status, risk_rule_state=rule_state,
                              locations_by_date={(r.base_date, r.equipment_id): location(r) for r in records})
     source.applicability = target_catalog.applicability
+    source.registered_line_entries = tuple(extra_lines)
     # 버전(N) 기준 입력에서 저장한 N 그룹. 형식이 깨진 저장값은 그룹 없이(목표 N 하나로) 계산하고 안내한다.
     source.group_store = GroupStore(storage)
     try:
@@ -290,8 +374,12 @@ def _version_catalog(groups, families, releases, items, links, observations, app
         tuple(pair.model_id for pair in known if pair.family_id == row["family_id"]),
         _source_references(row), row["item_mapping_status"] == "VERIFIED",
     ) for row in releases)
-    item_entries = tuple(ItemEntry(Item(row["item_id"], row["item_no"], row["content"], row.get("jira_code")),
-                                   _source_references(row)) for row in items)
+    # 실제 저장 열의 NULL도 확정값이다. 구형 별칭은 canonical 열 자체가 없을 때만 읽는다.
+    item_entries = tuple(ItemEntry(
+        Item(row["item_id"], row["item_no"], row["content"],
+             row["jira_code"] if "jira_code" in row else row.get("jira_key")),
+        _source_references(row), jira_code_known="jira_code" in row or "jira_key" in row,
+    ) for row in items)
     memberships = tuple(VersionItem(row["release_version_id"], row["item_id"], ItemState(row["item_state"]),
                                     TargetScope(row["target_scope"]), tuple(row["target_group_ids"] or ()))
                         for row in links)
@@ -312,48 +400,47 @@ class DatabaseDashboardSource(DashboardSource):
     def __init__(self, loader: Callable[..., DashboardSource]) -> None:
         self._lock = RLock()
         self._loader = loader
+        self._read_owner = object()
+        self._read_generation = self._accepted_generation = 0
         # 인자 없는 로더(고정 자료·기존 호출)는 선택지를 받지 않는다.
-        self._takes_catalog = bool(inspect.signature(loader).parameters)
+        parameters = inspect.signature(loader).parameters
+        self._takes_catalog = any(value.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                                inspect.Parameter.VAR_POSITIONAL)
+                                  for name, value in parameters.items() if name != "publish_lines")
+        self._takes_publish_lines = "publish_lines" in parameters or any(
+            value.kind is inspect.Parameter.VAR_KEYWORD for value in parameters.values())
         self._copy(self._load(None))
 
-    def _load(self, catalog):
-        return self._loader(catalog) if self._takes_catalog else self._loader()
+    def _load(self, catalog, *, publish_lines=True):
+        kwargs = {"publish_lines": publish_lines} if self._takes_publish_lines else {}
+        return self._loader(catalog, **kwargs) if self._takes_catalog else self._loader(**kwargs)
 
     def refresh(self) -> None:
         """DB를 다시 읽는다. 실패하면 이전 자료를 유지하고 화면이 처리하는 RuntimeError를 낸다."""
-        with self._lock:
-            try:
-                fresh = self._load(self.catalog)
-            except DatabaseError as error:
-                raise RuntimeError(f"DB 자료를 읽지 못했습니다: {error}") from error
-            # 선택지를 받지 않는 로더(고정 자료·테스트)는 로더가 만든 선택지를 그대로 쓴다.
-            if fresh.bindings != self.bindings:
-                raise RuntimeError("설비군 매핑이 바뀌었습니다. 앱을 다시 시작해 주세요.")
-            self._copy(fresh)
+        self.accept_query(self._read_source())
 
     def reload_catalog(self) -> QueryCatalog:
         """저장 현황으로 조회 선택지를 다시 만들고 자료도 함께 다시 읽는다."""
+        fresh = self._read_source(new_catalog=True)
+        self._accept_source(fresh, replace_catalog=True)
         with self._lock:
-            try:
-                fresh = self._load(None)
-            except DatabaseError as error:
-                raise RuntimeError(f"DB 자료를 읽지 못했습니다: {error}") from error
-            self._copy(fresh)
             return self.catalog
 
     def load_version_catalog(self) -> VersionCatalog:
         """새 DB 자료의 릴리즈·Item·원본 위치를 조회 화면에 전달한다."""
-        with self._lock:
-            self.refresh()
-            return self.version_catalog
+        fresh = self._read_source()
+        self.accept_query(fresh)
+        return fresh.version_catalog
 
     def load_item_data(self):
         """같은 DB 읽기의 Item·릴리즈·관측을 다른 워커의 갱신과 섞지 않고 반환한다."""
         from setron.ui.item_data import item_data_from_source
 
-        with self._lock:
-            self.refresh()
-            return item_data_from_source(self.version_catalog, self)
+        fresh = self._read_source()
+        data = item_data_from_source(fresh.version_catalog, fresh)
+        self.accept_query(fresh)
+        return data
 
     def snapshot(self, query):
         """최신 모델 적용 근거로 N을 검사하고 원래 선택 ID는 변경하지 않는다.
@@ -364,25 +451,81 @@ class DatabaseDashboardSource(DashboardSource):
         return
         - 현재 자료로 계산한 결과. 무효 N은 계산에서 제외하고 재선택 이유를 표시.
         """
+        fresh, result = self.read_query(query)
+        self.accept_query(fresh)
+        return result
+
+    def read_query(self, query):
+        """워커에서 독립 자료와 조회 결과를 만든다. 화면이 사용하는 공급자는 갱신하지 않는다.
+
+        실제 DB 읽기 동안 잠금을 잡지 않아 새 요청을 막지 않는다. 호출자는 최신 요청의 결과만
+        :meth:`accept_query`로 채택해야 하며, 취소된 요청의 자료는 버린다.
+        """
+        fresh = self._read_source()
+        return fresh, self._snapshot_from(fresh, query)
+
+    def accept_query(self, fresh):
+        """완성된 자료를 채택한다. 더 최신 읽기가 이미 채택됐으면 False를 반환한다."""
+        return self._accept_source(fresh)
+
+    def _read_source(self, *, new_catalog=False):
+        """읽기 번호만 잠금 안에서 예약하고 DB 작업은 독립 공급자에서 끝낸다."""
         with self._lock:
-            self.refresh()
-            if query.targets is None:
-                return super().snapshot(query)
-            selected = self.align_targets(query.targets)
-            pairs = {pair.key: pair for pair in target_pairs(self)}
-            invalid = tuple(target for target in selected if target.release_id is not None and
-                            target.release_id not in {option.release.release_version_id for option in pairs[
-                                target.model_id, target.family_id].options if option.unavailable_reason is None})
-            invalid_keys = {(target.model_id, target.family_id) for target in invalid}
-            effective = tuple(replace(target, release_id=None) if (target.model_id, target.family_id) in invalid_keys
-                              else target for target in selected)
-            result = super().snapshot(replace(query, targets=effective))
-            if invalid:
-                notice = " / ".join(f"{model_name(self, target.model_id)}·계열 {family_name(self, target.family_id)}"
-                                    for target in invalid)
-                result = replace(result, source_label=f"{result.source_label} · 목표 N 재선택·적용 근거 재확인 필요: {notice}")
-            # 화면은 요청한 조회 객체와 결과를 비교하므로 원래 조회 객체를 돌려준다.
-            return replace(result, query=query)
+            self._read_generation += 1
+            generation, owner = self._read_generation, self._read_owner
+            catalog = None if new_catalog else self.catalog
+            bindings = None if new_catalog else dict(self.bindings)
+        try:
+            # 고정 로더가 같은 객체를 반환해도 요청별 번호를 서로 덮어쓰지 않게 한다.
+            fresh = copy(self._load(catalog, publish_lines=False))
+        except DatabaseError as error:
+            raise RuntimeError(f"DB 자료를 읽지 못했습니다: {error}") from error
+        if bindings is not None:
+            self._check_bindings(fresh, bindings)
+        fresh._source_read_owner, fresh._source_read_generation = owner, generation
+        return fresh
+
+    def _accept_source(self, fresh, *, replace_catalog=False):
+        with self._lock:
+            owner = getattr(fresh, "_source_read_owner", self._read_owner)
+            generation = getattr(fresh, "_source_read_generation", self._read_generation)
+            if owner is not self._read_owner or generation < self._accepted_generation:
+                return False
+            if not replace_catalog:
+                self._check_bindings(fresh, self.bindings)
+            self._copy(fresh)
+            self._accepted_generation = generation
+            if hasattr(fresh, "registered_line_entries"):
+                use_registered_lines(fresh.registered_line_entries)
+            return True
+
+    @staticmethod
+    def _check_bindings(fresh, bindings):
+        if fresh.bindings != bindings:
+            raise RuntimeError("설비군 매핑이 바뀌었습니다. 앱을 다시 시작해 주세요.")
+
+    @staticmethod
+    def _snapshot_from(source, query):
+        """DB를 다시 읽지 않고 한 자료 묶음의 목표 검증과 집계를 끝낸다."""
+        if query.targets is None:
+            return DashboardSource.snapshot(source, query)
+        pairs = {pair.key: pair for pair in target_pairs(source)}
+        chosen = {(target.model_id, target.family_id): target.release_id for target in query.targets}
+        selected = tuple(TargetN(pair.model_id, pair.family_id, chosen.get(pair.key, pair.current_id))
+                         for pair in pairs.values())
+        invalid = tuple(target for target in selected if target.release_id is not None and
+                        target.release_id not in {option.release.release_version_id for option in pairs[
+                            target.model_id, target.family_id].options if option.unavailable_reason is None})
+        invalid_keys = {(target.model_id, target.family_id) for target in invalid}
+        effective = tuple(replace(target, release_id=None) if (target.model_id, target.family_id) in invalid_keys
+                          else target for target in selected)
+        result = DashboardSource.snapshot(source, replace(query, targets=effective))
+        if invalid:
+            notice = " / ".join(f"{model_name(source, target.model_id)}·계열 {family_name(source, target.family_id)}"
+                                for target in invalid)
+            result = replace(result, source_label=f"{result.source_label} · 목표 N 재선택·적용 근거 재확인 필요: {notice}")
+        # 화면은 요청한 조회 객체와 결과를 비교하므로 원래 조회 객체를 돌려준다.
+        return replace(result, query=query)
 
     def align_targets(self, targets):
         """다시 읽은 자료의 모델·계열 목록에 목표 초안을 맞춘다.
@@ -390,12 +533,16 @@ class DatabaseDashboardSource(DashboardSource):
         이미 고른 목표는 그대로 두고, 새로 생긴 모델·계열은 미지정, 사라진 것은 뺀다.
         """
         with self._lock:
-            chosen = {(t.model_id, t.family_id): t.release_id for t in targets}
-            return tuple(TargetN(p.model_id, p.family_id, chosen.get(p.key, p.current_id)) for p in target_pairs(self))
+            current = copy(self)
+        chosen = {(t.model_id, t.family_id): t.release_id for t in targets}
+        return tuple(TargetN(p.model_id, p.family_id, chosen.get(p.key, p.current_id)) for p in target_pairs(current))
 
     def _copy(self, source: DashboardSource) -> None:
         with self._lock:
-            self.__dict__.update({k: v for k, v in vars(source).items() if k not in {"_lock", "_loader", "_takes_catalog"}})
+            self.__dict__.update({k: v for k, v in vars(source).items()
+                                  if k not in {"_lock", "_loader", "_takes_catalog", "_takes_publish_lines",
+                                               "_read_owner", "_read_generation", "_accepted_generation",
+                                               "_source_read_owner", "_source_read_generation"}})
 
 
 def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | None, str | None]:
@@ -417,10 +564,11 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
     try:
         database = Database.from_env(values)
         storage = StorageService(database)
-        # Item Jira 칸(11/12): 이미 만든 DB에 칸이 없으면 더하고, 빈 Jira를 원본 보관에서 한 번 채운다. 실패해도 계속.
+        # 업그레이드가 DDL 후 저장소 reflection을 갱신한다. 기존 Jira 값과 NULL은 보존한다.
         from setron.features.item.jira_upgrade import upgrade as upgrade_jira
         upgrade_jira(storage, database.engine)
-        return DatabaseDashboardSource(lambda catalog=None: load_dashboard_source(storage, catalog)), None
+        return DatabaseDashboardSource(lambda catalog=None, *, publish_lines=True:
+                                       load_dashboard_source(storage, catalog, publish_lines=publish_lines)), None
     except (DatabaseError, StorageValidationError) as error:
         return None, f"DB 자료를 읽지 못해 합성 예시로 시작했습니다: {error}"
 

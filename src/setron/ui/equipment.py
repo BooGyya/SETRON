@@ -16,6 +16,7 @@ from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, back_button, button, label
 from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
+from setron.ui.deferred_result import DeferredResultMixin, ResultAttribute
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings, lookup_records
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
@@ -101,15 +102,17 @@ class ReadTableModel(QAbstractTableModel):
         super().__init__()
         self.headings, self.rows, self.ids, self.tones = headings, (), (), ()
         self.tooltips = {}
+        self.cell_tones = {}
         self.numeric_columns = numeric_columns
         self.tone_column = tone_column
         self.alignment = (Qt.AlignmentFlag.AlignCenter if centered else
                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-    def set_rows(self, rows, ids=(), tones=(), *, tooltips=None):
+    def set_rows(self, rows, ids=(), tones=(), *, tooltips=None, cell_tones=None):
         self.beginResetModel()
         self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
         self.tooltips = dict(tooltips or {})
+        self.cell_tones = dict(cell_tones or {})
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()):
@@ -136,8 +139,12 @@ class ReadTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.FontRole:
             return paint_font(14 if self.ids and index.column() == 0 else 13,
                         medium=bool(self.ids) and index.column() == 0, numeric=index.column() in self.numeric_columns)
-        if role == Qt.ItemDataRole.ForegroundRole and self.tones and index.column() == self.tone_column:
-            return ui_color(TONES[self.tones[index.row()]][1])
+        if role == Qt.ItemDataRole.ForegroundRole:
+            tone = self.cell_tones.get((index.row(), index.column()))
+            if tone is None and self.tones and index.column() == self.tone_column:
+                tone = self.tones[index.row()]
+            if tone is not None:
+                return ui_color(TONES[tone][1])
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return self.alignment
         return None
@@ -201,7 +208,23 @@ def fit_rows(table, *, compact=False):
         table.setFixedHeight(max(260, min(800, height + 28)))
 
 
-class EquipmentPage(QWidget):
+class EquipmentPage(DeferredResultMixin, QWidget):
+    data = ResultAttribute()
+    model = ResultAttribute()
+    full_list_model = ResultAttribute()
+    drawer_list_model = ResultAttribute()
+    drawer_risk_model = ResultAttribute()
+    table = ResultAttribute()
+    visible_tiles = ResultAttribute()
+    scope_ids = ResultAttribute()
+    selected_id = ResultAttribute()
+    metrics = ResultAttribute()
+    context = ResultAttribute()
+    result_status = ResultAttribute()
+    page_caption = ResultAttribute()
+    search = ResultAttribute()
+    goal_filter = ResultAttribute()
+    sort = ResultAttribute()
     mode_changed = Signal(str)
     back_requested = Signal(str)
 
@@ -281,9 +304,9 @@ class EquipmentPage(QWidget):
         self.model = self.full_list_model = ReadTableModel(
             ("설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거"),
             numeric_columns=(3,))
-        self.drawer_list_model = ReadTableModel(("설비명", "모델", "계열", "적용현황"), centered=True, tone_column=3)
-        self.drawer_risk_model = ReadTableModel(("설비명", "모델", "계열", "적용현황", "위험 기준"), centered=True,
-                                                tone_column=3)
+        self.drawer_list_model = ReadTableModel(("설비명", "모델", "계열", "적용현황", "위험버전"), centered=True, tone_column=3)
+        self.drawer_risk_model = ReadTableModel(("설비명", "모델", "계열", "적용현황", "위험버전", "위험 기준"),
+                                                centered=True, tone_column=3)
         self.table = read_table(self.model, "선택 범위 설비 목록", (110, 164, 170, 216, 140, 220))
         self._full_list_widths = self.table.base_widths
         self._full_header_alignment = self.table.horizontalHeader().defaultAlignment()
@@ -370,8 +393,8 @@ class EquipmentPage(QWidget):
         if model is self.model and self.table.model() is model:
             return
         self.model = model
-        self.table.base_widths = ((96, 96, 110, 104, 104) if model is self.drawer_risk_model
-                                  else (110, 110, 130, 130) if compact else self._full_list_widths)
+        self.table.base_widths = ((110, 100, 125, 140, 95, 115) if model is self.drawer_risk_model
+                                  else (110, 110, 130, 130, 100) if compact else self._full_list_widths)
         self.table.setModel(model)
 
     # ----- 설비 상세 -----
@@ -640,6 +663,7 @@ class EquipmentPage(QWidget):
         self.updateGeometry()
 
     def clear(self, text="선택지 변경 · 재조회 필요", *_):
+        self._pending_result = None
         self.close_item_detail()
         self.snapshot, self.data, self.scope_ids, self.selected_id = None, None, (), None
         self.detail_model.set_rows(())
@@ -662,6 +686,7 @@ class EquipmentPage(QWidget):
         if (not self.state.is_current(query) or snapshot.query is not query
                 or not self.state.catalog.is_view_of(self.source.catalog)):
             return False
+        self._pending_result = None
         try:
             data = equipment_data(snapshot, self.source)
         except (ValueError, RuntimeError):
@@ -673,6 +698,7 @@ class EquipmentPage(QWidget):
         return True
 
     def _current(self):
+        self.ensure_result()
         return self.snapshot is not None and self.state.is_current(self.snapshot.query)
 
     def _reset_filters(self):
@@ -755,6 +781,8 @@ class EquipmentPage(QWidget):
                 "\n".join(family_name(self.source, family_id) for family_id in families))
 
     def _render_list(self):
+        if self.ensure_result():
+            return
         current = self._current()
         for control in (self.search, self.goal_filter, self.sort):
             control.setEnabled(current)
@@ -765,16 +793,16 @@ class EquipmentPage(QWidget):
         total = len(self.visible_tiles)
         self.page_index = min(self.page_index, max(0, (total - 1) // self.page_size))
         start = self.page_index * self.page_size
-        rows, tones = [], []
+        rows, tones, tooltips, cell_tones = [], [], {}, {}
         page = self.visible_tiles[start:start + self.page_size]
         compact = self._list_host is not None
         self._use_list_model(compact)
         risk_column = self.model is self.drawer_risk_model
-        tooltips = {}
         if compact and page:
             records = {record.equipment_id: record for record in lookup_records(self.snapshot)}
             model_names = {mid: model_name(self.source, mid) for ids in self.source.bindings.values() for mid in ids}
-        for index, tile in enumerate(page):
+            whole_tiles = {detail.record.equipment_id: detail.whole for detail in self.data.details}
+        for row, tile in enumerate(page):
             code = tile.code
             if self.sort.currentData() == "priority":
                 entry = self.data.priority.get(tile.equipment_id)
@@ -782,14 +810,22 @@ class EquipmentPage(QWidget):
             goal = tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else "")
             if compact:
                 models, families = self._drawer_model_families(records[tile.equipment_id], model_names)
-                row = (code, models, families, goal)
+                whole = whole_tiles[tile.equipment_id]
+                excluded = whole.goal is GoalState.EXCLUDED
+                risk = "분석 제외" if excluded else {
+                    RiskStatus.RISK: "위험 후보", RiskStatus.NO_RISK: "후보 아님", RiskStatus.UNKNOWN: "미확인",
+                }[whole.risk]
+                values = (code, models, families, goal, risk)
+                tooltips[row, 4] = "\n".join(filter(None, (whole.risk_label, whole.risk_detail)))
+                cell_tones[row, 4] = ("neutral" if excluded else
+                                      {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning"}.get(whole.risk, "neutral"))
                 if risk_column:
-                    # 판정기 근거로 적용 위험(결함 Item·위험 버전 사용) / 미적용 위험(필수 Item 미적용)을 나눈다.
+                    # 후보 배지의 선택 범위 근거는 설비 전체의 위험 상태와 별도 열로 보존한다.
                     kinds = risk_kinds(tile.findings)
-                    row += ("\n".join(RISK_KIND_LABELS[k] for k in kinds) if kinds
-                            else "근거 미연결" if tile.risk is RiskStatus.RISK else tile.risk_label,)
-                    tooltips[index, 4] = tile.risk_detail or tile.risk_label
-                rows.append(row)
+                    values += ("\n".join(RISK_KIND_LABELS[k] for k in kinds) if kinds
+                               else "근거 미연결" if tile.risk is RiskStatus.RISK else tile.risk_label,)
+                    tooltips[row, 5] = tile.risk_detail or tile.risk_label
+                rows.append(values)
             else:
                 versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
                 names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
@@ -797,7 +833,7 @@ class EquipmentPage(QWidget):
                 rows.append((code, location.replace(" · ", "\n"), names, versions, goal,
                              "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
-        self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones, tooltips=tooltips)
+        self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones, tooltips=tooltips, cell_tones=cell_tones)
         fit_rows(self.table, compact=compact)
         self.table.setVisible(bool(page))
         self.message.setVisible(not page)

@@ -32,7 +32,7 @@ class IntervalSelector(QWidget):
         self._action = action
         for step, text in INTERVALS.items():
             if step is None and custom_days:
-                text = "지정일마다"
+                text = "지정 일수"
             index = self.segment.addTab(text)
             control = self.segment.buttons[index]
             control.setChecked(step is None)
@@ -76,17 +76,18 @@ class IntervalSelector(QWidget):
             self.buttons[selected].setChecked(True)
             self._current_step = step
             if self.custom_days:
-                self.buttons[None].setText("지정일마다")
-                self.buttons[None].setAccessibleName(f"{self.caption_label.text()} 지정일마다")
+                self.buttons[None].setText("지정 일수")
+                self.buttons[None].setAccessibleName(f"{self.caption_label.text()} 지정 일수")
                 self.buttons[None].setToolTip(f"시작 날짜부터 {self.day_value}일 간격으로 {self._action}")
 
     def set_saved_days(self):
-        """지정 일수와 구별해서 실제 저장된 날짜를 선택한 상태로 표시한다."""
+        """첫 버튼의 이름을 유지하며 실제 저장 날짜를 사용하는 상태로 돌린다."""
         with QSignalBlocker(self):
             control = self.buttons[None]
             control.setChecked(True)
-            control.setText("저장일마다")
-            control.setAccessibleName(f"{self.caption_label.text()} 저장일마다")
+            text = "지정 일수" if self.custom_days else "저장일마다"
+            control.setText(text)
+            control.setAccessibleName(f"{self.caption_label.text()} {text}")
             control.setToolTip(f"실제 저장된 날짜마다 {self._action}")
             self._current_step = None
 

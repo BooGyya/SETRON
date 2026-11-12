@@ -24,7 +24,7 @@ from setron.features.release.refresh import (ReleaseRefreshService, _context_cop
 from setron.features.release.refresh_schemas import RefreshContext
 from setron.features.release.schemas import ItemLinkInput
 from setron.features.release.service import ReleaseService
-from setron.features.release.validation import ITEM_EDITABLE, RELEASE_EDITABLE, prepare_links
+from setron.features.release.validation import ITEM_EDIT_RECORDED, RELEASE_EDITABLE, prepare_links
 from setron.features.risk.impact import DRAFT_RULE_ID, RuleImpact, preview_rule_impact
 from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
 from setron.features.storage.inputs import identifier, require, required_text
@@ -43,7 +43,7 @@ EDITABLE = {
     "equipment_version": frozenset({"family_id", "version_raw", "release_version_id"}),
     "equipment_pm": frozenset({"group_id", "model_name_raw", "family_id", "version_raw", "release_version_id"}),
     "release_version": RELEASE_EDITABLE,
-    "item": ITEM_EDITABLE,
+    "item": ITEM_EDIT_RECORDED,
     "release_version_item": frozenset({"item_state", "target_scope", "target_group_ids"}),
     "risk_rule": frozenset({"rule_type", "family_id", "group_id", "item_id", "release_version_id",
                             "start_release_version_id", "end_release_version_id", "risk_reason",

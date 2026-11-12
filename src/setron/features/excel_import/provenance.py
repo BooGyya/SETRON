@@ -98,11 +98,10 @@ def _matches_saved(field, value, original, values, kind, address):
         return current == text
     if current == text:
         return True
-    if field == "jira_code":                 # JIRA 열 · 비고 문장 속 'ETOJ-1234': 코드가 모두 그 칸에 적혀 있어야 한다
-        from setron.features.item.jira import split_codes
+    if field in {"jira_code", "jira_key"}:   # 각 조각이 같은 근거 셀에 실제로 있어야 한다.
+        from setron.features.item.jira import matches_source
 
-        codes = split_codes(current)
-        return bool(codes) and all(code in text for code in codes)
+        return matches_source(current, text)
     candidates = [current, text]
     if field in {"base_date", "release_date"}:
         candidates.extend(_DATES.findall(text))

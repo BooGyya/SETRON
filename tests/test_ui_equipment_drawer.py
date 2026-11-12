@@ -10,6 +10,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from setron.features.aggregation.schemas import PmVersion
+from setron.features.risk.schemas import FindingBasis, RiskFinding, RiskRule, RiskStatus, RuleType
 from setron.ui.app import create_window
 from setron.ui.equipment_drawer import EquipmentDrawer, observed_software
 from setron.ui.heatmap_data import EquipmentSelection, GoalState
@@ -137,10 +138,18 @@ def test_software_shows_current_and_target_on_separate_rows_without_verdict_or_c
     assert not any(text.startswith(("판정 요약", "관측된 SW (", "관측 SW ")) or "원본 근거" in text for text in captions)
 
 
-@pytest.mark.parametrize("eid,goal,cards", [(1, GoalState.BELOW, 3), (2, GoalState.MET, 1),
-                                         (3, GoalState.UNKNOWN, 1), (4, GoalState.EXCLUDED, 0),
-                                         (5, GoalState.UNKNOWN, 0)])
-def test_representative_states_are_real_data_not_figma_demo(window, eid, goal, cards):
+@pytest.mark.parametrize("eid,goal,cards,risk,status,tone", [
+    (1, GoalState.BELOW, 3, RiskStatus.RISK, "위험 후보", "danger"),
+    (2, GoalState.MET, 1, RiskStatus.RISK, "위험 후보", "danger"),
+    (2, GoalState.MET, 1, RiskStatus.NO_RISK, "등록 규칙상 후보 아님", "neutral"),
+    (3, GoalState.UNKNOWN, 1, RiskStatus.UNKNOWN, "위험 미확인", "warning"),
+    (4, GoalState.EXCLUDED, 0, RiskStatus.UNKNOWN, "위험 분석 제외", "neutral"),
+    (5, GoalState.UNKNOWN, 0, RiskStatus.UNKNOWN, "위험 미확인", "warning"),
+])
+def test_representative_states_are_real_data_not_figma_demo(window, source, eid, goal, cards, risk, status, tone):
+    if risk is RiskStatus.NO_RISK:
+        source.risks[eid] = risk
+        window.query_panel.apply_draft()
     drawer = open_tile(window, eid)
     assert drawer.detail.whole.goal is goal
     if goal is GoalState.EXCLUDED:
@@ -150,8 +159,15 @@ def test_representative_states_are_real_data_not_figma_demo(window, eid, goal, c
     else:
         assert drawer.goal_badge.text() == goal.value
     assert len(drawer.software_cards) == cards
+    assert drawer.risk_title.text() == "위험버전"
+    assert drawer.risk_status_badge.text() == status
+    assert drawer.risk_status_badge.tone == tone
+    assert drawer.risk_card.isAncestorOf(drawer.risk_status_badge)
+    assert drawer.risk_card.isAncestorOf(drawer.risk_reason)
+    assert drawer.risk_reason.text()
+    assert drawer.body.itemAt(drawer.body.count() - 1).widget() is drawer.risk_card
     if eid == 2:
-        assert "위험 후보" in drawer.risk_badge.text()  # 목표 달성 ≠ 위험 해제
+        assert drawer.risk_badge.text() == status  # 목표 달성 ≠ 위험 해제
         observation = drawer.software_cards[0].observation
         assert observation.current == observation.target == "v2"
     if eid == 3:
@@ -159,6 +175,24 @@ def test_representative_states_are_real_data_not_figma_demo(window, eid, goal, c
     assert drawer.info_values["설비명"].text() == f"TEST-{eid}"
     assert not hasattr(drawer, "edit_button")
     assert not any(control.text() == "버전 정보 수정" for control in drawer.findChildren(QPushButton))
+
+
+def test_risk_card_preserves_long_finding_as_plain_wrapped_text(window, app):
+    drawer = open_tile(window)
+    reason = "위험 지정 사유 <검토 중> " * 30
+    rule = RiskRule(1, RuleType.DIRECT_VERSION, 1001, reason)
+    finding = RiskFinding(rule, RiskStatus.RISK, FindingBasis.DIRECT_VERSION, drawer.detail.record.pms[0])
+    whole = replace(drawer.detail.whole, findings=(finding,))
+    detail = replace(drawer.detail, whole=whole)
+    drawer.open_detail(drawer.request, detail, window.pages["equipment"].detail_model.rows)
+    assert drawer.risk_reason.text() == whole.risk_detail and reason in drawer.risk_reason.text()
+    assert drawer.risk_reason.textFormat() == Qt.TextFormat.PlainText
+    assert drawer.risk_reason.wordWrap()
+    window.resize(960, 600)
+    app.processEvents()
+    assert drawer.scroll.horizontalScrollBar().maximum() == 0
+    assert drawer.body_widget.width() == drawer.scroll.viewport().width()
+    assert drawer.risk_card.width() <= drawer.body_widget.width()
 
 
 def test_panel_shows_actual_equipment_information_in_one_card(window):

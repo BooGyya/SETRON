@@ -11,7 +11,10 @@ from ntpath import normcase, normpath
 from typing import Any
 import warnings
 
-import xlwings as xw
+from setron.infrastructure._lazy_module import LazyModule
+
+
+xw = LazyModule("xlwings")
 
 
 class ExcelReadError(Exception):

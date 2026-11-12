@@ -7,7 +7,7 @@ from setron.features.aggregation.schemas import EquipmentRecord
 from setron.features.item.schemas import Application, BASIS_LABELS, TargetScope
 from setron.features.item.service import ItemCatalog, search_items
 from setron.features.item.jira import split_codes
-from setron.ui.item_original import JIRA_FOUND, ItemJira, jira_by_item
+from setron.ui.item_original import ItemJira, JIRA_EMPTY, JIRA_FOUND, jira_by_item
 from setron.ui.version_data import VersionCatalog
 
 
@@ -64,13 +64,19 @@ class ItemManagerData:
         return tuple(result)
 
     def jira(self, item_ids=None):
-        """Item별 Jira 코드. 저장된 값(11/12)을 먼저 쓰고, 없으면 보관 원본 행에서 읽는다. 둘 다 없으면 미확인."""
+        """저장된 코드와 NULL을 우선하며, Jira 저장 열이 없던 자료만 원본 행을 읽는다."""
         ids = [e.item.item_id for e in self.versions.items] if item_ids is None else list(item_ids)
-        stored = {e.item.item_id: e.item.jira_code for e in self.versions.items
-                  if e.item.item_id in set(ids) and getattr(e.item, "jira_code", None)}
-        result = jira_by_item(self.versions.original_rows, [i for i in ids if i not in stored])
-        for item_id, codes in stored.items():
-            result[item_id] = ItemJira(split_codes(codes), JIRA_FOUND, ("저장된 Jira 코드",))
+        result = jira_by_item(self.versions.original_rows, ids)
+        for entry in self.versions.items:
+            item_id = entry.item.item_id
+            if item_id not in result:
+                continue
+            if codes := split_codes(entry.item.jira_code):
+                sources = tuple(f"입력 작업 {ref.batch_id} · {ref.sheet} · {ref.cells}"
+                                for ref in getattr(entry, "sources", ()) if ref.field in {"jira_code", "jira_key"})
+                result[item_id] = ItemJira(codes, JIRA_FOUND, sources, stored=True)
+            elif getattr(entry, "jira_code_known", getattr(entry, "jira_key_known", False)):
+                result[item_id] = ItemJira((), JIRA_EMPTY, stored=True)
         return result
 
     def catalog(self):

@@ -431,10 +431,12 @@ def test_compact_list_hides_detail_columns_and_keeps_row_selection(window):
     page = window.pages["heatmap"]
     page.layout_buttons.button(1).click()
     table, model = page.list_table, page.list_model
+    assert page.list_tools.isVisible()
     row = model.ids.index(1)
     index = model.equipment_index(1)
     detailed = model.rows[row]
-    assert detailed[1] == "테스트 A\nP1" and detailed[5].startswith("위험 후보\n")
+    assert detailed[1] == "테스트 A\nP1" and detailed[5] == "위험 후보"
+    assert "세부 근거 미연결" in index.siblingAtColumn(5).data(Qt.ItemDataRole.ToolTipRole)
     assert [col for col in range(model.columnCount()) if table.isColumnHidden(col)] == [1]
     QApplication.processEvents()
     detailed_height = table.visualRect(index).height()
@@ -564,6 +566,7 @@ def test_each_grouping_supports_tree_projection_filter_changes_and_compact_colum
     page.view_toggle.setChecked(False)
     assert [column for column in range(model.columnCount()) if not table.isColumnHidden(column)] == [0, 3, 4]
     page.layout_buttons.button(0).click()
+    assert page.list_tools.isHidden()
     assert set(page.tile_buttons) == expected_ids
     assert all((tile.width(), tile.height()) == (140, 40) for tile in page.tile_occurrences)
 

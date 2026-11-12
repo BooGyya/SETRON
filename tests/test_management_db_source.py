@@ -238,7 +238,7 @@ def test_hpa_observation_remains_available_but_is_excluded_from_common_risk_coun
 
 
 def test_concurrent_item_read_and_refresh_keep_catalog_and_observations_together(revision_storage, monkeypatch):
-    """Item 자료를 조립하는 동안 다른 워커의 DB 갱신이 관측만 교체하지 못하게 한다."""
+    """다른 읽기가 진행돼도 Item은 자기 DB 읽기의 카탈로그·관측으로 함께 조립한다."""
     import setron.ui.item_data as item_module
 
     connected(revision_storage)
@@ -270,7 +270,8 @@ def test_concurrent_item_read_and_refresh_keep_catalog_and_observations_together
         try:
             assert entering_item.wait(2)
             refreshing = executor.submit(source.refresh)
-            assert not third_load.wait(0.05)
+            assert third_load.wait(2)
+            refreshing.result(timeout=2)
         finally:
             release_item.set()
         data = pending.result(timeout=2)

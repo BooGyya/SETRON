@@ -134,7 +134,8 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
     def pick(records):
         chosen = select_records(records, replace(resolved, base_date=None), data.catalog)
         if request.areas:
-            chosen = tuple(r for r in chosen if area_of({"site": r.site, "line": r.line}) in request.areas)
+            chosen = tuple(r for r in chosen if not r.is_hpa and area_of({
+                "production_area": r.production_area, "site": r.site, "line": r.line}) in request.areas)
         if wanted_codes:                                   # 질문 속 설비 호기 (DEMO-0121 · ESPA02)
             chosen = tuple(r for r in chosen if (r.equipment_code or "").casefold() in wanted_codes)
         return tuple(chosen)

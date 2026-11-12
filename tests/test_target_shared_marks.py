@@ -14,6 +14,30 @@ from setron.infrastructure.excel_reader import SheetData
 from test_release_revision import all_rows, revision_storage
 
 
+@pytest.mark.parametrize("jira", [None, "ETOJ-3257"])
+def test_jira_column_rename_keeps_old_model_mark_proof_but_value_changes_invalidate_it(jira):
+    from setron.features.release.shared_models import _fingerprint, _matches_item_fingerprint
+
+    old = {"release": {"release_version_id": 1}, "item": {
+        "item_id": 2, "content": "보존 내용", "jira_key": jira,
+        "source_reference": {"jira_key": {"sheet": "노트", "cells": ["C2"]}}}, "models": []}
+    saved = _fingerprint(old)
+    current = {**old, "item": {key: value for key, value in old["item"].items() if key != "jira_key"}}
+    current["item"]["jira_code"] = jira
+    assert _matches_item_fingerprint(saved, current)
+    assert not _matches_item_fingerprint(saved, {**current, "item": {**current["item"], "jira_code": "ETOJ-9999"}})
+    assert not _matches_item_fingerprint(saved, {**current, "item": {**current["item"], "content": "다른 내용"}})
+
+
+def test_added_jira_column_preserves_pre_jira_model_mark_proof_for_initial_backfill():
+    from setron.features.release.shared_models import _fingerprint, _matches_item_fingerprint
+
+    previous = {"release": {}, "item": {"item_id": 1, "content": "원문"}, "models": []}
+    assert _matches_item_fingerprint(_fingerprint(previous), {**previous, "item": {**previous["item"], "jira_code": None}})
+    assert _matches_item_fingerprint(_fingerprint(previous), {**previous, "item": {**previous["item"], "jira_code": "ETOJ-1"}})
+    assert not _matches_item_fingerprint(_fingerprint(previous), {**previous, "item": {**previous["item"], "content": "변경", "jira_code": "ETOJ-1"}})
+
+
 @pytest.fixture
 def catalog(revision_storage):
     storage = revision_storage

@@ -9,10 +9,14 @@ from enum import Enum
 import json
 import math
 import os
+from threading import Lock
 from typing import Protocol
 from urllib.parse import urlsplit
 
-import openai
+from setron.infrastructure._lazy_module import LazyModule
+
+
+openai = LazyModule("openai")
 
 
 class AIError(Exception):
@@ -134,8 +138,19 @@ class OpenAICompatibleChatClient:
 
     def __init__(self, config: AIConfig, *, http_client=None) -> None:
         self.config = config
-        self._client = openai.OpenAI(base_url=config.base_url, api_key=config.api_key,
-                                     timeout=config.timeout, max_retries=0, http_client=http_client)
+        self._client = None
+        self._http_client = http_client
+        self._client_lock = Lock()
+        self._closed = False
+
+    def _get_client(self):
+        with self._client_lock:
+            if self._closed:
+                raise AIConnectionError("종료된 AI 연결입니다.")
+            if self._client is None:
+                self._client = openai.OpenAI(base_url=self.config.base_url, api_key=self.config.api_key,
+                                            timeout=self.config.timeout, max_retries=0, http_client=self._http_client)
+            return self._client
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None, *, http_client=None) -> OpenAICompatibleChatClient:
@@ -148,8 +163,9 @@ class OpenAICompatibleChatClient:
         서버별 지원 여부가 확인되지 않은 JSON 모드·도구·추론 옵션은 전송하지 않는다.
         SDK 오류의 본문·헤더는 사용자 오류에 포함하지 않는다.
         """
+        client = self._get_client()
         try:
-            response = self._client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=self.config.model,
                 messages=[{"role": message.role, "content": message.content} for message in messages],
             )
@@ -178,7 +194,13 @@ class OpenAICompatibleChatClient:
 
     def close(self) -> None:
         """SDK와 HTTP 연결을 정리한다."""
-        self._client.close()
+        with self._client_lock:
+            if self._closed:
+                return
+            self._closed = True
+            resource = self._client if self._client is not None else self._http_client
+        if resource is not None:
+            resource.close()
 
     def __enter__(self) -> OpenAICompatibleChatClient:
         return self

@@ -26,7 +26,7 @@ FIELD_NAMES = {
     "geometry_type": "형상", "modification_type": "개조 유형", "family_id": "버전 계열",
     "version_raw": "SW 버전", "release_version_id": "대응 릴리즈", "model_name_raw": "PM 모델 표기",
     "version_suffix": "핫픽스 표기", "released_at": "출시일", "version_order": "확인된 릴리즈 순서",
-    "item_mapping_status": "Item 매핑 확인", "item_no": "원본 Item 번호", "content": "변경 내용",
+    "item_mapping_status": "Item 매핑 확인", "item_no": "원본 Item 번호", "content": "변경 내용", "jira_code": "JIRA 이슈코드", "jira_key": "JIRA 이슈코드",
     "item_state": "Item 적용 상태", "target_scope": "적용 모델 범위", "target_group_ids": "적용 모델",
     "rule_type": "위험 유형", "item_id": "대상 Item", "start_release_version_id": "위험 시작 버전",
     "end_release_version_id": "위험 해제 버전", "risk_reason": "위험 사유",

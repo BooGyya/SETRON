@@ -69,6 +69,7 @@ def revision_storage():
     Table("item", metadata, Column("item_id", Integer, primary_key=True),
           Column("release_note_id", Integer, ForeignKey("release_note.release_note_id")),
           Column("item_no", Integer), Column("content", String, nullable=False),
+          Column("jira_code", String(200)),
           Column("batch_id", Integer, ForeignKey("import_batch.batch_id"), nullable=False),
           Column("source_reference", String), Column("edited_fields", String, nullable=False))
     Table("equipment_snapshot", metadata, Column("snapshot_id", Integer, primary_key=True),
