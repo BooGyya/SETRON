@@ -66,7 +66,7 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     p.type_buttons["item"].click()
     until(lambda: not p.item_request.busy)
     assert p.item.isVisibleTo(p) and p.item.count() > 1
-    p.type_buttons["status"].click()
+    p.type_buttons["item"].click()
     assert p.item.isHidden()
     p.query_panel.select("site_key", p.source.catalog.sites[0].key)
     p.start.setDate(QDate(2026, 10, 1))
@@ -159,7 +159,7 @@ def test_generated_report_keeps_original_scope_after_filters_change(own, tmp_pat
     p.query_panel.search_button.click()
     until(lambda: not p.request.busy)
     new = p.result
-    assert new.request.kind == "change" and new.scope != first.scope
+    assert new.request.selected_types == ("status", "change") and new.scope != first.scope
     assert new.request.start == date(2026, 9, 1) and new.request.end == date(2026, 9, 21)
 
 
@@ -198,7 +198,7 @@ def test_ai_report_uses_completed_answer_or_numeric_fallback(own, tmp_path):
     current[0] = None
     r = generated(p)
     assert not any(s.title.startswith("AI 분석 ·") for s in r.sections)
-    assert "수치표만 생성" in report_html(r)
+    assert "AI 분석 결과 없음" in report_html(r)
 
 
 def test_cancel_discards_late_worker_result_and_generation_can_retry(own, tmp_path, monkeypatch):

@@ -69,9 +69,9 @@ def request(source, **kwargs):
     return ReportRequest("status", query, DAYS[-1], DAYS[0], DAYS[-1], **kwargs)
 
 
-def test_required_graphs_keep_exact_lines_separate_dfb_and_independent_risk():
+def test_default_graphs_keep_exact_lines_separate_dfb_and_independent_risk():
     source = report_source()
-    result = generate_report(source, request(source, trend=False, heatmap=False))
+    result = generate_report(source, request(source))
     trends = [s.visual for s in result.sections if s.chart == "line_trend"]
     c4 = next(t for t in trends if t.group == "C4")
     assert dict(zip(c4.lines, c4.rates)) == {"P1D": (1.0, 0.0, None), "P1F": (0.0, 1.0, 1.0)}

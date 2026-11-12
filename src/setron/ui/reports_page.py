@@ -8,19 +8,21 @@ from pathlib import Path
 
 from PySide6.QtCore import QDate, QSettings, QSignalBlocker, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QButtonGroup, QFrame, QHBoxLayout, QStyledItemDelegate, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QFrame, QHBoxLayout, QStyledItemDelegate, QVBoxLayout, QWidget
 
 from setron.ui.chat_report_library import ChatReportLibrary
 from setron.ui.chat_report_preview import PdfPreviewDialog
+from setron.ui.appearance import readable_color, set_color_style
 from setron.ui.components import button, label
 from setron.ui.dashboard import DashboardGrid
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.report_data import REPORT_TYPES, ReportRequest, generate_report
+from setron.ui.heatmap_grouping import GROUPING_MODES
+from setron.ui.report_data import COMMON_CONTENTS, REPORT_TYPES, ReportRequest, generate_report
 from setron.ui.report_export import pdf_document, save_generated_report
 from setron.ui.report_widgets import GenerationDialog, report_pictures
-from setron.ui.theme import LINE, SECONDARY
+from setron.ui.theme import ASSETS, LINE, SECONDARY, font, set_widget_font
 from setron.ui.version_management_widgets import actions, card, combo, note, table
 
 
@@ -31,6 +33,22 @@ _TYPE_DESCRIPTIONS = {
     "change": "관측일 사이 설비와 PM별 이전 버전 및 다음 버전",
     "ai": "최근 완료된 AI 답변의 요약, 원인 분석, 표, 주의사항",
 }
+
+
+def _content_check(caption):
+    control = QCheckBox(caption)
+    control.setAccessibleName(caption)
+    set_widget_font(control, font(14, medium=True))
+    tick = (ASSETS / "checkbox-tick.svg").as_posix()
+    set_color_style(control, lambda t: (
+        f"QCheckBox {{color:{readable_color(t['ink'], t['surface'])};background:transparent;spacing:7px;"
+        "padding:2px;border:1px solid transparent;border-radius:4px;}"
+        f"QCheckBox:focus {{border-color:{t['accent']};}}"
+        f"QCheckBox:disabled {{color:{readable_color(t['muted'], t['surface'])};}}"
+        f"QCheckBox::indicator {{width:16px;height:16px;border:1px solid {t['line']};border-radius:4px;background:{t['soft']};}}"
+        f"QCheckBox::indicator:checked {{background:#3655c7;border-color:#3655c7;image:url({tick});}}"
+        f"QCheckBox::indicator:disabled {{background:{t['soft']};border-color:{t['line']};}}"))
+    return control
 
 
 class SavedReportDelegate(QStyledItemDelegate):
@@ -77,25 +95,21 @@ class ReportsPage(QWidget):
         self.start, self.end = self.query_panel.start_date, self.query_panel.end_date
         body.addWidget(self.query_panel)
 
-        config = card("보고서 유형")
-        types = QButtonGroup(self)
-        self.type_buttons = {}
-        for key, caption, *_ in REPORT_TYPES:
-            choice = button(caption)
-            choice.setCheckable(True)
-            choice.setProperty("settingsOption", True)
-            choice.clicked.connect(self._kind_changed)
-            types.addButton(choice)
-            self.type_buttons[key] = choice
-        self.type_buttons["status"].setChecked(True)
-        config.body.addWidget(DashboardGrid(list(self.type_buttons.values()), minimum_width=120, maximum_columns=5, spacing=8))
+        config = self.config_card = card()
+        header = QWidget()
+        header_body = QHBoxLayout(header)
+        header_body.setContentsMargins(0, 0, 0, 0)
+        header_body.setSpacing(12)
+        self.contents_title = label("보고서 포함 내용", 18, medium=True, wrap=True)
+        header_body.addWidget(self.contents_title, 1, Qt.AlignmentFlag.AlignVCenter)
+        self.select_all_button = button("전체 선택")
+        self.select_all_button.clicked.connect(lambda: self.select_contents(not self._all_contents_checked()))
+        header_body.addWidget(self.select_all_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        config.body.addWidget(header)
         contents = QWidget()
         contents_body = QVBoxLayout(contents)
         contents_body.setContentsMargins(0, 4, 0, 0)
         contents_body.setSpacing(8)
-        self.contents_title = label("보고서 포함 내용", 15, medium=True)
-        self.contents_title.setStyleSheet("font-weight:700;")
-        contents_body.addWidget(self.contents_title)
 
         def divider(*, vertical=False):
             line = QFrame()
@@ -115,14 +129,37 @@ class ReportsPage(QWidget):
         common_body = QVBoxLayout(common)
         common_body.setContentsMargins(0, 0, 0, 0)
         common_body.setSpacing(8)
-        common_body.addWidget(label("공통", 13, medium=True))
-        self.common_note = label("요약: 조회 조건, 목표 N, 설비 수, 달성률, 위험 현황\n"
-                                 "추이: 전체 및 라인별 적용률 그래프\n"
-                                 "시각화: 설비군/라인별 히트맵, 구성비, 막대, 트리맵\n"
-                                 "근거: 위험 판정 근거, 설비별 관측 버전 목록",
-                                 13, color=SECONDARY, wrap=True)
-        self.common_note.setMinimumWidth(0)
-        common_body.addWidget(self.common_note)
+        common_body.addWidget(label("공통 내용", 15, medium=True))
+        self.content_checks = {}
+
+        def option(layout, caption, description):
+            control = _content_check(caption)
+            control.toggled.connect(self._kind_changed)
+            layout.addWidget(control)
+            text = label(description, 12, color=SECONDARY, wrap=True)
+            text.setMinimumWidth(0)
+            layout.addWidget(text)
+            return control, text
+
+        for key, caption, description in COMMON_CONTENTS:
+            if key == "heatmap":
+                self.heatmap_options = QWidget()
+                map_body = QVBoxLayout(self.heatmap_options)
+                map_body.setContentsMargins(0, 0, 0, 0)
+                map_body.setSpacing(6)
+                map_body.addWidget(label("히트맵", 14, medium=True))
+                self.heatmap_checks = {mode: _content_check(title) for mode, title in GROUPING_MODES}
+                for mode, control in self.heatmap_checks.items():
+                    control.setAccessibleName(f"{control.text()}별 히트맵")
+                    control.setChecked(mode == "group")
+                    control.toggled.connect(self._kind_changed)
+                map_body.addWidget(DashboardGrid(list(self.heatmap_checks.values()),
+                                                minimum_width=90, maximum_columns=3, spacing=6))
+                common_body.addWidget(self.heatmap_options)
+                continue
+            control, _ = option(common_body, caption, description)
+            control.setChecked(True)
+            self.content_checks[key] = control
         common_body.addStretch()
         contents_columns.addWidget(common, 1)
         self.contents_divider = divider(vertical=True)
@@ -132,13 +169,16 @@ class ReportsPage(QWidget):
         specific_body = QVBoxLayout(specific)
         specific_body.setContentsMargins(0, 0, 0, 0)
         specific_body.setSpacing(8)
-        self.type_heading = label("", 13, medium=True, wrap=True)
-        specific_body.addWidget(self.type_heading)
-        self.type_note = label("", 13, color=SECONDARY, wrap=True)
-        self.type_note.setMinimumWidth(0)
-        specific_body.addWidget(self.type_note)
+        specific_body.addWidget(label("유형별 추가 내용", 15, medium=True))
+        self.type_buttons = {}
+        for key, caption, *_ in REPORT_TYPES:
+            control, text = option(specific_body, caption, _TYPE_DESCRIPTIONS[key])
+            self.type_buttons[key] = control
+            if key == "ai":
+                self.ai_note = text
+        self.type_buttons["status"].setChecked(True)
         specific_body.addStretch()
-        contents_columns.addWidget(specific, 2)
+        contents_columns.addWidget(specific, 1)
         contents_body.addLayout(contents_columns)
         config.body.addWidget(contents)
         self.item = combo("조회할 Item", ((None, "Item 선택"),))
@@ -188,7 +228,28 @@ class ReportsPage(QWidget):
 
     @property
     def kind(self):
-        return next(key for key, control in self.type_buttons.items() if control.isChecked())
+        return next(iter(self.selected_types), "status")
+
+    @property
+    def selected_types(self):
+        return tuple(key for key, control in self.type_buttons.items() if control.isChecked())
+
+    @property
+    def selected_contents(self):
+        return tuple(key for key, *_ in COMMON_CONTENTS
+                     if (any(c.isChecked() for c in self.heatmap_checks.values()) if key == "heatmap"
+                         else self.content_checks[key].isChecked()))
+
+    def _all_contents_checked(self):
+        return all(c.isChecked() for c in (*self.content_checks.values(), *self.type_buttons.values(),
+                                           *self.heatmap_checks.values()))
+
+    def select_contents(self, checked):
+        """선택 상태만 바꾼다. 저장된 파일이나 DB를 삭제하지 않는다."""
+        for control in (*self.content_checks.values(), *self.type_buttons.values(), *self.heatmap_checks.values()):
+            with QSignalBlocker(control):
+                control.setChecked(checked)
+        self._kind_changed()
 
     def open_period(self, kind: str, start, end) -> bool:
         """다른 화면(AI 분석)에서 '이 종류 · 이 기간으로' 보고서 메뉴를 채운다. 만들기는 사용자가 누른다 (11/11).
@@ -202,7 +263,9 @@ class ReportsPage(QWidget):
         """
         if self.saving or kind not in self.type_buttons:
             return False
-        self.type_buttons[kind].setChecked(True)
+        for key, control in self.type_buttons.items():
+            with QSignalBlocker(control):
+                control.setChecked(key == kind)
         with QSignalBlocker(self.start), QSignalBlocker(self.end):
             self.start.setDate(QDate(start.year, start.month, start.day))
             self.end.setDate(QDate(end.year, end.month, end.day))
@@ -230,14 +293,17 @@ class ReportsPage(QWidget):
         self.generation_status.setVisible(bool(text))
 
     def _kind_changed(self, *_):
-        kind = self.kind
-        description = _TYPE_DESCRIPTIONS[kind]
-        if kind == "ai" and self.ai_provider() is None:
-            description += "\nAI 답변 없음: 공통 수치만 포함"
-        caption = self.type_buttons[kind].text().replace("·", " 및 ")
-        self.type_heading.setText(caption + " 추가 내용")
-        self.type_note.setText(description)
-        item = kind == "item"
+        # 생성 중의 초기 체크 상태 신호에는 아직 다른 컨트롤이 없다.
+        if not hasattr(self, "item"):
+            return
+        caption = "전체 해제" if self._all_contents_checked() else "전체 선택"
+        self.select_all_button.setText(caption)
+        self.select_all_button.setAccessibleName(caption)
+        description = _TYPE_DESCRIPTIONS["ai"]
+        if "ai" in self.selected_types and self.ai_provider() is None:
+            description += "\n완료된 AI 답변 없음"
+        self.ai_note.setText(description)
+        item = "item" in self.selected_types
         self.item.setVisible(item)
         self.item_label.setVisible(item)
         if item and self.version_loader and self.item.count() == 1 and not self.item_request.busy:
@@ -274,11 +340,15 @@ class ReportsPage(QWidget):
             self.state.set_as_of(base)
             self.state.set_target_draft(self.targets_provider())
             query = self.query_panel.apply_draft()
+            kinds = self.selected_types
             kind = self.kind
-            ai_answer = deepcopy(self.ai_provider()) if kind == "ai" else None
-            caption = self.type_buttons[kind].text().replace("·", "_").replace(" ", "_")
+            ai_answer = deepcopy(self.ai_provider()) if "ai" in kinds else None
+            caption = (self.type_buttons[kind].text().replace("·", "_").replace(" ", "_")
+                       if len(kinds) == 1 else "맞춤")
             request = ReportRequest(kind, query, base, start, end, "docx", f"SETRON_{caption}_보고서_{end}",
-                                    item_id=self.item.currentData(), ai_answer=ai_answer, numeric_only=ai_answer is None)
+                                    item_id=self.item.currentData(), ai_answer=ai_answer, numeric_only=ai_answer is None,
+                                    contents=self.selected_contents,
+                                    types=kinds, heatmap_modes=tuple(key for key, c in self.heatmap_checks.items() if c.isChecked()))
         except ValueError as error:
             self._notice(str(error))
             return False
@@ -291,7 +361,7 @@ class ReportsPage(QWidget):
         source, loader = self.source, self.version_loader
 
         def load():
-            versions = loader() if request.kind == "item" and loader else None
+            versions = loader() if "item" in request.selected_types and loader else None
             return generate_report(source, request, versions)
 
         return self.request.start(BackgroundRead(load))
