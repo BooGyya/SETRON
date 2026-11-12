@@ -124,3 +124,26 @@ def test_lazy_tile_keeps_keyboard_activation_and_focus_return(view, app, monkeyp
     assert page.tile_buttons[control.data.equipment_id] is control
     control.setFocus()
     assert app.focusWidget() is control and control.isChecked()
+
+
+def test_new_query_hides_old_result_and_reuses_matching_cards_with_latest_risk(view, app):
+    page, host = view
+    cards, controls = tuple(page.group_cards), tuple(page.tile_occurrences)
+    target = page.tiles[0]
+    query = page.state.apply()
+    spy = QSignalSpy(page.equipment_selected)
+    assert page.begin_query(query)
+    assert page.snapshot is None and page.visible_ids == () and page.tile_body.count() == 0
+    assert all(card.isHidden() for card in cards)
+    page._select(target.equipment_id)
+    assert spy.count() == 0
+    page.source.risks[target.equipment_id] = RiskStatus.RISK
+    snapshot = page.source.snapshot(query)
+    assert page.accept_result(query, snapshot)
+    assert tuple(page.group_cards) == cards and tuple(page.tile_occurrences) == controls
+    assert page.rebuilt_tiles == 0
+    assert all(control.data.risk is RiskStatus.RISK for control in controls
+               if control.data.equipment_id == target.equipment_id)
+    page.invalidate()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert not page._card_cache and all(not isValid(card) for card in cards)

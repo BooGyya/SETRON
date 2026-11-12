@@ -16,6 +16,7 @@ from setron.ui.appearance_data import HEATMAP_FIELDS, HEATMAP_STANDARD, HEATMAP_
 from setron.ui.components import Card, StatusBadge, button, filter_checkbox, label
 from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import RiskRuleState
+from setron.ui.deferred_result import DeferredResultMixin, ResultAttribute
 from setron.ui.equipment import ignore_width
 from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
@@ -391,7 +392,20 @@ class HeatmapGroupCard(QFrame):
         return grid
 
 
-class HeatmapPage(QWidget):
+class HeatmapPage(DeferredResultMixin, QWidget):
+    tiles = ResultAttribute()
+    tile_buttons = ResultAttribute()
+    tile_grids = ResultAttribute()
+    tile_occurrences = ResultAttribute()
+    group_cards = ResultAttribute()
+    visible_ids = ResultAttribute()
+    selected_id = ResultAttribute()
+    list_model = ResultAttribute()
+    list_table = ResultAttribute()
+    metrics = ResultAttribute()
+    context = ResultAttribute()
+    result_status = ResultAttribute()
+    view_count = ResultAttribute()
     equipment_selected = Signal(object)
 
     def __init__(self, state, source, *, detail_connected=False, show_summary=True, show_grouping=True):
@@ -410,6 +424,7 @@ class HeatmapPage(QWidget):
         self._selected_groups = None
         self._card_entries = {}
         self._card_cache = OrderedDict()
+        self._preserve_query_cards = False
         self._defer_tile_content = False
         self.group_cards = []
         self.rebuilt_tiles = self.restyled_tiles = 0
@@ -653,8 +668,11 @@ class HeatmapPage(QWidget):
         """검색·보기 설정은 유지하고 전달받은 표시 자료만 비운다."""
         self._clear()
 
-    def _clear(self):
-        self._clear_card_cache()
+    def _clear(self, *, preserve_cards=False):
+        self._pending_result = None
+        self._preserve_query_cards = preserve_cards
+        if not preserve_cards:
+            self._clear_card_cache()
         with QSignalBlocker(self.below_filter):
             self.below_filter.setChecked(False)
         self.below_filter.setEnabled(False)
@@ -672,7 +690,7 @@ class HeatmapPage(QWidget):
     def begin_query(self, query):
         if not self.state.is_current(query):
             return False
-        self._clear()
+        self._clear(preserve_cards=True)
         self.context.setText(f"적용 #{query.revision} · {query.description}")
         self.result_status.setText(f"{getattr(self.source, 'result_label', '예시 결과')} 계산 중")
         self.result_status.set_tone("info")
@@ -719,8 +737,10 @@ class HeatmapPage(QWidget):
         selected_groups는 설비군 표시 범위이며 None이면 미분류·HPA를 포함한 전체다.
         query_bound는 이 페이지의 QueryState에 연결된 일반 조회 결과에서만 사용한다.
         """
+        self._pending_result = None
         if source is not None:
             self.source = source
+        self._preserve_query_cards = False
         self._query_bound = query_bound
         self._selected_groups = None if selected_groups is None else frozenset(selected_groups)
         self._display_groups = tuple(
@@ -768,6 +788,8 @@ class HeatmapPage(QWidget):
         return not text or any(text in part.casefold() for part in (tile.code, tile.location, tile.description))
 
     def _render_tiles(self, *_):
+        if self.ensure_result():
+            return
         list_mode = self.layout_buttons.checkedId() == 1
         self.grouping_bar.setVisible(self._show_grouping)
         self.hpa_button.setVisible(not list_mode and any(t.goal is GoalState.EXCLUDED for t in self.tiles))
@@ -804,12 +826,14 @@ class HeatmapPage(QWidget):
                                         show_hpa=list_mode or self.hpa_button.isChecked())
         if list_mode:
             if self.snapshot is None:
-                self._clear_card_cache()
+                if not self._preserve_query_cards:
+                    self._clear_card_cache()
                 self._sync_card_rows(())
             self._render_list(grouping_filtered, plan)
             return
         if self.snapshot is None:
-            self._clear_card_cache()
+            if not self._preserve_query_cards:
+                self._clear_card_cache()
             self._sync_card_rows(())
             return
         expanded = self.view_toggle.isChecked()
@@ -1061,6 +1085,7 @@ class HeatmapPage(QWidget):
                 self._select(equipment_id, self.list_table)
 
     def _select(self, equipment_id, origin=None):
+        self.ensure_result()
         if (self.snapshot is None or equipment_id not in self.visible_ids
                 or self._query_bound and (self.state is None or not self.state.is_current(self.snapshot.query))):
             return

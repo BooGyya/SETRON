@@ -166,16 +166,16 @@ class QueryPanel(QWidget):
             for control in (self.start_date, self.end_date):
                 control.hide()
                 control.dateChanged.connect(lambda _day, edit=control: self._confirm_period_edit(edit))
-                control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
-                control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
+                control.calendar_clicked.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
+                control.calendar_activated.connect(lambda day, edit=control: self._confirm_period_date(edit, day))
         else:
             date_field, self.date_edit = self._date_field("기준날짜")
             self.original_date_field = date_field
             self.date_edit.setObjectName("query_as_of")
             self.date_edit.setToolTip("날짜를 선택한 뒤 조회 버튼을 누르면 해당 날짜까지 저장된 가장 최근 자료로 계산합니다.")
             self.date_edit.dateChanged.connect(self._choose_date)
-            self.date_edit.calendarWidget().clicked.connect(self._confirm_date)
-            self.date_edit.calendarWidget().activated.connect(self._confirm_date)
+            self.date_edit.calendar_clicked.connect(self._confirm_date)
+            self.date_edit.calendar_activated.connect(self._confirm_date)
             fields = [date_field]
         for key, caption in FILTER_CAPTIONS.items():
             if not show_group and key == "group_key":
@@ -326,7 +326,7 @@ class QueryPanel(QWidget):
 
     def _confirm_period_edit(self, control):
         self.sync_period_range()
-        if not control.calendarWidget().isVisible():
+        if not control.is_calendar_visible():
             self.confirmed.emit()
 
     def _confirm_period_date(self, control, day):
@@ -387,7 +387,7 @@ class QueryPanel(QWidget):
         self.confirmed.emit()
 
     def _choose_date(self, value):
-        if not self.date_edit.calendarWidget().isVisible():
+        if not self.date_edit.is_calendar_visible():
             self._confirm_date(value)
 
     def _confirm_date(self, value):

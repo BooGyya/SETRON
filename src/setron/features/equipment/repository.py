@@ -1,5 +1,6 @@
 """공통 저장 트랜잭션 안에서 설비와 정확한 기준일의 현황을 조회한다."""
 
+from collections import defaultdict
 from dataclasses import fields
 
 from sqlalchemy import select
@@ -66,17 +67,42 @@ class EquipmentRepository:
         """
         versions = self.rows(tx, "equipment_version", lock=lock, snapshot_id=snapshot["snapshot_id"])
         pms = self.rows(tx, "equipment_pm", lock=lock, snapshot_id=snapshot["snapshot_id"])
+        return self._stored_snapshot(equipment, snapshot, versions, pms)
+
+    def load_all(self, tx, equipment, *, lock=False):
+        """같은 트랜잭션의 전체 현황·SW·PM을 세 번 읽어 기본키 순서대로 연결한다.
+
+        현황마다 SW와 PM을 따로 조회하지 않는다. 원문과 날짜별 위치, PM의 SW 연결 검증은
+        단건 :meth:`load`와 같으며, 조회한 행을 메모리에서 연결할 때만 묶는다.
+        """
+        snapshots = self.rows(tx, "equipment_snapshot", lock=lock)
+        if not snapshots:
+            return ()
+        versions, pms = defaultdict(list), defaultdict(list)
+        for version in self.rows(tx, "equipment_version", lock=lock):
+            versions[version["snapshot_id"]].append(version)
+        for pm in self.rows(tx, "equipment_pm", lock=lock):
+            pms[pm["snapshot_id"]].append(pm)
+        return tuple(self._stored_snapshot(equipment[snapshot["equipment_id"]], snapshot,
+                                           versions[snapshot["snapshot_id"]], pms[snapshot["snapshot_id"]])
+                     for snapshot in snapshots)
+
+    @staticmethod
+    def _stored_snapshot(equipment, snapshot, versions, pms):
         # NULL 연결의 PM을 조용히 버려 정상 현황처럼 반환하지 않는다.
         version_ids = {version["equipment_version_id"] for version in versions}
         if any(pm["equipment_version_id"] not in version_ids for pm in pms):
             raise StorageValidationError("PM의 SW 연결을 확인해야 합니다.")
+        pms_by_version = defaultdict(list)
+        for pm in pms:
+            pms_by_version[pm["equipment_version_id"]].append(pm)
         software = tuple(StoredSoftware(
             **{key: version[key] for key in (
                 "equipment_version_id", "family_id", "version_raw", "release_version_id", "batch_id", "source_reference",
             )},
             pms=tuple(StoredPm(**{key: pm[key] for key in (
                 "pm_id", "pm_name", "group_id", "model_name_raw", "batch_id", "source_reference",
-            )}) for pm in pms if pm["equipment_version_id"] == version["equipment_version_id"]),
+            )}) for pm in pms_by_version[version["equipment_version_id"]]),
         ) for version in versions)
         return StoredSnapshot(
             **{field.name: snapshot[field.name] for field in fields(SnapshotInput)

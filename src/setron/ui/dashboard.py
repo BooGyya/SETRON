@@ -311,8 +311,8 @@ class DashboardPage(QWidget):
         period_body.addWidget(self.trend_interval)
         for control in (self.trend_start, self.trend_end):
             control.dateChanged.connect(lambda _day, edit=control: self._change_trend_date(edit))
-            control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
-            control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
+            control.calendar_clicked.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
+            control.calendar_activated.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
         self.trend_interval.step_changed.connect(self._set_trend_interval)
         self.view_controls = _DashboardViewControls(self.tabs, self.trend_filters, self.trend_interval)
         self.content.body.addWidget(self.view_controls)
@@ -472,13 +472,19 @@ class DashboardPage(QWidget):
     def _result_label(self):
         return getattr(self.source, "result_label", "예시 결과")
 
-    def apply_query(self, query):
+    def begin_query(self, query):
         if not self.state.is_current(query):
             return False
         self.snapshot = None
         self._clear_values()
         self.failure_reason = None
         self.result_status.setText(f"{self._result_label()} 계산 중")
+        self.message.setText("조회 결과를 계산하고 있습니다.")
+        return True
+
+    def apply_query(self, query):
+        if not self.begin_query(query):
+            return False
         try:
             if not self.state.catalog.is_view_of(self.source.catalog):
                 raise ValueError("조회 선택지와 데이터 공급자의 매핑이 다릅니다.")
@@ -502,6 +508,24 @@ class DashboardPage(QWidget):
             self.message.setText("선택지·관측 자료 연결을 확인할 수 없습니다. 데이터 연결과 조회 조건을 확인해 주세요.")
             return False
         return self.accept_result(query, result)
+
+    def fail_query(self, query, error):
+        if not self.state.is_current(query):
+            return False
+        if isinstance(error, HpaClassificationConflict):
+            self.result_status.setText("조회 보류 · HPA 분류 확인 필요")
+            tone, text = "danger", str(error)
+        elif isinstance(error, NoObservationBefore):
+            self.result_status.setText("기준일 이전 자료 없음")
+            tone, text = "warning", str(error)
+            self.failure_reason = text
+        else:
+            self.result_status.setText("결과 표시 실패")
+            tone, text = "danger", "선택지·관측 자료 연결을 확인할 수 없습니다. 데이터 연결과 조회 조건을 확인해 주세요."
+        self.result_status.set_tone(tone)
+        self.message.setTextFormat(Qt.TextFormat.PlainText)
+        self.message.setText(text)
+        return False
 
     def accept_result(self, query, result):
         if not self.state.is_current(query) or result.query is not query:
@@ -552,7 +576,7 @@ class DashboardPage(QWidget):
         self.trend_period_changed.emit(start, end)
 
     def _change_trend_date(self, control):
-        if not control.calendarWidget().isVisible():
+        if not control.is_calendar_visible():
             self._trend_period_edited = True
             self.trend_period_changed.emit(self.trend_start.date().toPython(), self.trend_end.date().toPython())
 

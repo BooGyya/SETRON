@@ -16,6 +16,7 @@ from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, back_button, button, label
 from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import count_value, family_name, missing_sw_count, model_name, upgrade_caption
+from setron.ui.deferred_result import DeferredResultMixin, ResultAttribute
 from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, compare_tone, format_findings, lookup_records
 from setron.ui.item_data import BASIS_LABELS, item_evidence_rows, selected_application
@@ -207,7 +208,22 @@ def fit_rows(table, *, compact=False):
         table.setFixedHeight(max(260, min(800, height + 28)))
 
 
-class EquipmentPage(QWidget):
+class EquipmentPage(DeferredResultMixin, QWidget):
+    data = ResultAttribute()
+    model = ResultAttribute()
+    full_list_model = ResultAttribute()
+    drawer_list_model = ResultAttribute()
+    table = ResultAttribute()
+    visible_tiles = ResultAttribute()
+    scope_ids = ResultAttribute()
+    selected_id = ResultAttribute()
+    metrics = ResultAttribute()
+    context = ResultAttribute()
+    result_status = ResultAttribute()
+    page_caption = ResultAttribute()
+    search = ResultAttribute()
+    goal_filter = ResultAttribute()
+    sort = ResultAttribute()
     mode_changed = Signal(str)
     back_requested = Signal(str)
 
@@ -634,6 +650,7 @@ class EquipmentPage(QWidget):
         self.updateGeometry()
 
     def clear(self, text="선택지 변경 · 재조회 필요", *_):
+        self._pending_result = None
         self.close_item_detail()
         self.snapshot, self.data, self.scope_ids, self.selected_id = None, None, (), None
         self.detail_model.set_rows(())
@@ -656,6 +673,7 @@ class EquipmentPage(QWidget):
         if (not self.state.is_current(query) or snapshot.query is not query
                 or not self.state.catalog.is_view_of(self.source.catalog)):
             return False
+        self._pending_result = None
         try:
             data = equipment_data(snapshot, self.source)
         except (ValueError, RuntimeError):
@@ -667,6 +685,7 @@ class EquipmentPage(QWidget):
         return True
 
     def _current(self):
+        self.ensure_result()
         return self.snapshot is not None and self.state.is_current(self.snapshot.query)
 
     def _reset_filters(self):
@@ -749,6 +768,8 @@ class EquipmentPage(QWidget):
                 "\n".join(family_name(self.source, family_id) for family_id in families))
 
     def _render_list(self):
+        if self.ensure_result():
+            return
         current = self._current()
         for control in (self.search, self.goal_filter, self.sort):
             control.setEnabled(current)
