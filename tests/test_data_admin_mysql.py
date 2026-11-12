@@ -367,3 +367,19 @@ def test_new_row_on_a_registered_foundry_line_gets_the_foundry_family(storage):
     # 같은 현황표의 메모리 설비 계열을 파운드리 새 행에 그대로 쓰지 않는다
     second = service.add_row(batch, {"group_name": "M-C4", "line": "QF1", "equipment_code": "QA-F2", "version_raw": "v1"}, None)
     assert "(파운드리)" in next(r for r in service.sheet_rows(batch).rows if r.snapshot_id == second).family_name
+
+
+def test_empty_sheet_keeps_its_area_and_rows_know_the_latest_group_version(storage):
+    service = DataAdminService(storage)
+    service.add_site("QA기본영역")
+    with pytest.raises(StorageValidationError, match="메모리 또는 파운드리"):
+        service.create_sheet("QA기본영역", date(2026, 11, 7), "HPA")
+    batch = service.create_sheet("QA기본영역", date(2026, 11, 7), "FOUNDRY")
+    service.add_line("QA기본영역", "QB1", "MEMORY")
+    data = service.sheet_rows(batch)
+    assert data.default_area == "FOUNDRY" and data.line_areas == {"QB1": "MEMORY"}   # 라인을 고르면 이 값으로 채운다
+    c4 = next(gid for gid, name, _ in data.groups if name == "M-C4")
+    family = _c4_family(storage)
+    ordered = [r for r in service.release_rows(family) if r.item_id is None or r.first_of_version]
+    assert data.latest_versions[(c4, "MEMORY")] == ordered[0].version_raw   # 최신 버전이 위 (확인된 순서가 가장 큼)
+

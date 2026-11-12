@@ -33,7 +33,8 @@ SHEET_ROWS = SheetRows(
     (_row(12, 6, 22, "EC2", "15L", "v1.3", cells={"equipment_code": ("D3", "EC2"), "version_raw": ("E3", "v1.3")}),
      _row(11, 5, 21, "EC1", "13L", "v1.2", cells={"equipment_code": ("D4", "EC1"), "version_raw": ("E4", "v1.2")}),
      _row(14, 8, 24, "EC4", "17L", "v1.1", pm="PM1")),
-    ((1, "M-C4", "POLY"), (2, "M-C4 DFB", "POLY"), (3, "M-O2", "OXIDE")), ("13L", "15L", "17L"))
+    ((1, "M-C4", "POLY"), (2, "M-C4 DFB", "POLY"), (3, "M-O2", "OXIDE")), ("13L", "15L", "17L"),
+    latest_versions={(1, "MEMORY"): "v1.4", (1, "FOUNDRY"): "v1.4F", (3, "MEMORY"): "v3.6"})
 GROUPS = (GroupRow(1, "M-C4", "POLY", None, None, 2), GroupRow(2, "M-C4 DFB", "POLY", 1, "M-C4", 1),
           GroupRow(4, "C7", "POLY", None, None, 0), GroupRow(3, "M-O2", "OXIDE", None, None, 1))
 EQUIPMENT = (EquipmentRow(5, "EC1", (1,), "M-C4", "M-C4", "화성", "13L", date(2026, 11, 1), 3),
@@ -150,20 +151,25 @@ def test_three_fixed_tabs_and_status_subtabs_load_lazily(own):
 def test_sheet_shows_db_values_in_import_columns_sorted_by_line_group_code(own):
     page, sheet = sheet_page(own)
     assert "화성 · 기준일 2026-11-01" in sheet.source.text() and "마스터.xlsx" in sheet.source.text()
-    assert [sheet.table.horizontalHeaderItem(c).text() for c in range(7)] == [
-        "설비 호기", "Line", "설비군", "모델명", "메모리/파운드리", "SW 버전", "PM"]
+    assert sheet.sheet_combo.currentText() == "2026-11-01 · 화성 · 3대 · 마스터.xlsx"  # Site · 날짜를 두 번 쓰지 않는다
+    assert [sheet.table.horizontalHeaderItem(c).text() for c in range(8)] == [
+        "설비 호기", "Line", "대분류", "설비군", "모델명", "메모리/파운드리", "SW 버전", "PM"]
     assert codes(sheet) == ["EC1", "EC2", "EC4"]  # Line → 설비군 → 호기 (DB 순서와 다름)
-    assert [cell(sheet, 0, c).text() for c in range(6)] == ["EC1", "13L", "M-C4", "M-C4", "메모리", "v1.2"]
+    assert [cell(sheet, 0, c).text() for c in range(7)] == ["EC1", "13L", "POLY", "M-C4", "M-C4", "메모리", "v1.2"]
+    editable_flag = module.Qt.ItemFlag.ItemIsEditable
+    assert not cell(sheet, 0, 2).flags() & editable_flag and not cell(sheet, 0, 4).flags() & editable_flag  # 대분류 · 모델명 자동
     assert "원본 D4 · EC1" in cell(sheet, 0, 0).toolTip() and "원본 셀 없음" in cell(sheet, 0, 1).toolTip()
-    assert not sheet.table.isColumnHidden(6) and cell(sheet, 2, 6).text() == "PM1"
+    assert not sheet.table.isColumnHidden(7) and cell(sheet, 2, 7).text() == "PM1"
     editable = module.Qt.ItemFlag.ItemIsEditable
-    assert not cell(sheet, 2, 2).flags() & editable and not cell(sheet, 2, 5).flags() & editable  # PM 설비
-    assert "버전 관리에서" in cell(sheet, 2, 5).toolTip() and cell(sheet, 2, 1).flags() & editable
+    assert not cell(sheet, 2, 3).flags() & editable and not cell(sheet, 2, 6).flags() & editable  # PM 설비
+    assert "버전 관리에서" in cell(sheet, 2, 6).toolTip() and cell(sheet, 2, 1).flags() & editable
     assert not hasattr(sheet, "raw_button") and not [b for b in sheet.findChildren(type(sheet.save_button))
                                                      if b.text() == "원본 보기"]  # [원본 보기]는 두지 않는다 (11-11)
-    assert [b.text() for b in (sheet.undo_button, sheet.add_button, sheet.delete_button, sheet.save_button)] \
-        == ["되돌리기", "＋ 행 추가", "선택 행 삭제", "저장"]
-    assert not sheet.save_button.isEnabled() and not sheet.undo_button.isEnabled() and sheet.add_button.isEnabled()
+    assert [b.text() for b in (sheet.add_button, sheet.delete_button, sheet.save_button)] == ["＋ 행 추가", "선택 행 삭제", "저장"]
+    for control, name in ((sheet.undo_button, "되돌리기"), (sheet.redo_button, "다시 실행")):  # 글자 대신 아이콘 (11-12)
+        assert control.text() == "" and not control.icon().isNull() and control.accessibleName() == name
+        assert "Ctrl+" in control.toolTip() and not control.isEnabled()
+    assert not sheet.save_button.isEnabled() and sheet.add_button.isEnabled()
     assert sheet.table.horizontalHeader().sectionResizeMode(0) == module.QHeaderView.ResizeMode.Interactive
 
 
@@ -173,38 +179,41 @@ def test_edits_regroup_adds_and_deletes_wait_for_save_then_go_together(own, monk
     saved = []
     page, sheet = sheet_page(own, gateway)
     page.saved.connect(saved.append)
-    cell(sheet, 0, 5).setText("v1.2a")      # EC1 SW 버전
+    cell(sheet, 0, 6).setText("v1.2a")      # EC1 SW 버전
     cell(sheet, 0, 1).setText("19L")        # EC1 Line
-    cell(sheet, 0, 4).setText("파운드리")    # EC1 메모리/파운드리
-    cell(sheet, 0, 2).setText("M-O2")       # EC1 설비군 → regroup
-    assert cell(sheet, 0, 5).background().color() == module.SAVING and "v1.2 → v1.2a" in cell(sheet, 0, 5).toolTip()
+    cell(sheet, 0, 5).setText("파운드리")    # EC1 메모리/파운드리
+    cell(sheet, 0, 3).setText("M-O2")       # EC1 설비군 → regroup
+    assert cell(sheet, 0, 6).background().color() == module.SAVING and "v1.2 → v1.2a" in cell(sheet, 0, 6).toolTip()
     sheet.table.selectRow(1)                # EC2 삭제 표시
     assert sheet.delete_selected()
     assert cell(sheet, 1, 0).background().color() == module.DELETE_ROW and "삭제 예정" in cell(sheet, 1, 0).toolTip()
     assert sheet.add_row()                  # 새 행
     new = sheet.table.rowCount() - 1
-    for column, value in ((0, "EC9"), (1, "19L"), (2, "M-C4"), (4, "메모리"), (5, "v2.0")):
+    for column, value in ((0, "EC9"), (1, "19L"), (3, "M-C4"), (5, "파운드리"), (6, "v2.0")):  # 같은 새 라인 19L은 같은 메모리/파운드리
         cell(sheet, new, column).setText(value)
+    assert cell(sheet, new, 2).text() == "POLY" and cell(sheet, new, 4).text() == "M-C4"  # 대분류 · 모델명은 설비군에서
+    assert sheet.notice.y() < sheet.table.y()                  # 안내 줄은 표 위(버튼 아래)에 있다
     assert not gateway.saved and "apply_rows" not in gateway.calls  # 저장 전에는 DB에 아무것도 쓰지 않는다
     assert sheet.save_button.text() == "저장 (6건)"
     assert sheet.save()
     settle(page)
     assert len(asked) == 1 and "EC2" in asked[0]    # 행 삭제만 한 번 묻는다
+    assert gateway.done["add_line"] == [(("화성", "19L", "FOUNDRY"), {})]   # 새 라인은 묻지 않고 그 줄의 값으로 등록
     edits = edits_by_table(gateway)
     assert edits["equipment_version"] == ({"equipment_version_id": 21}, {"version_raw": "v1.2a", "release_version_id": None})
     assert edits["equipment_snapshot"] == ({"snapshot_id": 11}, {"line": "19L", "production_area": "FOUNDRY"})
     assert gateway.done["apply_rows"] == [((7, [({"equipment_code": "EC9", "line": "19L", "group_name": "M-C4", "model_name": "",
-                                                   "production_area": "MEMORY", "version_raw": "v2.0"}, None)], (12,), [(11, 3)]), {})]
+                                                   "production_area": "FOUNDRY", "version_raw": "v2.0"}, None)], (12,), [(11, 3)]), {})]
     step = sheet.steps[-1]
     assert step[0] == "saved" and step[1]["regroup"] == [(11, 1)] and step[1]["added"] == [77] and step[1]["journal"] == 900
-    assert not sheet.pending and saved and "4칸 수정 · 1행 추가 · 1행 삭제" in sheet.notice.text()
+    assert not sheet.pending and saved and "4칸 수정 · 1행 추가 · 1행 삭제" in sheet.notice.text() and "라인 19L" in sheet.notice.text()
 
 
 def test_one_value_per_equipment_is_shared_and_edit_on_deleted_row_is_dropped(own, monkeypatch):
     answer(monkeypatch)
     gateway = FakeGateway()
     page, sheet = sheet_page(own, gateway)
-    cell(sheet, 1, 5).setText("v9")          # EC2 SW 버전
+    cell(sheet, 1, 6).setText("v9")          # EC2 SW 버전
     sheet.table.selectRow(1)
     sheet.delete_selected()
     sheet.save()
@@ -214,8 +223,8 @@ def test_one_value_per_equipment_is_shared_and_edit_on_deleted_row_is_dropped(ow
 
 def test_bad_values_are_rejected_and_restored(own):
     page, sheet = sheet_page(own)
-    cell(sheet, 0, 2).setText("없는설비군")
-    assert "설비 탭에서 먼저 추가" in sheet.notice.text() and cell(sheet, 0, 2).text() == "M-C4" and not sheet.edits
+    cell(sheet, 0, 3).setText("없는설비군")
+    assert "설비 탭에서 먼저 추가" in sheet.notice.text() and cell(sheet, 0, 3).text() == "M-C4" and not sheet.edits
     cell(sheet, 0, 0).setText("")
     assert "비울 수 없습니다" in sheet.notice.text() and cell(sheet, 0, 0).text() == "EC1" and not sheet.edits
 
@@ -224,9 +233,9 @@ def test_undo_goes_back_one_step_then_undoes_the_whole_last_save(own, monkeypatc
     answer(monkeypatch)
     gateway = FakeGateway()
     page, sheet = sheet_page(own, gateway)
-    cell(sheet, 0, 5).setText("v9")
-    cell(sheet, 0, 5).setText("v10")
-    assert sheet.undo() and cell(sheet, 0, 5).text() == "v9" and sheet.edits == {("version", 21): "v9"}
+    cell(sheet, 0, 6).setText("v9")
+    cell(sheet, 0, 6).setText("v10")
+    assert sheet.undo() and cell(sheet, 0, 6).text() == "v9" and sheet.edits == {("version", 21): "v9"}
     sheet.table.selectRow(1)
     sheet.delete_selected()
     assert sheet.undo() and not sheet.deletes and cell(sheet, 1, 0).background().color() != module.DELETE_ROW
@@ -234,7 +243,7 @@ def test_undo_goes_back_one_step_then_undoes_the_whole_last_save(own, monkeypatc
     cell(sheet, 3, 0).setText("EC9")
     assert sheet.undo() and sheet.new_rows[0]["values"]["equipment_code"] == ""
     assert sheet.undo() and not sheet.new_rows and sheet.table.rowCount() == 3
-    cell(sheet, 0, 2).setText("M-O2")
+    cell(sheet, 0, 3).setText("M-O2")
     sheet.save()
     settle(page)
     assert sheet.undo()        # 마지막 저장 전체(칸 수정 · 설비군 변경)를 되돌린다
@@ -244,20 +253,62 @@ def test_undo_goes_back_one_step_then_undoes_the_whole_last_save(own, monkeypatc
     assert not sheet.steps and "마지막 저장을 되돌렸습니다" in sheet.notice.text()
 
 
+def test_redo_reapplies_undone_steps_until_something_else_changes(own, monkeypatch):
+    answer(monkeypatch)
+    page, sheet = sheet_page(own)
+    cell(sheet, 0, 6).setText("v9")
+    sheet.table.selectRow(1)
+    sheet.delete_selected()
+    assert sheet.undo() and sheet.undo() and not sheet.edits and not sheet.deletes
+    assert sheet.redo_button.isEnabled()
+    assert sheet.redo() and sheet.edits == {("version", 21): "v9"} and cell(sheet, 0, 6).text() == "v9"
+    assert sheet.redo() and sheet.deletes == {12: "EC2"} and not sheet.redo_button.isEnabled()
+    assert sheet.undo()                       # 삭제 표시를 다시 풀고
+    cell(sheet, 0, 1).setText("19L")          # 다른 칸을 고치면 다시 실행할 수 없다
+    assert not sheet.redo() and "다시 실행할 수 없습니다" in sheet.notice.text() and not sheet.redo_button.isEnabled()
+    assert len(sheet.findChildren(module.QShortcut)) == 3  # Ctrl+Z · Ctrl+Y · Ctrl+Shift+Z
+
+
+def test_redo_saves_an_undone_save_again(own, monkeypatch):
+    asked = answer(monkeypatch)
+    gateway = FakeGateway()
+    page, sheet = sheet_page(own, gateway)
+    cell(sheet, 0, 6).setText("v9")
+    sheet.table.selectRow(1)                  # EC2 (설비 6) 삭제
+    sheet.delete_selected()
+    assert sheet.save()
+    settle(page)
+    assert sheet.undo()                       # 저장 전체를 되돌린다
+    settle(page)
+    assert sheet.redo_button.isEnabled() and sheet.redo()   # 같은 변경으로 다시 저장 (지운 행은 설비로 다시 찾는다)
+    settle(page)
+    assert len(asked) == 2 and len(gateway.done["apply_rows"]) == 2 and gateway.done["apply_rows"][-1][0][2] == (12,)
+    assert gateway.saved[-1][0][0].changes == {"version_raw": "v9", "release_version_id": None}
+    assert sheet.steps[-1][0] == "saved" and not sheet.redo_steps and not sheet.pending
+
+
 def test_new_row_needs_required_cells_and_unknown_group_is_registered_on_save(own, monkeypatch):
     asked = answer(monkeypatch)
-    monkeypatch.setattr(module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("OXIDE", True)))
     gateway = FakeGateway()
     page, sheet = sheet_page(own, gateway)
     assert sheet.add_row()
     assert sheet.table.verticalHeaderItem(3).text() == "＋" and cell(sheet, 3, 0).background().color() == module.NEW_ROW
     cell(sheet, 3, 0).setText("EC9")
     assert not sheet.save() and "필수 칸" in sheet.notice.text()
-    cell(sheet, 3, 2).setText("C8")
-    cell(sheet, 3, 5).setText("v2.0")
+    editable = module.Qt.ItemFlag.ItemIsEditable
+    assert not cell(sheet, 3, 2).flags() & editable          # 설비군을 적기 전에는 대분류를 고를 수 없다
+    cell(sheet, 3, 3).setText("C8")
+    cell(sheet, 3, 6).setText("v2.0")
+    assert not sheet.save() and "메모리/파운드리" in sheet.notice.text()   # 메모리/파운드리도 필수 (비우면 임의로 정하지 않는다)
+    cell(sheet, 3, 5).setText("메모리")
+    assert cell(sheet, 3, 2).flags() & editable and cell(sheet, 3, 2).background().color() == module.NEW_ROW
+    assert not sheet.save() and "대분류" in sheet.notice.text()   # 새 설비군은 대분류를 골라야 한다
+    cell(sheet, 3, 2).setText("OXIDE")
     assert sheet.save()
     settle(page)
-    assert "C8" in asked[0] and gateway.created == [("C8", "OXIDE", None)] and "새 설비군 C8 등록" in sheet.notice.text()
+    assert "C8" in asked[0] and "OXIDE" in asked[0] and gateway.created == [("C8", "OXIDE", None)]
+    assert "새로 등록: C8" in sheet.notice.text()
+    assert gateway.done["apply_rows"][0][0][1][0][0]["model_name"] == ""   # 모델명은 서버가 설비군 이름으로
 
 
 def test_empty_sheet_is_created_from_sheet_tab_for_an_existing_site(own, monkeypatch):
@@ -275,13 +326,13 @@ def test_empty_sheet_is_created_from_sheet_tab_for_an_existing_site(own, monkeyp
             return QDialog.DialogCode.Accepted
 
         def values(self):
-            return "China", date(2026, 11, 12)
+            return "China", date(2026, 11, 12), "MEMORY"
 
     monkeypatch.setattr(module, "CreateSheetDialog", Accept)
     assert sheet.create_sheet()
     settle(page)
     assert shown == [(["China", "화성"], "화성")]  # 등록 Site + 현황표가 있는 Site, 지금 보는 Site를 먼저 고름
-    assert gateway.done["create_sheet"] == [(("China", date(2026, 11, 12)), {})]
+    assert gateway.done["create_sheet"] == [(("China", date(2026, 11, 12), "MEMORY"), {})]
     assert page.status_stack.currentIndex() == 0 and "China · 2026-11-12 빈 현황표를 만들었습니다" in sheet.notice.text()
 
 
@@ -293,7 +344,7 @@ def test_line_of_another_site_is_warned_before_save(own, monkeypatch):
                           if method == "sheet_rows" else original(method, *a, **k))(gateway.data_admin)
     page, sheet = sheet_page(own, gateway)
     sheet.add_row()
-    for column, value in ((0, "CC4H101"), (1, "C4H"), (2, "M-C4"), (5, "v1.0")):
+    for column, value in ((0, "CC4H101"), (1, "C4H"), (3, "M-C4"), (5, "메모리"), (6, "v1.0")):
         cell(sheet, 3, column).setText(value)
     assert sheet.other_site_lines() == {"C4H": ("China",)}
     asked = answer(monkeypatch, QMessageBox.StandardButton.No)
@@ -319,7 +370,7 @@ def test_help_button_opens_guide_drawer_and_steps_jump_to_screens(own):
     assert sheet.guide.is_open
     texts = [w.text() for w in sheet.guide.panel.findChildren(QLabel)]
     assert "새 위치에 설비 넣기" in texts and any("SW 버전" in t and "필수" in t for t in texts)
-    assert set(sheet.guide_buttons) == {"location", "equipment", "create", "add"}
+    assert set(sheet.guide_buttons) == {"location", "create", "add"}   # 3단계: 빈 현황표 → 행 추가 → 저장 · 확인
     sheet.guide_buttons["location"].click()
     assert not sheet.guide.is_open and page.status_stack.currentIndex() == 2
     settle(page)
@@ -333,25 +384,28 @@ def test_help_button_opens_guide_drawer_and_steps_jump_to_screens(own):
 
 def test_create_sheet_dialog_checks_the_date(own):
     dialog = own(module.CreateSheetDialog(None, ["China", "화성"], "화성"))
-    assert dialog.site.currentData() == "화성"
+    assert dialog.site.currentData() == "화성" and dialog.site.isEditable()
     dialog.base_date.setText("11월 12일")
     dialog._accept()
     assert "YYYY-MM-DD" in dialog.error.text() and dialog.result() != QDialog.DialogCode.Accepted
     dialog.site.setCurrentIndex(0)
     dialog.base_date.setText(" 2026-11-12 ")
     dialog._accept()
-    assert dialog.values() == ("China", date(2026, 11, 12))
+    assert "메모리/파운드리" in dialog.error.text() and dialog.result() != QDialog.DialogCode.Accepted   # 필수
+    dialog.areas.buttons()[1].setChecked(True)
+    dialog._accept()
+    assert dialog.values() == ("China", date(2026, 11, 12), "FOUNDRY")
 
 
 def test_sort_follows_header_clicks(own):
     page, sheet = sheet_page(own)
     assert "Line → 설비군 → 설비 호기" in sheet.sort_label.text() and not sheet.sort_reset.isVisibleTo(sheet)
-    sheet._header_clicked(5)   # SW 버전 오름차순
+    sheet._header_clicked(6)   # SW 버전 오름차순
     assert codes(sheet) == ["EC4", "EC1", "EC2"] and "SW 버전 오름차순" in sheet.sort_label.text()
-    assert sheet.table.horizontalHeaderItem(5).text() == "SW 버전 ▲"
-    sheet._header_clicked(5)   # 내림차순
+    assert sheet.table.horizontalHeaderItem(6).text() == "SW 버전 ▲"
+    sheet._header_clicked(6)   # 내림차순
     assert codes(sheet) == ["EC2", "EC1", "EC4"] and sheet.sort_reset.isVisibleTo(sheet)
-    sheet._header_clicked(5)   # 기본 정렬로
+    sheet._header_clicked(6)   # 기본 정렬로
     assert codes(sheet) == ["EC1", "EC2", "EC4"] and sheet.sort is None
 
 
@@ -361,11 +415,107 @@ def test_failed_save_keeps_changes_and_reports_reason(own):
     failed = []
     page, sheet = sheet_page(own, gateway)
     page.save_failed.connect(lambda: failed.append(True))
-    cell(sheet, 0, 5).setText("v9")
+    cell(sheet, 0, 6).setText("v9")
     sheet.save()
     settle(page)
     assert failed and "바뀌었습니다" in sheet.notice.text() and sheet.edits == {("version", 21): "v9"}
     assert sheet.save_button.isEnabled()
+
+
+def test_group_change_sets_model_and_category_and_fixes_a_mismatched_model(own, monkeypatch):
+    from dataclasses import replace
+
+    answer(monkeypatch)
+    gateway = FakeGateway()
+    mismatched = replace(SHEET_ROWS.rows[1], model_name="M-O2")   # EC1: 설비군 M-C4인데 모델명 M-O2
+    rows = (SHEET_ROWS.rows[0], mismatched, SHEET_ROWS.rows[2])
+    gateway.data_admin = (lambda original: lambda method, *a, **k: replace(SHEET_ROWS, rows=rows)
+                          if method == "sheet_rows" else original(method, *a, **k))(gateway.data_admin)
+    page, sheet = sheet_page(own, gateway)
+    assert cell(sheet, 0, 4).text() == "M-O2" and "설비군(M-C4)과 다릅니다" in cell(sheet, 0, 4).toolTip()
+    editable = module.Qt.ItemFlag.ItemIsEditable
+    assert cell(sheet, 0, 4).flags() & editable and not cell(sheet, 1, 4).flags() & editable  # 다른 줄만 맞출 수 있다
+    cell(sheet, 0, 4).setText("M-O3")          # 설비군과 다른 이름으로는 못 바꾼다
+    assert "설비군과 같아야" in sheet.notice.text() and not sheet.edits
+    cell(sheet, 0, 4).setText("M-C4")          # 설비군 이름으로 맞춘다
+    assert sheet.edits == {("model", 11): "M-C4"} and cell(sheet, 0, 4).text() == "M-C4"
+    assert sheet.undo() and not sheet.edits and cell(sheet, 0, 4).text() == "M-O2"   # 한 단계로 되돌린다
+    cell(sheet, 0, 3).setText("M-O2")          # 다른 설비군이면 대분류 · 모델명이 따라 바뀐다
+    assert sheet.edits == {("group", 11): 3} and [cell(sheet, 0, c).text() for c in (2, 3, 4)] == ["OXIDE", "M-O2", "M-O2"]
+    sheet.save()
+    settle(page)
+    assert gateway.done["apply_rows"][0][0][3] == [(11, 3)] and not gateway.saved   # 모델명은 서버가 설비군으로 맞춘다
+
+
+def test_unregistered_line_is_registered_with_the_row_area_or_save_is_blocked(own, monkeypatch):
+    answer(monkeypatch)
+    gateway = FakeGateway()
+    page, sheet = sheet_page(own, gateway)
+    cell(sheet, 0, 1).setText("NEW1")         # EC1(메모리)을 처음 보는 라인으로 → 묻지 않고 메모리로 등록
+    assert sheet.unregistered_lines() == ["NEW1"] and "NEW1" in sheet._line_choices()   # 적은 라인은 목록에도 보인다
+    assert sheet.save()
+    settle(page)
+    assert gateway.done["add_line"] == [(("화성", "NEW1", "MEMORY"), {})]
+    sheet.add_row()                            # 새 행: 메모리/파운드리를 비우면 새 라인이라 저장을 막는다
+    new = sheet.table.rowCount() - 1
+    for column, value in ((0, "EC9"), (1, "NEW2"), (3, "M-C4")):
+        cell(sheet, new, column).setText(value)
+    assert cell(sheet, new, 5).background().color() == module.NEW_ROW   # 메모리/파운드리 필수 (모르는 라인이라 비어 있음)
+    assert not sheet.save() and "메모리/파운드리" in sheet.notice.text() and sheet.pending
+    cell(sheet, new, 5).setText("파운드리")
+    assert sheet.save()
+    settle(page)
+    assert gateway.done["add_line"][-1] == (("화성", "NEW2", "FOUNDRY"), {})
+
+
+def test_new_row_gets_sheet_area_and_latest_version_of_the_group(own, monkeypatch):
+    from dataclasses import replace
+
+    answer(monkeypatch)
+    gateway = FakeGateway()
+    gateway.data_admin = (lambda original: lambda method, *a, **k: replace(
+        SHEET_ROWS, default_area="FOUNDRY", line_areas={"13L": "MEMORY"})
+        if method == "sheet_rows" else original(method, *a, **k))(gateway.data_admin)
+    page, sheet = sheet_page(own, gateway)
+    sheet.add_row()
+    new = sheet.table.rowCount() - 1
+    assert cell(sheet, new, 5).text() == "파운드리"                   # 빈 현황표에서 고른 메모리/파운드리
+    cell(sheet, new, 1).setText("13L")                               # 메모리/파운드리를 아는 라인 → 그 값으로 보이게 채움
+    assert cell(sheet, new, 5).text() == "메모리" and "라인의 메모리/파운드리로 자동" in cell(sheet, new, 5).toolTip()
+    cell(sheet, new, 1).setText("99L")                               # 모르는 라인 → 현황표 기본값
+    assert cell(sheet, new, 5).text() == "파운드리"
+    cell(sheet, new, 3).setText("M-C4")
+    assert cell(sheet, new, 6).text() == "v1.4F" and "최신 버전으로 자동" in cell(sheet, new, 6).toolTip()
+    cell(sheet, new, 5).setText("메모리")                             # 메모리로 바꾸면 메모리 계열 최신으로
+    assert cell(sheet, new, 6).text() == "v1.4"
+    cell(sheet, new, 6).setText("v1.2")                              # 직접 적은 버전은
+    cell(sheet, new, 3).setText("M-O2")                              # 설비군을 바꿔도 그대로
+    assert cell(sheet, new, 6).text() == "v1.2"
+    assert sheet.undo() and cell(sheet, new, 3).text() == "M-C4" and cell(sheet, new, 6).text() == "v1.2"
+
+
+def test_new_site_typed_in_empty_sheet_dialog_is_registered_with_the_sheet(own, monkeypatch):
+    asked = answer(monkeypatch)
+    gateway = FakeGateway()
+    page, sheet = sheet_page(own, gateway)
+
+    class Accept:
+        def __init__(self, *_):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def values(self):
+            return "베트남", date(2026, 11, 12), "FOUNDRY"
+
+    monkeypatch.setattr(module, "CreateSheetDialog", Accept)
+    assert sheet.create_sheet()
+    settle(page)
+    assert "'베트남'은(는) 아직 없는 Site" in asked[0]
+    assert gateway.done["add_site"] == [(("베트남",), {})]
+    assert gateway.done["create_sheet"] == [(("베트남", date(2026, 11, 12), "FOUNDRY"), {})]
+    assert "새 Site '베트남'" in sheet.notice.text()
 
 
 def test_equipment_groups_show_category_once_per_group_and_list_model_site_line(own, monkeypatch):
@@ -497,8 +647,19 @@ def test_add_group_dialog_requires_same_category_for_variant(own):
 
 def test_site_added_then_empty_sheet_is_created_and_stays_on_location(own, monkeypatch):
     answer(monkeypatch)
-    monkeypatch.setattr(module.QInputDialog, "getText", staticmethod(
-        lambda *a, **k: ("용인", True) if a[1] == "Site 추가" else ("2026-11-15", True)))
+    monkeypatch.setattr(module.QInputDialog, "getText", staticmethod(lambda *a, **k: ("용인", True)))
+
+    class Accept:
+        def __init__(self, *_):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def values(self):
+            return "용인", date(2026, 11, 15), "MEMORY"
+
+    monkeypatch.setattr(module, "CreateSheetDialog", Accept)
     gateway = FakeGateway()
     page = page_with(own, gateway)
     page.select_status(2)
@@ -506,7 +667,7 @@ def test_site_added_then_empty_sheet_is_created_and_stays_on_location(own, monke
     assert page.location_panel.add_site()
     settle(page)
     assert gateway.done["add_site"] == [(("용인",), {})]
-    assert gateway.done["create_sheet"] == [(("용인", date(2026, 11, 15)), {})]
+    assert gateway.done["create_sheet"] == [(("용인", date(2026, 11, 15), "MEMORY"), {})]
     assert page.status_stack.currentIndex() == 2 and "빈 현황표를 만들었습니다" in page.location_panel.notice.text()  # 위치 탭에 머문다
     assert page.sheet_panel.pending_batch == 8 and not page.sheet_panel.loaded  # 현황표 탭에 가면 만든 현황표를 고른다
 
@@ -563,6 +724,13 @@ def test_release_changes_wait_for_save_then_go_together_and_undo(own, monkeypatc
     assert gateway.done["undo_release"] == [(({"versions": [102]},), {})]
     assert gateway.saved[-1][0][0].changes == {"content": "Recipe 확인"}
     assert not panel.steps and "되돌렸습니다" in panel.notice.text()
+    assert panel.redo_button.isEnabled() and panel.redo()     # 되돌린 저장을 같은 변경으로 다시 저장
+    settle(page)
+    plan = gateway.done["apply_release"][-1][0][1]
+    assert len(asked) == 2 and plan["delete_items"] == [(100, 501)] and plan["orders"] == {100: [500]}
+    assert [v["version_raw"] for v in plan["add_versions"]] == ["v4.60.1.3"] and plan["add_items"][0]["content"] == "새 기능"
+    assert gateway.saved[-1][0][0].changes == {"content": "Recipe 확인 수정"}
+    assert panel.steps[-1][0] == "saved" and not panel.redo_steps
 
 
 def test_release_pending_steps_undo_one_by_one(own):
@@ -578,7 +746,10 @@ def test_release_pending_steps_undo_one_by_one(own):
     assert panel.table.item(2, 0).background().color() == module.DELETE_ROW and panel.save_button.text() == "저장 (2건)"
     assert panel.undo() and not panel.deleted
     assert panel.undo() and not panel.edits and panel.table.item(0, 3).text() == "Recipe 확인"
-    assert not panel.undo_button.isEnabled()
+    assert not panel.undo_button.isEnabled() and panel.redo_button.isEnabled()
+    assert panel.redo() and panel.edits and not panel.deleted and panel.table.item(0, 3).text() == "Recipe 확인 수정"
+    assert panel.redo() and panel.deleted and not panel.redo_button.isEnabled()
+    assert panel.redo_button.text() == "" and panel.redo_button.accessibleName() == "다시 실행"
 
 
 def test_release_bad_model_name_or_date_is_rejected_and_restored(own):
@@ -661,3 +832,47 @@ def test_app_sidebar_has_single_data_menu_and_delete_moved_from_import(own):
     page.select_status(3)
     assert importer.deletion.isVisibleTo(window)
     assert window.navigate("versions")  # 다른 화면의 내부 이동은 그대로 (관리 데이터 화면은 develop에서 없어짐)
+
+
+def test_sheet_choice_label_does_not_repeat_site_and_date():
+    manual = StatusSheet(8, date(2026, 11, 11), "USA", "USA 2026-11-11 (직접 입력)", None, None, 1)
+    unnamed = StatusSheet(9, date(2026, 11, 11), "평택", "평택 2026-11-01", None, None, 25)
+    plain = StatusSheet(10, date(2026, 11, 1), "화성", "현황 2026-11-01", None, None, 50)
+    assert manual.label == "2026-11-11 · USA · 1대 · 직접 입력"
+    assert unnamed.label == "2026-11-11 · 평택 · 25대 · 2026-11-01"  # 파일 이름이 없으면 Site만 뺀 시트 이름
+    assert plain.label == "2026-11-01 · 화성 · 50대 · 현황"
+
+
+def test_new_row_without_area_does_not_fill_version_or_save(own, monkeypatch):
+    answer(monkeypatch)
+    gateway = FakeGateway()
+    page, sheet = sheet_page(own, gateway)                            # 기본값 없는 현황표
+    sheet.add_row()
+    new = sheet.table.rowCount() - 1
+    for column, value in ((0, "EC9"), (1, "99L"), (3, "M-C4")):
+        cell(sheet, new, column).setText(value)
+    assert cell(sheet, new, 5).text() == "" and cell(sheet, new, 6).text() == ""   # 메모리를 가정해 버전을 채우지 않는다
+    assert not sheet.save() and "메모리/파운드리" in sheet.notice.text() and "apply_rows" not in gateway.done
+    cell(sheet, new, 5).setText("메모리")
+    assert cell(sheet, new, 6).text() == "v1.4"                       # 정해진 뒤에 최신 버전을 채운다
+
+
+def test_selected_new_row_still_shows_required_and_filled_colors(own):
+    page, sheet = sheet_page(own)
+    sheet.add_row()
+    new = sheet.table.rowCount() - 1
+    cell(sheet, new, 1).setText("13L")                     # 노란 칸 (채움)
+    sheet.table.selectRow(new)                             # 입력 중인 줄을 고른 상태
+    sheet.table.viewport().repaint()
+    image = sheet.table.viewport().grab().toImage()
+
+    def color(column):
+        rect = sheet.table.visualRect(sheet.table.model().index(new, column))
+        return image.pixelColor(rect.center())
+
+    required, filled = color(0), color(1)                  # 설비 호기(분홍 필수) · Line(노랑)
+    assert required != filled                              # 고른 줄도 칸 색이 구분된다 (선택 색이 덮지 않음)
+    assert required.red() > required.green() and filled.green() > filled.blue()   # 분홍 · 노랑 기운이 남아 있다
+    assert isinstance(sheet.table.itemDelegate(), module._KeepColorsDelegate)
+    assert isinstance(page.release_panel.table.itemDelegate(), module._KeepColorsDelegate)
+

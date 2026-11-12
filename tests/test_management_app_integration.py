@@ -362,6 +362,8 @@ def test_confirmed_save_failure_retains_draft_and_reloads_known_old_values(app, 
         row = next(r for r, (kind, entry) in enumerate(sheet.view)
                    if kind == "row" and entry.snapshot_id == snapshot.snapshot_id)
         sheet.table.item(row, 1).setText("저장 실패 초안")  # Line 칸 (DB 값 기준 현황표, 11-11 6차)
+        # 처음 보는 라인은 그 줄의 메모리/파운드리로 등록한다 (11-12). 모르면 저장을 막으므로 값을 정해 둔다
+        sheet.table.item(row, 5).setText("메모리")
         assert sheet.pending and sheet.save()
         wait_for_save(window, app)
         wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
