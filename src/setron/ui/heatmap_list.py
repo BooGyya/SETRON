@@ -1,5 +1,6 @@
 """카드형과 같은 그룹 트리를 사용하는 히트맵 목록 표시."""
 
+from collections import OrderedDict
 from math import floor
 
 from PySide6.QtCore import QEvent, QModelIndex, QRect, QSignalBlocker, Qt
@@ -26,6 +27,7 @@ class HeatmapListModel(QStandardItemModel):
         self._equipment_items, self._group_items = {}, {}
         self._structure_signature, self._row_items = None, ()
         self.name_changed = False
+        self._content_revision = self._name_revision = 0
         self._rebuilding = False
         self.setHorizontalHeaderLabels(self.headings)
 
@@ -71,6 +73,10 @@ class HeatmapListModel(QStandardItemModel):
                 ids.append(tile.equipment_id)
                 tones.append(tone)
             self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
+            if changed_rows:
+                self._content_revision += 1
+            if self.name_changed:
+                self._name_revision += 1
             return False, tuple(changed_rows)
 
         self._rebuilding = True
@@ -128,6 +134,8 @@ class HeatmapListModel(QStandardItemModel):
         self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
         self._structure_signature, self._row_items = signature, tuple(row_items)
         self.name_changed = True
+        self._content_revision += 1
+        self._name_revision += 1
 
     def equipment_index(self, equipment_id, preferred_key=None):
         items = self._equipment_items.get(equipment_id, ())
@@ -184,6 +192,10 @@ class HeatmapTreeView(QTreeView):
         self._fitting_height = False
         self._resizing_columns = False
         self._row_heights, self._last_compact = {}, self.compact
+        self._height_capped = False
+        self._text_widths = OrderedDict()
+        self._width_signature = self._name_width_signature = None
+        self._measured_widths, self._name_width = {}, 220
         self.setModel(model)
         self.setAccessibleName(name)
         self.setAccessibleDescription("분류를 펼치거나 접고 설비를 선택합니다. 좌우 방향키로 분류를 탐색합니다.")
@@ -306,13 +318,16 @@ class HeatmapTreeView(QTreeView):
         with QSignalBlocker(self):
             rebuilt, changed_rows = self.model().set_groups(nodes, row_factory)
             if rebuilt:
-                self.expandAll()
+                # 설비 말단 행까지 펼침을 검사하지 않고 분류 노드만 연다.
+                for key, item in self.model()._group_items.items():
+                    if key not in self._collapsed_keys:
+                        self.setExpanded(self.model().indexFromItem(item), True)
+                self.select_equipment(equipment_id, preferred_key=preferred_key, reveal=False)
+                # Qt의 현재 행 복원이 조상을 자동으로 열어도 사용자가 접은 분류는 유지한다.
                 for key in self._collapsed_keys:
                     index = self.model().group_index(key)
                     if index.isValid():
                         self.setExpanded(index, False)
-        if rebuilt:
-            self.select_equipment(equipment_id, preferred_key=preferred_key, reveal=False)
         columns_changed = self.resize_columns() if rebuilt or changed_rows else False
         resize = rebuilt or columns_changed or self.compact != self._last_compact
         if not resize:
@@ -324,7 +339,10 @@ class HeatmapTreeView(QTreeView):
                         visible = False
                         break
                     parent = parent.parent()
-                if visible and self._row_heights.get(self._row_key(index)) != self._row_height(index):
+                key = self._row_key(index)
+                if self._height_capped and key not in self._row_heights:
+                    continue  # 상한을 채운 앞부분 뒤의 행은 패널 높이를 바꾸지 않는다.
+                if visible and self._row_heights.get(key) != self._row_height(index):
                     resize = True
                     break
         if resize:
@@ -349,29 +367,55 @@ class HeatmapTreeView(QTreeView):
         self.setCurrentIndex(index)
 
     def _column_widths(self):
-        name_width = 220
-        for items in self.model()._equipment_items.values():
-            for item in items:
-                index, depth = self.model().indexFromItem(item), int(self.rootIsDecorated())
-                parent = index.parent()
-                while parent.isValid():
-                    depth += 1
-                    parent = parent.parent()
-                text_width = QFontMetrics(index.data(Qt.ItemDataRole.FontRole)).horizontalAdvance(item.text())
-                name_width = max(name_width, text_width + depth * self.indentation() + 20)
+        model = self.model()
         limits = {3: (140, 160), 4: (100, 120)} if self.compact else {
             2: (120, 160), 3: (150, 200), 4: (100, 120), 5: (110, 150)}
-        widths = {0: name_width}
+        columns = (0, *(column for column in limits if not self.isColumnHidden(column)))
+        sample = model._row_items[0] if model._row_items else ()
+        fonts = {column: model.indexFromItem(sample[column]).data(Qt.ItemDataRole.FontRole) if sample else self.font()
+                 for column in columns}
+        font_keys = {column: value.key() for column, value in fonts.items()}
+        signature = (id(model), model._content_revision, self.compact, tuple(font_keys.items()),
+                     self.font().key(), self.indentation(), self.rootIsDecorated())
+        if signature == self._width_signature:
+            return self._measured_widths
+        metrics = {column: QFontMetrics(value) for column, value in fonts.items()}
+
+        def text_width(text, column):
+            key = font_keys[column], text
+            cached = self._text_widths.get(key)
+            if cached is not None:
+                self._text_widths.move_to_end(key)
+                return cached
+            width = metrics[column].horizontalAdvance(text)
+            self._text_widths[key] = width
+            if len(self._text_widths) > 8192:
+                self._text_widths.popitem(last=False)
+            return width
+
+        name_signature = id(model), model._name_revision, font_keys[0], self.indentation(), self.rootIsDecorated()
+        if name_signature != self._name_width_signature:
+            name_width = 220
+            for items in model._row_items:
+                item, depth = items[0], int(self.rootIsDecorated())
+                parent = item.parent()
+                while parent is not None:
+                    depth += 1
+                    parent = parent.parent()
+                name_width = max(name_width, text_width(item.text(), 0) + depth * self.indentation() + 20)
+            self._name_width, self._name_width_signature = name_width, name_signature
+        widths = {0: self._name_width}
         for column, (minimum, maximum) in limits.items():
             if self.isColumnHidden(column):
                 continue
             required = self.fontMetrics().horizontalAdvance(self.model().headings[column]) + 20
-            for items in self.model()._row_items:
+            for items in model._row_items:
+                if required >= maximum:
+                    break
                 item = items[column]
-                index = self.model().indexFromItem(item)
-                metrics = QFontMetrics(index.data(Qt.ItemDataRole.FontRole))
-                required = max(required, *(metrics.horizontalAdvance(line) + 20 for line in (item.text().splitlines() or [""])))
+                required = max(required, *(text_width(line, column) + 20 for line in (item.text().splitlines() or [""])))
             widths[column] = max(minimum, min(maximum, required))
+        self._width_signature, self._measured_widths = signature, widths
         return widths
 
     def resize_columns(self):
@@ -409,6 +453,8 @@ class HeatmapTreeView(QTreeView):
             def add_rows(parent=QModelIndex()):
                 nonlocal height
                 for row in range(model.rowCount(parent)):
+                    if height >= 800:
+                        return
                     index = model.index(row, 0, parent)
                     row_height = self._row_height(index)
                     self._row_heights[self._row_key(index)] = row_height
@@ -417,6 +463,7 @@ class HeatmapTreeView(QTreeView):
                         add_rows(index)
 
             add_rows()
+            self._height_capped = height >= 800
             policy, scrollbar = self.horizontalScrollBarPolicy(), self.horizontalScrollBar()
             if (policy == Qt.ScrollBarPolicy.ScrollBarAlwaysOn or
                     policy == Qt.ScrollBarPolicy.ScrollBarAsNeeded and

@@ -1,5 +1,6 @@
 """작업 단위 5: 물리 설비 타일·버전 함께 보기. VER4 히트맵(상세보기·간략히 보기, 카드형·목록형) 배치."""
 
+from collections import OrderedDict
 from dataclasses import replace
 
 from PySide6.QtCore import QPoint, QSignalBlocker, QSize, QTimer, Qt, Signal
@@ -31,6 +32,9 @@ RISK_FILL = "#fde2e7"
 TIER_FILL = dict(zip(HEATMAP_TIERS, HEATMAP_STANDARD[False]))
 HEATMAP_CELL_SIZE = QSize(140, 80)
 HEATMAP_COMPACT_CELL_SIZE = QSize(140, 40)
+DEFERRED_TILE_THRESHOLD = 200
+CARD_CACHE_LIMIT = 3
+CARD_CACHE_TILE_LIMIT = 6000
 
 
 def _version_text(data, families, *, show_tier=True, separator=" / ", empty="SW 미등록"):
@@ -70,22 +74,36 @@ def tile_style(data, *, minimum_height=0, corner_radius=4, colors=None):
 
 
 class TileButton(QPushButton):
-    def __init__(self, data, *, expanded=False, families=None, cell_size=None):
+    def __init__(self, data, *, expanded=False, families=None, cell_size=None, defer_content=False):
         super().__init__()
         self.cell_size = QSize(cell_size) if cell_size is not None else None
         families = data.families if families is None else families
+        self._expanded = expanded
+        self._content_ready = False
+        self._families = families
         self.setObjectName("equipmentTile")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.set_data(data)
         self.setAccessibleDescription("Space 또는 클릭으로 설비 선택")
-        self.version_label = None
+        self.code_label = self.version_label = None
+        self.visual = (replace(data, observation_date=None, findings=()), families)
+        if self.cell_size is not None:
+            self.setFixedSize(self.cell_size)
+        if not defer_content or self.cell_size is None:
+            self._build_content()
+
+    def _build_content(self):
+        if self._content_ready:
+            return
+        self._content_ready = True
+        expanded = self._expanded
         body = QVBoxLayout(self)
         padding_y = 10 if expanded else 6 if self.cell_size is not None else 8
         body.setContentsMargins(10, padding_y, 10, padding_y)
         body.setSpacing(4)
-        self.code_label = label(data.code, 16, medium=True)
+        self.code_label = label(self.data.code, 16, medium=True)
         self.code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         body.addStretch()
         body.addWidget(self.code_label)
@@ -97,7 +115,16 @@ class TileButton(QPushButton):
         for child in self.findChildren(QWidget):
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         body.addStretch()
-        self.update_appearance(families)
+        self.update_appearance(self._families)
+        body.activate()
+        for child in self.findChildren(QWidget):
+            child.show()
+
+    def paintEvent(self, event):
+        # Qt는 조상 스크롤 영역에 가려진 버튼을 그리지 않는다. 실제 버튼은 유지해
+        # 접근성·키보드·상세 패널의 초점 복귀를 보존하고 무거운 본문만 늦게 만든다.
+        self._build_content()
+        super().paintEvent(event)
 
     def set_data(self, data):
         self.data = data
@@ -106,7 +133,10 @@ class TileButton(QPushButton):
         self.setToolTip(description)
 
     def update_appearance(self, families):
+        self._families = families
         self.visual = (replace(self.data, observation_date=None, findings=()), families)
+        if not self._content_ready:
+            return
         text = _version_text(self.data, families, show_tier=False) if self.version_label is not None else ""
         if self.cell_size is not None:
             width = self.cell_size.width() - 26
@@ -154,7 +184,17 @@ class TileGrid(QWidget):
         self.max_columns = max_columns
         self.columns = 0
         self.target_width = target_width or (240 if expanded else max(72, *(tile.code_label.sizeHint().width() + 14 for tile in tiles)))
-        self._center_host = QWidget() if centered and self.fixed_cells else None
+        self._fixed_column = self.fixed_cells and max_columns == 1 and spacing == 0
+        self._center_host = QWidget() if centered and self.fixed_cells and not self._fixed_column else None
+        if self._fixed_column:
+            self.columns = 1
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            for index, tile in enumerate(tiles):
+                tile.setParent(self)
+                tile.move(0, index * tile.cell_size.height())
+                tile.show()
+            self.setFixedSize(tiles[0].cell_size.width(), len(tiles) * tiles[0].cell_size.height())
+            return
         self.grid = QGridLayout(self._center_host if self._center_host is not None else self)
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setHorizontalSpacing(8 if spacing is None else spacing)
@@ -172,6 +212,8 @@ class TileGrid(QWidget):
         self._arrange(1)
 
     def minimumSizeHint(self):
+        if self._fixed_column:
+            return self.size()
         return QSize(0, self.grid.minimumSize().height())
 
     def _arrange(self, columns):
@@ -194,6 +236,9 @@ class TileGrid(QWidget):
         self.updateGeometry()
 
     def resizeEvent(self, event):
+        if self._fixed_column:
+            super().resizeEvent(event)
+            return
         limit = min(self.max_columns, len(self.tiles)) if self._center_host is not None else self.max_columns
         gap = self.grid.horizontalSpacing()
         self._arrange(max(1, min(limit, (event.size().width() + gap) // (self.target_width + gap))))
@@ -364,6 +409,8 @@ class HeatmapPage(QWidget):
         self._display_groups = ()
         self._selected_groups = None
         self._card_entries = {}
+        self._card_cache = OrderedDict()
+        self._defer_tile_content = False
         self.group_cards = []
         self.rebuilt_tiles = self.restyled_tiles = 0
         self._control_rows = None
@@ -607,6 +654,7 @@ class HeatmapPage(QWidget):
         self._clear()
 
     def _clear(self):
+        self._clear_card_cache()
         with QSignalBlocker(self.below_filter):
             self.below_filter.setChecked(False)
         self.below_filter.setEnabled(False)
@@ -756,14 +804,20 @@ class HeatmapPage(QWidget):
                                         show_hpa=list_mode or self.hpa_button.isChecked())
         if list_mode:
             if self.snapshot is None:
-                self._card_entries = {}
+                self._clear_card_cache()
                 self._sync_card_rows(())
             self._render_list(grouping_filtered, plan)
             return
-        previous_cards = self._card_entries
+        if self.snapshot is None:
+            self._clear_card_cache()
+            self._sync_card_rows(())
+            return
+        expanded = self.view_toggle.isChecked()
+        cache_key = self.grouping_mode, expanded, self.hpa_button.isChecked()
+        previous_cards = self._card_cache.pop(cache_key, {})
         self._card_entries = {}
         restore_positions = []
-        expanded = self.view_toggle.isChecked()
+        self._defer_tile_content = len(grouping_filtered) > DEFERRED_TILE_THRESHOLD
         for node in plan:
             signature = (expanded, self._group_signature(node))
             previous = previous_cards.get(node.key)
@@ -790,6 +844,13 @@ class HeatmapPage(QWidget):
                     restore_positions.append((card.scroll, previous[1].scroll.horizontalScrollBar().value()))
             self._card_entries[node.key] = (signature, card, controls, grids)
             self.group_cards.append(card)
+        self._card_cache[cache_key] = self._card_entries
+        self._trim_card_cache()
+        retained = {entry[1] for entries in self._card_cache.values() for entry in entries.values()}
+        for _, card, _, _ in previous_cards.values():
+            if card not in retained and self.tile_body.indexOf(card) < 0:
+                card.hide()
+                card.deleteLater()
         self._sync_card_rows(self.group_cards)
         for scroll, position in restore_positions:
             QTimer.singleShot(0, scroll, lambda scroll=scroll, position=position:
@@ -798,12 +859,14 @@ class HeatmapPage(QWidget):
     def _sync_card_rows(self, cards):
         """같은 카드는 부모·표시 상태를 유지하고 달라진 행만 삽입·제거한다."""
         desired = set(cards)
+        retained = {entry[1] for entries in self._card_cache.values() for entry in entries.values()}
         for index in range(self.tile_body.count() - 1, -1, -1):
             card = self.tile_body.itemAt(index).widget()
             if card not in desired:
                 self.tile_body.takeAt(index)
                 card.hide()
-                card.deleteLater()
+                if card not in retained:
+                    card.deleteLater()
         for index, card in enumerate(cards):
             current = self.tile_body.indexOf(card)
             if current == index:
@@ -813,6 +876,27 @@ class HeatmapPage(QWidget):
             self.tile_body.insertWidget(index, card)
             if card.isHidden():
                 card.show()
+
+    def _clear_card_cache(self):
+        for entries in self._card_cache.values():
+            for _, card, _, _ in entries.values():
+                if self.tile_body.indexOf(card) < 0:
+                    card.hide()
+                    card.deleteLater()
+        self._card_cache.clear()
+        self._card_entries = {}
+
+    def _trim_card_cache(self):
+        def tile_count():
+            return sum(len(entry[2]) for entries in self._card_cache.values() for entry in entries.values())
+
+        while len(self._card_cache) > 1 and (len(self._card_cache) > CARD_CACHE_LIMIT or
+                                            tile_count() > CARD_CACHE_TILE_LIMIT):
+            _, entries = self._card_cache.popitem(last=False)
+            for _, card, _, _ in entries.values():
+                if self.tile_body.indexOf(card) < 0:
+                    card.hide()
+                    card.deleteLater()
 
     @classmethod
     def _group_signature(cls, node):
@@ -910,7 +994,8 @@ class HeatmapPage(QWidget):
         for tile in node.tiles:
             families = group_families(tile, group_name)
             size = HEATMAP_CELL_SIZE if expanded else HEATMAP_COMPACT_CELL_SIZE
-            control = TileButton(tile, expanded=expanded, families=families, cell_size=size)
+            control = TileButton(tile, expanded=expanded, families=families, cell_size=size,
+                                 defer_content=self._defer_tile_content)
             control.setChecked(tile.equipment_id == self.selected_id)
             control.clicked.connect(lambda checked=False, eid=tile.equipment_id, origin=control: self._select(eid, origin))
             self.tile_buttons.setdefault(tile.equipment_id, control)
