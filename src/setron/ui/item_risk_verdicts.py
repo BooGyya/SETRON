@@ -56,6 +56,14 @@ def rule_verdicts(data, rule):
     return rows
 
 
+def risk_candidate_ids(data, rules):
+    """활성 위험 기준들이 위험 후보로 판정한 설비 ID. 관측 미연결이면 None(0대로 확정하지 않는다)."""
+    if data is None or not data.observations_connected:
+        return None
+    return tuple(dict.fromkeys(record.equipment_id for rule in rules if rule.is_enabled
+                               for record, result, _ in rule_verdicts(data, rule) if result.status is RiskStatus.RISK))
+
+
 class _VerdictDelegate(QStyledItemDelegate):
     """판정 열을 상태 색 칩으로 그린다. 색은 기존 배지 토큰을 쓴다."""
 
@@ -267,7 +275,13 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.source_button.clicked.connect(lambda: show_item_source(self, data, item_id))
         self.close_button = button("닫기", primary=True)
         self.close_button.clicked.connect(self.accept)
+        # 등록 결과를 대시보드 위험 후보 목록과 잇는다. 이동 여부는 닫힌 뒤 화면이 dashboard_ids로 판단한다.
+        self.dashboard_ids = None
+        self.dashboard_button = button("대시보드 위험 후보 보기")
+        self.dashboard_button.setToolTip("이 기준의 위험 후보 중 현재 대시보드 조회 범위에 표시되는 설비를 목록으로 엽니다.")
+        self.dashboard_button.clicked.connect(self._open_dashboard)
         footer.addWidget(self.source_button)
+        footer.addWidget(self.dashboard_button)
         footer.addStretch()
         footer.addWidget(self.close_button)
         outer.addLayout(footer)
@@ -315,6 +329,7 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.notice.setVisible(bool(message))
         for widget in (self.tiles, self.filters, self.table):
             widget.setVisible(has_rows)
+        self.dashboard_button.setEnabled(any(v[1].status is RiskStatus.RISK for v in self.verdicts))
         self.condition_box.setVisible(rule is not None)
         records = [v[0] for v in self.verdicts]
         models = {p.model_id: p.model_name for p in data.versions.pairs}
@@ -327,6 +342,10 @@ class ItemRuleVerdictDialog(PopupDialog):
             for model_id in sorted({pm.group_id for r in records for pm in r.pms if pm.group_id in models}):
                 self.group.addItem(models[model_id], model_id)
         self._site_changed()
+
+    def _open_dashboard(self):
+        self.dashboard_ids = tuple(dict.fromkeys(r.equipment_id for r, res, _ in self.verdicts if res.status is RiskStatus.RISK))
+        self.accept()
 
     def _site_changed(self, *_):
         site = self.site.currentData()

@@ -1,6 +1,7 @@
 """라인별 히트맵 시트를 검증한다 (BE-021, 5차 멘토 요청: 설비군 → 라인 → 설비 양식)."""
 
 from datetime import date
+from dataclasses import replace
 
 from openpyxl import Workbook, load_workbook
 
@@ -72,6 +73,20 @@ def test_mixed_equipment_appears_once_in_each_family():
 
     families = {f.family: codes(f.lines[0]) for f in groups[0].families}
     assert families == {"O2": [("ESO-MIX", Tier.ONE_BELOW)], "O3": [("ESO-MIX", Tier.AT)]}
+
+
+def test_dfb_is_grouped_separately_and_real_line_names_are_not_collapsed():
+    value = report(
+        replace(record(1, "C4-1", "평택", "P4H", o2("v2.2")), model_name="M-C4"),
+        replace(record(2, "DFB-1", "평택", "P3-S5", o2("v2.2")), model_name="M-C4 DFB"),
+        replace(record(3, "DFB-2", "평택", "P1F", o2("v2.2")), model_name="M-C4 DFB"),
+        replace(record(4, "DFB-3", "평택", "P1D", o2("v2.2")), model_name="M-C4 DFB"),
+    )
+    value = replace(value, family_names={F_O2: "C4"})
+    groups = {group.family: group for group in line_heatmap_groups(value)[0].families}
+    assert set(groups) == {"C4", "DFB"}
+    assert {line.line for line in groups["DFB"].lines} == {"P3-S5", "P1F", "P1D"}
+    assert [line.line for line in groups["C4"].lines] == ["P4H"]
 
 
 def test_missing_site_and_line_are_labeled_and_sorted_last():

@@ -21,7 +21,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from threading import RLock
 
-from setron.features.data_admin.service import registered_sites
+from setron.features.data_admin.service import registered_lines, registered_sites
+from setron.features.reference_data import default_area, use_registered_lines
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.read import read_equipment_record
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
@@ -47,13 +48,14 @@ GROUP_MODELS = {
 SOURCE_LABEL = "MySQL DB 저장 자료 · 조회 적용 시 목표 N·위험 기준 재확인"
 
 
-def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_sites=()) -> QueryCatalog:
+def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_sites=(), extra_lines=()) -> QueryCatalog:
     """저장된 현황의 실제 Site·Line으로 조회 선택지를 만든다.
 
     - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site와 데이터 관리에서 등록한 Site(``extra_sites``)를
       이름 그대로 덧붙인다. 등록만 하고 관측이 없는 Site도 선택지에 보인다 (11-11).
     - Fab: 저장된 production_area의 Memory/Foundry이며 Site 공통 선택지다.
-    - Line: 관측된 (Site, Fab, Line) 조합. 생산 영역이 없는 기존 키는 유지한다.
+    - Line: 관측된 (Site, Fab, Line) 조합. 생산 영역이 없는 기존 키는 유지한다. 데이터 관리에서 등록한 라인
+      (``extra_lines``: {"site", "line", "fab"})은 설비가 없어도 덧붙인다 (11-11 6차).
     - 설비군: VER3 선택지 중 :data:`GROUP_MODELS`의 모델이 DB에 등록된 것만 둔다 (``model_names``).
       등록 모델이 없는 설비군(예: Inline Ox·Cluster Ox)은 골라도 항상 0대라 빼고, ``model_names``가 없으면 모두 둔다.
       데이터 관리에서 등록한 새 기본형 설비군(``extra_groups``, :func:`registered_group_options`)은 같은 분류 뒤에 넣는다.
@@ -65,8 +67,10 @@ def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_site
                    | {name for name in extra_sites if name and name not in known})
     sites = (*base.sites, *(SiteOption(name, name) for name in extra))
     keys = {option.label: option.key for option in sites}
-    lines = sorted({(keys[value.site], value.production_area, value.line) for value in snapshots
-                    if value.site in keys and value.line}, key=lambda value: (value[0], value[1] or "", value[2]))
+    lines = sorted({(keys[value.site], line_area(value.production_area, value.site, value.line), value.line)
+                    for value in snapshots if value.site in keys and value.line}
+                   | {(keys[entry["site"]], entry["fab"], entry["line"]) for entry in extra_lines if entry["site"] in keys},
+                   key=lambda value: (value[0], value[1] or "", value[2]))
     groups = [option for option in base.groups if model_names is None
               or any(name in model_names for name in GROUP_MODELS.get(option.key, ()))]
     for option in extra_groups:
@@ -109,6 +113,15 @@ def registered_group_options(groups, keys) -> tuple[GroupOption, ...]:
         and row["analysis_enabled"])
 
 
+def line_area(stored, site, line):
+    """라인의 메모리/파운드리: 저장된 생산 영역 → 데이터 관리 등록 라인 → 장소표 (11-11 6차).
+
+    현황의 생산 영역이 비어 있어도 아는 라인은 Site → 메모리/파운드리 → 라인 필터에 들어가게 한다. 조회 선택지와
+    설비 위치가 같은 판정을 써야 라인 키가 맞는다.
+    """
+    return stored or default_area(site, line)
+
+
 def _line_key(site, fab, line):
     return f"{site}:{fab}:{line}" if fab is not None else f"{site}:{line}"
 
@@ -138,9 +151,12 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         # 노후도 기간 기준 (BE-016). 저장값이 잘못되면 None이며 화면은 '기준 설정 오류'로 보인다.
         age_thresholds = thresholds_in(tx).thresholds
         extra_sites = registered_sites(tx)
+        extra_lines = registered_lines(tx)
+    use_registered_lines(extra_lines)  # 가져오기 · AI 분석의 메모리/파운드리 판정도 같은 등록 라인을 쓴다
     keys = group_keys(groups)
     catalog = catalog or database_catalog(stored, {group["group_name"] for group in groups},
-                                          extra_groups=registered_group_options(groups, keys), extra_sites=extra_sites)
+                                          extra_groups=registered_group_options(groups, keys), extra_sites=extra_sites,
+                                          extra_lines=extra_lines)
 
     # 개조형은 상위 설비군의 선택지에 함께 묶는다 (데이터 관리에서 등록한 개조형 포함, 11-11).
     bindings = tuple(GroupBinding(option.key, tuple(sorted(gid for gid, key in keys.items() if key == option.key)))
@@ -167,7 +183,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
     stored_areas = {(value.base_date, value.equipment_id): value.production_area for value in stored}
 
     def location(record):
-        fab = stored_areas[record.base_date, record.equipment_id]
+        fab = line_area(stored_areas[record.base_date, record.equipment_id], record.site, record.line)
         fab = fab if fab in fab_keys else None
         key = _line_key(sites[record.site], fab, record.line)
         return EquipmentLocation(sites[record.site], record.line, fab, key if key in line_keys else None)
@@ -464,11 +480,11 @@ def data_exporter_from_env(environ=None):
     if not values.get("SETRON_DB_NAME"):
         return None
 
-    def exporter(path):
+    def exporter(path, *, production_area=None, batch_ids=None):
         database = None
         try:
             database = Database.from_env(values)
-            return save_management_summary(StorageService(database), path)
+            return save_management_summary(StorageService(database), path, production_area=production_area, batch_ids=batch_ids)
         except DatabaseError as error:
             return ExportResult(ExportStatus.FAILED, Path(path), f"DB 자료를 읽지 못했습니다: {error}")
         finally:
@@ -476,3 +492,31 @@ def data_exporter_from_env(environ=None):
                 database.dispose()
 
     return exporter
+
+
+def export_files_from_env(environ=None):
+    """가져온 파일 선택 목록을 독립 DB 연결에서 비동기로 읽는다."""
+    import os
+    from dataclasses import replace
+
+    from setron.features.data_admin.service import clock_offset
+    from setron.features.export.management_files import management_files
+    from setron.features.storage.service import StorageService
+    from setron.infrastructure.database import Database
+    from setron.ui.read_worker import BackgroundRead
+
+    values = os.environ if environ is None else environ
+    if not values.get("SETRON_DB_NAME"):
+        return None
+
+    def load():
+        database = Database.from_env(values)
+        try:
+            storage = StorageService(database)
+            offset = clock_offset(storage)
+            return tuple(replace(value, imported_at=value.imported_at + offset if value.imported_at else None)
+                         for value in management_files(storage))
+        finally:
+            database.dispose()
+
+    return BackgroundRead(load)

@@ -238,7 +238,7 @@ def test_sidebar_excel_export_saves_only_equipment_and_release_notes(qapp, revis
         try:
             assert book.sheetnames == ["설비현황표", "릴리즈노트"]
             assert book["설비현황표"].max_row == 2
-            assert book["릴리즈노트"].cell(2, 11).value == "원본 안전 개선"
+            assert book["릴리즈노트"].cell(2, 10).value == "원본 안전 개선"
         finally:
             book.close()
         assert len(messages) == 1 and "설비현황표 1행 · 릴리즈노트 1행" in messages[0]

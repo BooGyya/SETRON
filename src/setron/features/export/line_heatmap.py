@@ -24,6 +24,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from setron.features.export.schemas import StatusReport
 from setron.features.export.xlsx_cells import ReportTextWriter
+from setron.features.management_format import equipment_group_name
 from setron.features.version.groups import TIER_LABELS, Tier
 
 LINE_HEATMAP_SHEET = "라인별 히트맵"
@@ -91,6 +92,8 @@ def line_heatmap_groups(report: StatusReport) -> tuple[SiteGroup, ...]:
         line = _label(record.line, NO_LINE)
         for family in equipment.families:
             name = report.family_names.get(family.family_id, f"계열 {family.family_id}")
+            if equipment_group_name(record.model_name) == "DFB":
+                name = "DFB"
             tree[site][name][line].append(HeatmapCell(record.equipment_code, family.tier))
     return tuple(
         SiteGroup(site, tuple(

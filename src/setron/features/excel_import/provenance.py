@@ -153,6 +153,19 @@ def _derived(row, field, raw, kind):
                for values in (texts, saved) if values)
 
 
+def _area_matches(row, raw, request):
+    """저장할 Memory/Foundry가 확인된 사업장 · 라인의 구분과 같은지. 저장(import_save)과 같은 :func:`area_of`를 쓴다.
+
+    AI가 'Foundry'를 제목 칸 같은 곳을 근거로 넣으면, 칸 글자 전체와 달라 저장 직전에 막혔다(11/12 확인용 V2).
+    장소표와 다른 값(예: V2를 Memory)은 통과시키지 않는다.
+    """
+    from setron.features.reference_data import area_of
+
+    expected = area_of({"site": row.values.get("site"), "line": row.values.get("line")}, raw.get("sheet"),
+                       getattr(request, "workbook_name", None))
+    return expected is not None and str(row.values.get("production_area") or "").strip().upper() == expected
+
+
 def _hpa(value):
     """원본의 전체 HPA 표기를 확인하며 제목의 부분 문자열을 분류로 쓰지 않는다."""
     return isinstance(value, str) and value.strip().casefold() == "hpa"
@@ -261,6 +274,8 @@ def validate_save_request_sources(request):
                 continue
             if name in row.edited_fields:
                 continue
+            if name == "production_area" and kind is ExtractKind.EQUIPMENT_STATUS and _area_matches(row, raw, request):
+                continue                 # Memory/Foundry는 원본 칸이 아니라 사업장 · 라인으로 정해지는 값이다 (11/12)
             if not sources:
                 if _derived(row, name, raw, kind):
                     continue
