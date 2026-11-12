@@ -576,7 +576,7 @@ PERIOD_REPORTS = (("status", "버전 표준화 리포트", "기간 동안의 표
                   ("change", "설비별 변경 이력 리포트", "기간 안의 설비별 버전 변경"))
 _DATE_FIELDS = ("base_date", "date", "dates")
 _DATE_LIKE = re.compile(r"(?:(?<!\d)(?:1[0-2]|[1-9])\s*월|20\d\d[-./]\d{1,2}|20\d\d\s*년|\d{1,2}/\d{1,2}|\d+달 전)")
-_VERSION_LIKE = re.compile(r"v\d[\w.\-]*", re.I)
+_VERSION_LIKE = re.compile(r"v\d+[._][\w.\-]*", re.I)
 _MODEL_LIKE = re.compile(r"M-[A-Z0-9]+(?:\s*[A-Z]+)?|[OC]\d{1,2}", re.I)   # M-C9, M-O5 Prime, O7
 _LINE_LIKE = re.compile(r"(?:[A-Z]\d{1,2}[A-Z]?|\d{1,2}L|[A-Z]{2,5})(?:-[A-Z]\d)?", re.I)
 
@@ -612,8 +612,18 @@ def _missing_short(data: ChatData, problems) -> str | None:
                "families": ("계열", tuple(f.name for f in catalog.families))}
     if _VERSION_LIKE.fullmatch(value):
         return f"'{value}'은(는) 등록된 릴리즈 버전에서 찾지 못했어요. 버전 목록은 데이터 관리 → 릴리즈노트에서 볼 수 있어요."
+    from .recognize import similar_names
+
+    similar = [name for _, name in similar_names(value, catalog)]
+    if len(similar) > 1:                              # 'Inline' → Inline Ox · Inline O2: 어느 것인지 묻는다
+        return f"'{value}'은(는) 여러 이름에 해당해요: {' · '.join(similar[:6])}. 어느 것인지 적어 주세요."
     if field_name not in choices:                     # 질문 속 낱말: 글자 모양으로 종류를 짐작한다
-        field_name = ("groups" if _MODEL_LIKE.fullmatch(value) else "lines" if _LINE_LIKE.fullmatch(value) else "")
+        field_name = ("groups" if _MODEL_LIKE.fullmatch(value)                       # O7 · c2 · M-C9
+                      else "lines" if _LINE_LIKE.fullmatch(value) and any(ch.isdigit() for ch in value)   # S9 · V3 · P9
+                      else "")
+        if not field_name and (value.isupper() or re.fullmatch(r"[A-Za-z]\d{1,2}", value)):           # KCTC 같은 약어
+            return (f"'{value}'은(는) 지금 자료에서 찾지 못했어요. 모델: {_listing(choices['groups'][1], 6)} / "
+                    f"라인: {_listing(choices['lines'][1], 6)}.")
     kind, names = choices.get(field_name, (None, ()))
     if kind and names:
         return f"'{value}'은(는) 지금 자료에 없는 {kind}이에요. 있는 {kind}: {_listing(names, 8)}."
@@ -892,6 +902,52 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
                       equipment_ids=tuple(sorted({u.record.equipment_id for u in items})))
 
 
+_HPA_WORD = re.compile(r"(?<![a-z])hpa(?![a-z])")
+
+
+def _has_any(text: str, words) -> bool:
+    return any(word in text for word in words)
+
+
+def sibling_notice(request: ChatRequest, data: ChatData) -> list[str]:
+    """'O2' · 'C4'처럼 짧은 모델 이름이 다른 모델 이름에도 들어 있으면(Inline O2 · Cluster O2 / C4 DFB · C4+)
+    그 모델들은 포함하지 않았다고 알린다 (11/12). DFB는 독립 설비군이라 특히 헷갈리기 쉽다."""
+    def key(text):
+        return re.sub(r"[\s\-_()]", "", re.sub(r"^M-", "", text or "")).casefold()     # '+'는 남긴다 (C4 ≠ C4+)
+
+    notices = []
+    for name in request.conditions.groups:
+        mine = key(name)
+        others = sorted({g.model_name or g.name for g in data.catalog.groups
+                         if key(g.name) != mine and key(g.model_name) != mine and mine and mine in key(g.model_name or g.name)})
+        if others:
+            notices.append(f"'{name}'에는 같은 이름이 들어간 다른 모델({' · '.join(others)})은 포함하지 않았어요. "
+                           "함께 보려면 그 모델 이름을 적어 주세요.")
+    return notices
+
+
+def hpa_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
+    """HPA 설비 자체를 묻는 질문. HPA는 목표 N 집계에서 빼지만 저장 · 조회는 하므로 대수와 목록을 답한다 (11/12)."""
+    scope = _scope(request, data)
+    if scope.problems:
+        short = _missing_short(data, scope.problems)
+        return ChatAnswer(request, scope.understood, short or _missing(data), scope.base, issues=scope.issues,
+                          suggestions=SUGGESTIONS[:3])
+    rows = sorted((r for r in scope.records if r.is_hpa), key=lambda r: (r.site or "", r.line or "", r.equipment_code or ""))
+    subject = scope.subject.replace("전체", "").strip()
+    if not rows:
+        return ChatAnswer(request, scope.understood, f"{subject + ' ' if subject else ''}HPA 설비는 없어요.".strip(), scope.base,
+                          notices=("HPA는 목표 N 집계에서 제외하고 저장 · 조회만 해요.",), suggestions=SUGGESTIONS[:3])
+    table = Table("HPA 설비", ("설비명", "사업장", "라인", "설치 버전"),
+                  tuple((r.equipment_code or "-", r.site or "-", r.line or "-",
+                         " / ".join(sorted({p.version_raw for p in r.pms if p.version_raw})) or "-") for r in rows))
+    summary = (f"{subject + ' ' if subject else ''}HPA 설비는 {len(rows)}대예요. HPA는 목표 N 달성률 집계에서 제외하고 "
+               f"저장 · 조회만 해요.")
+    return ChatAnswer(request, scope.understood, summary, scope.base, tables=(table,),
+                      equipment_ids=tuple(r.equipment_id for r in rows), title="HPA 설비",
+                      suggestions=("HPA 빼고 전체 현황", *SUGGESTIONS[:2]))
+
+
 def _missing(data: ChatData) -> str:
     """조건을 못 쓴 질문의 답: 답하지 않은 이유와 지금 자료에 있는 선택지."""
     catalog = data.catalog
@@ -932,8 +988,11 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
             return ChatAnswer(request, " · ".join(request.codes),
                               f"설비 {', '.join(missing)}은(는) 저장된 현황에 없어요. 호기 이름을 다시 확인해 주세요.",
                               suggestions=SUGGESTIONS[:3])
+    if _HPA_WORD.search(request.question.casefold()) and not _has_any(request.question, ("빼고", "제외", "없이", "말고")):
+        return hpa_answer(request, data)
     if Intent.AGGREGATE in request.intents:
-        return aggregate_answer(request, data)
+        result = aggregate_answer(request, data)
+        return replace(result, notices=(*result.notices, *sibling_notice(request, data)))
     tier_note = ("N+1 · N-1 · N-2 같은 단계로 거르는 건 아직 지원하지 않아 목표 N 이상 · 미만으로 보여줘요. 단계별 색은 버전 히트맵에서 "
                  "볼 수 있어요.") if re.search(r"n\s*[+\-]\s*[12]", request.question.casefold()) else ""
     if request.period:
@@ -942,6 +1001,9 @@ def answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
         return unsupported_answer(request, data)
     scope = _scope(request, data)
     sentences, tables, charts, notices = [], [], [], ([tier_note] if tier_note else [])
+    notices += sibling_notice(request, data)
+    if _HPA_WORD.search(request.question.casefold()):
+        notices.append("HPA는 원래 목표 N 집계에서 제외해요 (저장 · 조회만).")
     cause, cause_is_ai, report, equipment_ids, focus = None, False, None, (), None
     if scope.hpa:
         notices.append(f"HPA {scope.hpa}대는 분석에서 제외했습니다.")
