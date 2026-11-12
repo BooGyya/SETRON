@@ -21,7 +21,7 @@ def dialog(app, data):
 
 
 @pytest.mark.parametrize("size", [(640, 700), (640, 500), (460, 500)])
-@pytest.mark.parametrize("criterion", ["SAFETY_REQUIRED", "DIRECT_VERSION", "DEFECT_ITEM"])
+@pytest.mark.parametrize("criterion", ["NOT_APPLIED", "APPLIED"])
 def test_scroll_form_keeps_footer_visible_for_all_criteria(dialog, size, criterion):
     dialog.advanced_toggle.setChecked(True)  # 상세 설정까지 펼친 가장 긴 형태에서 레이아웃을 확인한다.
     dialog.criterion.setCurrentIndex(dialog.criterion.findData(criterion))
@@ -64,7 +64,7 @@ def test_long_preview_and_criterion_change_only_expand_scroll_content(dialog):
     QTest.qWait(30)
     footer_position = dialog.footer.pos()
     initial_range = dialog.scroll.verticalScrollBar().maximum()
-    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DEFECT_ITEM"))
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("APPLIED"))
     dialog.preview.setText("대상 범위를 확인해 주세요. " * 80)
     QTest.qWait(40)
     assert dialog.height() == 500 and dialog.footer.pos() == footer_position
