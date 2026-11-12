@@ -95,6 +95,18 @@ def window(app, source):
     app.processEvents()
 
 
+def test_heatmap_badge_shows_icon_count_and_kind_breakdown(window):
+    window.query_panel.apply_draft()
+    dashboard = window.pages["dashboard"]
+    assert dashboard.snapshot.risky_ids == (1, 2)
+    badge = next(iter(dashboard.risk_buttons.values()))
+    # '후보 n' 대신 경고 아이콘 + 대수.
+    assert badge.text() == "2" and not badge.icon().isNull() and "후보" not in badge.text()
+    assert "위험 후보만 2대" in badge.accessibleName()
+    tip = badge.toolTip()
+    assert "적용 위험 1대" in tip and "미적용 위험 1대" in tip and "근거 미연결" not in tip
+
+
 def test_side_panel_list_and_detail_show_risk_reason_by_kind(window):
     query = window.query_panel.apply_draft()
     dashboard = window.pages["dashboard"]
