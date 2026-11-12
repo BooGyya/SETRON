@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QDate, QPoint, QPointF, Qt
 from PySide6.QtGui import QPalette, QWheelEvent
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QTableView
 
 from setron.ui.appearance import manager
@@ -177,6 +177,37 @@ def test_date_fields_reuse_common_calendar_and_only_commit_day_selection(own, fi
     field.selectAll()
     QTest.keyClicks(field, "20261108")
     assert field.text() == "2026-11-08" and field.hasAcceptableInput()
+
+
+@pytest.mark.parametrize("opening", ["arrow", "keyboard", "text"])
+def test_date_edit_builds_shared_calendar_on_first_open_and_forwards_signals(own, opening):
+    edit = own(DateEdit(open_on_click=opening == "text"))
+    edit.setDateRange(QDate(2020, 1, 1), QDate(2030, 12, 31))
+    edit.setDate(QDate(2026, 10, 5))
+    assert edit.findChildren(CalendarWidget) == [] and not edit.is_calendar_visible()
+    clicked, activated = QSignalSpy(edit.calendar_clicked), QSignalSpy(edit.calendar_activated)
+    if opening == "keyboard":
+        QTest.keyClick(edit, Qt.Key.Key_F4)
+    elif opening == "text":
+        QTest.mouseClick(edit.lineEdit(), Qt.MouseButton.LeftButton)
+    else:
+        QTest.mouseClick(edit, Qt.MouseButton.LeftButton, pos=edit._calendar_button_rect().center())
+    calendar = edit.calendarWidget()
+    assert isinstance(calendar, CalendarWidget) and edit.is_calendar_visible()
+    assert calendar.minimumDate() == edit.minimumDate() and calendar.maximumDate() == edit.maximumDate()
+    chosen = QDate(2026, 10, 21)
+    calendar.clicked.emit(chosen)
+    calendar.activated.emit(chosen)
+    assert clicked.count() == activated.count() == 1
+    assert clicked.at(0)[0] == activated.at(0)[0] == chosen
+
+
+@pytest.mark.parametrize("period", [False, True])
+def test_query_panel_calendar_stays_unbuilt_until_user_opens_it(own, period):
+    panel = own(QueryPanel(QueryState(preview_catalog()), period=period))
+    field = panel.start_date if period else panel.date_edit
+    field.setDate(QDate(2026, 10, 5))
+    assert panel.findChildren(CalendarWidget) == []
 
 
 def test_native_date_edit_keeps_input_and_popup_date_contract(own):

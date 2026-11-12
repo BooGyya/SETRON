@@ -230,6 +230,7 @@ def test_management_and_current_scope_xlsx_include_latest_saved_values(app, file
     with running_window(app, file_storage, extra_site=True) as (window, source, calls, release_id, item_id, snapshot):
         window.query_panel.set_draft(QuerySelection(site_key="hwaseong"))
         window.query_panel.apply_draft()
+        wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
         assert window.pages["dashboard"].snapshot.summary.equipment_count == 1
         save_data_changes(window, app, "equipment_snapshot", {"snapshot_id": snapshot.snapshot_id},
                           {"line": "수정된 화성 라인"})

@@ -100,15 +100,15 @@ def test_rows_show_version_item_and_jira_together(app, data):
     QTest.qWait(30)
     page = window.pages["items"]
     first, second = page.result_buttons[1], page.result_buttons[2]
-    assert first.version == "v99 외 1" and first.jira_label.text() == "JIRA ETOJ-9" and first.jira_label.isVisible()
-    assert second.jira_label.text() == "Jira 없음" and second.jira_slot_width == first.jira_slot_width
+    assert first.version == "v99 외 1" and first.jira_label.text() == "ETOJ-9" and first.jira_label.isVisible()
+    assert second.jira_label.text() == "-" and second.jira_slot_width == first.jira_slot_width
     assert "릴리즈노트 원본 Jira: ETOJ-9" in first.toolTip() and "Jira ETOJ-9" in first.accessibleDescription()
     assert first.caption.geometry().right() < first.jira_label.geometry().left()
     page.search.setText("ETOJ-9")
     assert tuple(page.result_buttons) == (1,)
     page.search.clear()
     page.result_buttons[1].click()
-    assert "포함 릴리즈 v99 외 1" in page.item_facts.text() and "JIRA ETOJ-9" in page.item_facts.text()
+    assert page.item_facts.isHidden() and page.item_facts.text() == ""
     # 펼친 Item에는 위험 기준 노란 칸(위험 후보 대수·대시보드 이동 버튼)을 두지 않는다.
     assert not hasattr(page, "rules_box") and not hasattr(page, "rules_dashboard")
     assert not any(b.text() == "대시보드 위험 후보 보기" for b in page.findChildren(QPushButton) if b.isVisibleTo(page))
@@ -118,13 +118,14 @@ def test_rows_show_version_item_and_jira_together(app, data):
     window.close()
 
 
-def test_rows_without_original_show_unknown_jira_not_empty(app, data):
+def test_rows_without_original_show_dash_and_preserve_unknown_jira_metadata(app, data):
     window = create_window(item_loader=lambda: data)
     window.show()
     window.navigate("items")
     QTest.qWait(30)
     page = window.pages["items"]
-    assert {b.jira_label.text() for b in page.result_buttons.values()} == {"Jira 미확인"}
+    assert {b.jira_label.text() for b in page.result_buttons.values()} == {"-"}
+    assert all(b.jira.status == JIRA_NO_ORIGINAL for b in page.result_buttons.values())
     window.close()
 
 

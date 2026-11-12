@@ -86,6 +86,17 @@ def backup(tmp_path, rows):
     return path
 
 
+def test_legacy_item_dump_is_imported_into_new_schema_with_null_jira(target, tmp_path):
+    incoming = bundle()
+    incoming["item"] = [(1, None, 7, "기존 원문 (ETOJ-3257)", 1, None, "[]")]
+    path = tmp_path / "previous-schema.sql"
+    path.write_text(_export(incoming, legacy_item=True), encoding="utf-8")
+    service = target[2]
+    service.apply(service.preview(path, "add"))
+    item, = current(target)["item"]
+    assert item["jira_key"] is None and item["content"] == "기존 원문 (ETOJ-3257)"
+
+
 def test_add_keeps_same_equipment_date_and_its_pm_and_version(target, tmp_path):
     seed(target, bundle())
     path = backup(tmp_path, bundle(line="파일 라인", version=b"v2", pm=b"PM2", day=2))
@@ -130,7 +141,7 @@ def test_colliding_ids_are_remapped_in_foreign_keys_and_json(target, tmp_path):
     incoming = bundle(code=b"EQ-2", group="O3", line="새 라인", version=b"v2", day=2)
     incoming["release_note"] = [(1, 1, date(2026, 11, 1), 1)]
     incoming["release_version"] = [(1, 1, 1, b"v2", None, date(2026, 11, 1), 1, "VERIFIED", 1, None, "[]")]
-    incoming["item"] = [(1, 1, 1, "파일의 Item", 1, None, "[]")]
+    incoming["item"] = [(1, 1, 1, None, "파일의 Item", 1, None, "[]")]
     incoming["release_version_item"] = [(1, 1, "APPLIED", "LISTED", "[1]")]
     incoming["equipment_version"] = [(1, 1, 1, b"v2", 1, 1, '{"version_raw":{"batch_id":1,"cell":"B2"}}')]
     path = backup(tmp_path, incoming)
@@ -161,13 +172,13 @@ def test_matching_item_number_and_releases_use_the_selected_merge_mode(target, t
     existing = bundle()
     existing["release_note"] = [(1, 1, date(2026, 11, 1), 1)]
     existing["release_version"] = [(1, 1, 1, b"v1", None, date(2026, 11, 1), 1, "VERIFIED", 1, None, "[]")]
-    existing["item"] = [(1, 1, 7, "기존 Item", 1, None, "[]")]
+    existing["item"] = [(1, 1, 7, None, "기존 Item", 1, None, "[]")]
     existing["release_version_item"] = [(1, 1, "APPLIED", "ALL", None)]
     seed(target, existing)
     incoming = bundle(day=2)
     incoming["release_note"] = [(5, 1, date(2026, 11, 1), 1)]
     incoming["release_version"] = [(9, 5, 1, b"v1", None, date(2026, 11, 1), 1, "VERIFIED", 1, None, "[]")]
-    incoming["item"] = [(13, 5, 7, "파일 Item", 1, None, "[]")]
+    incoming["item"] = [(13, 5, 7, None, "파일 Item", 1, None, "[]")]
     incoming["release_version_item"] = [(9, 13, "APPLIED", "ALL", None)]
     path = backup(tmp_path, incoming)
     service = target[2]

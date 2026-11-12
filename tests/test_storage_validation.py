@@ -62,6 +62,22 @@ def test_json_and_exact_text_round_trip_without_changing_source():
     assert "edited_fields" not in original
 
 
+@pytest.mark.parametrize("key", [None, "ETOJ-3257", "etoj-3257", "TEAM_2-1", "A" * 48 + "-1"])
+def test_item_jira_is_nullable_preserves_case_and_has_no_global_uniqueness(key):
+    original = {"content": "원문", "jira_key": key}
+    encoded = encode_record("item", original, inserting=True)
+    assert encoded["jira_key"] == key
+    assert encode_record("item", original, inserting=True)["jira_key"] == key
+    assert original == {"content": "원문", "jira_key": key}
+    assert encode_record("item", {"content": "원문"}, inserting=True)["jira_key"] is None
+
+
+@pytest.mark.parametrize("key", ["", " ETOJ-1", "ETOJ-1 ", "ETOJ-1\n", "ETOJ", "ETOJ-x", "1TEAM-1", "가-1", "A" * 49 + "-1", 123])
+def test_item_jira_rejects_bad_format_or_over_fifty_characters(key):
+    with pytest.raises(StorageValidationError, match="jira_key"):
+        encode_record("item", {"content": "원문", "jira_key": key}, inserting=True)
+
+
 @pytest.mark.parametrize(
     "value",
     [

@@ -213,7 +213,7 @@ def test_done_changes_only_goal_draft_and_apply_refreshes_all_views(window):
     dialog.confirm_button.click()
     assert applied_spy.count() == 0 and draft_spy.count() == 1
     assert window.pages["dashboard"].snapshot is old and window.query_state.applied is old_query
-    assert "목표 변경" in window.query_panel.status.text()
+    assert window.query_panel.status.text() == "변경사항 미적용"
     assert "v99" in window.query_panel.draft_summary.text() and "v2" in window.query_panel.applied_summary.text()
     new_query = window.query_panel.apply_draft()
     dashboard, heatmap, equipment = (window.pages[k] for k in ("dashboard", "heatmap", "equipment"))

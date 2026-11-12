@@ -21,7 +21,7 @@ DUMP_COLUMNS: dict[str, tuple[str, ...]] = {
         "release_version_id", "release_note_id", "family_id", "version_raw", "version_suffix", "released_at",
         "version_order", "item_mapping_status", "batch_id", "source_reference", "edited_fields",
     ),
-    "item": ("item_id", "release_note_id", "item_no", "content", "batch_id", "source_reference", "edited_fields"),
+    "item": ("item_id", "release_note_id", "item_no", "jira_key", "content", "batch_id", "source_reference", "edited_fields"),
     "equipment_snapshot": (
         "snapshot_id", "equipment_id", "base_date", "site", "line", "model_name", "group_id", "production_area",
         "structure_type", "geometry_type", "modification_type", "batch_id", "source_reference",
@@ -42,6 +42,33 @@ DUMP_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "app_setting": ("setting_key", "setting_value"),
 }
+LEGACY_ITEM_COLUMNS = tuple(column for column in DUMP_COLUMNS["item"] if column != "jira_key")
+
+
+def supported_columns(table: str, columns) -> bool:
+    """지원하는 전체 열 또는 jira_key 하나만 없는 이전 item 열 순서만 허용한다."""
+    columns = tuple(columns)
+    return columns == DUMP_COLUMNS.get(table) or table == "item" and columns == LEGACY_ITEM_COLUMNS
+
+
+def columns_from_definition(table: str, definition: str) -> tuple[str, ...]:
+    """실제 SHOW CREATE 또는 번들 스키마의 허용된 열 순서를 읽는다. SQL을 실행하지 않는다."""
+    columns = tuple(re.findall(r"^  `([a-z_]+)` ", definition, re.M))
+    if not columns:
+        columns = tuple(re.findall(r"^    ([a-z_]+) [A-Z]+", definition, re.M))
+    if not supported_columns(table, columns):
+        raise DumpFormatError(f"{table}의 구조가 지원하는 SETRON 스키마와 다릅니다.")
+    return columns
+
+
+def values_for_columns(table: str, row: dict, columns) -> tuple:
+    """새 선택 필드의 NULL만 이전 구조에서 생략하며 나머지 값 누락·손실은 차단한다."""
+    if not supported_columns(table, columns):
+        raise DumpFormatError(f"{table}의 열 순서가 올바르지 않습니다.")
+    extra = set(row) - set(columns)
+    if extra and not (table == "item" and extra == {"jira_key"} and row["jira_key"] is None):
+        raise DumpFormatError(f"{table}의 값을 이전 구조에 손실 없이 저장할 수 없습니다.")
+    return tuple(row.get(column) if table == "item" and column == "jira_key" else row[column] for column in columns)
 
 _INVALID = "SETRON에서 내보낸 SQL 파일 형식과 일치하지 않거나 파일이 불완전합니다."
 _FOREIGN_KEY_START = (
@@ -115,9 +142,10 @@ def _read_file(source: TextIO) -> dict[str, tuple[dict[str, object], ...]]:
     tables = {}
     for table in TABLE_NAMES:
         count = _read_count(source.readline(), table)
-        columns = DUMP_COLUMNS[table]
-        _skip_table_definition(source, table, columns)
+        columns = _skip_table_definition(source, table, DUMP_COLUMNS[table])
         rows = _read_rows(source, table, columns, count, legacy)
+        if table == "item" and columns == LEGACY_ITEM_COLUMNS:
+            rows = [{**row, "jira_key": None} for row in rows]
         tables[table] = tuple(rows)
         _expect(source, "\n")
 
@@ -140,15 +168,15 @@ def _read_count(line: str, name: str) -> int:
     return int(match[2])
 
 
-def _skip_table_definition(source: TextIO, table: str, columns: tuple[str, ...]) -> None:
+def _skip_table_definition(source: TextIO, table: str, columns: tuple[str, ...]) -> tuple[str, ...]:
     _expect(source, f"CREATE TABLE `{table}` (\n")
     found = []
     for line in source:
         if column := _DDL_COLUMN.match(line):
             found.append(column[1])
         elif line.startswith(") ENGINE=InnoDB ") and line.endswith(";\n"):
-            if tuple(found) == columns:
-                return
+            if tuple(found) == columns or table == "item" and tuple(found) == LEGACY_ITEM_COLUMNS:
+                return tuple(found)
             break
         elif not line.startswith(_DDL_CONSTRAINTS):
             break

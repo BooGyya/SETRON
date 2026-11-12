@@ -9,17 +9,19 @@ from unittest.mock import MagicMock
 import pytest
 
 from setron.features.db_export.service import _header, _write_rows
-from setron.features.db_import.dump import DUMP_COLUMNS, DumpFormatError, read_dump
+from setron.features.db_import.dump import DUMP_COLUMNS, LEGACY_ITEM_COLUMNS, DumpFormatError, read_dump
 from setron.features.storage.validation import TABLE_NAMES
 
 
-def _export(rows):
+def _export(rows, *, legacy_item=False):
     """Use the export writer with known MySQL result rows and SHOW CREATE framing."""
     file = StringIO()
     file.write(_header(datetime(2026, 11, 11), "5.6.19", "test", len(TABLE_NAMES), sum(map(len, rows.values()))))
     for table in TABLE_NAMES:
         table_rows = rows.get(table, ())
-        columns = DUMP_COLUMNS[table]
+        columns = LEGACY_ITEM_COLUMNS if table == "item" and legacy_item else DUMP_COLUMNS[table]
+        if table == "item" and not legacy_item:
+            table_rows = [(*row[:3], None, *row[3:]) if len(row) == len(LEGACY_ITEM_COLUMNS) else row for row in table_rows]
         fields = ",\n".join(f"  `{column}` text COMMENT '원문; 보존'" for column in columns)
         file.write(f"\n-- 테이블 {table} · {len(table_rows)}행\nCREATE TABLE `{table}` (\n{fields}\n"
                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n")
@@ -35,6 +37,29 @@ def _export(rows):
                "SET character_set_results = @OLD_CHARACTER_SET_RESULTS;\n"
                "SET collation_connection = @OLD_COLLATION_CONNECTION;\n")
     return file.getvalue()
+
+
+@pytest.mark.parametrize("legacy_item", [False, True])
+def test_item_dump_accepts_new_jira_and_only_the_known_old_layout(tmp_path, legacy_item):
+    row = (1, None, 7, "본문", 1, None, "[]")
+    values = row if legacy_item else (*row[:3], "etoj-3257", *row[3:])
+    path = tmp_path / "item.sql"
+    path.write_text(_export({"item": [values]}, legacy_item=legacy_item), encoding="utf-8")
+    restored = read_dump(path)["item"][0]
+    assert restored["content"] == "본문" and restored["item_no"] == 7
+    assert restored["jira_key"] == (None if legacy_item else "etoj-3257")
+
+
+@pytest.mark.parametrize("alter", [
+    lambda sql: sql.replace("`item_no`, `content`", "`jira_key`, `content`"),
+    lambda sql: sql.replace("`item_no` text", "`unknown` text"),
+    lambda sql: sql.replace("`item_no`, `content`", "`item_no`, `jira_key`, `content`"),
+])
+def test_legacy_item_compatibility_does_not_relax_other_columns_or_insert_headers(tmp_path, alter):
+    path = tmp_path / "wrong-item.sql"
+    path.write_text(alter(_export({"item": [(1, None, 1, "본문", 1, None, "[]")]}, legacy_item=True)), encoding="utf-8")
+    with pytest.raises(DumpFormatError):
+        read_dump(path)
 
 
 def test_dump_columns_follow_the_packaged_mysql_schema():

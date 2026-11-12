@@ -286,6 +286,16 @@ class ReleaseService:
                 manual_batch.update(tx.insert("import_batch", {"source_type": "MANUAL"}))
             values["batch_id"] = manual_batch["batch_id"]
         batch = tx.get("import_batch", {"batch_id": values["batch_id"]})
+        if table == "item" and values.get("jira_key") is None:
+            from setron.features.item.jira import extract_jira_from_source
+            from setron.features.storage.inputs import merge_sources
+            from setron.features.storage.validation import StorageValidationError
+            try:
+                jira = extract_jira_from_source(batch.get("raw_data"), values.get("source_reference"), content=values["content"])
+            except ValueError as error:
+                raise StorageValidationError(str(error)) from error
+            values["jira_key"] = jira.jira_key
+            values["source_reference"] = merge_sources(values.get("source_reference"), jira.source_reference)
         require(batch["source_type"] != "EXCEL" or bool(values["source_reference"]), "Excel 자료에는 원본 셀 위치가 필요합니다.")
         note = tx.get("release_note", {"release_note_id": values["release_note_id"]}) if values["release_note_id"] is not None else None
         if table == "release_version":

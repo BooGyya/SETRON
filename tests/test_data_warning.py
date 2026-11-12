@@ -67,8 +67,9 @@ def test_startup_reconnect_retries_then_shows_the_connected_source(app, monkeypa
                 if isinstance(widget, MainWindow) and widget.isVisible()]
 
     def exercise_reconnect(_app):
-        first, = visible_windows()
         try:
+            wait_for(app, lambda: len(visible_windows()) == 1, timeout=10)
+            first, = visible_windows()
             retry = first.db_reconnect_button
             assert retry.isVisible() and retry.isEnabled()
             retry.click()
@@ -86,11 +87,12 @@ def test_startup_reconnect_retries_then_shows_the_connected_source(app, monkeypa
             assert dashboard.source is connected_source
             wait_for(app, lambda: dashboard.snapshot is not None)
             assert len(attempts) == 3
-            assert attempts[0] == get_ident() and all(thread != get_ident() for thread in attempts[1:])
+            assert all(thread != get_ident() for thread in attempts)
         finally:
-            for window in visible_windows():
-                window.close()
-                window.deleteLater()
+            for window in app.topLevelWidgets():
+                if isinstance(window, MainWindow) or window.objectName() == "startupWindow":
+                    window.close()
+                    window.deleteLater()
             app.processEvents()
         return 0
 

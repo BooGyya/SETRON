@@ -82,13 +82,14 @@ def _dashboard_badge_style(colors, key, rules):
 
 class DashboardGrid(QWidget):
     def __init__(self, widgets, *, minimum_width=260, maximum_columns=4, spacing=16,
-                 alignment=Qt.AlignmentFlag(0), captions=None):
+                 alignment=Qt.AlignmentFlag(0), captions=None, compact_below=None):
         super().__init__()
         self.widgets, self.minimum_width, self.maximum_columns = widgets, minimum_width, maximum_columns
         self._visible_widgets = tuple(widgets)
         self.spacing = spacing
         self.alignment = alignment
         self.captions = captions or {}
+        self.compact_below, self.compact = compact_below, False
         self.columns = 0
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(0, 0, 0, 0)
@@ -127,8 +128,14 @@ class DashboardGrid(QWidget):
         self.updateGeometry()
 
     def resizeEvent(self, event):
-        self._arrange(max(1, min(self.maximum_columns,
-                                 (event.size().width() + self.spacing) // (self.minimum_width + self.spacing))))
+        compact = self.compact_below is not None and event.size().width() < self.compact_below
+        if compact != self.compact:
+            self.compact = compact
+            self.grid.setSpacing(8 if compact else self.spacing)
+            for widget in self.widgets:
+                widget.set_compact(compact)
+        self._arrange(max(1, len(self._visible_widgets)) if compact else max(
+            1, min(self.maximum_columns, (event.size().width() + self.spacing) // (self.minimum_width + self.spacing))))
         super().resizeEvent(event)
 
 
@@ -220,6 +227,34 @@ class _ChartSeriesControls(QWidget):
         super().resizeEvent(event)
 
 
+class _DashboardChartRow(QWidget):
+    """원형 차트의 읽을 수 있는 크기를 확보하고 좁은 폭에서는 범례를 아래로 보낸다."""
+
+    def __init__(self, chart, legend):
+        super().__init__()
+        self.chart, self.legend = chart, legend
+        self.composition = False
+        self.body = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(24)
+        self.body.addWidget(chart, 1)
+        self.body.addWidget(legend, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def set_composition(self, enabled):
+        self.composition = enabled
+        self._arrange()
+
+    def _arrange(self):
+        stacked = self.composition and self.width() < 760
+        self.body.setDirection(QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight)
+        self.body.setAlignment(self.chart, Qt.AlignmentFlag.AlignHCenter if stacked else Qt.AlignmentFlag(0))
+        self.body.setAlignment(self.legend, Qt.AlignmentFlag.AlignHCenter if stacked else Qt.AlignmentFlag.AlignVCenter)
+
+    def resizeEvent(self, event):
+        self._arrange()
+        super().resizeEvent(event)
+
+
 class DashboardKpi(Card):
     """VER4 대시보드 상단의 간결한 지표 카드. 첫 카드(달성률)는 강조색으로 채운다."""
 
@@ -253,6 +288,22 @@ class DashboardKpi(Card):
         else:
             self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._compact = False
+
+    def set_compact(self, compact):
+        if self._compact == compact:
+            return
+        self._compact = compact
+        self.body.setContentsMargins(*(6, 6, 6, 6) if compact else (18, 18, 18, 18))
+        self.body.setSpacing(2 if compact else 3)
+        set_widget_font(self.title, font(12))
+        set_widget_font(self.value, font(22 if compact else 30, medium=True))
+        self.value.setMinimumHeight(28 if compact else 40)
+        self.setMinimumHeight(64 if compact else 0)
+        self.setMaximumHeight(64 if compact else 16777215)
+        if self.caption is not None:
+            self.caption.setVisible(not compact)
+        self.updateGeometry()
 
 
 class DashboardPage(QWidget):
@@ -289,7 +340,7 @@ class DashboardPage(QWidget):
             card = DashboardKpi(title, asset, accent=accent, show_caption=False)
             self.metrics[key] = card
             cards.append(card)
-        self.kpi_grid = DashboardGrid(cards, minimum_width=200, maximum_columns=5, spacing=12)
+        self.kpi_grid = DashboardGrid(cards, minimum_width=200, maximum_columns=5, spacing=12, compact_below=900)
         body.addWidget(self.kpi_grid)
 
         # 대시보드의 집계 보기 전환 카드
@@ -313,8 +364,8 @@ class DashboardPage(QWidget):
         period_body.addWidget(self.trend_interval)
         for control in (self.trend_start, self.trend_end):
             control.dateChanged.connect(lambda _day, edit=control: self._change_trend_date(edit))
-            control.calendarWidget().clicked.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
-            control.calendarWidget().activated.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
+            control.calendar_clicked.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
+            control.calendar_activated.connect(lambda day, edit=control: self._confirm_trend_date(edit, day))
         self.trend_interval.step_changed.connect(self._set_trend_interval)
         self.view_controls = _DashboardViewControls(self.tabs, self.trend_filters, self.trend_interval)
         self.content.body.addWidget(self.view_controls)
@@ -365,18 +416,12 @@ class DashboardPage(QWidget):
         self.matrix_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.content.body.addWidget(self.matrix_scroll)
         self.chart = DashboardChart()
-        self.chart_row = QWidget()
-        chart_body = QHBoxLayout(self.chart_row)
-        chart_body.setContentsMargins(0, 0, 0, 0)
-        chart_body.setSpacing(24)
-        chart_body.addWidget(self.chart, 1)
         self.composition_legend = QWidget()
         self.composition_legend.setFixedWidth(260)
         self.composition_rows = QVBoxLayout(self.composition_legend)
         self.composition_rows.setContentsMargins(0, 0, 0, 0)
         self.composition_rows.setSpacing(12)
-        chart_body.addWidget(self.composition_legend, 0, Qt.AlignmentFlag.AlignVCenter)
-        chart_body.addStretch(0)
+        self.chart_row = _DashboardChartRow(self.chart, self.composition_legend)
         self.content.body.addWidget(self.chart_row)
         self.data_toggle = _outline_button("수치표 보기")
         self.data_toggle.setCheckable(True)
@@ -474,13 +519,19 @@ class DashboardPage(QWidget):
     def _result_label(self):
         return getattr(self.source, "result_label", "예시 결과")
 
-    def apply_query(self, query):
+    def begin_query(self, query):
         if not self.state.is_current(query):
             return False
         self.snapshot = None
         self._clear_values()
         self.failure_reason = None
         self.result_status.setText(f"{self._result_label()} 계산 중")
+        self.message.setText("조회 결과를 계산하고 있습니다.")
+        return True
+
+    def apply_query(self, query):
+        if not self.begin_query(query):
+            return False
         try:
             if not self.state.catalog.is_view_of(self.source.catalog):
                 raise ValueError("조회 선택지와 데이터 공급자의 매핑이 다릅니다.")
@@ -504,6 +555,24 @@ class DashboardPage(QWidget):
             self.message.setText("선택지·관측 자료 연결을 확인할 수 없습니다. 데이터 연결과 조회 조건을 확인해 주세요.")
             return False
         return self.accept_result(query, result)
+
+    def fail_query(self, query, error):
+        if not self.state.is_current(query):
+            return False
+        if isinstance(error, HpaClassificationConflict):
+            self.result_status.setText("조회 보류 · HPA 분류 확인 필요")
+            tone, text = "danger", str(error)
+        elif isinstance(error, NoObservationBefore):
+            self.result_status.setText("기준일 이전 자료 없음")
+            tone, text = "warning", str(error)
+            self.failure_reason = text
+        else:
+            self.result_status.setText("결과 표시 실패")
+            tone, text = "danger", "선택지·관측 자료 연결을 확인할 수 없습니다. 데이터 연결과 조회 조건을 확인해 주세요."
+        self.result_status.set_tone(tone)
+        self.message.setTextFormat(Qt.TextFormat.PlainText)
+        self.message.setText(text)
+        return False
 
     def accept_result(self, query, result):
         if not self.state.is_current(query) or result.query is not query:
@@ -554,7 +623,7 @@ class DashboardPage(QWidget):
         self.trend_period_changed.emit(start, end)
 
     def _change_trend_date(self, control):
-        if not control.calendarWidget().isVisible():
+        if not control.is_calendar_visible():
             self._trend_period_edited = True
             self.trend_period_changed.emit(self.trend_start.date().toPython(), self.trend_end.date().toPython())
 
@@ -638,8 +707,7 @@ class DashboardPage(QWidget):
         bars = bar_plot(data) if has_analysis and mode == 2 else ((), {})
         self.matrix_scroll.setVisible(has_data and mode == 0)
         self.chart.setVisible(has_analysis and mode != 0)
-        # Figma: 수치표 보기·정의 설명·위험 후보 목록·관측 변화·Site 요약 없이 보기 카드 하나만 넓게 쓴다.
-        self.data_toggle.hide()
+        self.data_toggle.setVisible(has_analysis and mode != 0)
         self.candidate_button.hide()
         self.attention_card.hide()
         self.bottom.hide()
@@ -649,7 +717,7 @@ class DashboardPage(QWidget):
         self.composition_legend.setVisible(has_analysis and mode == 1)
         # 구성비는 도넛 옆에 상태 칩을 붙여 둔다(Figma). 다른 차트는 카드 너비를 다 쓴다.
         self.chart.setMaximumWidth(560 if mode == 1 else 16777215)
-        self.chart_row.layout().setStretch(2, 1 if mode == 1 else 0)
+        self.chart_row.set_composition(mode == 1)
         self.site_button.setEnabled(has_data)
         self.message.setVisible(not has_data or (not has_analysis and mode != 0))
         self.data_table.setVisible(has_analysis and mode != 0 and self.data_toggle.isChecked())
@@ -705,6 +773,10 @@ class DashboardPage(QWidget):
         _clear_layout(self.composition_rows)
         counts = (data.summary.compliant, data.summary.below, data.summary.undetermined)
         total = sum(counts)
+        decided = data.summary.compliant + data.summary.below
+        self.composition_rows.addWidget(label(
+            f"달성률: 판단 가능 {decided}건 기준\n구성비: 판단 불가 포함 전체 {total}건 기준",
+            12, color=SECONDARY, wrap=True))
         styles = (("달성", "composition_met_chip", "rate"), ("미달", "below", "ink"),
                   ("확인 필요", "composition_unknown_chip", "ink"))
         for (name, key, preferred), count, ids in zip(styles, counts, composition_cohorts(data.summary)):
@@ -875,7 +947,7 @@ class DashboardPage(QWidget):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
         total_row = data.rows[-1]
-        columns = (("Site / 설비군", total_row.cells[-1]), *((cell.label, cell) for cell in total_row.cells))
+        columns = (("사업장 / 라인", total_row.cells[-1]), *((cell.label, cell) for cell in total_row.cells))
         for column, (title, cell) in enumerate(columns):
             heading = label(title, 13, medium=True)
             heading.setObjectName("dashboardMatrixHeading")
@@ -936,7 +1008,7 @@ class DashboardPage(QWidget):
                 area_label.setObjectName("dashboardMatrixArea")
                 area_label.setStyleSheet(f"QLabel#dashboardMatrixArea {{color:{SECONDARY};}}")
                 area_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                area_label.setAccessibleName(f"Site {sites[site]} · 원본 구역 {area or '미확인'}")
+                area_label.setAccessibleName(f"사업장 {sites[site]} · 원본 구역 {area or '미확인'}")
                 area_label.setToolTip(row_tooltip)
                 location_body.addWidget(area_label)
             grid.addWidget(location, grid_row, 0)
@@ -1070,7 +1142,7 @@ class DashboardPage(QWidget):
             headers = ("상태", "설비·계열 건수", "구성비")
             rows = [(name, str(value), f"{value / total:.1%}" if total else "—") for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)]
         elif mode == 2:
-            headers = ("Site / 설비군", "설비군", "목표 N 이상 적용률", "N 이상/판단 가능", "판단 불가", "설비 대수")
+            headers = ("사업장 / 라인", "설비군", "목표 N 이상 적용률", "N 이상/판단 가능", "판단 불가", "설비 대수")
             areas, groups = bar_plot(data)
             rows = [(area, label, f"{point.counts.rate:.1%}" if point.counts.rate is not None else
                      "계산 불가" if point.equipment_ids else "데이터 없음",

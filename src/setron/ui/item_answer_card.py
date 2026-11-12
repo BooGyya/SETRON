@@ -14,8 +14,8 @@ from setron.ui.theme import PRIMARY, SECONDARY
 class _AnswerActions(_WrapRow):
     """넓을 때 우측 한 줄, 좁을 때 각 줄의 끝에 맞춘다. 버튼 순서는 유지한다."""
 
-    def _arrange(self, columns):
-        if self.columns == columns:
+    def _arrange(self, columns, *, force=False):
+        if self.columns == columns and not force:
             return
         for index in range(max(self.columns, columns) + 2):
             self.grid.setColumnStretch(index, 0)

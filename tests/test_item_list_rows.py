@@ -4,13 +4,14 @@ from dataclasses import replace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
-from PySide6.QtGui import QBrush
+from PySide6.QtGui import QBrush, QFont
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
 
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
 from setron.features.version.schemas import ReleaseVersion
 from setron.ui.app import create_window
+from setron.ui.theme import INK
 from setron.ui.version_data import ItemEntry, ModelFamily, ReleaseEntry, family_display_name
 
 from test_ui_items import app, data
@@ -106,6 +107,39 @@ def test_row_shows_representative_release_and_tooltip(window):
     assert page.result_buttons[2].version_label.text() == "" and page.result_buttons[2].version_label.isVisible()
     assert page.result_buttons[2].caption.x() == first.caption.x()
     assert page.result_buttons[2].cursor().shape() == Qt.CursorShape.PointingHandCursor
+
+
+@pytest.mark.parametrize("width", [1600, 960])
+def test_list_header_jira_style_and_expanded_detail_avoid_repeated_summary(app, data, width):
+    entries = tuple(replace(entry, item=replace(entry.item, jira_key="ETOJ-9073" if entry.item.item_id == 1 else None),
+                            jira_key_known=True) for entry in data.versions.items)
+    window = _open(app, replace(data, versions=replace(data.versions, items=entries)), width=width)
+    try:
+        page = window.pages["items"]
+        header = page.result_header
+        assert header.isVisible() and page.result_rows.indexOf(header) == 0
+        assert [header.version_label.text(), header.caption.text(), header.jira_label.text()] == ["버전", "업데이트 내용", "JIRA"]
+        first, second = page.result_buttons[1], page.result_buttons[2]
+        assert [first.jira_label.text(), second.jira_label.text()] == ["ETOJ-9073", "-"]
+        for row in (first, second):
+            assert row.jira_label.isVisible()
+            assert row.jira_label.font() == row.version_label.font() == row.caption.font()
+            assert row.jira_label.property("setronBaseFont").pixelSize() == 15
+            assert row.jira_label.property("setronBaseFont").weight() == QFont.Weight.Medium
+            assert INK in row.jira_label.styleSheet()
+            for name in ("version_label", "caption", "jira_label"):
+                actual = getattr(row, name).mapTo(page.result_host, QPoint()).x()
+                expected = getattr(header, name).mapTo(page.result_host, QPoint()).x()
+                assert abs(actual - expected) <= 1
+        page.search.setText("ETOJ-9073")
+        assert tuple(page.result_buttons) == (1,)
+        page.result_buttons[1].click()
+        QTest.qWait(30)
+        assert page.application_details.isVisible()
+        assert page.item_facts.isHidden() and page.item_facts.text() == ""
+        assert window.scroll.horizontalScrollBar().maximum() == 0
+    finally:
+        _close(window)
 
 
 def test_version_groups_keep_title_alignment_across_pages_filters_and_reused_rows(app, data):
@@ -450,7 +484,7 @@ def test_short_last_page_keeps_card_height_and_pagination_position(many, width):
     assert page.detail_view.isHidden() and page.results_card.height() == card_height
 
 
-def test_many_pages_use_ellipsis_window_and_ten_page_jump(app, data):
+def test_many_pages_use_fixed_five_page_blocks_and_keep_first_last_controls(app, data):
     value = replace(data, versions=replace(data.versions,
         items=tuple(ItemEntry(Item(i, i, f"항목 {i}")) for i in range(1, 649)),
         version_items=tuple(VersionItem(1, i, ItemState.APPLIED, TargetScope.ALL) for i in range(1, 649))))
@@ -458,16 +492,23 @@ def test_many_pages_use_ellipsis_window_and_ten_page_jump(app, data):
     try:
         page = window.pages["items"]
         bar = page.page_bar
-        assert page.page_total == 54 and _tokens(page) == ["1", "2", "3", "4", "5", "…", "54"]
+        assert page.page_total == 54 and _tokens(page) == ["1", "2", "3", "4", "5"]
         assert window.scroll.horizontalScrollBar().maximum() == 0 and bar.geometry().right() <= page.results_card.width()
-        next(b for b in bar.numbers if b.text() == "…").click()  # 10페이지 뒤로
-        assert page.page_index == 10 and _tokens(page) == ["1", "…", "10", "11", "12", "…", "54"]
-        next(b for b in bar.numbers if b.text() == "…" and "앞" in b.accessibleName()).click()
-        assert page.page_index == 1
-        page.go_to_page(53)
-        assert _tokens(page) == ["1", "…", "50", "51", "52", "53", "54"] and page.page_index == 53
+        page.go_to_page(4)
+        assert _tokens(page) == ["1", "2", "3", "4", "5"]
+        page.next.click()
+        assert page.page_index == 5 and _tokens(page) == ["6", "7", "8", "9", "10"]
+        assert [b.text() for b in bar.numbers if b.property("current")] == ["6"]
+        assert bar.numbers[0].accessibleName() == "6페이지로 이동"
+        page.previous.click()
+        assert page.page_index == 4 and _tokens(page) == ["1", "2", "3", "4", "5"]
+        page.last_page.click()
+        assert _tokens(page) == ["51", "52", "53", "54"] and page.page_index == 53
+        assert not page.last_page.isEnabled() and not page.next.isEnabled()
         page.go_to_page(999)  # 범위 밖은 보정
         assert page.page_index == 53
+        page.first_page.click()
+        assert page.page_index == 0 and _tokens(page) == ["1", "2", "3", "4", "5"]
         page.go_to_page(-5)
         assert page.page_index == 0
     finally:

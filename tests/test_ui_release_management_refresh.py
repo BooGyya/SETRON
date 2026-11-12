@@ -143,6 +143,7 @@ def test_changed_query_discards_old_management_result_and_restores_ai_button(app
         window.navigate("ai")
         assert window.management_refresh.busy and not ai.analyze_button.isEnabled()
         new_query = window.query_panel.apply_draft()
+        wait_until(lambda: window.pages["dashboard"].snapshot is not None)
         current = window.pages["dashboard"].snapshot
         assert new_query is window.query_state.applied and new_query is not old_query
         assert current.query is new_query and current is not old

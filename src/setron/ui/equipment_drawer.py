@@ -131,8 +131,35 @@ class EquipmentDrawer(SideDrawer):
             empty = label("SW 미등록 · 목표 비교 불가", 14, wrap=True)
             ignore_width(empty)
             self.body.addWidget(empty)
+        self._build_risk(detail)
         self.show_panel()
         self.scroll.verticalScrollBar().setValue(0)
+
+    def _build_risk(self, detail):
+        whole = detail.whole
+        excluded = whole.goal is GoalState.EXCLUDED
+        tone = "neutral" if excluded else {
+            RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning",
+        }.get(whole.risk, "neutral")
+        self.risk_card = QFrame()
+        self.risk_card.setObjectName("drawerRisk")
+        self.risk_card.setStyleSheet(f"QFrame#drawerRisk {{background:white;border:1px solid {LINE};border-radius:12px;}}")
+        body = QVBoxLayout(self.risk_card)
+        body.setContentsMargins(14, 12, 14, 12)
+        body.setSpacing(8)
+        self.risk_title = label("위험버전", 16, medium=True, wrap=True)
+        self.risk_status_badge = StatusBadge(whole.risk_label, tone)
+        reason = ("HPA는 위험 분석에서 제외됩니다." if excluded else whole.risk_detail or {
+            RiskStatus.RISK: "위험 후보로 판정되었습니다. 상세 근거를 확인해 주세요.",
+            RiskStatus.NO_RISK: "현재 등록된 규칙에서는 위험 후보로 판정되지 않았습니다.",
+            RiskStatus.UNKNOWN: "위험 여부를 판정할 자료가 부족합니다.",
+        }[whole.risk])
+        self.risk_reason = label(reason, 14, color=SECONDARY, wrap=True)
+        ignore_width(self.risk_title, self.risk_reason)
+        body.addWidget(self.risk_title)
+        body.addWidget(self.risk_status_badge, alignment=Qt.AlignmentFlag.AlignLeft)
+        body.addWidget(self.risk_reason)
+        self.body.addWidget(self.risk_card)
 
     def _build_info(self, detail):
         whole, record = detail.whole, detail.record

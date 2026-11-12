@@ -26,6 +26,8 @@ from setron.ui.query_state import UNASSIGNED, GroupOption, LineOption, QueryCata
 from setron.ui.theme import install_theme
 from setron.ui.version_data import catalog_from_dashboard
 
+from test_ui_async_read import wait_until
+
 
 ANALYSIS, OTHER_HPA, LATEST = date(2026, 10, 1), date(2026, 10, 15), date(2026, 11, 1)
 
@@ -250,6 +252,7 @@ def test_existing_mixed_history_explains_conflict_and_clears_previous_views(wind
     windows.append(window)
     window.show()
     window.query_panel.apply_draft()
+    wait_until(lambda: not window.query_request.busy)
     dashboard, heatmap, equipment, ai = (window.pages[key]
                                         for key in ("dashboard", "heatmap", "equipment", "ai"))
     assert dashboard.snapshot is not None and dashboard.metrics["total"].value.text() == "1대"
@@ -259,6 +262,7 @@ def test_existing_mixed_history_explains_conflict_and_clears_previous_views(wind
     changed_day = date(2026, 12, 1)
     current[0] = source((*original.records, record(9, changed_day, hpa=False)))
     window.query_panel.apply_draft()
+    wait_until(lambda: not window.query_request.busy)
 
     assert dashboard.snapshot is None
     assert all(metric.value.text() == "—" for metric in dashboard.metrics.values())
@@ -286,6 +290,7 @@ def test_existing_mixed_history_explains_conflict_and_clears_previous_views(wind
 
     current[0] = original
     window.query_panel.apply_draft()
+    wait_until(lambda: not window.query_request.busy)
     assert dashboard.snapshot is not None and dashboard.metrics["total"].value.text() == "1대"
     assert heatmap.tiles and equipment.data is not None
     assert window.header.actions["equipment_list"].isEnabled()

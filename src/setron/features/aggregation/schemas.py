@@ -32,7 +32,11 @@ class PmVersion:
 
 @dataclass(frozen=True)
 class EquipmentRecord:
-    """한 기준 날짜의 설비 한 대. ``is_hpa``는 분석 제외 모델(`analysis_enabled` = false)인지다."""
+    """한 기준 날짜의 설비 한 대.
+
+    ``is_hpa``는 분석 제외 모델(`analysis_enabled` = false)인지다.
+    ``production_area``는 해당 관측에 저장된 생산 구분이며 같은 Site·Line의 다른 관측과 별개다.
+    """
 
     equipment_id: int
     equipment_code: str
@@ -42,6 +46,7 @@ class EquipmentRecord:
     model_name: str
     pms: tuple[PmVersion, ...]
     is_hpa: bool = False
+    production_area: str | None = None
 
 
 @dataclass(frozen=True)

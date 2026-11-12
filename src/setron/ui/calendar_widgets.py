@@ -1,12 +1,12 @@
 """모든 업무 화면에서 공유하는 연도 → 월 선택 달력. 날짜 확정은 Qt 기본 동작을 유지한다."""
 
-from PySide6.QtCore import QAbstractListModel, QDate, QEvent, QLocale, QModelIndex, QPointF, Qt
+from PySide6.QtCore import QAbstractListModel, QDate, QEvent, QLocale, QModelIndex, QPointF, Qt, Signal
 from PySide6.QtGui import QFont, QMouseEvent, QTextCharFormat
 from PySide6.QtWidgets import (
-    QCalendarWidget, QComboBox, QDateEdit, QHBoxLayout, QStyle, QStyleOptionComboBox, QToolButton, QWidget,
+    QCalendarWidget, QComboBox, QDateEdit, QHBoxLayout, QStyle, QStyleOptionComboBox, QTableView, QToolButton, QWidget,
 )
 
-from setron.ui.appearance import manager, ui_color
+from setron.ui.appearance import manager, set_color_style, ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, SOFT
 
@@ -63,7 +63,6 @@ class CalendarWidget(QCalendarWidget):
             control.setFixedSize(28, 32)
         self.year_combo, self.month_combo = ComboBox(), ComboBox()
         self.years = _Years(self)
-        self.year_combo.setModel(self.years)
         self.year_combo.setObjectName("calendarYear")
         self.month_combo.setObjectName("calendarMonth")
         self.year_combo.setAccessibleName("연도 선택 · 목록에서 스크롤")
@@ -79,6 +78,7 @@ class CalendarWidget(QCalendarWidget):
         self.year_combo.setMinimumWidth(108)
         self.month_combo.setMinimumContentsLength(3)
         self.month_combo.setMinimumWidth(76)
+        self.year_combo.setModel(self.years)
         for month in range(1, 13):
             self.month_combo.addItem(f"{month}월", month)
         for control in (self.previous_button, self.year_combo, self.month_combo, self.next_button):
@@ -101,6 +101,10 @@ class CalendarWidget(QCalendarWidget):
             f"QWidget#calendarHeader QToolButton:disabled {{background:transparent;border-color:transparent;color:{SECONDARY};}}"
             f"QCalendarWidget QAbstractItemView {{selection-background-color:{ACCENT_SOFT};selection-color:{PRIMARY};}}"
         )
+        days = self.findChild(QTableView, "qt_calendar_calendarview")
+        for view in (days, self.year_combo.view(), self.month_combo.view()):
+            set_color_style(view, lambda colors: (
+                f"selection-background-color:{colors['selected']};selection-color:{colors['accent']};"))
         appearance = manager()
         if appearance is not None:
             appearance.changed.connect(self._sync_day_colors)
@@ -187,38 +191,81 @@ class CalendarWidget(QCalendarWidget):
 class DateEdit(QDateEdit):
     """QDateEdit의 입력·검증·확정 동작을 보존하고 공통 달력만 연결한다."""
 
+    calendar_clicked = Signal(QDate)
+    calendar_activated = Signal(QDate)
+
     def __init__(self, parent=None, *, open_on_click=False):
         super().__init__(parent)
         self.open_on_click = open_on_click
+        self._calendar_widget = None
         self.setCalendarPopup(True)
-        self.setCalendarWidget(CalendarWidget(self))
         self.setDisplayFormat("yyyy-MM-dd")
         if open_on_click:
             self.lineEdit().installEventFilter(self)
 
-    def _open_from_click(self, event):
-        if (not self.open_on_click or event.button() != Qt.MouseButton.LeftButton or not self.calendarPopup()
-                or self.isReadOnly() or self.calendarWidget().isVisible()):
-            return False
-        # 날짜 텍스트를 눌러도 Qt의 기본 달력 버튼과 같은 동작을 사용한다.
+    def calendarWidget(self):
+        """명시적으로 요청하거나 팝업을 처음 열 때 공용 달력을 만든다."""
+        if self._calendar_widget is None:
+            self.setCalendarWidget(CalendarWidget(self))
+        return self._calendar_widget
+
+    def setCalendarWidget(self, calendar):
+        if self._calendar_widget is calendar:
+            return
+        super().setCalendarWidget(calendar)
+        self._calendar_widget = calendar
+        calendar.clicked.connect(self.calendar_clicked.emit)
+        calendar.activated.connect(self.calendar_activated.emit)
+
+    def is_calendar_visible(self):
+        return self._calendar_widget is not None and self._calendar_widget.isVisible()
+
+    def _calendar_button_rect(self):
         option = QStyleOptionComboBox()
         option.initFrom(self)
-        arrow = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
-                                            QStyle.SubControl.SC_ComboBoxArrow, self)
+        return self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                          QStyle.SubControl.SC_ComboBoxArrow, self)
+
+    def _open_from_click(self, event):
+        if (not self.open_on_click or event.button() != Qt.MouseButton.LeftButton or not self.calendarPopup()
+                or self.isReadOnly() or self.is_calendar_visible()):
+            return False
+        # 날짜 텍스트를 눌러도 Qt의 기본 달력 버튼과 같은 동작을 사용한다.
+        arrow = self._calendar_button_rect()
         if arrow.isEmpty():
             return False
+        calendar = self.calendarWidget()
         self.setFocus(Qt.FocusReason.MouseFocusReason)
         position = arrow.center()
         press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(position), QPointF(self.mapToGlobal(position)),
                             event.button(), event.buttons(), event.modifiers(), event.pointingDevice())
         super().mousePressEvent(press)
-        return self.calendarWidget().isVisible()
+        return calendar.isVisible()
 
     def mousePressEvent(self, event):
         if self._open_from_click(event):
             event.accept()
         else:
+            if (event.button() == Qt.MouseButton.LeftButton and self.calendarPopup() and not self.isReadOnly()
+                    and self._calendar_button_rect().contains(event.position().toPoint())):
+                self.calendarWidget()
             super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if (self.calendarPopup() and not self.isReadOnly() and
+                (event.key() == Qt.Key.Key_F4 or
+                 event.key() == Qt.Key.Key_Down and event.modifiers() & Qt.KeyboardModifier.AltModifier)):
+            self.calendarWidget()
+            arrow = self._calendar_button_rect()
+            if not arrow.isEmpty() and not self.is_calendar_visible():
+                position = arrow.center()
+                press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(position),
+                                    QPointF(self.mapToGlobal(position)), Qt.MouseButton.LeftButton,
+                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+                super().mousePressEvent(press)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def eventFilter(self, watched, event):
         if watched is self.lineEdit() and event.type() == QEvent.Type.MouseButtonPress and self._open_from_click(event):

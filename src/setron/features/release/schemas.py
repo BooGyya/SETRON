@@ -54,6 +54,7 @@ class ItemInput:
     item_no: int | None = None
     source_reference: dict | None = None
     edited_fields: tuple[str, ...] = ()
+    jira_key: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

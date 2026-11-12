@@ -39,11 +39,13 @@ class ItemJira:
     - codes: 원본에 적힌 Jira 코드(중복 제거, 원본 순서).
     - status: found(코드 있음)·empty(Jira 열은 있으나 빈 칸)·no_column(원본 행에 Jira 열 없음)·no_original(보관 원본 행 없음).
     - sources: 코드가 나온 '입력 작업 N · 시트 · 행' 위치.
+    - stored: 정식 jira_key 저장값이면 True. 비워 둔 저장값도 원본에서 다시 채우지 않는다.
     """
 
     codes: tuple[str, ...]
     status: str
     sources: tuple[str, ...] = ()
+    stored: bool = False
 
     @property
     def label(self):
@@ -59,6 +61,8 @@ class ItemJira:
 
     @property
     def tooltip(self):
+        if self.stored:
+            return ("JIRA 이슈코드: " + ", ".join(self.codes) + ("\n" + "\n".join(self.sources) if self.sources else "")) if self.codes else "저장된 JIRA 이슈코드가 없습니다."
         if self.codes:
             return "릴리즈노트 원본 Jira: " + ", ".join(self.codes) + ("\n" + "\n".join(self.sources) if self.sources else "")
         return {JIRA_EMPTY: "릴리즈노트 원본의 Jira 칸이 비어 있습니다.",

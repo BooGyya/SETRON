@@ -84,6 +84,7 @@ class Item:
     item_id: int
     item_no: int | None
     content: str
+    jira_key: str | None = None
 
 
 @dataclass(frozen=True)

@@ -126,7 +126,12 @@ def _equipment(sheet: Worksheet, data, names: _Names, snapshots) -> None:
 
 def _releases(sheet: Worksheet, data, names: _Names, families=None, *, production_area=None, include_unlinked=True) -> None:
     items = {i["item_id"]: i for i in data["item"]}
-    jira = jira_by_item(original_item_rows_from_batches(data["import_batch"], data["item"]), items)
+    # 정식 저장값은 NULL도 현재값이다. jira_key 열이 없던 이전 DB만 원본 셀로 보완한다.
+    legacy_items = [item for item in data["item"] if "jira_key" not in item]
+    legacy_jira = jira_by_item(original_item_rows_from_batches(data["import_batch"], legacy_items),
+                               (item["item_id"] for item in legacy_items))
+    jira = {item_id: (item["jira_key"] or "") if "jira_key" in item else ", ".join(legacy_jira[item_id].codes)
+            for item_id, item in items.items()}
     links_by_release = {}
     for link in data["release_version_item"]:
         links_by_release.setdefault(link["release_version_id"], []).append(link)
@@ -157,10 +162,10 @@ def _releases(sheet: Worksheet, data, names: _Names, families=None, *, productio
                          STATE_LABELS.get(link["item_state"], link["item_state"]),
                          SCOPE_LABELS.get(link["target_scope"], link["target_scope"]),
                          ", ".join(names.group(g) for g in link["target_group_ids"] or ()),
-                         ", ".join(item["edited_fields"] or ()), *extra, ", ".join(jira[item["item_id"]].codes)])
+                         ", ".join(item["edited_fields"] or ()), *extra, jira[item["item_id"]]])
     rows += [["", "", "", "", "", "", "", i["batch_id"],
               _item_no(i), i["content"], "", "", "", ", ".join(i["edited_fields"] or ())]
-              + ["", "", "", "", ", ".join(jira[i["item_id"]].codes)]
+              + ["", "", "", "", jira[i["item_id"]]]
               for i in data["item"] if include_unlinked and i["item_id"] not in linked]
     _rows(sheet, RELEASE_HEADERS, rows)
 
