@@ -7,7 +7,6 @@ from zipfile import ZipFile
 
 import pytest
 from docx import Document
-from openpyxl import load_workbook
 from PySide6.QtCore import QDate, QSettings
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtTest import QTest
@@ -61,7 +60,7 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     assert type(p.start) is type(replay.start) and type(p.end) is type(replay.end)
     assert (p.query_panel.range_button.start, p.query_panel.range_button.end) == (
         p.start.date().toPython(), p.end.date().toPython())
-    assert list(p.query_panel.combos) == ["fab_key", "site_key", "line_key"]
+    assert list(p.query_panel.combos) == ["fab_key", "site_key", "line_key", "group_key"]
     assert list(replay.query_panel.combos) == ["fab_key", "site_key", "line_key", "group_key"]
     assert not any("뒤로" in b.text() for b in p.findChildren(QPushButton))
     p.type_buttons["item"].click()
@@ -107,8 +106,8 @@ def test_report_counts_exact_denominator_dates_and_no_fake_lines():
         snapshot.summary.compliant, snapshot.summary.below, snapshot.summary.undetermined)
     trends = next(s.table for s in r.sections if s.title == "날짜별 적용률 추이")
     assert tuple(row[0] for row in trends.rows) == tuple(map(str, source.analysis_dates))
-    heatmap = next(s.table for s in r.sections if s.title == "버전 히트맵 발췌")
-    assert all(row[1] == "Line 미지정" for row in heatmap.rows)
+    heatmap = next(s.table for s in r.sections if s.title == "설비군·라인별 히트맵")
+    assert all(row[1] == "라인 미지정" for row in heatmap.rows)
     distribution = next(s.table for s in r.sections if s.title == "구성비·막대·트리맵")
     assert tuple(sum(row[i] for row in distribution.rows) for i in (1, 2, 3)) == summary.rows[0][2:]
 
@@ -235,22 +234,14 @@ def test_cancel_discards_late_worker_result_and_generation_can_retry(own, tmp_pa
     assert generated(p)
 
 
-@pytest.mark.parametrize("fmt", ["xlsx", "docx", "pdf"])
+@pytest.mark.parametrize("fmt", ["docx", "pdf"])
 def test_local_files_contain_same_frozen_conditions_counts_and_valid_format(own, tmp_path, fmt):
     source = demo_dashboard_source()
     r = generate_report(source, request(source, format=fmt, filename="보고서_합성검증"))
     path = tmp_path / r.filename
     result = save_generated_report(r, path)
     assert result.saved, result.message
-    if fmt == "xlsx":
-        with ZipFile(path) as zipped:
-            assert any("chartEx" in name for name in zipped.namelist())
-            assert any("charts/chart" in name for name in zipped.namelist())
-        book = load_workbook(path)
-        assert book.worksheets[0].cell(5, 1).value == source.snapshot(r.request.query).summary.equipment_count
-        assert any("추이" in sheet.title and sheet._charts for sheet in book)
-        book.close()
-    elif fmt == "docx":
+    if fmt == "docx":
         doc = Document(path)
         text = " ".join(p.text for p in doc.paragraphs)
         assert "합성 예시" in " ".join(c.text for t in doc.tables for row in t.rows for c in row.cells)
@@ -313,25 +304,47 @@ def test_pdf_retains_every_distinct_chart_in_same_section(own, tmp_path):
     p = page(own, tmp_path)
     r = generated(p)
     pictures = report_pictures(r)
-    assert len(pictures) == 4
+    assert len(pictures) > 4
+    distribution = next(i for i, s in enumerate(r.sections) if s.chart == "distribution")
+    assert sum(index == distribution for index, _ in pictures) == 3
     document = pdf_document(r, pictures)
     html = document.toHtml()
     for number, (index, _) in enumerate(pictures):
         assert f"report-chart:{index}/{number}" in html
 
 
-def test_excel_literal_formula_and_long_text_are_preserved(own, tmp_path):
+def test_picture_preparation_animates_and_cancel_discards_partial_preview(own, tmp_path, monkeypatch):
+    import setron.ui.reports_page as reports_page
+    p = page(own, tmp_path)
+    result = generated(p)
+
+    def prepare(report, progress):
+        assert p.saving and p.preparing_dialog.isVisible()
+        from setron.ui.import_dialogs import ImportBusyBar
+        bar = p.preparing_dialog.findChild(ImportBusyBar)
+        phase = bar.phase
+        QTest.qWait(100)
+        assert bar.phase != phase
+        p.preparing_dialog.reject()
+        progress()
+        raise AssertionError("취소한 그림 준비를 계속하면 안 됩니다.")
+
+    monkeypatch.setattr(reports_page, "report_pictures", prepare)
+    assert p.open_preview("docx") is None
+    assert not p.saving and p.preview_dialog is None and p.pictures is None
+    assert p.result is result and "취소" in p.generation_status.text()
+
+
+def test_word_literal_formula_and_long_text_are_preserved(own, tmp_path):
     source = demo_dashboard_source()
     r = generate_report(source, request(source))
     extra = ReportSection(2, "원문", "", Table("원문", ("내용",), (("=HYPERLINK(\"x\")",), ("긴" * 40000,))))
     r = replace(r, sections=(*r.sections, extra))
     result = save_generated_report(r, tmp_path / r.filename)
     assert result.saved, result.message
-    book = load_workbook(result.path)
-    sheet = next(s for s in book if s.title.endswith(" 원문"))
-    assert sheet["A5"].data_type == "s" and sheet["A5"].value.startswith("=HYPERLINK")
-    assert "긴값_분할" in book.sheetnames
-    book.close()
+    document = Document(result.path)
+    assert document.tables[-1].cell(1, 0).text == '=HYPERLINK("x")'
+    assert document.tables[-1].cell(2, 0).text == "긴" * 40000
 
 
 def test_failed_export_preserves_previous_file(own, tmp_path):

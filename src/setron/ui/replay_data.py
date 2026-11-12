@@ -189,7 +189,7 @@ def freeze_source(source):
         risk_rule_state=source.risk_rule_state)
     result.saved_groups = deepcopy(source.saved_groups)
     result.result_label = getattr(source, "result_label", "관측 자료")
-    for name in ("applicability", "target_reasons", "model_names", "family_names"):
+    for name in ("applicability", "target_reasons", "model_names", "family_names", "assessor"):
         if hasattr(source, name):
             setattr(result, name, deepcopy(getattr(source, name)))
     # 상세 패널의 전체 SW 위험도 조회 적용 시 고정한다. 재생·타일 클릭 때 원래 공급자를 호출하지 않는다.
