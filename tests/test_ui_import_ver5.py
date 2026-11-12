@@ -334,6 +334,23 @@ def test_period_is_inclusive_scoped_and_distinguishes_physical_and_sw_counts(own
     assert page.range_message.isVisibleTo(page)
 
 
+def test_period_uses_the_replay_range_calendar(own):
+    """11-12: 기간은 버전 리플레이와 같은 '시작 ~ 종료' 칸 하나. 누르면 기간 달력이 열리고, 고르면 검색 조건에 들어간다."""
+    from setron.ui.date_range import DateRangeButton
+
+    page = own(ImportDeletePage())
+    page.set_catalog(catalog())
+    assert isinstance(page.period_button, DateRangeButton) and page.period_button.text() == "전체 기간"
+    assert not page.start.isVisibleTo(page) and page.period_box.isVisibleTo(page)
+    page.quick_range("latest")                                  # 빠른 선택도 기간 칸에 보인다
+    assert page.period_button.text() == f"{page.start.text()} ~ {page.end.text()}" and page.start.text()
+    page.quick_range("manual")                                  # 직접 선택은 기간 달력을 연다
+    assert page.period_button.dialog is not None and page.period_button.dialog.isVisible()
+    page.period_button.dialog.reject()
+    page.period_button.range_changed.emit(date(2026, 7, 1), date(2026, 8, 31))
+    assert (page.start.text(), page.end.text()) == ("2026-07-01", "2026-08-31") and page.quick_buttons[-1].isChecked()
+
+
 def test_release_mode_uses_family_not_hidden_dates_or_site(own):
     page = own(ImportDeletePage())
     select_period(page)
