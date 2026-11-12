@@ -16,6 +16,7 @@ from setron.ui.components import StatusBadge, label
 from setron.ui.drawer import SideDrawer
 from setron.ui.equipment import ignore_width
 from setron.ui.heatmap_data import GoalState
+from setron.ui.risk_reasons import RiskReasonCard
 from setron.ui.theme import CANVAS, LINE, SECONDARY
 
 
@@ -84,6 +85,7 @@ class EquipmentDrawer(SideDrawer):
         super().__init__(parent, object_name=object_name, accessible_name=accessible_name)
         self.request, self.detail, self.return_focus = None, None, None
         self.software_cards = []
+        self.risk_reasons = None
         self.title = label("설비 정보", 24, medium=True, wrap=True)
         ignore_width(self.title)
         heading = QVBoxLayout()
@@ -109,6 +111,13 @@ class EquipmentDrawer(SideDrawer):
         self.request, self.detail, self.return_focus = request, detail, return_focus
         self.title.setText("설비 정보")
         self._build_info(detail)
+        whole = detail.whole
+        # 위험 후보는 어떤 기준 때문인지(적용 위험 / 미적용 위험)를 바로 아래에 둔다. 근거가 없으면 '미연결'로 둔다.
+        # 미확인은 판정기가 남긴 근거가 있을 때만 보인다(기준 미등록 등으로 근거가 없으면 상단 배지로 충분).
+        if not detail.record.is_hpa and (whole.risk is RiskStatus.RISK
+                                         or (whole.risk is RiskStatus.UNKNOWN and whole.findings)):
+            self.risk_reasons = RiskReasonCard(whole.risk, whole.findings)
+            self.body.addWidget(self.risk_reasons)
         observations = observed_software(detail, rows)
         model_counts = Counter(observation.model for observation in observations)
         for observation in observations:
@@ -173,6 +182,7 @@ class EquipmentDrawer(SideDrawer):
                         child.widget().hide()
                         child.widget().deleteLater()
         self.software_cards = []
+        self.risk_reasons = None
 
     def clear_detail(self):
         self.request, self.detail = None, None

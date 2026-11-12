@@ -21,6 +21,29 @@ class RuleType(str, Enum):
     DIRECT_VERSION = "DIRECT_VERSION"    # 사용자가 직접 위험으로 지정한 버전
 
 
+class RiskKind(str, Enum):
+    """위험 후보를 '버전을 썼을 때' 기준으로 두 갈래로 나눈 표시 분류. 판정 자체는 바꾸지 않는다.
+
+    - APPLIED(적용 위험): 결함 Item이 든 버전이나 위험 버전을 사용(적용)해서 위험이다.
+    - NOT_APPLIED(미적용 위험): 적용되어 있어야 할 필수 Item이 그 버전에 적용되지 않아 위험이다.
+    """
+
+    APPLIED = "APPLIED"
+    NOT_APPLIED = "NOT_APPLIED"
+
+
+RULE_KINDS = {
+    RuleType.DEFECT_ITEM: RiskKind.APPLIED,
+    RuleType.DIRECT_VERSION: RiskKind.APPLIED,
+    RuleType.SAFETY_REQUIRED: RiskKind.NOT_APPLIED,
+}
+RISK_KIND_LABELS = {RiskKind.APPLIED: "적용 위험", RiskKind.NOT_APPLIED: "미적용 위험"}
+RISK_KIND_DESCRIPTIONS = {
+    RiskKind.APPLIED: "결함 Item·위험 버전을 사용 중",
+    RiskKind.NOT_APPLIED: "필수 Item이 적용되지 않음",
+}
+
+
 class MappingStatus(str, Enum):
     VERIFIED = "VERIFIED"
     UNRESOLVED = "UNRESOLVED"
@@ -112,6 +135,16 @@ class RiskFinding:
     @property
     def message(self) -> str:
         return BASIS_MESSAGES[self.basis]
+
+    @property
+    def kind(self) -> RiskKind:
+        return RULE_KINDS[self.rule.rule_type]
+
+
+def risk_kinds(findings) -> tuple[RiskKind, ...]:
+    """위험(RISK)으로 판정된 근거의 분류를 적용 위험 → 미적용 위험 순으로 중복 없이 돌려준다. 미확인은 넣지 않는다."""
+    found = {f.kind for f in findings if f.status is RiskStatus.RISK}
+    return tuple(kind for kind in RiskKind if kind in found)
 
 
 @dataclass(frozen=True)
