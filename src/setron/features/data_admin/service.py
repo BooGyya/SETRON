@@ -197,8 +197,20 @@ class StatusSheet:
     equipment_count: int
 
     @property
+    def origin(self):
+        """현황표 출처: 직접 입력이면 '직접 입력', 가져왔으면 엑셀 파일 이름(없으면 Site · 날짜를 뺀 시트 이름)."""
+        if self.sheet.endswith("(직접 입력)"):
+            return "직접 입력"
+        if self.workbook:
+            return self.workbook
+        rest = self.sheet.replace(self.site, " ") if self.site else self.sheet
+        rest = " ".join(rest.replace(str(self.base_date), " ").split()).strip(" ·-_")
+        return rest or self.sheet
+
+    @property
     def label(self):
-        return f"{self.base_date} · {self.site} · {self.sheet}"
+        """현황표 선택 목록 글자. 시트 이름에 이미 있는 Site · 날짜를 다시 붙이지 않는다 (11-12)."""
+        return f"{self.base_date} · {self.site} · {self.equipment_count}대 · {self.origin}"
 
 
 @dataclass(frozen=True)
@@ -269,6 +281,9 @@ class SheetRows:
     groups: tuple  # (설비군 ID, 이름, 분류) — POLY · OXIDE · KCTC
     lines: tuple  # 이 Site의 라인 (관측 + 등록)
     elsewhere: dict = field(default_factory=dict)  # 이 Site에 없는 라인(소문자) → 그 라인이 있는 다른 Site들. 잘못 넣기 안내용
+    default_area: str | None = None  # 빈 현황표를 만들 때 고른 메모리/파운드리 (새 행 · 새 라인의 기본값, 11-12)
+    latest_versions: dict = field(default_factory=dict)  # (설비군 ID, MEMORY · FOUNDRY) → 그 계열 최신 릴리즈 버전 원문
+    line_areas: dict = field(default_factory=dict)  # 이 Site 라인 → 메모리/파운드리 (등록값 → 현황 값 → 장소표). 모르면 없음
 
 
 @dataclass(frozen=True)
@@ -656,8 +671,8 @@ class DataAdminService:
         return snapshot["snapshot_id"]
 
     def _regroup_in(self, tx, batch_id, snapshot_id, group_id):
-        """설비 현황의 설비군을 바꾼다. 모델명이 옛 설비군 이름이었으면 새 이름으로, SW 계열이 새 설비군(또는 상위
-        설비군)의 것이 아니면 새 설비군의 계열로 바꾸고 같은 원문 릴리즈에 다시 잇는다. 옛 설비군 ID를 돌려준다."""
+        """설비 현황의 설비군을 바꾼다. 모델명은 새 설비군 이름으로, SW 계열이 새 설비군(또는 상위 설비군)의 것이 아니면
+        새 설비군의 계열로 바꾸고 같은 원문 릴리즈에 다시 잇는다. 옛 설비군 ID를 돌려준다."""
         snapshot = tx.get("equipment_snapshot", {"snapshot_id": snapshot_id})
         require(not self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot_id),
                 "PM이 있는 설비는 PM마다 설비군이 달라 여기서 바꿀 수 없습니다.")
@@ -666,10 +681,8 @@ class DataAdminService:
         old_id, new = snapshot.get("group_id"), groups[group_id]
         if old_id == group_id:
             return old_id
-        old_name = _text(groups.get(old_id, {}).get("group_name"))
         changes = {"group_id": group_id}
-        if _text(snapshot.get("model_name")) in ("", old_name):
-            changes["model_name"] = _text(new["group_name"])
+        changes["model_name"] = _text(new["group_name"])  # 모델명은 설비군을 따라간다 (11-12, 현황표에서 모델명을 따로 고치지 않음)
         owners = {group_id} | ({new["parent_group_id"]} if new.get("parent_group_id") else set())
         owned = {f["family_id"] for owner in owners for f in self.rows.rows(tx, "version_family", group_id=owner)}
         # 계열은 설비군을 바꾸기 전에 정한다 (먼저 바꾸면 이 설비가 새 설비군의 '같은 설비'로 잡혀 옛 계열을 다시 고른다)
@@ -770,8 +783,57 @@ class DataAdminService:
                     elsewhere[line.casefold()].add(where)
             choices = tuple((g["group_id"], names[g["group_id"]], _text(g["category"])) for g in sorted(
                 groups, key=lambda g: names[g["group_id"]]) if _text(g["category"]) in CATEGORIES)
+            latest = self._latest_versions(tx, groups)
+            line_areas = self._line_areas(tx, site, lines)
+        meta = raw.get(SHEET_KEY) if isinstance(raw.get(SHEET_KEY), dict) else {}
         return SheetRows(batch_id, sheet, _workbook(raw), site, base_date, tuple(rows), choices, tuple(lines),
-                         {line: tuple(sorted(sites)) for line, sites in elsewhere.items()})
+                         {line: tuple(sorted(sites)) for line, sites in elsewhere.items()},
+                         meta.get("production_area") if meta.get("production_area") in FABS else None, latest, line_areas)
+
+    def _line_areas(self, tx, site, lines):
+        """이 Site 라인마다 아는 메모리/파운드리 (위치 탭과 같은 순서: 등록값 → 설비 현황의 생산 영역 → 장소표).
+        새 행에서 라인을 고르면 이 값을 칸에 보이게 채운다 (11-12: 빈칸을 몰래 정하지 않는다)."""
+        from setron.features.reference_data import default_area
+
+        registered = {e["line"]: e["fab"] for e in registered_lines(tx) if e["site"] == site}
+        observed = defaultdict(Counter)
+        for snapshot in self.rows.rows(tx, "equipment_snapshot"):
+            if _text(snapshot.get("site")) == site and snapshot.get("line") and snapshot.get("production_area") in FABS:
+                observed[_text(snapshot["line"])][snapshot["production_area"]] += 1
+        result = {}
+        for line in lines:
+            area = registered.get(line) or (observed[line].most_common(1)[0][0] if observed[line] else None) \
+                or default_area(site, line)
+            if area in FABS:
+                result[line] = area
+        return result
+
+    def _latest_versions(self, tx, groups):
+        """설비군 · 메모리/파운드리마다 쓸 SW 계열의 최신 릴리즈 버전 (새 행 SW 버전 자동 채우기용, 11-12).
+
+        계열은 새 행 저장과 같은 규칙으로 고른다: 설비군(또는 상위 설비군)의 계열 중 파운드리면 '(파운드리)' 계열,
+        여럿이면 통합UI. 최신은 확인된 순서가 가장 큰 릴리즈다(순서가 없으면 마지막에 등록된 것).
+        """
+        families = defaultdict(list)
+        for family in self.rows.rows(tx, "version_family"):
+            families[family["group_id"]].append(family)
+        releases = defaultdict(list)
+        for release in self.rows.rows(tx, "release_version"):
+            releases[release["family_id"]].append(release)
+        result = {}
+        for group in groups:
+            owners = [group["group_id"]] + ([group["parent_group_id"]] if group.get("parent_group_id") else [])
+            owned = [f for owner in owners for f in families[owner]]
+            for area in FABS:
+                chosen = [f for f in owned if ("(파운드리)" in _text(f["family_name"])) == (area == "FOUNDRY")] or owned
+                if len(chosen) > 1:
+                    chosen = [f for f in chosen if f.get("ui_type") == "INTEGRATED"] or chosen
+                candidates = [r for f in chosen[:1] for r in releases[f["family_id"]]]
+                if candidates:
+                    best = max(candidates, key=lambda r: (r.get("version_order") is not None, r.get("version_order") or 0,
+                                                          r["release_version_id"]))
+                    result[(group["group_id"], area)] = _text(best["version_raw"])
+        return result
 
     def _sheet_place_or_empty(self, tx, batch_id):
         raw = _raw(tx.get("import_batch", {"batch_id": batch_id}).get("raw_data"))
@@ -792,8 +854,10 @@ class DataAdminService:
                 self._bind(bindings, version, "version_raw", batch_id, sheet, "", "equipment_version", {}, "", True)
         return bindings
 
-    def create_sheet(self, site, base_date) -> int:
+    def create_sheet(self, site, base_date, production_area=None) -> int:
         """Site · 기준일의 빈 현황표(머리글만)를 만든다. 같은 Site · 기준일 현황표가 이미 있으면 거부한다.
+
+        ``production_area``(MEMORY · FOUNDRY)는 그 현황표 새 행 · 새 라인의 메모리/파운드리 기본값으로 보관한다 (11-12).
 
         return
         - 새 현황표의 입력 작업 ID.
@@ -801,13 +865,15 @@ class DataAdminService:
         site = (site or "").strip()
         require(bool(site), "Site를 골라 주세요.")
         require(isinstance(base_date, date), "기준일을 YYYY-MM-DD로 적어 주세요.")
+        require(production_area is None or production_area in FABS, "메모리 또는 파운드리를 골라 주세요.")
         require(all(not (s.base_date == base_date and s.site == site) for s in self.status_sheets()),
                 f"{site} · {base_date} 현황표가 이미 있습니다. 그 현황표에 행을 추가해 주세요.")
         sheet = f"{site} {base_date.isoformat()} (직접 입력)"
         with self.storage.transaction() as tx:
             created = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {
                 sheet: {f"{letter}1": text for letter, (text, _) in MANUAL_HEADERS.items()},
-                SHEET_KEY: {"site": site, "base_date": base_date.isoformat()}}})
+                SHEET_KEY: {"site": site, "base_date": base_date.isoformat(),
+                            **({"production_area": production_area} if production_area else {})}}})
             tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_create": {
                 "table": "status_sheet", "values": {"label": f"{site} · {base_date.isoformat()}", "batch_id": created["batch_id"]}}}})
         return created["batch_id"]
