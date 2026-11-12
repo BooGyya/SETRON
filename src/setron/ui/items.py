@@ -20,9 +20,9 @@ from setron.ui.item_data import (
 from setron.ui.item_distribution import APPLICATION_TONES, ItemDistribution
 from setron.ui.item_analysis import ItemSearchError, answer_items
 from setron.ui.item_answer_card import ItemAnswerCard
-from setron.ui.item_risk_dialog import _ClampLabel, warning_icon
+from setron.ui.item_risk_dialog import warning_icon
 from setron.ui.item_risk_page import ItemRiskPage
-from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, category, repeats_item, risk_candidate_ids
+from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, repeats_item
 from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, font, icon, set_widget_font
 from setron.ui.versions import _fit
@@ -609,44 +609,7 @@ class ItemsPage(QWidget):
         self.hpa_badge = StatusBadge("", APPLICATION_TONES[Application.NOT_TARGET])
         self.summary = _RightWrapRow([*self.summary_badges.values(), self.hpa_badge], 96)
         self.summary.grid.setSpacing(6)
-        # 등록된 위험 기준은 펼침 영역 맨 위의 강조 박스에 둔다(옅은 주의색 배경 + 왼쪽 포인트 라인).
-        self.rules_box = QFrame()
-        self.rules_box.setObjectName("registeredRules")
-        self.rules_box.setStyleSheet(f"QFrame#registeredRules {{background:#fff9e6;border:0;border-left:3px solid {TONES['warning'][2]};border-radius:4px;}}")
-        # 두 줄로 나눈다: 기준 정보(등록 건수·종류·기준명) / 위험 후보 대수와 대시보드 이동 버튼.
-        # 한 줄이면 좁은 폭에서 기준명이 잘리고 버튼이 상자 끝에 붙는다.
-        rules_lines = QVBoxLayout(self.rules_box)
-        rules_lines.setContentsMargins(12, 8, 12, 8)
-        rules_lines.setSpacing(8)
-        rules_row = QHBoxLayout()
-        rules_row.setSpacing(8)
-        candidates_row = QHBoxLayout()
-        candidates_row.setSpacing(8)
-        rules_lines.addLayout(rules_row)
-        rules_lines.addLayout(candidates_row)
-        self.rules_chip = StatusBadge("", "warning")
-        self.inline_rules = _ClampLabel(1)
-        set_widget_font(self.inline_rules, font(13, medium=True))
-        # 기준 종류 칩(환경안전 필수 등)은 이름 앞에 두고, 이름은 Item 제목과 다를 때만 오른쪽에 보인다.
-        self.rules_kinds = QWidget()
-        self.rules_kinds.setStyleSheet("background:transparent;")
-        self.rules_kinds_row = QHBoxLayout(self.rules_kinds)
-        self.rules_kinds_row.setContentsMargins(0, 0, 0, 0)
-        self.rules_kinds_row.setSpacing(6)
-        # 등록 결과의 위험 후보 대수(관측 미연결이면 미확인)와 대시보드 위험 후보 목록으로 가는 버튼.
-        self.rules_risk = StatusBadge("", "danger")
-        self.rules_dashboard = button("대시보드 위험 후보 보기")
-        self.rules_dashboard.setToolTip("이 Item 위험 기준의 위험 후보 중 현재 대시보드 조회 범위에 표시되는 설비를 목록으로 엽니다.")
-        self.rules_dashboard.clicked.connect(self.open_rule_candidates)
-        self.rule_candidate_ids = None
-        rules_row.addWidget(self.rules_chip)
-        rules_row.addWidget(self.rules_kinds)
-        rules_row.addWidget(self.inline_rules, 1)
-        candidates_row.addWidget(self.rules_risk)
-        candidates_row.addWidget(self.rules_dashboard)
-        candidates_row.addStretch(1)
-        self.rules_box.hide()
-        inline.addWidget(self.rules_box)
+        # 펼친 Item의 위험 기준 강조 박스(노란 칸)는 두지 않는다. 기준 확인은 목록 행의 '위험 기준 N건' 배지 → 판정 팝업에서 한다.
         detail.addWidget(self.inline_box)
         self.register_rule = button("위험 기준 등록")
         self.register_rule.clicked.connect(lambda: self.manager.open_add(item_id=self.selected_id, family_id=self.family_id))
@@ -749,15 +712,6 @@ class ItemsPage(QWidget):
         ids = self.verdict_dialog.dashboard_ids
         if ids:
             self.risk_candidates_requested.emit(f"위험 기준 · {self.verdict_dialog.rule.display_name or self.verdict_dialog.rule.risk_reason}", ids)
-        return True
-
-    def open_rule_candidates(self):
-        """펼친 Item의 활성 위험 기준이 판정한 위험 후보를 대시보드 위험 후보 목록으로 요청한다."""
-        if not self.rule_candidate_ids or self.selected_id is None:
-            return False
-        entry = next((e for e in self.data.versions.items if e.item.item_id == self.selected_id), None)
-        self.risk_candidates_requested.emit(f"위험 기준 · {entry.item.content if entry else self.selected_id}",
-                                            self.rule_candidate_ids)
         return True
 
     def show_notice(self, text, tone="warning"):
@@ -1208,32 +1162,12 @@ class ItemsPage(QWidget):
                             for r in records if any(pm.family_id == self.family_id for pm in r.pms))
         summary = catalog.summarize(item, records) if connected else None
         self.equipment = summary.equipment if summary else ()
-        enabled_rules = [r for r in rules if r.is_enabled and r.family_id == self.family_id]
         version_text, _ = self._release_caption(item.item_id)
         jira = self.data.jira([item.item_id])[item.item_id]
         self.item_facts.setText(" · ".join((f"포함 릴리즈 {version_text or '미확인'}",
                                             f"Item No {item.item_no if item.item_no is not None else '미확인'}",
                                             f"JIRA {jira.label}" if jira.codes else jira.label)))
         self.item_facts.setToolTip(jira.tooltip)
-        self.rules_box.setVisible(bool(enabled_rules))
-        self.rule_candidate_ids = risk_candidate_ids(self.data, enabled_rules) if enabled_rules else None
-        if enabled_rules:
-            self.rules_chip.setText(f"위험 기준 {len(enabled_rules)}건 등록됨")
-            known = self.rule_candidate_ids is not None
-            self.rules_risk.setText(f"위험 후보 {len(self.rule_candidate_ids)}대" if known else "위험 후보 미확인")
-            self.rules_risk.set_tone("danger" if known and self.rule_candidate_ids else "neutral")
-            self.rules_risk.setToolTip("" if known else "설비 관측 자료가 없어 위험 후보를 판정할 수 없습니다.")
-            self.rules_dashboard.setEnabled(bool(self.rule_candidate_ids))
-            distinct = [n for n in dict.fromkeys(r.display_name or r.risk_reason for r in enabled_rules)
-                        if not repeats_item(n, item.content)]
-            self.inline_rules.setVisible(bool(distinct))
-            self.inline_rules.set_full_text(" · ".join(distinct))
-            while self.rules_kinds_row.count():
-                self.rules_kinds_row.takeAt(0).widget().deleteLater()
-            for kind in dict.fromkeys(category(r) for r in enabled_rules):
-                self.rules_kinds_row.addWidget(StatusBadge(kind, "info"))
-            if any(r.memo.strip() for r in enabled_rules):
-                self.rules_kinds_row.addWidget(StatusBadge("메모 있음"))
         if summary:
             for state, count in summary.counts().items():
                 self.summary_badges[state].setText(f"{APPLICATION_LABELS[state]} {count}대")

@@ -56,14 +56,6 @@ def rule_verdicts(data, rule):
     return rows
 
 
-def risk_candidate_ids(data, rules):
-    """활성 위험 기준들이 위험 후보로 판정한 설비 ID. 관측 미연결이면 None(0대로 확정하지 않는다)."""
-    if data is None or not data.observations_connected:
-        return None
-    return tuple(dict.fromkeys(record.equipment_id for rule in rules if rule.is_enabled
-                               for record, result, _ in rule_verdicts(data, rule) if result.status is RiskStatus.RISK))
-
-
 class _VerdictDelegate(QStyledItemDelegate):
     """판정 열을 상태 색 칩으로 그린다. 색은 기존 배지 토큰을 쓴다."""
 

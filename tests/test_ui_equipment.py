@@ -177,8 +177,11 @@ def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, so
     model = page.table.model()
     assert model is page.model
     columns = range(model.columnCount())
+    # 위험 후보 배지에서 연 목록은 판정 기준 분류(적용/미적용 위험) 열을 더한다. 근거가 없으면 만들지 않고 '근거 미연결'.
+    risk_column = ("위험 기준",) if risk_only else ()
+    risk_cell = ("근거 미연결",) if risk_only else ()
     assert tuple(model.headerData(column, Qt.Orientation.Horizontal) for column in columns) == (
-        "설비명", "모델", "계열", "적용현황",
+        "설비명", "모델", "계열", "적용현황", *risk_column,
     )
     assert all(not page.table.isColumnHidden(column) for column in columns)
     assert sum(page.table.columnWidth(column) for column in columns) <= page.table.viewport().width()
@@ -186,8 +189,8 @@ def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, so
     assert all(model.index(row, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
                for row in range(model.rowCount()) for column in columns)
     assert model.rows[:2] == (
-        ("TEST-001", "M-O2\nM-O3", "O2 구UI\nO3 통합UI", "목표 미달\n복수 SW\nPM 불일치"),
-        ("TEST-002", "M-O2", "O2 구UI", "목표 달성"),
+        ("TEST-001", "M-O2\nM-O3", "O2 구UI\nO3 통합UI", "목표 미달\n복수 SW\nPM 불일치", *risk_cell),
+        ("TEST-002", "M-O2", "O2 구UI", "목표 달성", *risk_cell),
     )
     if not risk_only:
         assert model.rows[3] == ("TEST-004", "TEST", "—", "정보 부족")
