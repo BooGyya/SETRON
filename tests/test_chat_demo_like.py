@@ -186,3 +186,57 @@ def test_period_and_data_info_questions_still_work_on_demo_like_data():
     info = ask("가장 마지막 데이터가 언제야?")
     assert info.request.intents == (Intent.DATA_INFO,) and "2026-10-21" in info.summary
     assert recognize("최근 자료 기준 평택 달성률", CATALOG).intents == (Intent.COMPARE,)
+
+
+# --- 이름처럼 보이는 낱말은 버리지 않는다 (11/12 시연 DB: 'DFB 설비 알아?'가 전체 설비로 답하던 문제) --------------------
+@pytest.mark.parametrize("question, model", [
+    ("DFB 설비 알아?", "C4 DFB"), ("dfb 몇 대야", "C4 DFB"), ("C4-DFB 알아", "C4 DFB"), ("C4_DFB 현황", "C4 DFB"),
+    ("Prime 설비 몇 대", "O5 Prime"), ("C4+ 설비 몇 대", "C4+"), ("화성 C3 알아요?", "C3"),
+])
+def test_suffix_and_joined_aliases_resolve_to_the_group(question, model):
+    request = recognize(question, CATALOG)
+    assert request.conditions.groups == (model,) and request.conditions.unresolved == ()
+    assert "설비는" in ask(question).summary
+
+
+@pytest.mark.parametrize("question, expected", [
+    ("c2 설비 알아?", "'c2'은(는) 지금 자료에 없는 모델이에요"), ("O7 설비 몇 대야", "'O7'은(는) 지금 자료에 없는 모델이에요"),
+    ("평택 S9 라인 있어?", "'S9'은(는) 지금 자료에 없는 라인이에요"), ("KCTC 설비 있어?", "'KCTC'은(는) 지금 자료에서 찾지 못했어요"),
+    ("Inline 설비 몇 대", "'Inline'은(는) 여러 이름에 해당해요: Inline Ox · Inline O2"),
+])
+def test_unknown_name_like_words_are_reported_not_dropped(question, expected):
+    result = ask(question)
+    assert expected in result.summary and "전체 설비는" not in result.summary
+
+
+def test_english_words_are_not_mistaken_for_names():
+    assert recognize("pyeongtaek C4 status", CATALOG).conditions.unresolved == ()
+    assert recognize("show me the status", CATALOG).conditions.unresolved == ()
+
+
+def test_ai_plan_that_drops_the_name_falls_back_to_rules():
+    from test_chat_phrasing import FakeClient, Service
+
+    service = Service(FakeClient({"tool": "search", "names": []}))       # AI가 선택지에 없는 낱말을 버리고 전체 조회로 계획
+    service.data = lambda: DATA
+    assert service.ask("DFB 설비 알아?").summary.startswith("M-C4 DFB 설비는 18대")
+    assert "'c2'은(는) 지금 자료에 없는 모델" in service.ask("c2 설비 알아?").summary
+    assert service.ask("요즘 어때?").summary.startswith("전체 설비는")              # 이름이 없는 질문은 그대로 AI 계획
+
+
+# --- 짧은 모델 이름 · HPA (11/12) ---------------------------------------------------------------------------------
+def test_short_model_name_tells_which_sibling_models_are_excluded():
+    o2 = ask("O2 설비 몇 대야?")
+    assert o2.summary.startswith("M-O2 설비는") and any("Cluster O2 · Inline O2" in n for n in o2.notices)
+    c4 = ask("C4 설비 몇 대야?")
+    assert any("M-C4 DFB · M-C4+" in n for n in c4.notices)
+    assert not any("포함하지 않았어요" in n for n in ask("Inline O2 몇 대").notices)
+
+
+def test_hpa_questions_answer_the_hpa_equipment_itself():
+    result = ask("HPA 설비 몇 대야?")
+    assert result.summary.startswith("HPA 설비는 15대예요") and result.tables[0].title == "HPA 설비"
+    assert ask("평택 HPA 몇 대").summary.startswith("평택 HPA 설비는 15대예요")
+    assert ask("화성 15L HPA 있어?").summary == "화성 15L HPA 설비는 없어요."
+    excluded = ask("HPA 빼고 C4 몇 대")
+    assert excluded.summary.startswith("M-C4 설비는 40대") and any(n.startswith("HPA는 원래") for n in excluded.notices)

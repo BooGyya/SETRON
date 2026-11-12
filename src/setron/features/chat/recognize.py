@@ -7,6 +7,7 @@ AI 없이도 같은 질문은 항상 같은 결과가 나오도록 규칙으로 
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import replace
 from collections.abc import Iterable
 from datetime import date
@@ -35,7 +36,9 @@ _WORDS: dict[Intent, tuple[str, ...]] = {
     Intent.VERSION_INFO: ("최신 버전", "최신버전", "출시일", "릴리즈", "어떤 버전", "버전 목록", "버전별"),
     Intent.SEARCH: ("보여", "목록", "몇 대", "몇대", "대수", "뽑아", "찾아", "어디 있", "어디에 있", "리스트", "현황",
                     "알려", "쓰는 설비", "쓰고 있는", "적용된 설비",
-                    "어때", "어떻게 돼", "어떻게 되", "상태", "상황", "괜찮", "요즘", "전반", "전체적으로", "요약"),
+                    "어때", "어떻게 돼", "어떻게 되", "상태", "상황", "괜찮", "요즘", "전반", "전체적으로", "요약",
+                    "알아?", "알아 ?", "알아요", "아세요", "있어?", "있어 ?", "있나", "있냐", "있니", "있습니까"),   # 'DFB 설비 알아?'
+
 }
 _ORDER = (Intent.SEARCH, Intent.COMPARE, Intent.CHANGE, Intent.CAUSE, Intent.PRIORITY, Intent.FORECAST,
           Intent.VERSION_INFO, Intent.REPORT, Intent.DATA_INFO, Intent.AGGREGATE)
@@ -180,6 +183,9 @@ _KOREAN_DIGITS = {"투": "2", "쓰리": "3", "포": "4", "파이브": "5"}   # '
 _LINE_TOKEN = re.compile(r"(?<![A-Za-z0-9.])((?:P|S|V|M)\d{1,2}F?|\d{1,2}L|NRD|MFAB)(?![A-Za-z0-9._])")  # 'V1.2.1.4'의 V1은 라인이 아니다
 _GROUP_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:M-)?([OC][0-9])(?![0-9])")
 _VERSION = re.compile(r"(?<![\w.])[vV]\d[0-9A-Za-z._\-+]*")   # 영문·숫자·기호만 ('v3.52_20을'의 조사를 붙여 읽지 않게)
+_NAME_LIKE = re.compile(r"(?<![A-Za-z0-9가-힣])[A-Za-z][A-Za-z0-9\-+]{1,9}(?![A-Za-z0-9가-힣])")
+_NAME_STOP = {"ai", "sw", "pm", "ui", "n", "vs", "ok", "excel", "hpa", "fab", "id", "db", "sql", "api", "kpi", "or", "and",
+              "m", "v", "x", "top", "n+1", "n-1", "n-2", "pc", "hw", "fw", "epd", "qa", "mes"}
 _VERSION_SPAN = re.compile(r"(?<![\w.])[vV]\d+[._][0-9A-Za-z._\-+]*")    # 점·밑줄이 있어야 버전 (V1 라인과 구분)
 _DATE = re.compile(r"(20\d\d)[-./](\d{1,2})[-./](\d{1,2})")
 _MONTH = re.compile(r"(?<!\d)(1[0-2]|[1-9])\s*월")
@@ -259,7 +265,7 @@ def _match(text: str, names: Iterable[tuple[str, str]], taken: list[tuple[int, i
         if re.search(r"[가-힣]", alias):                            # 한글 이름: '평택P1F' · '평택에서'처럼 뒤에 무엇이 붙어도 단어
             pattern = r"(?<![가-힣])" + re.escape(alias.casefold())
         else:
-            pattern = r"(?<![A-Za-z0-9])" + re.escape(alias.casefold()) + r"(?![A-Za-z0-9])"
+            pattern = r"(?<![A-Za-z0-9])" + re.escape(alias.casefold()) + r"(?![A-Za-z0-9]|-[A-Za-z0-9])"
         for match in re.finditer(pattern, text):
             span = match.span()
             if any(start < span[1] and span[0] < end for start, end in taken):
@@ -289,6 +295,20 @@ def extract_conditions(question: str, catalog) -> QueryConditions:
     group_aliases = [alias for g in catalog.groups for alias in (
         (g.name, g.name), (g.model_name, g.name), (re.sub(r"^M-", "", g.model_name), g.name),
         (g.model_name.replace("-", ""), g.name))]                 # 'MC4'
+    for g in catalog.groups:                                       # 'M-C4 DFB' → 'C4-DFB' · 'C4_DFB' · 'C4DFB' · 'M-C4-DFB'
+        short = re.sub(r"^M-", "", g.model_name)
+        if " " in short:
+            for joiner in ("-", "_", ""):
+                group_aliases.append((short.replace(" ", joiner), g.name))
+                group_aliases.append((g.model_name.replace(" ", joiner), g.name))
+    suffixes = Counter(re.sub(r"^M-", "", g.model_name).split()[-1].casefold() for g in catalog.groups
+                       if " " in re.sub(r"^M-", "", g.model_name))
+    taken_names = {alias.casefold() for alias, _ in group_aliases}
+    for g in catalog.groups:                                       # 뒷말이 유일하면 'DFB' · 'Prime'만으로도 그 설비군
+        short = re.sub(r"^M-", "", g.model_name)
+        suffix = short.split()[-1] if " " in short else ""
+        if suffix and suffixes[suffix.casefold()] == 1 and suffix.casefold() not in taken_names:
+            group_aliases.append((suffix, g.name))
     for g in catalog.groups:                                       # 한글 발음: '씨4' · '오투'
         short = re.sub(r"^M-", "", g.model_name)
         for sound, letter in _KOREAN_SOUNDS:
@@ -358,9 +378,63 @@ def extract_conditions(question: str, catalog) -> QueryConditions:
             base_date = max(same).isoformat()
         else:
             unresolved.append(month.group(0))
+    for match in _NAME_LIKE.finditer(question):                   # 'DFB' · 'c2' · 'KCTC'처럼 이름처럼 보이는 낱말
+        start, end = match.span()
+        token = match.group(0)
+        if any(s_ < end and start < e_ for s_, e_ in taken) or token.casefold() in _NAME_STOP:
+            continue
+        if _VERSION.fullmatch(token) or _DATE.search(token):
+            continue
+        similar = _similar_names(token, catalog)
+        if len(similar) == 1:                                      # 비슷한 이름이 하나뿐이면 그것으로 본다
+            kind, name = similar[0]
+            target = {"group": groups, "family": families, "line": lines, "site": sites}[kind]
+            if name not in target:
+                target.append(name)
+            taken.append((start, end))
+        elif token.isupper() or any(ch.isdigit() for ch in token) or similar:
+            unresolved.append(token)                               # 소문자 영단어는 비슷한 이름이 있을 때만 (status 등은 그냥 둠)
+            taken.append((start, end))
     return QueryConditions(sites=tuple(sites), lines=tuple(lines), groups=tuple(groups), families=tuple(families),
                            versions=tuple(versions), base_date=base_date, unresolved=tuple(dict.fromkeys(unresolved)),
                            items=tuple(codes))                      # items 칸에 설비 호기를 실어 보낸다 (recognize가 codes로 옮김)
+
+
+def _norm_name(text: str) -> str:
+    return re.sub(r"[\s\-_+()]", "", text).casefold()
+
+
+def similar_names(token: str, catalog) -> list[tuple[str, str]]:
+    """질문 속 낱말과 비슷한 선택지 이름 [(종류, 이름)]. 'DFB' → M-C4 DFB, 'c3' → C3 계열들."""
+    return _similar_names(token, catalog)
+
+
+def _similar_names(token: str, catalog) -> list[tuple[str, str]]:
+    key = _norm_name(token)
+    if len(key) < 2:
+        return []
+    found: list[tuple[str, str]] = []
+    for g in catalog.groups:
+        if key in _norm_name(g.model_name) or key in _norm_name(g.name):
+            found.append(("group", g.name))
+    for f in catalog.families:
+        if key in _norm_name(f.name) and not any(name == f.name for _, name in found):
+            found.append(("family", f.name))
+    for line in catalog.lines:
+        if key == _norm_name(line) or key == _norm_name(re.split(r"\s*\(", line)[0]):
+            found.append(("line", line))
+    for site in catalog.sites:
+        if key == _norm_name(site):
+            found.append(("site", site))
+    if len(found) > 1:                                              # 'C4'가 C4 · C4 DFB · C4+에 다 들어가면 정확히 같은 것만
+        exact = [(kind, name) for kind, name in found if _norm_name(name) == key or _norm_name(re.sub(r"^M-", "", name)) == key]
+        if exact:
+            return exact
+        # 설비군과 그 계열이 같이 잡히면(DFB → M-C4 DFB 설비군, C4 계열은 아님) 설비군만
+        groups_only = [(kind, name) for kind, name in found if kind == "group"]
+        if len(groups_only) == 1:
+            return groups_only
+    return found
 
 
 def _union(*values: Iterable[str]) -> tuple[str, ...]:
