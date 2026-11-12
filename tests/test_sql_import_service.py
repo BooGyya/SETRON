@@ -11,7 +11,7 @@ from sqlalchemy import MetaData, create_engine, event, select
 from sqlalchemy.engine import URL
 
 from setron.features.db_export.service import export_database
-from setron.features.db_import.dump import DUMP_COLUMNS
+from setron.features.db_import.dump import DUMP_COLUMNS, allowed_columns
 from setron.features.db_import.merge import SqlImportError
 from setron.features.db_import.service import SqlImportService
 from setron.features.storage.validation import TABLE_NAMES
@@ -69,7 +69,9 @@ def seed(target, rows):
     with engine.begin() as connection:
         for name in TABLE_NAMES:
             if name in rows:
-                values = [dict(zip(DUMP_COLUMNS[name], row, strict=True)) for row in rows[name]]
+                # 행 길이로 형식을 고른다: 지금 형식(item.jira_code 포함) 또는 그 칸이 없던 예전 형식(11/12)
+                values = [dict(zip(next(c for c in allowed_columns(name) if len(c) == len(row)), row, strict=True))
+                          for row in rows[name]]
                 connection.execute(tables[name].insert(), values)
 
 
@@ -237,3 +239,17 @@ def test_mysql_export_and_merge_round_trip(schema_database, tmp_path):  # noqa: 
 
     service.apply(service.preview(path, "overwrite"))
     assert current(target) == original
+
+
+def test_item_jira_code_merges_from_new_exports_and_old_exports_leave_it_empty(target, tmp_path):
+    """11/12 item.jira_code: 대상 DB에 칸이 있을 때, 새 내보내기의 Jira는 들어오고 예전 내보내기(칸 없음)도 가져와진다."""
+    for name, row, expected in (("new", (13, None, 7, "파일 Item", 1, None, "[]", "ETOJ-1793"), "ETOJ-1793"),
+                                ("old", (14, None, 8, "예전 Item", 1, None, "[]"), None)):
+        incoming = bundle(day=3 if name == "new" else 4)
+        incoming["item"] = [row]
+        path = tmp_path / f"{name}.sql"
+        path.write_text(_export(incoming), encoding="utf-8")
+        service = target[2]
+        service.apply(service.preview(path, "add"))
+        stored = {item["content"]: item.get("jira_code") for item in current(target)["item"]}
+        assert stored[row[3]] == expected

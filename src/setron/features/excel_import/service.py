@@ -52,7 +52,7 @@ REQUIRED = {
 MAX_LENGTH = {
     "site": 50, "line": 50, "group_name": 50, "model_name": 255, "equipment_code": 50,
     "pm_name": 50, "family_name": 50, "version_raw": 100,
-    "ui_type": 20, "structure_type": 50, "geometry_type": 50, "modification_type": 100,
+    "ui_type": 20, "structure_type": 50, "geometry_type": 50, "modification_type": 100, "jira_code": 200,
 }
 DATE_FIELDS = ("base_date", "release_date")
 CONTEXT_FIELDS = ("group_name", "model_name", "family_name", "ui_type", "structure_type")
