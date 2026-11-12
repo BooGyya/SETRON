@@ -9,9 +9,11 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.version.groups import VersionGroups
 from setron.ui.dashboard_data import DashboardSource, GroupBinding
 from setron.ui.dashboard_demo import demo_dashboard_source
+from setron.ui.heatmap_data import EquipmentTile, GoalState
+from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups
 from setron.ui.query_state import QuerySelection, QueryState, TargetN, VersionFilter
 from setron.ui.replay_data import (
-    ReplayRequest, group_completion, group_view, interval_days, load_replay, replay_detail,
+    ReplayRequest, group_completion, group_view, interval_days, load_replay, replay_detail, replay_trends,
 )
 from setron.ui.target_data import initial_targets
 
@@ -134,6 +136,37 @@ def test_group_view_and_completion_count_selected_groups_only():
     assert both.compliant >= only.compliant
     done, judged = group_completion(c3)
     assert 0 <= done <= judged <= len(c3.equipment_ids)
+
+
+def test_subline_groups_include_only_actual_detail_lines_and_leave_other_groupings_complete():
+    lines = ("P1F", "P1D", "P4H", "P4D", "S3", "5L", None, "13L")
+    tiles = tuple(EquipmentTile(index, f"EQ-{index}", "site", "사업장", "",
+                                GoalState.EXCLUDED if index == 8 else GoalState.MET,
+                                RiskStatus.NO_RISK, (), False, False, line_label=line)
+                  for index, line in enumerate(lines, start=1))
+    groups = (("c3", "C3", tuple(range(1, 9))),)
+    nodes = build_heatmap_groups(tiles, groups, mode="subline", show_hpa=True)
+    assert {node.title for node in nodes} == {"P1F", "P1D", "P4H", "P4D"}
+    assert {tile.equipment_id for node in nodes for tile in node.tiles} == {1, 2, 3, 4}
+    for mode, _ in GROUPING_MODES:
+        if mode != "subline":
+            nodes = build_heatmap_groups(tiles, groups, mode=mode, show_hpa=True)
+            assert {tile.equipment_id for node in nodes for tile in node.tiles} == set(range(1, 9))
+
+
+def test_replay_subline_trends_exclude_parent_only_lines_without_changing_snapshot_totals():
+    source = demo_dashboard_source()
+    data = load_replay(source, request(source))
+    equipment_ids = tuple(tile.equipment_id for tile in data.frames[0].tiles[:6])
+    labels = dict(zip(equipment_ids, ("P1F", "P1D", "P4H", "P4D", "S3", "5L")))
+    frames = tuple(replace(frame, tiles=tuple(replace(tile, line_label=labels.get(tile.equipment_id))
+                                              for tile in frame.tiles)) for frame in data.frames)
+    before = tuple(frame.snapshot.summary for frame in frames)
+    trends = replay_trends(data, frames, grouping="subline")
+    assert {trend.label for trend in trends} == {"P1F", "P1D", "P4H", "P4D"}
+    assert all(summary.equipment_count == 1 for trend in trends for summary in trend.summaries)
+    assert tuple(frame.snapshot.summary for frame in frames) == before
+    assert len(replay_trends(data, data.frames, grouping="subline")) == 0
 
 
 def test_single_actual_date_can_be_viewed_but_cannot_play():

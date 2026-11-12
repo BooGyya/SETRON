@@ -79,6 +79,11 @@ def _position(tile):
     return _Position(tile.site_key or "", tile.site_label or "Site 미지정", fab_key, fab_label, line, subline)
 
 
+def tiles_for_grouping(tiles, mode):
+    """세부라인 보기는 실제 세부 구분이 있는 설비만 표시한다."""
+    return tuple(tile for tile in tiles if mode != "subline" or _position(tile).subline is not None)
+
+
 def _natural(value):
     return tuple(int(part) if part.isdigit() else part.casefold()
                  for part in re.split(r"(\d+)", value or ""))
@@ -107,7 +112,7 @@ def build_heatmap_groups(tiles, groups, *, mode="group", site_order=(), show_hpa
     """
     if mode not in dict(GROUPING_MODES):
         raise ValueError("지원하지 않는 히트맵 그룹 기준입니다.")
-    tiles = _unique(tiles)
+    tiles = tiles_for_grouping(_unique(tiles), mode)
     models = tuple((str(key), name, frozenset(ids)) for key, name, ids in groups)
     positions = {tile.equipment_id: _position(tile) for tile in tiles}
     sites = {key: index for index, key in enumerate(site_order)}
@@ -205,7 +210,7 @@ def build_heatmap_groups(tiles, groups, *, mode="group", site_order=(), show_hpa
             selected = tuple(bucket)
             position = positions[selected[0].equipment_id]
             node_key = ("subline", *key)
-            nodes.append(HeatmapGroupNode(node_key, _location_title(position, position.subline or position.line),
+            nodes.append(HeatmapGroupNode(node_key, position.subline,
                                          selected, model_nodes(selected, node_key)))
         result = tuple(nodes)
     else:

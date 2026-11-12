@@ -723,17 +723,26 @@ def test_replay_ticks_do_not_jump_scroll_or_leave_a_detail_from_another_date(own
     page.view_tabs.setCurrentIndex(1)
     QTest.qWait(100)
     bar = window.scroll.verticalScrollBar()
-    bar.setValue(450)
+    until(lambda: bar.maximum() > 0 and all(
+        card.height() >= card.minimumSizeHint().height()
+        and card.scroll.viewport().height() >= card.scroll.widget().height()
+        for card in page.heatmap.group_cards))
+    position = min(450, bar.maximum() // 2)
+    assert position > 0
+    bar.setValue(position)
+    assert bar.value() == position
     assert page.play()
     QTest.qWait(100)
-    assert bar.value() == 450
+    assert bar.value() == position
     page.advance()
     QTest.qWait(100)
-    assert bar.value() == 450
+    assert bar.value() == position
     page.pause()
     assert page.open_equipment(1)
+    assert page.drawer.request.base_date == page.frame.snapshot.base_date
     page.restart()
-    assert not page.drawer.isVisibleTo(window)
+    assert not page.drawer.is_open and page.drawer.request is None
+    until(lambda: not page.drawer.isVisibleTo(window))
 
 
 def test_chart_breaks_lines_at_unknown_dates_and_clear_removes_previous_values(own):

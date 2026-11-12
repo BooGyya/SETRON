@@ -18,7 +18,7 @@ from setron.ui.dashboard_data import RiskRuleState
 from setron.ui.equipment import ignore_width
 from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
-from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups, group_families
+from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups, group_families, tiles_for_grouping
 from setron.ui.heatmap_list import HeatmapListModel, HeatmapTreeView
 from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
 from setron.ui.view_controls import SegmentedControl
@@ -733,30 +733,32 @@ class HeatmapPage(QWidget):
         scoped = tuple(t for t in self.tiles if not below_only or t.goal is GoalState.BELOW)
         risk_filtered = tuple(t for t in scoped if not risk_only or t.risk is RiskStatus.RISK)
         filtered = tuple(t for t in risk_filtered if self._matches(t, text))
-        self.visible_ids = tuple(dict.fromkeys(t.equipment_id for t in filtered))
+        grouping_filtered = tiles_for_grouping(filtered, self.grouping_mode)
+        self.visible_ids = tuple(dict.fromkeys(t.equipment_id for t in grouping_filtered))
         self.view_count.setText("표시할 조회 결과가 없습니다." if self.snapshot is None else
                                 f"{'목표 미달' if below_only else '전체'}{' · 위험 후보' if risk_only else ''}{' · 검색 적용' if text else ''}"
-                                f" · 표시 {len(filtered)}대 / 선택 범위 {len(self.tiles)}대 · 요약은 선택 범위 전체 기준")
-        self.message.setVisible(not filtered)
+                                f" · 표시 {len(grouping_filtered)}대 / 선택 범위 {len(self.tiles)}대 · 요약은 선택 범위 전체 기준")
+        self.message.setVisible(not grouping_filtered)
         if self.snapshot is not None:
             self.message.setText("선택한 설비군이 없습니다. 위 설비군 버튼에서 하나 이상 골라 주세요."
                                  if self._selected_groups == frozenset() else
                                  "조건에 맞는 설비가 없습니다. 날짜나 필터를 다시 선택해 주세요." if not self.tiles else
                                  "목표 미달 설비가 없습니다." if not scoped else
                                  "위험 후보가 없습니다. '위험 후보'를 해제해 주세요." if not risk_filtered else
+                                 "표시할 세부라인이 없습니다." if filtered and not grouping_filtered else
                                  f"'{self.search.text().strip()}' 검색 결과가 없습니다. 검색어를 지우면 전체 설비가 보입니다.")
-        self.list_table.setVisible(list_mode and bool(filtered))
+        self.list_table.setVisible(list_mode and bool(grouping_filtered))
         self.tile_host.setVisible(not list_mode)
         plan = ()
-        if filtered and self.snapshot is not None:
-            plan = build_heatmap_groups(filtered, self._display_groups, mode=self.grouping_mode,
+        if grouping_filtered and self.snapshot is not None:
+            plan = build_heatmap_groups(grouping_filtered, self._display_groups, mode=self.grouping_mode,
                                         site_order=tuple(site.key for site in self.source.catalog.sites),
                                         show_hpa=list_mode or self.hpa_button.isChecked())
         if list_mode:
             if self.snapshot is None:
                 self._card_entries = {}
                 self._sync_card_rows(())
-            self._render_list(filtered, plan)
+            self._render_list(grouping_filtered, plan)
             return
         previous_cards = self._card_entries
         self._card_entries = {}

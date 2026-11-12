@@ -419,7 +419,9 @@ def test_horizontal_filters_and_equal_display_button_heights_at_wide_and_narrow_
     assert unknown.data(Qt.ItemDataRole.DisplayRole) == "정보 부족"
     assert "버전 값이 비어 있습니다." in unknown.data(Qt.ItemDataRole.ToolTipRole)
     for column in range(model.columnCount()):
-        assert model.equipment_index(1).siblingAtColumn(column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+        expected_alignment = (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                              if column == 0 else Qt.AlignmentFlag.AlignCenter)
+        assert model.equipment_index(1).siblingAtColumn(column).data(Qt.ItemDataRole.TextAlignmentRole) == expected_alignment
     assert model.index(0, 0).data(model.GROUP_ROLE)
     assert model.index(0, 0).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 
@@ -537,11 +539,17 @@ def test_each_grouping_supports_tree_projection_filter_changes_and_compact_colum
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     snapshot = page.snapshot
+    expected_ids = {1, 2, 3, 4, 5}
+    if mode == "subline":
+        lines = {1: "P1F", 2: "P1D", 3: "P4H", 4: "P4D", 5: "S3"}
+        page.present_snapshot(snapshot, tiles=tuple(replace(tile, line_label=lines[tile.equipment_id])
+                                                    for tile in page.tiles))
+        expected_ids.remove(5)  # 상위 라인만 있는 설비는 세부라인 보기에 섞이지 않는다.
     page.set_grouping(mode)
     page.layout_buttons.button(1).click()
     table, model = page.list_table, page.list_model
     assert model.rowCount() and model.index(0, 0).data(model.GROUP_ROLE)
-    assert set(model.ids) == {1, 2, 3, 4, 5}
+    assert set(model.ids) == expected_ids
     projections = {(index.siblingAtColumn(2).data(), index.siblingAtColumn(3).data())
                    for index in equipment_indexes(model, 1)}
     assert projections == {("O2", "v99\nv2"), ("O3", "v2")}
@@ -549,15 +557,35 @@ def test_each_grouping_supports_tree_projection_filter_changes_and_compact_colum
     table.setExpanded(first, False)
     page._render_tiles()
     assert not table.isExpanded(model.index(0, 0))
-    for text, ids in (("TEST-1", {1}), ("TEST-2", {2}), ("", {1, 2, 3, 4, 5})):
+    for text, ids in (("TEST-1", {1}), ("TEST-2", {2}), ("", expected_ids)):
         page.search.setText(text)
         assert set(model.ids) == ids
         assert page.snapshot is snapshot
     page.view_toggle.setChecked(False)
     assert [column for column in range(model.columnCount()) if not table.isColumnHidden(column)] == [0, 3, 4]
     page.layout_buttons.button(0).click()
-    assert set(page.tile_buttons) == {1, 2, 3, 4, 5}
+    assert set(page.tile_buttons) == expected_ids
     assert all((tile.width(), tile.height()) == (140, 40) for tile in page.tile_occurrences)
+
+
+def test_subline_without_detail_lines_clears_previous_cards_and_list_and_explains_empty_scope(window):
+    window.query_panel.apply_draft()
+    page = window.pages["heatmap"]
+    snapshot = page.snapshot
+    assert page.tile_buttons
+    page.set_grouping("subline")
+    for layout in (0, 1):
+        page.layout_buttons.button(layout).click()
+        assert page.visible_ids == () and not page.tile_buttons and not page.group_cards
+        if layout:
+            assert page.list_model.rowCount() == 0
+        else:
+            assert not page.tile_occurrences
+        assert page.message.isVisible() and page.message.text() == "표시할 세부라인이 없습니다."
+        assert page.list_table.isHidden() and page.snapshot is snapshot
+    page.set_grouping("line")
+    assert set(page.list_model.ids) == {1, 2, 3, 4, 5}
+    assert page.message.isHidden() and page.snapshot is snapshot
 
 
 def test_same_structure_preserves_cards_cells_and_scroll_while_only_changed_tiles_are_restyled(window, source):

@@ -1240,6 +1240,8 @@ class ItemsPage(QWidget):
             self.hpa_badge.setText(f"HPA 제외 {summary.hpa_excluded}대")
             self.summary.minimum_width = max(badge.sizeHint().width() for badge in self.summary.widgets)
         self.summary.setVisible(summary is not None)
+        self.filter_row.setVisible(summary is not None)
+        self.application_toolbar.setVisible(summary is not None)
         self.no_data_notice.setVisible(summary is None)
         self.no_data_reason.setText(
             "설비 관측 자료가 없어 설비별 적용 여부를 판단할 수 없습니다. 위험 기준 등록은 그대로 할 수 있습니다."

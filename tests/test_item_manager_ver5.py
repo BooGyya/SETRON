@@ -344,6 +344,8 @@ def test_full_detail_without_observations_shows_one_notice_and_no_filters(app, d
     page.open_row(0)
     assert not page.no_data_notice.isHidden() and "설비 관측 자료가 없어" in page.no_data_reason.text()
     assert page.summary.isHidden() and page.filter_row.isHidden() and page.equipment_empty.isHidden()
+    assert page.application_toolbar.isHidden() and page.site_filter.isHidden() and page.state_filter.isHidden()
+    assert page.item_facts.isVisible() and "포함 릴리즈" in page.item_facts.text()
     assert not hasattr(page, "observation_note") and page.application_details.isVisible()
     window.close()
 
