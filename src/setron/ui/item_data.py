@@ -6,7 +6,8 @@ from datetime import date
 from setron.features.aggregation.schemas import EquipmentRecord
 from setron.features.item.schemas import Application, BASIS_LABELS, TargetScope
 from setron.features.item.service import ItemCatalog, search_items
-from setron.ui.item_original import jira_by_item
+from setron.features.item.jira import split_codes
+from setron.ui.item_original import JIRA_FOUND, ItemJira, jira_by_item
 from setron.ui.version_data import VersionCatalog
 
 
@@ -54,18 +55,23 @@ class ItemManagerData:
         by_id = {e.item.item_id: e for e in entries}
         result = [by_id[i.item_id] for i in found]
         needle = "".join(query.split()).casefold()
-        if needle and self.versions.original_rows:
+        if needle and (self.versions.original_rows or any(e.item.jira_code for e in entries)):
             # 릴리즈노트 원본에 적힌 Jira 코드로도 찾는다. 원본에 없는 코드는 만들지 않는다.
             matched = {e.item.item_id for e in result}
-            jira = jira_by_item(self.versions.original_rows, by_id)
+            jira = self.jira(by_id)
             result.extend(e for e in entries if e.item.item_id not in matched
                           and any(needle in code.casefold() for code in jira[e.item.item_id].codes))
         return tuple(result)
 
     def jira(self, item_ids=None):
-        """Item별 원본 Jira 코드. 보관 원본이 없으면 미확인으로 돌려준다."""
-        ids = [e.item.item_id for e in self.versions.items] if item_ids is None else item_ids
-        return jira_by_item(self.versions.original_rows, ids)
+        """Item별 Jira 코드. 저장된 값(11/12)을 먼저 쓰고, 없으면 보관 원본 행에서 읽는다. 둘 다 없으면 미확인."""
+        ids = [e.item.item_id for e in self.versions.items] if item_ids is None else list(item_ids)
+        stored = {e.item.item_id: e.item.jira_code for e in self.versions.items
+                  if e.item.item_id in set(ids) and getattr(e.item, "jira_code", None)}
+        result = jira_by_item(self.versions.original_rows, [i for i in ids if i not in stored])
+        for item_id, codes in stored.items():
+            result[item_id] = ItemJira(split_codes(codes), JIRA_FOUND, ("저장된 Jira 코드",))
+        return result
 
     def catalog(self):
         return ItemCatalog(self.versions.families(), self.versions.version_items)

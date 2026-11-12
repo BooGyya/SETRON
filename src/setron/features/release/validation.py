@@ -12,6 +12,8 @@ from .schemas import ItemInput, ItemLinkInput, ReleaseInput
 
 RELEASE_EDITABLE = frozenset({"version_raw", "version_suffix", "released_at", "version_order", "item_mapping_status"})
 ITEM_EDITABLE = frozenset({"item_no", "content"})
+# 수정 기록 · 저장 후 수정으로 받을 수 있는 Item 필드. Jira(11/12)는 다시 가져오기의 충돌 비교(ITEM_EDITABLE)에는 넣지 않는다.
+ITEM_EDIT_RECORDED = ITEM_EDITABLE | {"jira_code"}
 
 
 def optional_integer(value, field):
@@ -81,11 +83,19 @@ def prepare_record(value):
         if field in values and values[field] is not None:
             identifier(values[field], field)
     validate_values(table, values)
-    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDITABLE
+    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDIT_RECORDED
     names = value.edited_fields
     require(isinstance(names, tuple) and all(isinstance(name, str) for name in names), "수정 항목은 필드명 튜플이어야 합니다.")
     require(len(set(names)) == len(names) and set(names) <= editable, "수정 항목에 중복되거나 편집할 수 없는 필드가 있습니다.")
     values["edited_fields"] = list(names)
+    if table == "item":
+        # Jira 칸은 11/12에 더했다. 값이 없으면 넣지 않아 칸을 아직 못 더한 DB에도 그대로 저장된다.
+        jira = values.get("jira_code")
+        if jira is None or not str(jira).strip():
+            values.pop("jira_code", None)
+        else:
+            require(isinstance(jira, str) and len(jira) <= 200, "Jira 코드는 200자 이하 문자열이어야 합니다.")
+            values["jira_code"] = jira.strip()
     values["source_reference"] = merge_sources(value.source_reference)
     return values
 
@@ -104,7 +114,7 @@ def prepare_changes(table, current, changes):
     raises
     - StorageValidationError: 원본 정보·식별자를 수정하거나 변경값이 잘못된 경우.
     """
-    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDITABLE
+    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDIT_RECORDED
     require(isinstance(changes, dict) and set(changes) <= editable, "편집할 수 없는 필드가 포함됐습니다.")
     result = deepcopy(changes)
     combined = {**current, **result}

@@ -21,7 +21,8 @@ DUMP_COLUMNS: dict[str, tuple[str, ...]] = {
         "release_version_id", "release_note_id", "family_id", "version_raw", "version_suffix", "released_at",
         "version_order", "item_mapping_status", "batch_id", "source_reference", "edited_fields",
     ),
-    "item": ("item_id", "release_note_id", "item_no", "content", "batch_id", "source_reference", "edited_fields"),
+    "item": ("item_id", "release_note_id", "item_no", "content", "batch_id", "source_reference", "edited_fields",
+             "jira_code"),
     "equipment_snapshot": (
         "snapshot_id", "equipment_id", "base_date", "site", "line", "model_name", "group_id", "production_area",
         "structure_type", "geometry_type", "modification_type", "batch_id", "source_reference",
@@ -115,8 +116,7 @@ def _read_file(source: TextIO) -> dict[str, tuple[dict[str, object], ...]]:
     tables = {}
     for table in TABLE_NAMES:
         count = _read_count(source.readline(), table)
-        columns = DUMP_COLUMNS[table]
-        _skip_table_definition(source, table, columns)
+        columns = _skip_table_definition(source, table, DUMP_COLUMNS[table])
         rows = _read_rows(source, table, columns, count, legacy)
         tables[table] = tuple(rows)
         _expect(source, "\n")
@@ -140,15 +140,28 @@ def _read_count(line: str, name: str) -> int:
     return int(match[2])
 
 
-def _skip_table_definition(source: TextIO, table: str, columns: tuple[str, ...]) -> None:
+# 나중에 더한 칸(11/12 item.jira_code). 이 칸이 있는 내보내기와 없는 예전 내보내기를 모두 읽는다.
+OPTIONAL_TRAILING: dict[str, tuple[str, ...]] = {"item": ("jira_code",)}
+
+
+def allowed_columns(table: str) -> tuple[tuple[str, ...], ...]:
+    """이 표로 읽을 수 있는 칸 순서들: 지금 형식, 그리고 나중에 더한 칸이 없는 예전 형식."""
+    columns = DUMP_COLUMNS[table]
+    older = tuple(name for name in columns if name not in OPTIONAL_TRAILING.get(table, ()))
+    return (columns,) if older == columns else (columns, older)
+
+
+def _skip_table_definition(source: TextIO, table: str, columns: tuple[str, ...]) -> tuple[str, ...]:
+    """CREATE TABLE의 칸 목록을 확인하고, 이 파일이 실제로 쓰는 칸 순서를 돌려준다."""
     _expect(source, f"CREATE TABLE `{table}` (\n")
     found = []
+    allowed = allowed_columns(table)
     for line in source:
         if column := _DDL_COLUMN.match(line):
             found.append(column[1])
         elif line.startswith(") ENGINE=InnoDB ") and line.endswith(";\n"):
-            if tuple(found) == columns:
-                return
+            if tuple(found) in allowed:
+                return tuple(found)
             break
         elif not line.startswith(_DDL_CONSTRAINTS):
             break

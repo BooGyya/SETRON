@@ -67,11 +67,11 @@ SOFTWARE_FIELDS = ("family_name", "version_raw", "ui_type")
 PM_FIELDS = ("pm_name", "model_name")
 RELEASE_FIELDS = ("version_raw", "release_date", "family_name", "model_name", "group_name", "ui_type",
                   "production_area", "version_order", "version_suffix", "item_mapping_status")
-ITEM_FIELDS = ("item_no", "content")
+ITEM_FIELDS = ("item_no", "content", "jira_code")
 # 검토 화면에서 고친 항목 중 DB 수정 표시(edited_fields)에 남길 수 있는 것과 그 열 이름.
 RELEASE_EDITED = {"version_raw": "version_raw", "release_date": "released_at", "version_suffix": "version_suffix",
                   "version_order": "version_order", "item_mapping_status": "item_mapping_status"}
-ITEM_EDITED = {"item_no": "item_no", "content": "content"}
+ITEM_EDITED = {"item_no": "item_no", "content": "content", "jira_code": "jira_code"}
 
 TARGET_LABEL = "MySQL DB"
 
@@ -598,12 +598,14 @@ class DatabaseImportSaver:
                     previous = items[index]
                     items[index] = replace(previous,
                         source_reference=merge_sources(previous.source_reference, _sources(row, ITEM_FIELDS)),
-                        edited_fields=tuple(dict.fromkeys((*previous.edited_fields, *_edited(row, ITEM_EDITED)))))
+                        edited_fields=tuple(dict.fromkeys((*previous.edited_fields, *_edited(row, ITEM_EDITED)))),
+                        jira_code=previous.jira_code or row.values.get("jira_code") or None)
                     continue
                 seen[key] = len(items)
                 items.append(ItemInput(content=content, batch_id=batch_id, item_no=row.values.get("item_no"),
                                        source_reference=_sources(row, ITEM_FIELDS),
-                                       edited_fields=_edited(row, ITEM_EDITED)))
+                                       edited_fields=_edited(row, ITEM_EDITED),
+                                       jira_code=row.values.get("jira_code") or None))
             result.append((release, tuple(items)))
         return result
 

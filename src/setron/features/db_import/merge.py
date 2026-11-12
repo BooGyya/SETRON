@@ -12,7 +12,7 @@ from sqlalchemy import Date, DateTime
 
 from setron.features.storage.validation import JSON_COLUMNS, TABLE_NAMES, decode_record, encode_record
 
-from .dump import DUMP_COLUMNS
+from .dump import DUMP_COLUMNS, OPTIONAL_TRAILING, allowed_columns
 from .group_settings import group_history_prune
 from .references import ReferenceConflict, rewrite_json
 
@@ -82,6 +82,11 @@ def fingerprint(rows, next_ids):
 
 def _normalized(table, row, repository):
     values = dict(row)
+    for name in OPTIONAL_TRAILING.get(table.name, ()):          # 예전 내보내기 → 대상 DB에 더한 칸은 빈 값(11/12)
+        if name in table.columns and name not in values:
+            values[name] = None
+        if name not in table.columns:                          # 칸을 아직 못 더한 DB → 내보내기의 값은 쓰지 않는다
+            values.pop(name, None)
     for column in table.columns:
         value = values[column.name]
         if isinstance(value, str):
@@ -134,7 +139,8 @@ class _Planner:
     def __init__(self, source, target, next_ids, repository, mode):
         self.target, self.next_ids, self.mode = target, next_ids, mode
         self.tables = {name: repository.table(name) for name in TABLE_NAMES}
-        if any(set(table.columns.keys()) != set(DUMP_COLUMNS[name]) for name, table in self.tables.items()):
+        if any(set(table.columns.keys()) not in [set(columns) for columns in allowed_columns(name)]
+               for name, table in self.tables.items()):
             raise SqlImportError("대상 DB의 테이블 구조와 지원하는 SETRON 백업 형식이 다릅니다.")
         self.primary = {name: tuple(table.primary_key.columns.keys()) for name, table in self.tables.items()}
         self.foreign = {name: tuple(sorted((fk.parent.name, fk.column.table.name, fk.column.name)

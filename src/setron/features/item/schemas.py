@@ -84,6 +84,7 @@ class Item:
     item_id: int
     item_no: int | None
     content: str
+    jira_code: str | None = None        # 저장된 Item별 Jira 코드(11/12). 없으면 원본 행에서 읽는다
 
 
 @dataclass(frozen=True)

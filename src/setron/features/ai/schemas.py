@@ -66,7 +66,7 @@ EQUIPMENT_STATUS_FIELDS = (
     "engine_version", "epd_version",
 )
 RELEASE_NOTE_FIELDS = (
-    "version_raw", "release_date", "item_no", "content", "target_models",
+    "version_raw", "release_date", "item_no", "content", "jira_code", "target_models",
     "group_name", "model_name", "family_name", "ui_type", "structure_type",
     "modification_type", "modification_mark", "production_area", "version_order", "version_suffix", "item_mapping_status",
 )
