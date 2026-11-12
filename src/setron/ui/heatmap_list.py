@@ -213,7 +213,9 @@ class HeatmapTreeView(QTreeView):
             self.setColumnWidth(column, width)
         self.setStyleSheet("QTreeView {background:white;border:0;selection-background-color:#edf0fd;selection-color:#18243c;}"
                            "QHeaderView {background:#f7f9fc;}"
-                           "QHeaderView::section {background:#f7f9fc;color:#5b6880;border:0;padding:8px;}"
+                           "QHeaderView::section {background:#f7f9fc;color:#5b6880;border:0;"
+                           "border-right:1px solid #e3e8ef;padding:8px;}"
+                           "QHeaderView::section:last {border-right:0;}"
                            "QTreeView::item {padding:8px;border:0;}"
                            f"QTreeView:focus {{border:1px solid {PRIMARY};}}")
         self.collapsed.connect(lambda index: self._remember_expansion(index, False))

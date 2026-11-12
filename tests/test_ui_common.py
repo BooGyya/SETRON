@@ -67,9 +67,13 @@ def test_sidebar_removes_standalone_history_menu(window):
     assert not any(menu.key == "history" for menu in MENUS)
     assert not any(nav.accessibleName() == "이력 조회" for nav in window.nav.values())
     assert window.findChild(QWidget, "nav_history") is None
-    assert {"versions", "management", "reports", "settings"} <= window.nav.keys()
+    assert {"versions", "reports", "settings"} <= window.nav.keys()
+    assert "management" not in window.nav
+    assert window.findChild(QWidget, "nav_management") is None
     with pytest.raises(ValueError, match="알 수 없는"):
         window.navigate("history")
+    with pytest.raises(ValueError, match="알 수 없는"):
+        window.navigate("management")
 
 
 @pytest.mark.parametrize("route,title", [("replay", "버전 리플레이"), ("export", "데이터 내보내기"),

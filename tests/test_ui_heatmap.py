@@ -454,9 +454,17 @@ def test_compact_list_hides_detail_columns_and_keeps_row_selection(window):
         window.resize(*size)
         QTest.qWait(45)
         assert window.scroll.horizontalScrollBar().maximum() == 0
-        assert table.header().length() >= table.viewport().width()
+        assert table.width() == page.controls_host.width()
+        assert table.header().viewport().width() == table.viewport().width()
+        assert table.header().sectionViewportPosition(3) == table.columnWidth(0)
+        assert table.header().sectionViewportPosition(4) == table.columnWidth(0) + table.columnWidth(3)
+        assert table.columnWidth(3) <= 200 and table.columnWidth(4) <= 140
         if table.header().length() > table.viewport().width():
             assert table.horizontalScrollBar().maximum() > 0
+        else:
+            assert table.horizontalScrollBar().maximum() == 0
+        if size[0] == 1600:
+            assert table.header().length() < table.viewport().width()
         assert table.selectionModel().selectedRows(0)[0].data(Qt.ItemDataRole.UserRole) == 1
 
     table.setFocus()
