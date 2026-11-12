@@ -272,7 +272,8 @@ def test_existing_mixed_history_explains_conflict_and_clears_previous_views(wind
     assert all(metric.value.text() == "—" for metric in heatmap.metrics.values())
     assert equipment.snapshot is None and equipment.data is None and not equipment.model.ids
     assert not window.header.actions["equipment_list"].isEnabled()
-    assert "결과를 계산한 뒤 분석" in ai.facts_label.text()
+    assert ai.facts_provider() is None and ai._current_snapshot() is None
+    assert "대시보드" in ai.facts_label.text() and "분석" in ai.facts_label.text()
 
     assert ai.analyze()
     for _ in range(300):

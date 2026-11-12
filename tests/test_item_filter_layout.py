@@ -9,6 +9,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QStyleOptionViewItem
 
 from setron.ui.app import create_window
+from setron.ui.appearance import manager
 from setron.ui.version_data import ModelFamily
 
 from test_ui_items import app, data
@@ -87,25 +88,35 @@ def test_toolbar_is_one_row_with_search_on_the_right(window, width):
 
 def test_dropdown_and_popup_typography_matches_search(window):
     page = window.pages["items"]
-    expected = page.search.font()
     page.result_buttons[1].click()
-    for combo in (page.family_combo, page.site_filter, page.state_filter, page.distribution_view):
-        window.scroll.ensureWidgetVisible(combo)
-        combo.showPopup()
-        QTest.qWait(20)
-        assert combo.view().window().isVisible()
-        for widget in (combo, combo.view()):
-            actual = widget.font()
-            assert actual.family() == expected.family() and actual.pixelSize() == expected.pixelSize()
-            assert actual.weight() == expected.weight() == QFont.Weight.Normal
-            assert widget.property("setronBaseFont").pixelSize() == 14
-        for row in range(combo.count()):
-            option = QStyleOptionViewItem()
-            option.initFrom(combo.view())
-            combo.itemDelegate().initStyleOption(option, combo.model().index(row, combo.modelColumn()))
-            assert option.font.family() == expected.family() and option.font.pixelSize() == expected.pixelSize()
-            assert option.font.weight() == QFont.Weight.Normal
-        combo.hidePopup()
+    assert page.distribution_view.isHidden()
+    controller = manager()
+    previous = controller.appearance
+    try:
+        for size in ("small", "normal", "large"):
+            controller.apply(replace(previous, font_size=size))
+            expected = page.search.font()
+            assert expected.pixelSize() == round(14 * controller.appearance.font_scale)
+            for combo in (page.family_combo, page.site_filter, page.state_filter):
+                window.scroll.ensureWidgetVisible(combo)
+                combo.showPopup()
+                QTest.qWait(20)
+                try:
+                    assert combo.view().window().isVisible()
+                    for widget in (combo, combo.view()):
+                        actual = widget.font()
+                        assert actual.family() == expected.family() and actual.pixelSize() == expected.pixelSize()
+                        assert actual.weight() == expected.weight() == QFont.Weight.Normal
+                    for row in range(combo.count()):
+                        option = QStyleOptionViewItem()
+                        option.initFrom(combo.view())
+                        combo.itemDelegate().initStyleOption(option, combo.model().index(row, combo.modelColumn()))
+                        assert option.font.family() == expected.family() and option.font.pixelSize() == expected.pixelSize()
+                        assert option.font.weight() == QFont.Weight.Normal
+                finally:
+                    combo.hidePopup()
+    finally:
+        controller.apply(previous)
 
 
 def test_toolbar_wraps_search_below_on_narrow_width_without_clipping(app, data):

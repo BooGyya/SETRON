@@ -135,7 +135,9 @@ def test_loading_responsive_and_duplicate_blocked(context):
     assert slow.thread != get_ident()
     assert page.read_request.busy and not page.refresh.isEnabled()
     assert "불러오는 중" in page.status.text() and result(page) is None
-    assert "완료 후" in page.count.text() and "0건" not in page.count.text()
+    loading_count = ("조회 중 · 결과 건수는 완료 후 표시합니다." if isinstance(page, VersionsPage)
+                     else "검색 결과 확인 중")
+    assert page.count.text() == loading_count and "0건" not in page.count.text()
     tick = []
     QTimer.singleShot(0, lambda: tick.append(get_ident()))
     wait_until(lambda: bool(tick))

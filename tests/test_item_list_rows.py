@@ -6,6 +6,7 @@ import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PySide6.QtGui import QBrush
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
 
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
 from setron.features.version.schemas import ReleaseVersion
@@ -275,11 +276,16 @@ def test_open_row_shows_application_toolbar_and_preserves_original_multiline_con
 def test_application_dropdown_arrows_open_popups_and_apply_selection(window):
     page = window.pages["items"]
     page.result_buttons[1].click()
-    for combo in (page.site_filter, page.state_filter, page.distribution_view):
-        assert "caret-down.svg" in combo.styleSheet() and "QComboBox::down-arrow" in combo.styleSheet()
+    assert page.distribution_view.isHidden()
+    for combo in (page.site_filter, page.state_filter):
         window.scroll.ensureWidgetVisible(combo)
         QTest.qWait(30)
-        QTest.mouseClick(combo, Qt.MouseButton.LeftButton, pos=QPoint(combo.width() - 14, combo.height() // 2))
+        option = QStyleOptionComboBox()
+        combo.initStyleOption(option)
+        arrow = combo.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                            QStyle.SubControl.SC_ComboBoxArrow, combo)
+        assert arrow.isValid() and combo.rect().contains(arrow)
+        QTest.mouseClick(combo, Qt.MouseButton.LeftButton, pos=arrow.center())
         assert combo.view().isVisible()
         QTest.qWait(20)
         QTest.keyClick(combo.view(), Qt.Key.Key_Down)

@@ -6,11 +6,12 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QScrollArea, QStyle, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QScrollArea, QStyle, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from setron.ui.app import create_window
 from setron.ui.combo_box import ComboBox
 from setron.ui.dashboard_demo import demo_dashboard_source
+from setron.ui.data_management_page import _ChoiceDelegate
 from setron.ui.import_widgets import import_combo_style
 from test_ui_import_ver5 import own  # noqa: F401
 
@@ -130,6 +131,38 @@ def test_empty_or_disabled_fields_do_not_open(own):
     combo.setEnabled(False)
     combo.showPopup()
     assert not combo.view().isVisible()
+
+
+@pytest.mark.parametrize("editable", [False, True])
+def test_data_management_delegate_uses_shared_popup_and_commits_selection_or_input(own, editable):
+    table = own(QTableWidget(1, 1))
+    table.setGeometry(80, 80, 420, 180)
+    table.setItem(0, 0, QTableWidgetItem("P2"))
+    delegate = _ChoiceDelegate(table, lambda: ("P1", "P2"), editable=editable)
+    table.setItemDelegateForColumn(0, delegate)
+    table.setCurrentCell(0, 0)
+    table.editItem(table.item(0, 0))
+    QTest.qWait(10)
+    editor = table.findChild(ComboBox)
+    assert editor is not None and editor.parentWidget() is table.viewport()
+    assert editor.isEditable() is editable and editor.currentText() == "P2"
+    committed = QSignalSpy(delegate.commitData)
+    editor.showPopup()
+    QTest.qWait(20)
+    below(editor)
+    if editable:
+        editor.hidePopup()
+        editor.lineEdit().selectAll()
+        QTest.keyClicks(editor.lineEdit(), "P5")
+        expected = "P5"
+    else:
+        QTest.keyClick(editor.view(), Qt.Key.Key_Home)
+        QTest.keyClick(editor.view(), Qt.Key.Key_Return)
+        expected = "P1"
+    if table.item(0, 0).text() != expected:
+        QTest.keyClick(editor, Qt.Key.Key_Return)
+    QTest.qWait(20)
+    assert committed.count() >= 1 and table.item(0, 0).text() == expected
 
 
 def test_no_screen_constructs_an_unshared_native_combobox():

@@ -23,7 +23,7 @@ from types import SimpleNamespace
 from PySide6.QtCore import QEvent, QSettings, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
+    QAbstractItemView, QApplication, QButtonGroup, QDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMessageBox, QScrollArea, QSizePolicy, QStackedWidget, QStyledItemDelegate, QTabBar, QTableWidget, QTableWidgetItem, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -220,7 +220,7 @@ class _ChoiceDelegate(QStyledItemDelegate):
         self.options, self.editable = options, editable
 
     def createEditor(self, parent, option, index):
-        editor = QComboBox(parent)
+        editor = ComboBox(parent)
         editor.setEditable(self.editable)
         editor.addItems(list(self.options()))
         return editor

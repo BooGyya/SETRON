@@ -641,6 +641,7 @@ def test_multiline_labels_get_full_height(own):
     page = page_with(own)
     page.resize(1400, 1400)  # 앱에서는 창 전체가 스크롤되므로 화면 최소 높이보다 크게 띄운다
     page.select_tab(1)
+    settle(page)  # 계열 조회 완료 안내가 아래의 검증용 여러 줄 텍스트를 덮지 않게 한다.
     info = page.release_panel.notice
     info.setText("첫 줄\n둘째 줄\n셋째 줄\n넷째 줄")
     until(lambda: info.height() >= info.heightForWidth(info.width()) > info.fontMetrics().height() * 3)

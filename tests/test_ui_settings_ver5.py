@@ -3,7 +3,7 @@
 from dataclasses import replace
 import json
 from threading import Event
-from time import sleep
+from time import monotonic, sleep
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSettings, Qt
@@ -252,7 +252,11 @@ def test_saved_palette_has_readable_text_in_existing_dashboard_and_heatmap(own, 
     p.update_draft(dashboard_unknown="#111111", surface="#111111", rate="#eeeeee", **{heat_key: "#161616"})
     assert "#161616" not in tile.styleSheet()
     assert p.save_appearance()
-    until(lambda: not p.operation.busy)
+    # 모든 화면의 위젯을 나눠 적용하므로 병렬 GUI 검사 중에는 짧은 공통 대기보다 오래 걸릴 수 있다.
+    deadline = monotonic() + 20
+    while p.operation.busy and monotonic() < deadline:
+        QTest.qWait(10)
+    assert not p.operation.busy, "저장한 팔레트의 전체 화면 적용이 20초 안에 끝나지 않았습니다."
     assert store.appearance() == current.appearance
     assert "background:#161616" in tile.styleSheet()
     tile_ink = tile.code_label.palette().color(QPalette.ColorRole.WindowText).name()
