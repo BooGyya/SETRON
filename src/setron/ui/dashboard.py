@@ -1,5 +1,6 @@
 """작업 단위 4: 조회 적용과 연결되는 대시보드 한 페이지, 표/구성비/막대/추이 보기."""
 
+from collections import Counter
 from html import escape
 
 from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, Signal
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.aggregation.service import summarize
+from setron.features.risk.schemas import RISK_KIND_DESCRIPTIONS, RISK_KIND_LABELS, RiskKind, risk_kinds
 from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import readable_color, set_color_style, surface_edge
 from setron.ui.components import Card, StatusBadge, button, label
@@ -959,6 +961,24 @@ class DashboardPage(QWidget):
             f"분석 {summary.equipment_count}대 · HPA 제외 {summary.hpa_excluded}대 · SW 미등록 {missing_sw_count(summary)}대\n"
             f"{risk_text}", ids)
 
+    def _risk_kind_lines(self, ids):
+        """위험 후보를 적용 위험 / 미적용 위험으로 센 줄. 판정 근거가 없는 자료는 분류하지 않고 '근거 미연결'로 센다."""
+        assessor = getattr(self.source, "assessor", None)
+        records = {r.equipment_id: r for r in self.snapshot.selected_records}
+        counts, missing = Counter(), 0
+        for equipment_id in ids:
+            record = records.get(equipment_id)
+            kinds = (risk_kinds(assessor.equipment_risk(record).findings)
+                     if assessor is not None and assessor.rules and record is not None else ())
+            counts.update(kinds)
+            missing += not kinds
+        lines = [f"{RISK_KIND_LABELS[kind]} {counts[kind]}대 · {RISK_KIND_DESCRIPTIONS[kind]}" for kind in RiskKind if counts[kind]]
+        if sum(counts.values()) > len(ids) - missing:
+            lines.append("한 설비가 두 분류에 모두 해당하면 각각 셉니다.")
+        if missing:
+            lines.append(f"판정 근거 미연결 {missing}대")
+        return lines
+
     def _matrix_cell(self, row, row_index, column, cell, location_title):
         """Figma 셀: 큰 달성률, 아래에 'N 이상/판단 가능 건' + 위험 후보·판단 불가 표시."""
         summary = cell.summary
@@ -1012,7 +1032,10 @@ class DashboardPage(QWidget):
             detail.addStretch(1)
             detail.addWidget(label(f"{summary.compliant}/{summary.compliant + summary.below}건", 11))
             if cell.risky_ids:
-                risk = button(f"후보 {len(cell.risky_ids)}")
+                # '후보 n' 대신 위험 후보 KPI와 같은 경고 아이콘 + 대수로 보인다.
+                risk = button(str(len(cell.risky_ids)))
+                risk.setIcon(icon("60dbd.svg"))
+                risk.setIconSize(QSize(11, 10))
                 risk.setProperty("dashboardRiskBadge", True)
                 set_widget_font(risk, font(10, medium=True))
                 set_color_style(risk, lambda colors: (
@@ -1021,7 +1044,8 @@ class DashboardPage(QWidget):
                         "padding:0 5px;min-height:16px;max-height:16px;") + "}"
                     f"QPushButton:focus {{border-color:{readable_color(colors['accent'], colors['risk'], 3)};}}"))
                 risk.setAccessibleName(f"{row.label} {cell.label} 위험 후보만 {len(cell.risky_ids)}대")
-                risk.setToolTip(equipment_count_tooltip(f"위험 후보 · {title}", cell.risky_ids))
+                risk.setToolTip(equipment_count_tooltip(
+                    "\n".join((f"위험 후보 · {title}", *self._risk_kind_lines(cell.risky_ids))), cell.risky_ids))
                 risk.clicked.connect(lambda checked=False: self._select(title, cell.risky_ids, risk_only=True))
                 detail.addWidget(risk)
                 self.risk_buttons[row_index, column] = risk

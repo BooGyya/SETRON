@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 
 from setron.features.aggregation.service import summarize
 from setron.features.risk.service import RiskAssessor
-from setron.features.risk.schemas import RiskStatus
+from setron.features.risk.schemas import RISK_KIND_LABELS, RiskStatus, risk_kinds
 from setron.features.version.schemas import CompareStatus
 from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
@@ -210,6 +210,8 @@ class EquipmentPage(QWidget):
         self.state, self.source = state, source
         self.snapshot, self.data = None, None
         self.scope_ids, self.visible_tiles = (), ()
+        # 대시보드 위험 후보 배지에서 연 목록이면 패널 목록에 '위험 기준'(적용/미적용 위험) 열을 더한다.
+        self.scope_risk_only = False
         self.origin, self.detail_back = "heatmap", "list"
         self.page_index, self.page_size, self.selected_id = 0, 12, None
         self.mode = "list"
@@ -280,6 +282,8 @@ class EquipmentPage(QWidget):
             ("설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거"),
             numeric_columns=(3,))
         self.drawer_list_model = ReadTableModel(("설비명", "모델", "계열", "적용현황"), centered=True, tone_column=3)
+        self.drawer_risk_model = ReadTableModel(("설비명", "모델", "계열", "적용현황", "위험 기준"), centered=True,
+                                                tone_column=3)
         self.table = read_table(self.model, "선택 범위 설비 목록", (110, 164, 170, 216, 140, 220))
         self._full_list_widths = self.table.base_widths
         self._full_header_alignment = self.table.horizontalHeader().defaultAlignment()
@@ -340,9 +344,7 @@ class EquipmentPage(QWidget):
 
     def _set_list_compact(self, compact):
         selected_id = self.table.currentIndex().data(Qt.ItemDataRole.UserRole)
-        self.model = self.drawer_list_model if compact else self.full_list_model
-        self.table.base_widths = (110, 110, 130, 130) if compact else self._full_list_widths
-        self.table.setModel(self.model)
+        self._use_list_model(compact)
         padding = 12 if compact else 24
         self.list_card.body.setContentsMargins(padding, padding, padding, padding)
         self.list_card.body.setSpacing(10 if compact else 16)
@@ -361,6 +363,16 @@ class EquipmentPage(QWidget):
         self._render_list()
         if selected_id in self.model.ids:
             self.table.selectRow(self.model.ids.index(selected_id))
+
+    def _use_list_model(self, compact):
+        """목록 모델을 고른다. 패널의 위험 후보 목록은 '위험 기준' 열이 있는 모델을 쓴다."""
+        model = (self.drawer_risk_model if self.scope_risk_only else self.drawer_list_model) if compact else self.full_list_model
+        if model is self.model and self.table.model() is model:
+            return
+        self.model = model
+        self.table.base_widths = ((96, 96, 110, 104, 104) if model is self.drawer_risk_model
+                                  else (110, 110, 130, 130) if compact else self._full_list_widths)
+        self.table.setModel(model)
 
     # ----- 설비 상세 -----
 
@@ -678,7 +690,7 @@ class EquipmentPage(QWidget):
             return False
         self.close_item_detail()
         self.origin = origin if origin in ("dashboard", "heatmap") else self.origin
-        self.scope_ids = self.data.equipment_ids
+        self.scope_ids, self.scope_risk_only = self.data.equipment_ids, False
         self._reset_filters()
         self._update_scope()
         self._set_mode("list")
@@ -694,7 +706,7 @@ class EquipmentPage(QWidget):
         if request.risk_only and not set(request.equipment_ids) <= set(self.snapshot.risky_ids):
             return False
         self.origin = origin if origin in ("dashboard", "heatmap") else "dashboard"
-        self.scope_ids = request.equipment_ids
+        self.scope_ids, self.scope_risk_only = request.equipment_ids, bool(request.risk_only)
         self._reset_filters()
         self._update_scope()
         self._set_mode("list")
@@ -756,10 +768,13 @@ class EquipmentPage(QWidget):
         rows, tones = [], []
         page = self.visible_tiles[start:start + self.page_size]
         compact = self._list_host is not None
+        self._use_list_model(compact)
+        risk_column = self.model is self.drawer_risk_model
+        tooltips = {}
         if compact and page:
             records = {record.equipment_id: record for record in lookup_records(self.snapshot)}
             model_names = {mid: model_name(self.source, mid) for ids in self.source.bindings.values() for mid in ids}
-        for tile in page:
+        for index, tile in enumerate(page):
             code = tile.code
             if self.sort.currentData() == "priority":
                 entry = self.data.priority.get(tile.equipment_id)
@@ -767,7 +782,14 @@ class EquipmentPage(QWidget):
             goal = tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else "")
             if compact:
                 models, families = self._drawer_model_families(records[tile.equipment_id], model_names)
-                rows.append((code, models, families, goal))
+                row = (code, models, families, goal)
+                if risk_column:
+                    # 판정기 근거로 적용 위험(결함 Item·위험 버전 사용) / 미적용 위험(필수 Item 미적용)을 나눈다.
+                    kinds = risk_kinds(tile.findings)
+                    row += ("\n".join(RISK_KIND_LABELS[k] for k in kinds) if kinds
+                            else "근거 미연결" if tile.risk is RiskStatus.RISK else tile.risk_label,)
+                    tooltips[index, 4] = tile.risk_detail or tile.risk_label
+                rows.append(row)
             else:
                 versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
                 names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
@@ -775,7 +797,7 @@ class EquipmentPage(QWidget):
                 rows.append((code, location.replace(" · ", "\n"), names, versions, goal,
                              "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
-        self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones)
+        self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones, tooltips=tooltips)
         fit_rows(self.table, compact=compact)
         self.table.setVisible(bool(page))
         self.message.setVisible(not page)

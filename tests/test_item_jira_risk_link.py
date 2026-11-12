@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QPushButton
 
 from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.release.schemas import ItemInput, ItemLinkInput
@@ -14,7 +15,7 @@ from setron.ui.app import create_window
 from setron.ui.item_original import (
     JIRA_EMPTY, JIRA_FOUND, JIRA_NO_COLUMN, JIRA_NO_ORIGINAL, OriginalItemRow, item_jira,
 )
-from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, risk_candidate_ids
+from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, rule_verdicts
 from setron.ui.read_worker import BackgroundRead
 
 from test_ui_items import app, data  # noqa: F401
@@ -79,7 +80,8 @@ def test_imported_release_note_jira_links_to_item_and_risk_matches_dashboard(rev
     jira = data.jira(ids)
     assert jira[ids[0]].codes == ("ETOJ-101",) and jira[ids[1]].status == JIRA_EMPTY
     assert [e.item.item_id for e in data.search("etoj-101")] == [ids[0]]
-    candidates = risk_candidate_ids(data, data.risk_rules)
+    candidates = [record.equipment_id for rule in data.risk_rules
+                  for record, result, _ in rule_verdicts(data, rule) if result.status is RiskStatus.RISK]
     assert candidates and all(source.risks[i] is RiskStatus.RISK for i in candidates)
 
 
@@ -107,13 +109,11 @@ def test_rows_show_version_item_and_jira_together(app, data):
     page.search.clear()
     page.result_buttons[1].click()
     assert "포함 릴리즈 v99 외 1" in page.item_facts.text() and "JIRA ETOJ-9" in page.item_facts.text()
-    # 위험 기준 등록 결과: 같은 판정기로 계산한 위험 후보 대수와 대시보드 이동 버튼.
-    assert page.rules_risk.text() == f"위험 후보 {len(page.rule_candidate_ids)}대" and page.rule_candidate_ids
-    requested = []
-    page.risk_candidates_requested.connect(lambda title, ids: requested.append((title, ids)))
-    page.rules_dashboard.click()
-    assert requested and requested[0][1] == page.rule_candidate_ids
-    # 조회 조건이 적용되지 않았으면 대시보드로 이동하지 않고 이유를 안내한다.
+    # 펼친 Item에는 위험 기준 노란 칸(위험 후보 대수·대시보드 이동 버튼)을 두지 않는다.
+    assert not hasattr(page, "rules_box") and not hasattr(page, "rules_dashboard")
+    assert not any(b.text() == "대시보드 위험 후보 보기" for b in page.findChildren(QPushButton) if b.isVisibleTo(page))
+    # 판정 팝업에서 요청해도 조회 조건이 적용되지 않았으면 대시보드로 이동하지 않고 이유를 안내한다.
+    assert not window.show_item_risk_candidates("위험 기준 · 필수 기능", (1,))
     assert window.route == "items" and "조회 조건을 먼저 적용" in page.notice.text()
     window.close()
 
