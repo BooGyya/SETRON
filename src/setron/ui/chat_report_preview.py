@@ -6,8 +6,8 @@ from html import escape
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QMarginsF, QSize, Qt, QUrl
-from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPdfWriter, QTextDocument
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QSize, Qt, QUrl
+from PySide6.QtGui import QImage, QPdfWriter, QTextDocument
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
@@ -20,11 +20,13 @@ from setron.ui.chat_components import asset_label
 from setron.ui.components import button, label
 from setron.ui.import_dialogs import confirm_numbered_save
 from setron.ui.management_integration import save_numbered_export
+from setron.ui.report_pagination import configure_report_device, configure_report_document, print_numbered_document
 
 
 def report_document(report) -> QTextDocument:
     """미리보기·PDF·인쇄가 같은 선택 항목과 같은 문서를 사용한다."""
     doc = QTextDocument()
+    configure_report_document(doc)
     html = ["<style>body {font-family: 'IBM Plex Sans KR'; font-size: 10pt; color:#142033;}"
             "h1{font-size:21pt;}h2{font-size:15pt;}h3{font-size:12pt;}"
             "th{background:#eef0f3;}td,th{padding:6px;}table{border-collapse:collapse;}</style>"]
@@ -89,11 +91,10 @@ def save_report_pdf(report, path) -> ExportResult:
             temporary = Path(handle.name)
         writer = QPdfWriter(str(temporary))
         writer.setResolution(96)
-        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-        writer.setPageMargins(QMarginsF(16, 16, 16, 16), QPageLayout.Unit.Millimeter)
+        configure_report_device(writer)
         writer.setTitle(report.title)
         writer.setCreator("SETRON")
-        report_document(report).print_(writer)
+        print_numbered_document(report_document(report), writer)
         del writer
         if temporary.stat().st_size < 10 or not temporary.read_bytes().startswith(b"%PDF-"):
             raise OSError("PDF 생성 결과가 비어 있습니다.")
@@ -224,11 +225,10 @@ class PdfPreviewDialog(QDialog):
 
     def print_report(self):
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-        printer.setPageMargins(QMarginsF(16, 16, 16, 16), QPageLayout.Unit.Millimeter)
+        configure_report_device(printer)
         dialog = QPrintDialog(printer, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.document_factory(self.report).print_(printer)
+            print_numbered_document(self.document_factory(self.report), printer)
 
     def _cleanup(self, *_):
         self.view.setDocument(None)

@@ -17,6 +17,7 @@ from docx import Document
 from docx.shared import Inches, Pt
 
 from setron.features.export.docx_fonts import use_korean_font
+from setron.features.export.docx_pagination import add_page_numbers
 from setron.features.export.schemas import ExportResult, ExportStatus
 
 from .export import conditions_of
@@ -58,6 +59,7 @@ def build_chat_report(report: ChatReport):
     """보고서 문서(python-docx Document)를 만든다."""
     document = Document()
     use_korean_font(document)                 # 기본 서식의 한글 글꼴(MS Mincho)로는 한글이 □로 깨진다
+    add_page_numbers(document)
     document.styles["Normal"].font.size = Pt(10)
     document.add_heading(report.title, 0)
     bases = sorted({p.answer.base_date for p in report.parts if p.answer.base_date})

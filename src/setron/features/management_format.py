@@ -10,6 +10,7 @@ EQUIPMENT_HEADERS = (
 RELEASE_HEADERS = (
     "관리 모델", "버전(원문)", "접미사", "출시일", "확인된 순서", "Item 매핑", "직접 수정 항목", "입력 작업",
     "Item 번호", "내용", "적용 상태", "모델 범위", "지정 모델", "Item 직접 수정 항목", "UI", "구조", "생산 영역", "설비군",
+    "Jira 코드",
 )
 PRODUCTION_AREAS = (None, "MEMORY", "FOUNDRY")
 

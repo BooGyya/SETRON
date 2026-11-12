@@ -24,6 +24,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from setron.features.export.management_files import read_management_data, select_files
 from setron.features.export.schemas import ExportResult, ExportStatus
+from setron.features.item.original import jira_by_item, original_item_rows_from_batches
 from setron.features.management_format import EQUIPMENT_HEADERS, PRODUCTION_AREAS, RELEASE_HEADERS, equipment_group_name
 from setron.features.reference_data import FOUNDRY_FAMILY_MODELS, strip_foundry
 from setron.infrastructure.database import DatabaseError
@@ -125,6 +126,7 @@ def _equipment(sheet: Worksheet, data, names: _Names, snapshots) -> None:
 
 def _releases(sheet: Worksheet, data, names: _Names, families=None, *, production_area=None, include_unlinked=True) -> None:
     items = {i["item_id"]: i for i in data["item"]}
+    jira = jira_by_item(original_item_rows_from_batches(data["import_batch"], data["item"]), items)
     links_by_release = {}
     for link in data["release_version_item"]:
         links_by_release.setdefault(link["release_version_id"], []).append(link)
@@ -148,17 +150,18 @@ def _releases(sheet: Worksheet, data, names: _Names, families=None, *, productio
                 ", ".join(release["edited_fields"] or ()), release["batch_id"]]
         links = links_by_release.get(release["release_version_id"], [])
         if not links:
-            rows.append([*base, "", "", "", "", "", "", *extra])
+            rows.append([*base, "", "", "", "", "", "", *extra, ""])
         for link in links:
             item = items[link["item_id"]]
             rows.append([*base, _item_no(item), item["content"],
                          STATE_LABELS.get(link["item_state"], link["item_state"]),
                          SCOPE_LABELS.get(link["target_scope"], link["target_scope"]),
                          ", ".join(names.group(g) for g in link["target_group_ids"] or ()),
-                         ", ".join(item["edited_fields"] or ()), *extra])
+                         ", ".join(item["edited_fields"] or ()), *extra, ", ".join(jira[item["item_id"]].codes)])
     rows += [["", "", "", "", "", "", "", i["batch_id"],
               _item_no(i), i["content"], "", "", "", ", ".join(i["edited_fields"] or ())]
-              + ["", "", "", ""] for i in data["item"] if include_unlinked and i["item_id"] not in linked]
+              + ["", "", "", "", ", ".join(jira[i["item_id"]].codes)]
+              for i in data["item"] if include_unlinked and i["item_id"] not in linked]
     _rows(sheet, RELEASE_HEADERS, rows)
 
 
