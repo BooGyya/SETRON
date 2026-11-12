@@ -12,7 +12,9 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Mm, Pt, RGBColor
 
 from setron.features.export.docx_fonts import use_korean_font
+from setron.features.export.docx_pagination import add_page_numbers
 from setron.features.export.schemas import ExportResult, ExportStatus
+from setron.ui.report_pagination import configure_report_device, configure_report_document, print_numbered_document
 
 
 def display_value(value):
@@ -84,6 +86,7 @@ def _word(report, path, pictures):
     page = document.sections[0]
     page.page_width, page.page_height = Mm(210), Mm(297)
     page.top_margin = page.bottom_margin = page.left_margin = page.right_margin = Mm(16)
+    add_page_numbers(document)
     normal = document.styles["Normal"]
     normal.font.size = Pt(10)
     normal.paragraph_format.space_after = Pt(6)
@@ -128,12 +131,10 @@ def _word(report, path, pictures):
 
 def pdf_document(report, pictures=None):
     """미리보기·인쇄·다운로드가 같은 이미지와 숫자를 사용한다."""
-    from PySide6.QtCore import QSizeF, QUrl
+    from PySide6.QtCore import QUrl
     from PySide6.QtGui import QImage, QTextDocument
     document = QTextDocument()
-    # A4, 16mm 여백, 96dpi. print_의 추가 기본 여백과 그림 잘림을 방지한다.
-    document.setDocumentMargin(0)
-    document.setPageSize(QSizeF((210 - 32) * 96 / 25.4, (297 - 32) * 96 / 25.4))
+    configure_report_document(document)
     html = report_html(report)
     figures = {}
     for number, (index, png) in enumerate(_pictures(report, pictures)):
@@ -156,16 +157,14 @@ def pdf_document(report, pictures=None):
 
 
 def _pdf(report, path, pictures):
-    from PySide6.QtCore import QMarginsF
-    from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter
+    from PySide6.QtGui import QPdfWriter
     document = pdf_document(report, pictures)
     writer = QPdfWriter(str(path))
     writer.setTitle(report.title)
     writer.setCreator("SETRON")
     writer.setResolution(96)
-    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-    writer.setPageMargins(QMarginsF(16, 16, 16, 16), QPageLayout.Unit.Millimeter)
-    document.print_(writer)
+    configure_report_device(writer)
+    print_numbered_document(document, writer)
     del writer
     if not path.read_bytes().startswith(b"%PDF-"):
         raise OSError("PDF 생성 결과가 올바르지 않습니다.")
