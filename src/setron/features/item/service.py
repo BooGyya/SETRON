@@ -43,14 +43,15 @@ _STATE_TO_APPLICATION = {
 
 
 def search_items(items: Iterable[Item], query: str, *, match_words: bool = False) -> tuple[Item, ...]:
-    """Item 내용이나 원본 항목 번호로 검색한다. 대소문자를 가리지 않는다."""
+    """Item 내용·JIRA 이슈 코드·원본 항목 번호로 검색한다. 대소문자를 가리지 않는다."""
     keyword = query.strip().casefold()
     if not keyword:
         return ()
     words = keyword.split() if match_words else (keyword,)
     found = [
         item for item in items
-        if all(word in item.content.casefold() for word in words) or (item.item_no is not None and keyword == str(item.item_no))
+        if all(word in (item.content + " " + (item.jira_key or "")).casefold() for word in words)
+        or (item.item_no is not None and keyword == str(item.item_no))
     ]
     return tuple(sorted(found, key=lambda i: (i.item_no is None, i.item_no or 0, i.item_id)))
 

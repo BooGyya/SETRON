@@ -592,17 +592,27 @@ class DatabaseImportSaver:
                 content = row.values.get("content")
                 if not content:
                     continue
+                from setron.features.item.jira import extract_jira_from_source
+                try:
+                    jira = extract_jira_from_source(getattr(self, "_row_raw_data", {}).get(id(row)),
+                                                    _sources(row, ITEM_FIELDS), content=content)
+                except ValueError as error:
+                    raise StorageValidationError(str(error)) from error
+                item_sources = merge_sources(_sources(row, ITEM_FIELDS), jira.source_reference)
                 key = (row.values.get("item_no"), content)
                 if key in seen:
                     index = seen[key]
                     previous = items[index]
+                    _require(not previous.jira_key or not jira.jira_key or previous.jira_key == jira.jira_key,
+                             "같은 Item의 JIRA 이슈 코드가 상충합니다.")
                     items[index] = replace(previous,
-                        source_reference=merge_sources(previous.source_reference, _sources(row, ITEM_FIELDS)),
+                        jira_key=previous.jira_key or jira.jira_key,
+                        source_reference=merge_sources(previous.source_reference, item_sources),
                         edited_fields=tuple(dict.fromkeys((*previous.edited_fields, *_edited(row, ITEM_EDITED)))))
                     continue
                 seen[key] = len(items)
                 items.append(ItemInput(content=content, batch_id=batch_id, item_no=row.values.get("item_no"),
-                                       source_reference=_sources(row, ITEM_FIELDS),
+                                       jira_key=jira.jira_key, source_reference=item_sources,
                                        edited_fields=_edited(row, ITEM_EDITED)))
             result.append((release, tuple(items)))
         return result
@@ -612,6 +622,7 @@ class DatabaseImportSaver:
     def _remember_workbooks(self, requests) -> None:
         """저장 행마다 통합문서 이름을 기억한다. 릴리즈노트는 사이트·라인 칸이 없어 파일명으로 파운드리를 가른다."""
         self._row_workbooks = {id(row): request.workbook_name for request in requests for row in request.rows}
+        self._row_raw_data = {id(row): request.raw_data for request in requests for row in request.rows}
 
     def _model(self, tx, values: Mapping[str, Any], row: SaveRow) -> dict:
         raw = (values.get("model_name") or "").strip()

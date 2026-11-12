@@ -48,6 +48,7 @@ class ReleaseEntry:
 class ItemEntry:
     item: Item
     sources: tuple[SourceReference, ...] = ()
+    jira_key_known: bool = False
 
 
 @dataclass(frozen=True)

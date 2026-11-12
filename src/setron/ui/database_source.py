@@ -18,10 +18,12 @@ from __future__ import annotations
 import inspect
 
 from collections.abc import Callable
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import replace
 from functools import lru_cache
 from threading import RLock
+
+from sqlalchemy import select
 
 from setron.features.data_admin.service import registered_lines, registered_sites
 from setron.features.reference_data import default_area, use_registered_lines
@@ -35,7 +37,7 @@ from setron.features.risk.schemas import RiskStatus
 from setron.features.risk.service import RiskAssessor
 from setron.features.targets.groups import GroupStore
 from setron.features.targets.service import TargetService
-from setron.features.storage.validation import StorageValidationError
+from setron.features.storage.validation import StorageValidationError, decode_record
 from setron.infrastructure.database import DatabaseError
 from setron.ui.dashboard_data import DashboardSource, EquipmentLocation, GroupBinding, RiskRuleState, family_name, model_name
 from setron.ui.query_state import FabOption, GroupOption, LineOption, QueryCatalog, SiteOption, TargetN, preview_catalog
@@ -164,6 +166,44 @@ def _line_key(site, fab, line):
     return f"{site}:{fab}:{line}" if fab is not None else f"{site}:{line}"
 
 
+class _TargetReadView:
+    """현재 읽기 트랜잭션의 전체 원본 행을 공유 노트 지문 검사에서 재사용한다.
+
+    저장 서비스에는 전달하지 않는다. 다음 조회는 새 행을 읽으며 없는 기본 키는
+    원래 get과 같이 LookupError다. DTO로 줄이지 않아 지문에 쓰이는 모든 필드를 보존한다.
+    """
+
+    def __init__(self, tx, rows):
+        self.repository, self.session = tx.repository, tx.session
+        self._tx = tx
+        self._keys = {name: tuple(column.name for column in tx.repository.table(name).primary_key.columns)
+                      for name in rows}
+        self._rows = {name: {tuple(row[key] for key in self._keys[name]): row for row in values}
+                      for name, values in rows.items()}
+        table = tx.repository.table("app_setting")
+        prefix = b"shared_note_item_models.v1:"
+        query = select(table).where(table.c.setting_key >= prefix, table.c.setting_key < b"shared_note_item_models.v1;")
+        self._shared_raw = {saved["setting_key"]: dict(saved) for saved in tx.session.execute(query).mappings()}
+        self._shared = {}
+
+    def get(self, table, key):
+        if table in self._rows:
+            identity = tuple(key[name] for name in self._keys[table])
+            try:
+                return deepcopy(self._rows[table][identity])
+            except KeyError:
+                raise LookupError("현재 읽기 자료에 해당 행이 없습니다.") from None
+        if table == "app_setting" and isinstance(key.get("setting_key"), str) and key["setting_key"].startswith("shared_note_item_models.v1:"):
+            name = key["setting_key"]
+            if name not in self._shared:
+                raw = self._shared_raw.get(name.encode("utf-8"), self._shared_raw.get(name))
+                if raw is None:
+                    raise LookupError("현재 읽기 자료에 해당 설정이 없습니다.")
+                self._shared[name] = decode_record("app_setting", raw)
+            return deepcopy(self._shared[name])
+        return self._tx.get(table, key)
+
+
 def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publish_lines=True) -> DashboardSource:
     """DB를 한 번 읽어 대시보드 공급자를 만든다. 연결할 수 없는 현황은 빼고 ``source_label``에 건수를 적는다.
 
@@ -186,7 +226,9 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publi
         pairs = tuple(sorted({(model_id, sw.family_id) for value in stored for sw in value.software
                               for model_id in ([pm.group_id for pm in sw.pms] if sw.pms else [value.group_id])
                               if model_id is not None}))
-        target_catalog = TargetService(None).read_in(tx, pairs, {pair: None for pair in pairs})
+        target_read = (_TargetReadView(tx, {"equipment_group": groups, "version_family": families,
+            "release_version": releases, "release_version_item": links, "item": items}) if pairs else tx)
+        target_catalog = TargetService(None).read_in(target_read, pairs, {pair: None for pair in pairs})
         # 노후도 기간 기준 (BE-016). 저장값이 잘못되면 None이며 화면은 '기준 설정 오류'로 보인다.
         age_thresholds = thresholds_in(tx).thresholds
         extra_sites = registered_sites(tx)
@@ -224,7 +266,7 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publi
     stored_areas = {(value.base_date, value.equipment_id): value.production_area for value in stored}
 
     def location(record):
-        fab = area_for(stored_areas[record.base_date, record.equipment_id], record.site, record.line)
+        fab = None if record.is_hpa else area_for(stored_areas[record.base_date, record.equipment_id], record.site, record.line)
         fab = fab if fab in fab_keys else None
         key = _line_key(sites[record.site], fab, record.line)
         return EquipmentLocation(sites[record.site], record.line, fab, key if key in line_keys else None)
@@ -330,8 +372,8 @@ def _version_catalog(groups, families, releases, items, links, observations, app
         tuple(pair.model_id for pair in known if pair.family_id == row["family_id"]),
         _source_references(row), row["item_mapping_status"] == "VERIFIED",
     ) for row in releases)
-    item_entries = tuple(ItemEntry(Item(row["item_id"], row["item_no"], row["content"]),
-                                   _source_references(row)) for row in items)
+    item_entries = tuple(ItemEntry(Item(row["item_id"], row["item_no"], row["content"], row.get("jira_key")),
+                                   _source_references(row), "jira_key" in row) for row in items)
     memberships = tuple(VersionItem(row["release_version_id"], row["item_id"], ItemState(row["item_state"]),
                                     TargetScope(row["target_scope"]), tuple(row["target_group_ids"] or ()))
                         for row in links)

@@ -41,6 +41,7 @@ class ItemJira:
     codes: tuple[str, ...]
     status: str
     sources: tuple[str, ...] = ()
+    stored: bool = False
 
     @property
     def label(self):
@@ -56,6 +57,8 @@ class ItemJira:
 
     @property
     def tooltip(self):
+        if self.stored:
+            return ("JIRA 이슈코드: " + ", ".join(self.codes) + ("\n" + "\n".join(self.sources) if self.sources else "")) if self.codes else "저장된 JIRA 이슈코드가 없습니다."
         if self.codes:
             return "릴리즈노트 원본 Jira: " + ", ".join(self.codes) + ("\n" + "\n".join(self.sources) if self.sources else "")
         return {JIRA_EMPTY: "릴리즈노트 원본의 Jira 칸이 비어 있습니다.",

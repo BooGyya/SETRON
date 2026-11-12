@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date
+import re
 
 from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.storage.inputs import identifier, merge_sources, require, required_text
@@ -11,7 +12,7 @@ from setron.features.storage.validation import StorageValidationError
 from .schemas import ItemInput, ItemLinkInput, ReleaseInput
 
 RELEASE_EDITABLE = frozenset({"version_raw", "version_suffix", "released_at", "version_order", "item_mapping_status"})
-ITEM_EDITABLE = frozenset({"item_no", "content"})
+ITEM_EDITABLE = frozenset({"item_no", "content", "jira_key"})
 
 
 def optional_integer(value, field):
@@ -51,6 +52,10 @@ def validate_values(table, values):
     else:
         required_text(values["content"], "content", 65535)
         optional_integer(values.get("item_no"), "item_no")
+        jira_key = values.get("jira_key")
+        require(jira_key is None or isinstance(jira_key, str) and 1 <= len(jira_key) <= 50
+                and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-[0-9]+", jira_key) is not None,
+                "jira_key: JIRA 이슈 코드 하나 또는 None이 필요합니다.")
     text_fields = ("version_raw", "version_suffix") if table == "release_version" else ("content",)
     for field in text_fields:
         if values.get(field) is not None:

@@ -6,7 +6,7 @@ from datetime import date
 from setron.features.aggregation.schemas import EquipmentRecord
 from setron.features.item.schemas import Application, BASIS_LABELS, TargetScope
 from setron.features.item.service import ItemCatalog, search_items
-from setron.ui.item_original import jira_by_item
+from setron.ui.item_original import ItemJira, JIRA_EMPTY, JIRA_FOUND, jira_by_item
 from setron.ui.version_data import VersionCatalog
 
 
@@ -58,14 +58,25 @@ class ItemManagerData:
             # 릴리즈노트 원본에 적힌 Jira 코드로도 찾는다. 원본에 없는 코드는 만들지 않는다.
             matched = {e.item.item_id for e in result}
             jira = jira_by_item(self.versions.original_rows, by_id)
-            result.extend(e for e in entries if e.item.item_id not in matched
+            result.extend(e for e in entries if not e.jira_key_known and e.item.item_id not in matched
                           and any(needle in code.casefold() for code in jira[e.item.item_id].codes))
         return tuple(result)
 
     def jira(self, item_ids=None):
-        """Item별 원본 Jira 코드. 보관 원본이 없으면 미확인으로 돌려준다."""
+        """저장된 이슈 코드를 우선하고, 이전 자료는 기존 원본 행 조회를 유지한다."""
         ids = [e.item.item_id for e in self.versions.items] if item_ids is None else item_ids
-        return jira_by_item(self.versions.original_rows, ids)
+        result = jira_by_item(self.versions.original_rows, ids)
+        for entry in self.versions.items:
+            item_id = entry.item.item_id
+            if item_id not in result:
+                continue
+            if entry.item.jira_key:
+                sources = tuple(f"입력 작업 {ref.batch_id} · {ref.sheet} · {ref.cells}"
+                                for ref in entry.sources if ref.field == "jira_key")
+                result[item_id] = ItemJira((entry.item.jira_key,), JIRA_FOUND, sources, stored=True)
+            elif entry.jira_key_known:
+                result[item_id] = ItemJira((), JIRA_EMPTY, stored=True)
+        return result
 
     def catalog(self):
         return ItemCatalog(self.versions.families(), self.versions.version_items)

@@ -1,6 +1,7 @@
 """앱 입력값을 MySQL 5.6의 저장 형식으로 변환하고 기존 CHECK 규칙을 검사한다."""
 
 import json
+import re
 from copy import deepcopy
 
 
@@ -37,7 +38,7 @@ BINARY_COLUMNS = {
 DEFAULTS = {
     "equipment_group": {"analysis_enabled": True},
     "release_version": {"item_mapping_status": "UNKNOWN", "edited_fields": []},
-    "item": {"edited_fields": []},
+    "item": {"edited_fields": [], "jira_key": None},
     "release_version_item": {"target_scope": "UNKNOWN", "target_group_ids": None},
     "risk_rule": {"is_enabled": True, "mapping_status": "UNRESOLVED"},
 }
@@ -173,6 +174,10 @@ def encode_record(table, values, *, inserting=False):
         fail(table, "analysis_enabled", "HPA는 공통 분석에서 제외해야 합니다.")
     if table == "import_batch" and result.get("source_type") == "EXCEL" and result.get("raw_data") is None:
         fail(table, "raw_data", "Excel 원본값이 필요합니다.")
+    if table == "item" and result.get("jira_key") is not None:
+        jira_key = result["jira_key"]
+        if not isinstance(jira_key, str) or len(jira_key) > 50 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-[0-9]+", jira_key):
+            fail(table, "jira_key", "이슈 코드는 50자 이내의 프로젝트키-숫자 형식이어야 합니다.")
     if table == "release_version_item":
         ids, scope = result.get("target_group_ids"), result.get("target_scope")
         if (scope == "LISTED" and ids is None) or (scope != "LISTED" and ids is not None):

@@ -170,7 +170,7 @@ class ItemForm(ImportDialog):
                 control = QCheckBox(pair.model_name)
                 self.models[pair.model_id] = control
                 row.addWidget(control)
-        self.jira = text_field("JIRA · 미기재는 유지", metadata.get("jira", ""))
+        self.jira = text_field("JIRA · 미기재는 유지", entry.item.jira_key or metadata.get("jira", "") if entry else metadata.get("jira", ""))
         self.remark = text_field("비고 · REMARK", metadata.get("remark", ""))
         self.reason = text_field("등록·수정 사유")
         for title, field in (("Item 번호", self.number), ("항목 · 분류", self.category), ("변경 내용 *", self.content),

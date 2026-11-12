@@ -22,8 +22,10 @@ def built():
     try:
         import build_seed
         from seed_source import candidates
+        from seed_augmentation import prepare_seed
         catalog = json.loads((DATABASE / "demo_release_catalog.json").read_text(encoding="utf-8"))
-        return build_seed, candidates, catalog, build_seed.build_sql(catalog)
+        effective_catalog, _ = prepare_seed(catalog)
+        return build_seed, candidates, effective_catalog, build_seed.build_sql(catalog)
     finally:
         sys.path.remove(str(DATABASE))
 
@@ -52,7 +54,7 @@ def test_every_pair_with_release_notes_gets_one_n_group_in_app_format(built):
     build_seed, candidates = built[0], built[1]
     pairs = {(t["model"], t["family"]) for t in catalog["templates"]
              if t["model"] != "HPA" and build_seed.demo_target(catalog, candidates, t["model"], t["family"]) is not None}
-    assert len(statements) == len(pairs) == 11              # 적용 근거가 있는 쌍만 (M-O5 Prime 등은 목표 없음)
+    assert len(statements) == len(pairs) == 18              # 원본 또는 합성 시연 근거가 있는 모든 비HPA 쌍
     for statement in statements:
         env = {}
         key_sql, value_sql = _split(statement.split("SELECT ", 1)[1].rsplit("\nFROM DUAL", 1)[0])

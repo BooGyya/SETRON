@@ -161,6 +161,7 @@ class StorageRepository:
         - StorageValidationError: 테이블·필수값·자료형·길이가 잘못된 경우.
         """
         table = self.table(name)
+        values = self._legacy_jira_values(table, values)
         self.validate_columns(table, values, inserting=True)
         result = session.execute(table.insert().values(**values))
         return dict(zip(table.primary_key.columns.keys(), result.inserted_primary_key))
@@ -181,10 +182,20 @@ class StorageRepository:
         - StorageValidationError: 컬럼 값이나 기본키 형식이 잘못된 경우.
         """
         table = self.table(name)
+        values = self._legacy_jira_values(table, values)
         self.validate_columns(table, values)
         changes = {field: value for field, value in values.items() if field not in table.primary_key.columns}
         if changes:
             session.execute(table.update().where(self.key_filter(table, key)).values(**changes))
+
+    @staticmethod
+    def _legacy_jira_values(table, values):
+        """이전 item 구조에는 값 없는 새 선택 필드만 생략한다. 실제 코드는 버리지 않는다."""
+        if table.name == "item" and "jira_key" not in table.c and "jira_key" in values:
+            if values["jira_key"] is not None:
+                raise StorageValidationError("item.jira_key: 이전 DB 구조에는 이슈 코드를 저장할 수 없습니다. DB 구조를 먼저 갱신해 주세요.")
+            return {key: value for key, value in values.items() if key != "jira_key"}
+        return values
 
     def delete(self, session, name, key):
         """전체 기본키로 지정한 행을 현재 세션에서 삭제한다.
