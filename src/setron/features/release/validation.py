@@ -3,16 +3,17 @@
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date
-import re
 
 from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.storage.inputs import identifier, merge_sources, require, required_text
-from setron.features.storage.validation import StorageValidationError
+from setron.features.storage.validation import StorageValidationError, normalize_item_jira
 
 from .schemas import ItemInput, ItemLinkInput, ReleaseInput
 
 RELEASE_EDITABLE = frozenset({"version_raw", "version_suffix", "released_at", "version_order", "item_mapping_status"})
-ITEM_EDITABLE = frozenset({"item_no", "content", "jira_key"})
+ITEM_EDITABLE = frozenset({"item_no", "content"})
+# 수정 기록 · 저장 후 수정으로 받을 수 있는 Item 필드. Jira(11/12)는 다시 가져오기의 충돌 비교(ITEM_EDITABLE)에는 넣지 않는다.
+ITEM_EDIT_RECORDED = ITEM_EDITABLE | {"jira_code", "jira_key"}
 
 
 def optional_integer(value, field):
@@ -52,10 +53,7 @@ def validate_values(table, values):
     else:
         required_text(values["content"], "content", 65535)
         optional_integer(values.get("item_no"), "item_no")
-        jira_key = values.get("jira_key")
-        require(jira_key is None or isinstance(jira_key, str) and 1 <= len(jira_key) <= 50
-                and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*-[0-9]+", jira_key) is not None,
-                "jira_key: JIRA 이슈 코드 하나 또는 None이 필요합니다.")
+        normalize_item_jira(values)
     text_fields = ("version_raw", "version_suffix") if table == "release_version" else ("content",)
     for field in text_fields:
         if values.get(field) is not None:
@@ -80,17 +78,24 @@ def prepare_record(value):
     require(type(value) in {ReleaseInput, ItemInput}, "릴리즈 또는 Item 등록 요청이 필요합니다.")
     table = "release_version" if isinstance(value, ReleaseInput) else "item"
     values = asdict(value)
+    if table == "item":
+        # DTO 기본 None은 별칭을 동시에 지정한 요청으로 취급하지 않는다.
+        if values.get("jira_key") is None:
+            values.pop("jira_key", None)
+        elif values.get("jira_code") is None:
+            values.pop("jira_code", None)
+        values = normalize_item_jira(values)
     if table == "release_version":
         identifier(values["family_id"], "family_id")
     for field in ("batch_id", "release_note_id"):
         if field in values and values[field] is not None:
             identifier(values[field], field)
     validate_values(table, values)
-    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDITABLE
+    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDIT_RECORDED
     names = value.edited_fields
     require(isinstance(names, tuple) and all(isinstance(name, str) for name in names), "수정 항목은 필드명 튜플이어야 합니다.")
     require(len(set(names)) == len(names) and set(names) <= editable, "수정 항목에 중복되거나 편집할 수 없는 필드가 있습니다.")
-    values["edited_fields"] = list(names)
+    values["edited_fields"] = list(dict.fromkeys("jira_code" if table == "item" and name == "jira_key" else name for name in names))
     values["source_reference"] = merge_sources(value.source_reference)
     return values
 
@@ -109,12 +114,13 @@ def prepare_changes(table, current, changes):
     raises
     - StorageValidationError: 원본 정보·식별자를 수정하거나 변경값이 잘못된 경우.
     """
-    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDITABLE
+    editable = RELEASE_EDITABLE if table == "release_version" else ITEM_EDIT_RECORDED
     require(isinstance(changes, dict) and set(changes) <= editable, "편집할 수 없는 필드가 포함됐습니다.")
-    result = deepcopy(changes)
-    combined = {**current, **result}
+    result = normalize_item_jira(changes) if table == "item" else deepcopy(changes)
+    comparison = normalize_item_jira(current) if table == "item" else current
+    combined = {**comparison, **result}
     validate_values(table, combined)
-    changed = [name for name in changes if current[name] != changes[name]]
+    changed = [name for name in result if comparison.get(name) != result[name]]
     result["edited_fields"] = list(dict.fromkeys([*current["edited_fields"], *changed]))
     return result
 

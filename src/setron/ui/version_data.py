@@ -48,7 +48,13 @@ class ReleaseEntry:
 class ItemEntry:
     item: Item
     sources: tuple[SourceReference, ...] = ()
+    jira_code_known: bool = False
     jira_key_known: bool = False
+
+    def __post_init__(self):
+        known = self.jira_code_known or self.jira_key_known
+        object.__setattr__(self, "jira_code_known", known)
+        object.__setattr__(self, "jira_key_known", known)
 
 
 @dataclass(frozen=True)

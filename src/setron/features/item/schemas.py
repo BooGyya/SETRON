@@ -84,7 +84,12 @@ class Item:
     item_id: int
     item_no: int | None
     content: str
-    jira_key: str | None = None
+    jira_code: str | None = None        # 저장된 Item별 Jira 코드(11/12). 없으면 원본 행에서 읽는다
+
+    @property
+    def jira_key(self):
+        """이전 읽기 호출의 호환 별칭. 저장 필드는 jira_code다."""
+        return self.jira_code
 
 
 @dataclass(frozen=True)

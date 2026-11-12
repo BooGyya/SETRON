@@ -175,7 +175,7 @@ def build_sql(catalog):
             if jira:
                 source.update(jira['source_reference'])
             row = {'release_note_id': Expr(f'@note_{key}'), 'item_no': item['no'],
-                   'jira_key': jira['jira_key'] if jira else None, 'content': item['content'],
+                   'jira_code': jira['jira_key'] if jira else None, 'content': item['content'],
                    'batch_id': Expr(f'@batch_{item_workbook}'), 'source_reference': Expr(json_sql(source)), 'edited_fields': '[]'}
             insert('item', row)
             emit(f'SET @i_{key}_{i} = IF(@seed_install, LAST_INSERT_ID(), NULL)')

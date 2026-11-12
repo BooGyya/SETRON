@@ -98,6 +98,10 @@ def _matches_saved(field, value, original, values, kind, address):
         return current == text
     if current == text:
         return True
+    if field in {"jira_code", "jira_key"}:   # 각 조각이 같은 근거 셀에 실제로 있어야 한다.
+        from setron.features.item.jira import matches_source
+
+        return matches_source(current, text)
     candidates = [current, text]
     if field in {"base_date", "release_date"}:
         candidates.extend(_DATES.findall(text))

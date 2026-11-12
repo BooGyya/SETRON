@@ -111,7 +111,7 @@ def test_row_shows_representative_release_and_tooltip(window):
 
 @pytest.mark.parametrize("width", [1600, 960])
 def test_list_header_jira_style_and_expanded_detail_avoid_repeated_summary(app, data, width):
-    entries = tuple(replace(entry, item=replace(entry.item, jira_key="ETOJ-9073" if entry.item.item_id == 1 else None),
+    entries = tuple(replace(entry, item=replace(entry.item, jira_code="ETOJ-9073" if entry.item.item_id == 1 else None),
                             jira_key_known=True) for entry in data.versions.items)
     window = _open(app, replace(data, versions=replace(data.versions, items=entries)), width=width)
     try:

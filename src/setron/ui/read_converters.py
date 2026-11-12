@@ -114,8 +114,9 @@ def read_item(view: RecordView) -> ItemEntry:
     row = _record(view, "item", ("item_id", "item_no", "content"))
     identifier(row["item_id"], "item_id")
     validate_values("item", row)
-    return ItemEntry(Item(row["item_id"], row["item_no"], row["content"], row.get("jira_key")),
-                     source_references(view), "jira_key" in row)
+    code = row["jira_code"] if "jira_code" in row else row.get("jira_key")
+    return ItemEntry(Item(row["item_id"], row["item_no"], row["content"], code),
+                     source_references(view), "jira_code" in row or "jira_key" in row)
 
 
 def read_item_links(detail: ReleaseDetail) -> tuple[VersionItem, ...]:

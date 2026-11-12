@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from pymysql.converters import escape_item
 
-from setron.features.db_import.dump import DUMP_COLUMNS, _read_file, columns_from_definition, values_for_columns
+from setron.features.db_import.dump import DUMP_COLUMNS, DumpFormatError, _read_file, columns_from_definition, project_row, values_for_columns
 from setron.features.reference_data import default_area
 from setron.features.storage.validation import TABLE_NAMES, decode_record, encode_record
 
@@ -200,12 +200,17 @@ def render(dump: Dump, rows) -> str:
             columns = columns_from_definition(table, definition)
             out.append(f"INSERT INTO `{table}` (" + ", ".join(f"`{c}`" for c in columns) + ") VALUES\n")
             encoded = [encode_record(table, row) for row in rows[table]]
+            values = [values_for_columns(table, row, columns) for row in encoded]
+            limits = {field: int(length) for field, length in re.findall(
+                r"`(jira_key|jira_code)`\s+VARCHAR\((\d+)\)", definition, re.I)}
+            if any(value is not None and (not isinstance(value, str) or len(value) > limits[field])
+                   for row in values for field, value in zip(columns, row, strict=True) if field in limits):
+                raise DumpFormatError("Item의 Jira 값을 대상 열에 손실 없이 저장할 수 없습니다.")
 
             def literal(value):
                 return "_binary X'" + value.hex() + "'" if isinstance(value, bytes) else escape_item(value, "utf8mb4")
 
-            out.append(",\n".join("(" + ", ".join(literal(value) for value in values_for_columns(table, row, columns)) + ")"
-                                 for row in encoded) + ";\n")
+            out.append(",\n".join("(" + ", ".join(literal(value) for value in row) + ")" for row in values) + ";\n")
         out.append("\n")
     out.append(dump.footer.lstrip("\n"))
     result = "".join(out)
@@ -216,7 +221,25 @@ def render(dump: Dump, rows) -> str:
 
 def build(sql: str) -> str:
     dump = read_sql(sql)
-    return render(dump, augment(dump.rows))
+    rows = augment(dump.rows)
+    dump = canonical_item_dump(dump)
+    rows["item"] = [project_row("item", row, DUMP_COLUMNS["item"]) for row in rows["item"]]
+    return render(dump, rows)
+
+
+def canonical_item_dump(dump: Dump) -> Dump:
+    """제공 원본은 수정하지 않고 가공 출력의 Jira 열만 현재 이름으로 바꾼다."""
+    result = deepcopy(dump)
+    definition = result.definitions["item"]
+    if (columns_from_definition("item", definition) != DUMP_COLUMNS["item"]
+            or not re.search(r"`jira_code`\s+varchar\(200\)", definition, re.I)):
+        lines = [line for line in definition.splitlines(keepends=True)
+                 if not re.match(r"  `jira_(?:key|code)` ", line) and "KEY `ix_item_jira_key`" not in line]
+        position = next(index for index, line in enumerate(lines) if line.startswith("  `edited_fields` ")) + 1
+        lines.insert(position, "  `jira_code` varchar(200) DEFAULT NULL COMMENT 'Item Jira 코드; 미기재는 NULL',\n")
+        result.definitions["item"] = "".join(lines)
+    result.rows["item"] = [project_row("item", row, DUMP_COLUMNS["item"]) for row in result.rows["item"]]
+    return result
 
 
 def main():

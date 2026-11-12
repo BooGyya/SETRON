@@ -528,7 +528,7 @@ def test_legacy_item_backup_and_failed_new_load_restore_exact_old_columns_and_va
     backup, = (tmp_path / "backups").glob("*.sql")
     assert "`jira_key`" not in backup.read_text(encoding="utf-8")
     restored = initializer.read_dataset(backup)
-    assert restored["item"] == ({**old_item, "jira_key": None},)
+    assert restored["item"] == (old_item,)
 
 
 def test_legacy_backup_can_be_imported_into_new_schema_with_null_jira(initializer, setup, tmp_path):
@@ -540,7 +540,7 @@ def test_legacy_backup_can_be_imported_into_new_schema_with_null_jira(initialize
     _, rows, _ = initializer._backup(db, db.cursor(), tmp_path, config)
     initializer._drop(db.cursor())
     initializer._apply(db, db.cursor(), rows, initializer.schema_statements())
-    assert db.columns["item"] == DUMP_COLUMNS["item"] and db.rows["item"][0]["jira_key"] is None
+    assert db.columns["item"] == DUMP_COLUMNS["item"] and db.rows["item"][0]["jira_code"] is None
 
 
 def test_nonnull_jira_cannot_be_discarded_by_restoring_old_item_structure(initializer, setup, tmp_path):
@@ -554,3 +554,80 @@ def test_nonnull_jira_cannot_be_discarded_by_restoring_old_item_structure(initia
     with pytest.raises(DumpFormatError, match="손실 없이"):
         initializer._apply(db, db.cursor(), rows, definitions)
     assert not db.log
+
+
+@pytest.mark.parametrize("layout", ["old", "key", "code", "renamed", "dual"])
+def test_backup_and_restore_keep_each_historical_jira_layout_exact(initializer, setup, tmp_path, layout):
+    from setron.features.db_import.dump import (
+        DUAL_ITEM_COLUMNS, LEGACY_ITEM_COLUMNS, LEGACY_KEY_ITEM_COLUMNS, LEGACY_RENAMED_CODE_ITEM_COLUMNS,
+    )
+    _, _, db, config, _ = setup
+    columns = {"old": LEGACY_ITEM_COLUMNS, "key": LEGACY_KEY_ITEM_COLUMNS,
+               "code": DUMP_COLUMNS["item"], "renamed": LEGACY_RENAMED_CODE_ITEM_COLUMNS,
+               "dual": DUAL_ITEM_COLUMNS}[layout]
+    item = {"item_id": 7, "release_note_id": None, "item_no": 3, "content": "원본 본문😀", "batch_id": 1,
+            "source_reference": None, "edited_fields": "[]"}
+    for field in ("jira_key", "jira_code"):
+        if field in columns:
+            item[field] = "ETOJ-1, ETOJ-2"
+    db.rows["item"], db.columns["item"] = (item,), columns
+    before = deepcopy(db.rows)
+    _, backed_up, definitions = initializer._backup(db, db.cursor(), tmp_path, config)
+    assert backed_up == before
+    initializer._drop(db.cursor())
+    initializer._apply(db, db.cursor(), backed_up, definitions)
+    assert db.rows == before and db.columns["item"] == columns
+    initializer._drop(db.cursor())
+    initializer._apply(db, db.cursor(), backed_up, initializer.schema_statements())
+    assert db.rows["item"][0]["jira_code"] == (None if layout == "old" else "ETOJ-1, ETOJ-2")
+    assert backed_up == before
+
+
+def test_apply_rejects_long_jira_before_ddl_for_a_legacy_fifty_character_column(initializer, setup, tmp_path):
+    from setron.features.db_import.dump import LEGACY_KEY_ITEM_COLUMNS
+    _, _, db, config, _ = setup
+    db.columns["item"] = LEGACY_KEY_ITEM_COLUMNS
+    _, rows, definitions = initializer._backup(db, db.cursor(), tmp_path, config)
+    definitions = tuple(definition.replace("`jira_key` text", "`jira_key` varchar(50)") for definition in definitions)
+    rows["item"] = ({"item_id": 1, "release_note_id": None, "item_no": 1, "content": "원문", "batch_id": 1,
+                     "source_reference": None, "edited_fields": "[]", "jira_code": "TEAM-" + "1" * 60},)
+    db.log.clear()
+    with pytest.raises(initializer.SetupError, match="손실 없이"):
+        initializer._apply(db, db.cursor(), rows, definitions)
+    assert db.log == []
+
+
+def test_old_columnless_dump_derives_original_jira_only_when_restoring_to_new_schema(initializer, setup, tmp_path):
+    import json
+    _, _, db, _, _ = setup
+    raw = {"노트": {"A1": "No", "B1": "Update내용", "C1": "JIRA",
+                    "A2": 1, "B2": "원본 내용", "C2": "ETOJ-987"}}
+    references = {"content": {"sheet": "노트", "cells": ["B2"]}}
+    path = tmp_path / "old-with-original.sql"
+    path.write_text(_export({
+        "import_batch": [(1, "EXCEL", datetime(2026, 11, 12), json.dumps(raw, ensure_ascii=False))],
+        "item": [(1, None, 1, "원본 내용", 1, json.dumps(references, ensure_ascii=False), "[]")],
+    }, legacy_item=True), encoding="utf-8")
+    rows = initializer.read_dataset(path)
+    before = deepcopy(rows)
+    assert "jira_code" not in rows["item"][0] and "jira_key" not in rows["item"][0]
+    initializer._drop(db.cursor())
+    initializer._apply(db, db.cursor(), rows, initializer.schema_statements())
+    assert db.rows["item"][0]["jira_code"] == "ETOJ-987"
+    assert rows == before
+
+
+def test_oversized_derived_jira_is_rejected_before_connect_or_drop(initializer, setup, tmp_path, monkeypatch):
+    import json
+    _, _, db, config, _ = setup
+    raw = {"노트": {"A1": "Update내용", "B1": "JIRA", "A2": "원문", "B2": "TEAM-" + "1" * 201}}
+    source = tmp_path / "long-original.sql"
+    source.write_text(_export({
+        "import_batch": [(1, "EXCEL", datetime(2026, 11, 12), json.dumps(raw))],
+        "item": [(1, None, 1, "원문", 1, json.dumps({"content": {"sheet": "노트", "cells": ["A2"]}}), "[]")],
+    }, legacy_item=True), encoding="utf-8")
+    monkeypatch.setattr(initializer.pymysql, "connect", lambda **_: pytest.fail("Jira 사전 검증 전 DB 접속 금지"))
+    before = deepcopy(db.rows)
+    with pytest.raises(DumpFormatError, match="자르지 않고"):
+        initializer.prepare(config, folder=tmp_path, source=source, confirm=lambda _: True)
+    assert db.rows == before and not db.log and not (tmp_path / "backups").exists()

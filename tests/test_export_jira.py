@@ -20,11 +20,11 @@ from test_release_revision import all_rows, release, revision_storage  # noqa: F
 
 @pytest.fixture
 def legacy_storage(revision_storage):
-    """이 테스트의 메모리 SQLite만 jira_key 도입 전 실제 열 구성으로 바꾼다."""
+    """이 테스트의 메모리 SQLite만 Jira 저장 열 도입 전 실제 열 구성으로 바꾼다."""
     storage = revision_storage
     assert storage.database.engine.dialect.name == "sqlite"
     with storage.database.engine.begin() as connection:
-        connection.exec_driver_sql("ALTER TABLE item DROP COLUMN jira_key")
+        connection.exec_driver_sql("ALTER TABLE item DROP COLUMN jira_code")
         metadata = storage.repository.metadata
         metadata.remove(storage.repository.table("item"))
         Table("item", metadata, autoload_with=connection)
@@ -110,29 +110,29 @@ def test_legacy_jira_cell_is_literal_text_even_when_it_starts_with_formula_prefi
         assert sheet.cell(2, column).data_type == "s"
 
 
-@pytest.mark.parametrize("jira_key", ["ETOJ-9073", None])
-def test_stored_jira_edit_or_explicit_clear_overrides_original_for_linked_and_unlinked_items(revision_storage, jira_key):
+@pytest.mark.parametrize("jira_code", ["ETOJ-9073", None])
+def test_stored_jira_edit_or_explicit_clear_overrides_original_for_linked_and_unlinked_items(revision_storage, jira_code):
     storage = revision_storage
     _, item_id, batch_id = jira_source(storage)
     service = ReleaseService(storage)
-    service.update_item(item_id, {"jira_key": "ETOJ-9073"})
-    service.update_item(item_id, {"jira_key": jira_key})
+    service.update_item(item_id, {"jira_code": "ETOJ-9073"})
+    service.update_item(item_id, {"jira_code": jira_code})
     with storage.transaction() as tx:
-        tx.insert("item", {"item_no": 8, "content": "연결 전 저장 Item", "jira_key": jira_key,
+        tx.insert("item", {"item_no": 8, "content": "연결 전 저장 Item", "jira_code": jira_code,
                            "batch_id": batch_id, "source_reference": {"content": {"sheet": "노트", "cells": ["B2"]}},
                            "edited_fields": []})
     before = {table: all_rows(storage, table) for table in ("item", "import_batch", "release_version_item")}
     for selected in (None, (batch_id,)):
         with closing(build_management_workbook(storage, batch_ids=selected)) as book:
             rows = records(book["릴리즈노트"])
-            assert len(rows) == 2 and all(row["Jira 코드"] == (jira_key or "") for row in rows)
+            assert len(rows) == 2 and all(row["Jira 코드"] == (jira_code or "") for row in rows)
     assert {table: all_rows(storage, table) for table in before} == before
 
 
 def test_stored_jira_survives_export_and_real_reimport_to_another_database(revision_storage):
     storage = revision_storage
     _, item_id, _ = jira_source(storage)
-    ReleaseService(storage).update_item(item_id, {"jira_key": "ETOJ-9073"})
+    ReleaseService(storage).update_item(item_id, {"jira_code": "ETOJ-9073"})
     with closing(build_management_workbook(storage)) as book:
         values = [list(row) for row in book["릴리즈노트"].iter_rows(values_only=True)]
     sheet = SheetData("jira.xlsx", "릴리즈노트", 1, 1, values)
@@ -150,4 +150,4 @@ def test_stored_jira_survives_export_and_real_reimport_to_another_database(revis
         saver.save(build_save_request(draft, "jira-roundtrip", reference))
         rows = records(build_management_workbook(target)["릴리즈노트"])
         assert len(rows) == 1 and rows[0]["Jira 코드"] == "ETOJ-9073"
-        assert all_rows(target, "item")[0]["jira_key"] == "ETOJ-9073"
+        assert all_rows(target, "item")[0]["jira_code"] == "ETOJ-9073"

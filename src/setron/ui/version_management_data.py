@@ -144,12 +144,12 @@ def make_item(catalog, release_id, values, *, entry=None):
     if number is not None and (type(number) is not int or number < 1):
         raise ValueError("Item 번호는 양의 정수 또는 빈 값이어야 합니다.")
     iid = entry.item.item_id if entry else max((e.item.item_id for e in catalog.items), default=0) + 1
-    jira_key = values.get("jira_key", values.get("jira")) or (entry.item.jira_key if entry else None)
+    jira_code = values.get("jira_code", values.get("jira_key", values.get("jira"))) or (entry.item.jira_code if entry else None)
     from setron.features.release.validation import validate_values
-    validate_values("item", {"content": content, "item_no": number, "jira_key": jira_key})
-    item = Item(iid, number, content, jira_key)
-    result = replace(entry, item=item, jira_key_known=True) if entry else ItemEntry(
-        item, (SourceReference("직접 등록 · 작업본"),), jira_key_known=True)
+    validate_values("item", {"content": content, "item_no": number, "jira_code": jira_code})
+    item = Item(iid, number, content, jira_code)
+    result = replace(entry, item=item, jira_code_known=True) if entry else ItemEntry(
+        item, (SourceReference("직접 등록 · 작업본"),), jira_code_known=True)
     scope = TargetScope(values.get("target_scope", "UNKNOWN"))
     ids = tuple(values.get("target_group_ids", ())) if scope is TargetScope.LISTED else ()
     allowed = set(catalog.entry(release_id).model_ids)

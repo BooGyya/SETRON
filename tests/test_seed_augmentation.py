@@ -276,6 +276,8 @@ def test_hpa_area_is_not_applicable_with_exact_original_note(dataset):
 
 def test_pm_and_approved_decision_branches_are_emitted_with_exact_row_counts(dataset):
     from build_seed import build_sql
+    from test_demo_seed_targets import _split
+    import re
 
     source, effective, _ = dataset
     sql = build_sql(source)
@@ -284,6 +286,24 @@ def test_pm_and_approved_decision_branches_are_emitted_with_exact_row_counts(dat
                 "equipment_pm": 36, "risk_rule": 2}
     for table, count in expected.items():
         assert sum(statement.startswith(f"INSERT INTO {table} (") for statement in statements) == count
+    jira = []
+    item_statements = [statement for statement in statements if statement.startswith("INSERT INTO item (")]
+    assert len(item_statements) == 2398
+    for statement in item_statements:
+        heading, body = statement.split("\nSELECT ", 1)
+        columns = heading[len("INSERT INTO item ("):-1].split(", ")
+        assert "jira_code" in columns and "jira_key" not in columns
+        for column in columns:
+            expression, body = _split(body)
+            if column == "jira_code":
+                if expression != "NULL":
+                    value = re.fullmatch(r"CONVERT\(0x([0-9a-f]+) USING utf8mb4\) COLLATE utf8mb4_unicode_ci", expression)
+                    assert value
+                    jira.append(bytes.fromhex(value[1]).decode("utf-8"))
+                break
+    expected_jira = [item["jira_key"] for family in effective["seed_augmentation"]["source_item_jira"].values()
+                     for item in family.values()]
+    assert Counter(jira) == Counter(expected_jira) and len(jira) == 987 and len(set(jira)) == 945
     scenarios = effective["seed_augmentation"]["scenarios"]
     assert len(scenarios["unregistered"]) == 3 and len(scenarios["aging"]) == 2
     assert len(scenarios["risk_rules"]) == 2
@@ -296,7 +316,7 @@ def test_new_seed_key_and_actual_code_collisions_prevent_old_dataset_skip(datase
 
     source, _, plan = dataset
     sql = build_sql(source)
-    assert SEED_KEY.startswith("demo_seed.v4:") and GENERATOR_REVISION == 8
+    assert SEED_KEY.startswith("demo_seed.v4:") and GENERATOR_REVISION == 9
     installed = next(statement for statement in sql.split(";\n\n") if statement.startswith("SET @seed_done"))
     assert literal(SEED_KEY) in installed and literal("demo_seed.v2:excel:300x6:2026-10-21") not in installed
     assert literal("demo_seed.v3:excel:300x6:2026-10-21") not in installed
@@ -348,6 +368,6 @@ def test_inferred_items_do_not_copy_original_ticket_numbers(dataset):
 
 def test_item_schema_has_one_optional_nonunique_jira_column():
     schema = (DATABASE / "schema_mysql5619.sql").read_text(encoding="utf-8")
-    assert "jira_key VARCHAR(50) COLLATE utf8mb4_bin NULL" in schema
-    assert "KEY ix_item_jira_key (jira_key)" in schema
-    assert "UNIQUE KEY ix_item_jira_key" not in schema
+    assert "jira_code VARCHAR(200) NULL" in schema
+    assert "jira_key VARCHAR" not in schema
+    assert "UNIQUE KEY ix_item_jira_code" not in schema

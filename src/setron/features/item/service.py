@@ -50,7 +50,7 @@ def search_items(items: Iterable[Item], query: str, *, match_words: bool = False
     words = keyword.split() if match_words else (keyword,)
     found = [
         item for item in items
-        if all(word in (item.content + " " + (item.jira_key or "")).casefold() for word in words)
+        if all(word in (item.content + " " + (item.jira_code or "")).casefold() for word in words)
         or (item.item_no is not None and keyword == str(item.item_no))
     ]
     return tuple(sorted(found, key=lambda i: (i.item_no is None, i.item_no or 0, i.item_id)))

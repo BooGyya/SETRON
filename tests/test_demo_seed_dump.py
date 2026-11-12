@@ -144,3 +144,22 @@ def test_main_preserves_source_and_the_two_variants(builder, baseline, tmp_path,
     assert not builder.read_sql(setup.read_text(encoding="utf-8")).rows["risk_rule"]
     builder.main()
     assert (working.read_bytes(), setup.read_bytes()) == first
+
+
+def test_legacy_key_fifty_column_render_and_canonical_conversion_preserve_value(builder, baseline):
+    legacy = deepcopy(baseline)
+    definition = legacy.definitions["item"]
+    lines = [line for line in definition.splitlines(keepends=True) if not line.startswith("  `jira_code` ")]
+    position = next(index for index, line in enumerate(lines) if line.startswith("  `item_no` ")) + 1
+    lines.insert(position, "  `jira_key` varchar(50) DEFAULT NULL,\n")
+    legacy.definitions["item"] = "".join(lines)
+    legacy.rows["item"][0]["jira_code"] = "ETOJ-1"
+    rendered = builder.read_sql(builder.render(legacy, legacy.rows))
+    assert rendered.rows["item"][0]["jira_key"] == "ETOJ-1"
+    assert "jira_code" not in rendered.rows["item"][0]
+    converted = builder.canonical_item_dump(rendered)
+    assert converted.rows["item"][0]["jira_code"] == "ETOJ-1"
+    assert "jira_key" not in converted.rows["item"][0]
+    legacy.rows["item"][0]["jira_code"] = "TEAM-" + "1" * 60
+    with pytest.raises(builder.DumpFormatError, match="손실 없이"):
+        builder.render(legacy, legacy.rows)

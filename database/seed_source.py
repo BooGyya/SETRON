@@ -13,7 +13,7 @@ from setron.features.reference_data import resolve_model_text, MODEL_STRUCTURES
 DATES = tuple(date(2026, month, 21) for month in range(5, 11))
 SEED_KEY = "demo_seed.v4:excel:300x6:2026-10-21"
 LEGACY_KEY = "demo_seed.v1:300x6:2026-10-21"
-GENERATOR_REVISION = 8   # 8: 원본 Jira 987건·실제 셀 출처 보존, 추정 Item의 Ticket 비복제
+GENERATOR_REVISION = 9   # 9: jira_code 저장으로 통일, 원본 Jira 987건·기존 셀 출처 보존
 FAMILIES = (
     ("c3_legacy", "M-C3", "C3 구UI", "LEGACY"),
     ("c3", "M-C3", "C3 통합UI", "INTEGRATED"),

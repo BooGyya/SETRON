@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 from sqlalchemy import Date, DateTime, Integer, LargeBinary, MetaData, String, and_, select
 
-from .validation import BINARY_COLUMNS, TABLE_NAMES, StorageValidationError
+from .validation import BINARY_COLUMNS, TABLE_NAMES, StorageValidationError, normalize_item_jira
 
 
 class StorageRepository:
@@ -190,12 +190,23 @@ class StorageRepository:
 
     @staticmethod
     def _legacy_jira_values(table, values):
-        """이전 item 구조에는 값 없는 새 선택 필드만 생략한다. 실제 코드는 버리지 않는다."""
-        if table.name == "item" and "jira_key" not in table.c and "jira_key" in values:
-            if values["jira_key"] is not None:
-                raise StorageValidationError("item.jira_key: 이전 DB 구조에는 이슈 코드를 저장할 수 없습니다. DB 구조를 먼저 갱신해 주세요.")
-            return {key: value for key, value in values.items() if key != "jira_key"}
-        return values
+        """실제 열에 맞춰 이전 별칭만 변환한다. 저장할 수 없는 실제 값은 버리지 않는다."""
+        if table.name != "item":
+            return values
+        result = normalize_item_jira(values)
+        if "jira_code" not in result:
+            return result
+        code = result["jira_code"]
+        if "jira_code" in table.c:
+            if "jira_key" in table.c:
+                result["jira_key"] = code
+        elif "jira_key" in table.c:
+            result["jira_key"] = result.pop("jira_code")
+        elif code is None:
+            result.pop("jira_code")
+        else:
+            raise StorageValidationError("item.jira_code: 이전 DB 구조에는 이슈 코드를 저장할 수 없습니다. DB 구조를 먼저 갱신해 주세요.")
+        return result
 
     def delete(self, session, name, key):
         """전체 기본키로 지정한 행을 현재 세션에서 삭제한다.

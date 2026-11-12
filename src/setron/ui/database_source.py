@@ -372,8 +372,12 @@ def _version_catalog(groups, families, releases, items, links, observations, app
         tuple(pair.model_id for pair in known if pair.family_id == row["family_id"]),
         _source_references(row), row["item_mapping_status"] == "VERIFIED",
     ) for row in releases)
-    item_entries = tuple(ItemEntry(Item(row["item_id"], row["item_no"], row["content"], row.get("jira_key")),
-                                   _source_references(row), "jira_key" in row) for row in items)
+    # 실제 저장 열의 NULL도 확정값이다. 구형 별칭은 canonical 열 자체가 없을 때만 읽는다.
+    item_entries = tuple(ItemEntry(
+        Item(row["item_id"], row["item_no"], row["content"],
+             row["jira_code"] if "jira_code" in row else row.get("jira_key")),
+        _source_references(row), jira_code_known="jira_code" in row or "jira_key" in row,
+    ) for row in items)
     memberships = tuple(VersionItem(row["release_version_id"], row["item_id"], ItemState(row["item_state"]),
                                     TargetScope(row["target_scope"]), tuple(row["target_group_ids"] or ()))
                         for row in links)
@@ -556,7 +560,11 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
     if not values.get("SETRON_DB_NAME"):
         return None, None
     try:
-        storage = StorageService(Database.from_env(values))
+        database = Database.from_env(values)
+        storage = StorageService(database)
+        # 업그레이드가 DDL 후 저장소 reflection을 갱신한다. 기존 Jira 값과 NULL은 보존한다.
+        from setron.features.item.jira_upgrade import upgrade as upgrade_jira
+        upgrade_jira(storage, database.engine)
         return DatabaseDashboardSource(lambda catalog=None, *, publish_lines=True:
                                        load_dashboard_source(storage, catalog, publish_lines=publish_lines)), None
     except (DatabaseError, StorageValidationError) as error:

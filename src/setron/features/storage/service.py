@@ -6,7 +6,7 @@ from copy import deepcopy
 from sqlalchemy import or_, select
 
 from .repository import StorageRepository
-from .validation import StorageValidationError, decode_record, encode_record
+from .validation import StorageValidationError, decode_record, encode_record, normalize_item_jira
 
 
 class StorageService:
@@ -114,6 +114,9 @@ class StorageTransaction:
         primary_key = self.repository.table(table).primary_key.columns.keys()
         if any(field in changes and changes[field] != current[field] for field in primary_key):
             raise StorageValidationError("기록의 기본키는 변경할 수 없습니다.")
+        if table == "item":
+            current = normalize_item_jira(current)
+            changes = normalize_item_jira(changes)
         current.update(deepcopy(changes))
         self.repository.update(self.session, table, key, encode_record(table, current))
         return self.get(table, key)

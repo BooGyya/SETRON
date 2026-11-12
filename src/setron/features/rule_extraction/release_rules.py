@@ -17,6 +17,8 @@ from typing import Any
 
 from setron.features.reference_data import MODEL_CATEGORIES
 
+from setron.features.item.jira import codes_in, join_codes
+
 from .status_rules import Pos, _clean, _norm, _text
 
 ALIASES: dict[str, tuple[str, ...]] = {
@@ -166,25 +168,38 @@ def parse_release(rows: list[list[Any]]) -> list[ReleaseRow] | None:
             continue
         no_value, no_col = cell(row, "no")
         date_value, date_col = cell(row, "date")
+        jira_value, jira_col = cell(row, "jira")         # JIRA 열 값 · 비고 속 ETOJ-1234 (11/11 멘토링)
+        jira_header = rows[h][jira_col] if jira_col is not None and jira_col < len(rows[h]) else None
+        jira_notes = []
+        parts = codes_in(jira_value, jira_header) if jira_col is not None else ()
+        try:
+            jira = join_codes(parts)
+        except ValueError as error:
+            # 검토 화면에서 전체 원문과 길이 오류를 보이도록 보존한다. 저장 검증이 명시적으로 차단한다.
+            jira = ", ".join(parts)
+            jira_notes.append((str(error), "jira_code", (r, jira_col)))
         row_date = current_date
         if _text(date_value).strip() and (found_date := _DATE.search(_text(date_value))):
             row_date = (found_date.group(0), (r, date_col))
         marks = [(c, header, _text(row[c]).strip()) for c, header in sorted(flags.items()) if _text(row[c]).strip()]
         for name in current:
             base_values = {"version_raw": name, "item_no": _item_no(no_value), "content": _text(content_value),
-                           "release_date": row_date[0] if row_date else None, **common, "family_name": None}
+                           "jira_code": jira, "release_date": row_date[0] if row_date else None, **common,
+                           "family_name": None}
             base_positions = {"version_raw": current_pos, "content": (r, content_col), **common_pos}
+            if jira:
+                base_positions["jira_code"] = (r, jira_col)
             if base_values["item_no"] is not None:
                 base_positions["item_no"] = (r, no_col)
             if row_date:
                 base_positions["release_date"] = row_date[1]
             if not marks:
-                out.append(ReleaseRow(dict(base_values), dict(base_positions)))
+                out.append(ReleaseRow(dict(base_values), dict(base_positions), list(jira_notes)))
                 continue
             for c, header, mark in marks:
                 values = {**base_values, "target_models": header, "modification_mark": mark}
                 positions = {**base_positions, "target_models": (h, c), "modification_mark": (r, c)}
-                out.append(ReleaseRow(values, positions))
+                out.append(ReleaseRow(values, positions, list(jira_notes)))
     if out and header_notes:
         out[0].notes.extend(header_notes)
     # 재배포(같은 버전·다른 출시일) 안내는 AI 추출과 같이 검증 단계(excel_import._release_issues)가 남긴다.

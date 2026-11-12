@@ -62,20 +62,29 @@ def test_json_and_exact_text_round_trip_without_changing_source():
     assert "edited_fields" not in original
 
 
-@pytest.mark.parametrize("key", [None, "ETOJ-3257", "etoj-3257", "TEAM_2-1", "A" * 48 + "-1"])
+@pytest.mark.parametrize("key", [None, "ETOJ-3257", "etoj-3257", "TEAM_2-1", "A" * 198 + "-1", "ETOJ-1, ETOJ-2"])
 def test_item_jira_is_nullable_preserves_case_and_has_no_global_uniqueness(key):
-    original = {"content": "원문", "jira_key": key}
+    original = {"content": "원문", "jira_code": key}
     encoded = encode_record("item", original, inserting=True)
-    assert encoded["jira_key"] == key
-    assert encode_record("item", original, inserting=True)["jira_key"] == key
-    assert original == {"content": "원문", "jira_key": key}
-    assert encode_record("item", {"content": "원문"}, inserting=True)["jira_key"] is None
+    assert encoded["jira_code"] == key
+    assert encode_record("item", original, inserting=True)["jira_code"] == key
+    assert original == {"content": "원문", "jira_code": key}
+    assert encode_record("item", {"content": "원문"}, inserting=True)["jira_code"] is None
 
 
-@pytest.mark.parametrize("key", ["", " ETOJ-1", "ETOJ-1 ", "ETOJ-1\n", "ETOJ", "ETOJ-x", "1TEAM-1", "가-1", "A" * 49 + "-1", 123])
-def test_item_jira_rejects_bad_format_or_over_fifty_characters(key):
-    with pytest.raises(StorageValidationError, match="jira_key"):
-        encode_record("item", {"content": "원문", "jira_key": key}, inserting=True)
+@pytest.mark.parametrize("key", ["A" * 201, 123, [], "\ud800"])
+def test_item_jira_rejects_wrong_types_invalid_unicode_and_over_two_hundred_characters(key):
+    with pytest.raises(StorageValidationError, match="jira_code"):
+        encode_record("item", {"content": "원문", "jira_code": key}, inserting=True)
+
+
+def test_legacy_jira_alias_is_lossless_and_conflicting_null_is_not_replaced():
+    value = {"content": "원문", "jira_key": " ETOJ-1; ETOJ-2\nETOJ-1 "}
+    encoded = encode_record("item", value, inserting=True)
+    assert encoded["jira_code"] == "ETOJ-1, ETOJ-2" and "jira_key" not in encoded
+    assert value["jira_key"] == " ETOJ-1; ETOJ-2\nETOJ-1 "
+    with pytest.raises(StorageValidationError, match="서로 다릅니다"):
+        encode_record("item", {"content": "원문", "jira_code": None, "jira_key": "ETOJ-1"}, inserting=True)
 
 
 @pytest.mark.parametrize(

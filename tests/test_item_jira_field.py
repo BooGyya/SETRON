@@ -86,13 +86,13 @@ def test_excel_item_registration_and_official_edits_persist_jira(revision_storag
     detail = service.register_release(ReleaseInput(family_id=1, version_raw="v1"), (
         ItemInput(content="변경 내용", batch_id=batch["batch_id"], source_reference={"content": {"sheet": "노트", "cells": ["A2"]}}),))
     item = detail.items[0].item.current
-    assert item["jira_key"] == "ETOJ-4120" and item["source_reference"]["jira_key"]["cells"] == ["B2"]
-    edited = service.update_item(item["item_id"], {"jira_key": "ETOJ-9999"})
-    assert edited.current["jira_key"] == "ETOJ-9999" and "jira_key" in edited.current["edited_fields"]
+    assert item["jira_code"] == "ETOJ-4120" and item["source_reference"]["jira_code"]["cells"] == ["B2"]
+    edited = service.update_item(item["item_id"], {"jira_code": "ETOJ-9999"})
+    assert edited.current["jira_code"] == "ETOJ-9999" and "jira_code" in edited.current["edited_fields"]
     management = ManagementService(storage)
     current = management.get_record("item", {"item_id": item["item_id"]})
-    management.save((RecordEdit(table="item", key=current.key, revision=current.revision, changes={"jira_key": None}),))
-    assert service.get_item(item["item_id"]).current["jira_key"] is None
+    management.save((RecordEdit(table="item", key=current.key, revision=current.revision, changes={"jira_code": None}),))
+    assert service.get_item(item["item_id"]).current["jira_code"] is None
 
 
 @pytest.mark.parametrize("complete_note", [False, True])
@@ -112,4 +112,4 @@ def test_excel_save_extracts_jira_before_both_new_and_complete_note_paths(revisi
     with revision_storage.transaction() as tx:
         from setron.features.equipment.repository import EquipmentRepository
         items = EquipmentRepository().rows(tx, "item")
-    assert len(items) == 1 and items[0]["jira_key"] == "ETOJ-3257"
+    assert len(items) == 1 and items[0]["jira_code"] == "ETOJ-3257"

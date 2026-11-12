@@ -119,6 +119,19 @@ def _fingerprint(value):
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _matches_item_fingerprint(expected, evidence):
+    """컬럼 이름만 이관한 과거 표식 지문도 인정한다. 값 변경은 계속 무효화한다."""
+    if expected == _fingerprint(evidence):
+        return True
+    item = evidence["item"]
+    if "jira_code" not in item or "jira_key" in item:
+        return False
+    previous = {key: value for key, value in item.items() if key != "jira_code"}
+    # Jira 열 자체가 없던 표식은 당시 캡처한 필드로 검증한다. 최초 원본 보강도 보존한다.
+    candidates = [{**previous, "jira_key": item["jira_code"]}, previous]
+    return any(expected == _fingerprint({**evidence, "item": candidate}) for candidate in candidates)
+
+
 def _marks(values):
     marks = tuple(values)
     require(bool(marks) and all(isinstance(mark, ModelItemMark) for mark in marks), "모델별 Item 적용 정보가 필요합니다.")
@@ -211,7 +224,7 @@ class SharedNoteItemService:
             link = tx.get("release_version_item", {"release_version_id": release_id, "item_id": item_id})
             models = sorted((tx.get("equipment_group", {"group_id": model_id}) for model_id in ids),
                             key=lambda value: value["group_id"])
-            if payload.get("fingerprint") != _fingerprint({"release": release, "item": item, "models": models}):
+            if not _matches_item_fingerprint(payload.get("fingerprint"), {"release": release, "item": item, "models": models}):
                 reason = "릴리즈·Item·모델 정보가 변경됐습니다. 적용 표식을 다시 확인해 주세요."
             elif payload.get("link_fingerprint") != _fingerprint(link):
                 reason = "Item의 연결·적용 상태 확인 근거가 없거나 변경됐습니다. 적용 표식을 다시 확인해 주세요."

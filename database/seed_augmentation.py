@@ -360,5 +360,5 @@ def prepare_seed(source_catalog):
         "source_items": sum(len(family["items"]) for family in source_catalog["families"].values()),
         "with_jira": sum(len(values) for values in source_item_jira.values()),
         "unique_jira": len({item["jira_key"] for values in source_item_jira.values() for item in values.values()}),
-        "synthetic_item_policy": "추정 Item에는 원본 Ticket을 복제하지 않으며 jira_key=NULL로 저장"}
+        "synthetic_item_policy": "추정 Item에는 원본 Ticket을 복제하지 않으며 jira_code=NULL로 저장"}
     return catalog, plan

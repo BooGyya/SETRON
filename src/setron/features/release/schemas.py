@@ -46,6 +46,7 @@ class ItemInput:
     - item_no: 원본 Item 번호. 확인되지 않았으면 None.
     - source_reference: 필드별 원본 시트·셀 위치. 직접 입력은 None 허용.
     - edited_fields: 저장 전 검토 과정에서 직접 수정한 필드 이름 튜플.
+    - jira_code: 원본에 적힌 Item별 Jira 코드(여러 개면 ', '). 없으면 None (11/11 멘토링).
     """
 
     content: str
@@ -54,7 +55,8 @@ class ItemInput:
     item_no: int | None = None
     source_reference: dict | None = None
     edited_fields: tuple[str, ...] = ()
-    jira_key: str | None = None
+    jira_code: str | None = None
+    jira_key: str | None = None  # 이전 요청 입력만 호환하며 저장 전 jira_code로 변환한다.
 
 
 @dataclass(frozen=True, kw_only=True)

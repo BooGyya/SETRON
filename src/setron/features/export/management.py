@@ -126,11 +126,12 @@ def _equipment(sheet: Worksheet, data, names: _Names, snapshots) -> None:
 
 def _releases(sheet: Worksheet, data, names: _Names, families=None, *, production_area=None, include_unlinked=True) -> None:
     items = {i["item_id"]: i for i in data["item"]}
-    # 정식 저장값은 NULL도 현재값이다. jira_key 열이 없던 이전 DB만 원본 셀로 보완한다.
-    legacy_items = [item for item in data["item"] if "jira_key" not in item]
+    # 저장된 NULL도 현재값이다. 두 Jira 열 모두 없던 이전 DB만 원본 셀로 보완한다.
+    legacy_items = [item for item in data["item"] if "jira_code" not in item and "jira_key" not in item]
     legacy_jira = jira_by_item(original_item_rows_from_batches(data["import_batch"], legacy_items),
                                (item["item_id"] for item in legacy_items))
-    jira = {item_id: (item["jira_key"] or "") if "jira_key" in item else ", ".join(legacy_jira[item_id].codes)
+    jira = {item_id: (item["jira_code"] or "") if "jira_code" in item else
+            (item["jira_key"] or "") if "jira_key" in item else ", ".join(legacy_jira[item_id].codes)
             for item_id, item in items.items()}
     links_by_release = {}
     for link in data["release_version_item"]:

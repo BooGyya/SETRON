@@ -67,11 +67,11 @@ SOFTWARE_FIELDS = ("family_name", "version_raw", "ui_type")
 PM_FIELDS = ("pm_name", "model_name")
 RELEASE_FIELDS = ("version_raw", "release_date", "family_name", "model_name", "group_name", "ui_type",
                   "production_area", "version_order", "version_suffix", "item_mapping_status")
-ITEM_FIELDS = ("item_no", "content")
+ITEM_FIELDS = ("item_no", "content", "jira_code", "jira_key")
 # 검토 화면에서 고친 항목 중 DB 수정 표시(edited_fields)에 남길 수 있는 것과 그 열 이름.
 RELEASE_EDITED = {"version_raw": "version_raw", "release_date": "released_at", "version_suffix": "version_suffix",
                   "version_order": "version_order", "item_mapping_status": "item_mapping_status"}
-ITEM_EDITED = {"item_no": "item_no", "content": "content"}
+ITEM_EDITED = {"item_no": "item_no", "content": "content", "jira_code": "jira_code", "jira_key": "jira_code"}
 
 TARGET_LABEL = "MySQL DB"
 
@@ -592,10 +592,17 @@ class DatabaseImportSaver:
                 content = row.values.get("content")
                 if not content:
                     continue
-                from setron.features.item.jira import extract_jira_from_source
+                from setron.features.item.jira import extract_jira_from_source, join_codes, normalize_jira, split_codes
                 try:
                     jira = extract_jira_from_source(getattr(self, "_row_raw_data", {}).get(id(row)),
-                                                    _sources(row, ITEM_FIELDS), content=content)
+                                                    _sources(row, ITEM_FIELDS), content=content, strict=False)
+                    supplied = row.values.get("jira_code", row.values.get("jira_key"))
+                    legacy = row.values.get("jira_key")
+                    if supplied is not None and legacy is not None:
+                        _require(normalize_jira(supplied) == normalize_jira(legacy),
+                                 "같은 Item의 Jira 입력값이 상충합니다.")
+                    edited_jira = any(name in row.edited_fields for name in ("jira_code", "jira_key"))
+                    code = normalize_jira(supplied) if supplied is not None or edited_jira else jira.jira_code
                 except ValueError as error:
                     raise StorageValidationError(str(error)) from error
                 item_sources = merge_sources(_sources(row, ITEM_FIELDS), jira.source_reference)
@@ -603,16 +610,21 @@ class DatabaseImportSaver:
                 if key in seen:
                     index = seen[key]
                     previous = items[index]
-                    _require(not previous.jira_key or not jira.jira_key or previous.jira_key == jira.jira_key,
-                             "같은 Item의 JIRA 이슈 코드가 상충합니다.")
+                    _require(not (code is None and edited_jira and previous.jira_code) and
+                             not ("jira_code" in previous.edited_fields and previous.jira_code is None and code),
+                             "같은 Item의 Jira 삭제와 코드 입력이 상충합니다.")
+                    try:
+                        combined = join_codes((*split_codes(previous.jira_code), *split_codes(code)))
+                    except ValueError as error:
+                        raise StorageValidationError(str(error)) from error
                     items[index] = replace(previous,
-                        jira_key=previous.jira_key or jira.jira_key,
+                        jira_code=combined,
                         source_reference=merge_sources(previous.source_reference, item_sources),
                         edited_fields=tuple(dict.fromkeys((*previous.edited_fields, *_edited(row, ITEM_EDITED)))))
                     continue
                 seen[key] = len(items)
                 items.append(ItemInput(content=content, batch_id=batch_id, item_no=row.values.get("item_no"),
-                                       jira_key=jira.jira_key, source_reference=item_sources,
+                                       jira_code=code, source_reference=item_sources,
                                        edited_fields=_edited(row, ITEM_EDITED)))
             result.append((release, tuple(items)))
         return result
@@ -780,7 +792,8 @@ def _sources(row: SaveRow, names: Sequence[str]) -> dict | None:
                 if isinstance(cells, str):
                     cells = [cell.strip() for cell in cells.split(",") if cell.strip()]
                 converted.append({**location, "cells": cells})
-            result[name] = converted
+            canonical = "jira_code" if name == "jira_key" else name
+            result = merge_sources(result, {canonical: converted}) or {}
     return merge_sources(result or None)
 
 

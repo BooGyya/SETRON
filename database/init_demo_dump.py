@@ -22,7 +22,7 @@ from pymysql.converters import escape_item
 from init_local_db import is_loopback
 from setron.features.db_export.service import _header
 from setron.features.db_import.dump import (DUMP_COLUMNS, DumpFormatError, _read_file,
-    columns_from_definition, supported_columns, values_for_columns)
+    columns_from_definition, supported_columns, values_for_columns, with_legacy_jira)
 from setron.features.storage.validation import TABLE_NAMES, decode_record, encode_record
 from setron.infrastructure.database import DatabaseConfig, DatabaseConfigError
 from setron.infrastructure.env_file import load_env_file
@@ -98,6 +98,7 @@ def schema_statements() -> tuple[str, ...]:
 
 
 def _check_references(rows, statements):
+    rows, _, _ = _projected_values(rows, statements)
     for table, statement in zip(TABLE_NAMES, statements, strict=True):
         for local, parent, remote in re.findall(
                 r"FOREIGN KEY \(([a-z_]+)\)\s+REFERENCES ([a-z_]+) \(([a-z_]+)\)", statement):
@@ -171,7 +172,6 @@ def _backup(connection, cursor, folder, config):
                                    else value.isoformat() if isinstance(value, date) else value
                                    for field, value in row.items()} for row in values)
                       for table, values in originals.items()}
-        normalized["item"] = tuple({**row, "jira_key": row.get("jira_key")} for row in normalized["item"])
         if backed_up != normalized:
             raise SetupError("백업 SQL의 값이 원본 DB와 일치하지 않습니다.")
         connection.commit()
@@ -188,11 +188,26 @@ def _drop(cursor):
         cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
 
 
-def _apply(connection, cursor, rows, definitions):
+def _projected_values(rows, definitions):
     columns_by_table = {table: columns_from_definition(table, definition)
                         for table, definition in zip(TABLE_NAMES, definitions, strict=True)}
+    rows = with_legacy_jira(rows, columns_by_table["item"])
     # 대상 DDL과 데이터가 맞는지 DDL 실행 전에 검사한다. non-NULL Jira를 구형 구조에서 버리지 않는다.
     values = {table: [values_for_columns(table, row, columns_by_table[table]) for row in rows[table]] for table in TABLE_NAMES}
+    for table, definition in zip(TABLE_NAMES, definitions, strict=True):
+        if table != "item":
+            continue
+        limits = {field: int(length) for field, length in re.findall(
+            r"(?:`)?(jira_key|jira_code)(?:`)?\s+VARCHAR\((\d+)\)", definition, re.I)}
+        for projected in values[table]:
+            for field, value in zip(columns_by_table[table], projected, strict=True):
+                if field in limits and value is not None and (not isinstance(value, str) or len(value) > limits[field]):
+                    raise SetupError(f"item.{field}의 값을 대상 열에 손실 없이 저장할 수 없습니다.")
+    return rows, columns_by_table, values
+
+
+def _apply(connection, cursor, rows, definitions):
+    rows, columns_by_table, values = _projected_values(rows, definitions)
     cursor.execute("SET SESSION SQL_MODE = 'STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO'")
     cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
     for definition in definitions:
