@@ -861,6 +861,19 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.header.action_requested.connect(open_all)
 
     defer_query_apply = False
+
+    def query_apply_block_reason():
+        # 저장 후 같은 조건을 새 선택지에 연결하는 내부 재적용은 조회 워커를 따로 실행한다.
+        if defer_query_apply:
+            return ""
+        if window.management_saving:
+            return "관리 데이터 저장 중입니다. 저장이 완료된 뒤 조회해 주세요."
+        if risk_save.locked:
+            return "저장 결과를 확인하지 못해 조회할 수 없습니다. DB 기록을 먼저 확인해 주세요."
+        return ""
+
+    window.query_panel.apply_guard = query_apply_block_reason
+    replay.ready(lambda page: setattr(page.query_panel, "apply_guard", query_apply_block_reason))
     query_request = window.query_request = ReadRequest(window)
     pending_query = None
 

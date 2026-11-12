@@ -3,12 +3,12 @@
 from collections import OrderedDict
 from math import floor
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, QSignalBlocker, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import QHeaderView, QSizePolicy, QStyle, QStyleOption, QStyledItemDelegate, QTreeView
+from PySide6.QtCore import QEvent, QModelIndex, QSignalBlocker, Qt
+from PySide6.QtGui import QAction, QColor, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
+from PySide6.QtWidgets import QApplication, QHeaderView, QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QTreeView
 
 from setron.ui.appearance import ui_color
-from setron.ui.theme import ACCENT_SOFT, LINE, PRIMARY, TONES, font, paint_font, set_widget_font
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, TONES, font, paint_font, set_widget_font
 
 
 class HeatmapListModel(QStandardItemModel):
@@ -151,12 +151,14 @@ class HeatmapListModel(QStandardItemModel):
             return None
         group = super().data(index, self.GROUP_ROLE)
         if group:
-            if role == Qt.ItemDataRole.BackgroundRole:
-                return ui_color(ACCENT_SOFT)
             if role == Qt.ItemDataRole.ForegroundRole:
-                return ui_color(PRIMARY)
+                return ui_color(INK if not index.parent().isValid() else SECONDARY)
             if role == Qt.ItemDataRole.FontRole:
-                return paint_font(14, medium=True)
+                parent, depth = index.parent(), 0
+                while parent.isValid():
+                    depth += 1
+                    parent = parent.parent()
+                return paint_font(15 if depth == 0 else 14, medium=depth < 2)
             if role == Qt.ItemDataRole.TextAlignmentRole:
                 return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         else:
@@ -175,9 +177,15 @@ class HeatmapListModel(QStandardItemModel):
 
 
 class _HeatmapTreeDelegate(QStyledItemDelegate):
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        if index.column() == 0:
+            option.features &= ~QStyleOptionViewItem.ViewItemFeature.WrapText
+            option.textElideMode = Qt.TextElideMode.ElideRight
+
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
-        minimum = 34 if index.data(HeatmapListModel.GROUP_ROLE) or self.parent().compact else 56
+        minimum = 32 if index.data(HeatmapListModel.GROUP_ROLE) else 34 if self.parent().compact else 46
         size.setHeight(max(minimum, size.height()))
         return size
 
@@ -189,6 +197,7 @@ class HeatmapTreeView(QTreeView):
         super().__init__()
         self.base_widths, self.compact = tuple(widths), False
         self._collapsed_keys = set()
+        self._expansion_depth = -1
         self._fitting_height = False
         self._resizing_columns = False
         self._row_heights, self._last_compact = {}, self.compact
@@ -232,9 +241,27 @@ class HeatmapTreeView(QTreeView):
                            f"QTreeView:focus {{border:1px solid {PRIMARY};}}")
         self.collapsed.connect(lambda index: self._remember_expansion(index, False))
         self.expanded.connect(lambda index: self._remember_expansion(index, True))
+        self.copy_name_action = QAction("설비명 복사", self)
+        self.copy_name_action.setShortcut(QKeySequence.StandardKey.Copy)
+        self.copy_name_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.copy_name_action.setEnabled(False)
+        self.copy_name_action.triggered.connect(self.copy_equipment_name)
+        self.addAction(self.copy_name_action)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        self.selectionModel().currentChanged.connect(self._sync_copy_action)
+
+    def _sync_copy_action(self, current, previous=None):
+        self.copy_name_action.setEnabled(current.isValid() and current.data(Qt.ItemDataRole.UserRole) is not None)
+
+    def copy_equipment_name(self):
+        index = self.currentIndex()
+        if not index.isValid() or index.data(Qt.ItemDataRole.UserRole) is None:
+            return False
+        QApplication.clipboard().setText(index.siblingAtColumn(0).data())
+        return True
 
     def drawBranches(self, painter, rect, index):
-        """댓글처럼 부모에서 자식으로 잇고 기본 펼침 화살표는 그대로 그린다."""
+        """곡선 연결선과 명시적인 펼침 화살표를 같은 클릭 영역에 그린다."""
         ancestors, parent = [], index.parent()
         while parent.isValid():
             ancestors.append(parent)
@@ -288,19 +315,25 @@ class HeatmapTreeView(QTreeView):
             branches.moveTo(axis(depth), middle + arrow_gap)
             branches.lineTo(axis(depth), bottom)
         painter.drawPath(branches)
-        painter.restore()
         if has_children and (depth or self.rootIsDecorated()):
-            option = QStyleOption()
-            option.initFrom(self)
-            option.rect = QRect(round(current_x - indent / 2), rect.top(), round(indent), rect.height())
-            # Item/Sibling은 기본 점선을 그리므로 화살표 상태만 넘긴다.
-            option.state &= ~(QStyle.StateFlag.State_Item | QStyle.StateFlag.State_Sibling)
-            option.state |= QStyle.StateFlag.State_Children
+            # 플랫폼 스타일의 branch 상태 조합에 의존하면 연결선만 보일 수 있다.
+            arrow, x = QPainterPath(), snap(current_x)
             if self.isExpanded(index):
-                option.state |= QStyle.StateFlag.State_Open
-            self.style().drawPrimitive(QStyle.PrimitiveElement.PE_IndicatorBranch, option, painter, self)
+                arrow.moveTo(x - 4, middle - 2)
+                arrow.lineTo(x + 4, middle - 2)
+                arrow.lineTo(x, middle + 3)
+            else:
+                arrow.moveTo(x - direction * 2, middle - 4)
+                arrow.lineTo(x + direction * 3, middle)
+                arrow.lineTo(x - direction * 2, middle + 4)
+            arrow.closeSubpath()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(ui_color(SECONDARY))
+            painter.drawPath(arrow)
+        painter.restore()
 
     def _remember_expansion(self, index, expanded):
+        self._expansion_depth = None
         key = index.data(HeatmapListModel.KEY_ROLE)
         if key is not None:
             key = tuple(key)
@@ -308,6 +341,26 @@ class HeatmapTreeView(QTreeView):
                 self._collapsed_keys.discard(key)
             else:
                 self._collapsed_keys.add(key)
+        self.fit_height()
+
+    def _apply_expansion_depth(self, depth):
+        for item in self.model()._group_items.values():
+            index, level = self.model().indexFromItem(item), 1
+            parent = index.parent()
+            while parent.isValid():
+                level += 1
+                parent = parent.parent()
+            self.setExpanded(index, depth == -1 or level < depth)
+        self._collapsed_keys = {key for key, item in self.model()._group_items.items()
+                                if not self.isExpanded(self.model().indexFromItem(item))}
+
+    def set_expansion_depth(self, depth):
+        """-1은 전체 펼침, 0은 전체 접기, 양수는 표시할 분류 단계 수다."""
+        if type(depth) is not int or depth < -1:
+            raise ValueError("표시할 계층 단계를 확인해 주세요.")
+        self._expansion_depth = depth
+        with QSignalBlocker(self):
+            self._apply_expansion_depth(depth)
         self.fit_height()
 
     def set_groups(self, nodes, row_factory):
@@ -318,10 +371,13 @@ class HeatmapTreeView(QTreeView):
         with QSignalBlocker(self):
             rebuilt, changed_rows = self.model().set_groups(nodes, row_factory)
             if rebuilt:
-                # 설비 말단 행까지 펼침을 검사하지 않고 분류 노드만 연다.
-                for key, item in self.model()._group_items.items():
-                    if key not in self._collapsed_keys:
-                        self.setExpanded(self.model().indexFromItem(item), True)
+                if self._expansion_depth is not None:
+                    self._apply_expansion_depth(self._expansion_depth)
+                else:
+                    # 설비 말단 행까지 펼침을 검사하지 않고 분류 노드만 연다.
+                    for key, item in self.model()._group_items.items():
+                        if key not in self._collapsed_keys:
+                            self.setExpanded(self.model().indexFromItem(item), True)
                 self.select_equipment(equipment_id, preferred_key=preferred_key, reveal=False)
                 # Qt의 현재 행 복원이 조상을 자동으로 열어도 사용자가 접은 분류는 유지한다.
                 for key in self._collapsed_keys:
@@ -426,6 +482,8 @@ class HeatmapTreeView(QTreeView):
         self._resizing_columns = True
         try:
             for column, width in self._column_widths().items():
+                if column == 0:
+                    width = min(width, max(220, min(360, round(self.viewport().width() * 0.42))))
                 if self.columnWidth(column) != width:
                     self.setColumnWidth(column, width)
                     changed = True

@@ -79,7 +79,9 @@ def test_width_cache_keeps_longest_last_name_and_remeasures_renames_and_indentat
     app.processEvents()
     index = table.model().equipment_index(199)
     text_width = QFontMetrics(index.data(Qt.ItemDataRole.FontRole)).horizontalAdvance(longest)
-    assert table.columnWidth(0) >= text_width + 2 * table.indentation() + 20
+    assert table._name_width >= text_width + 2 * table.indentation() + 20
+    assert table.columnWidth(0) <= min(360, round(table.viewport().width() * 0.42))
+    assert index.data(Qt.ItemDataRole.ToolTipRole) == longest
 
     measured, original = [], heatmap_list.QFontMetrics
 
@@ -90,10 +92,10 @@ def test_width_cache_keeps_longest_last_name_and_remeasures_renames_and_indentat
     monkeypatch.setattr(heatmap_list, "QFontMetrics", metrics)
     table.resize_columns()
     assert measured == []
-    before = table.columnWidth(0)
+    before, measured_before = table.columnWidth(0), table._name_width
     table.setIndentation(table.indentation() + 10)
     table.resize_columns()
-    assert table.columnWidth(0) == before + 20
+    assert table._name_width == measured_before + 20 and table.columnWidth(0) == before
     original_paint_font = heatmap_list.paint_font
 
     def larger_font(*args, **kwargs):
@@ -103,7 +105,7 @@ def test_width_cache_keeps_longest_last_name_and_remeasures_renames_and_indentat
 
     monkeypatch.setattr(heatmap_list, "paint_font", larger_font)
     table.resize_columns()
-    assert table.columnWidth(0) > before + 20
+    assert table._name_width > measured_before + 20 and table.columnWidth(0) == before
     table.set_groups((node(tuple(replace(row, code=f"SHORT-{row.equipment_id}") for row in rows)),), values)
     assert table.columnWidth(0) < before
 

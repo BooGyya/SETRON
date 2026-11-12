@@ -151,7 +151,7 @@ class ReplayPage(QWidget):
         if not hasattr(self, "playback_controls"):
             return
         host, controls = self._playback_host, self.playback_controls
-        controls.adjustSize()
+        controls.fit_width(host.width() - 24)
         size = controls.size()
         margins = self.layout().contentsMargins()
         bottom = size.height() + 32
@@ -275,6 +275,8 @@ class ReplayPage(QWidget):
         try:
             self.state.set_target_draft(self.targets_provider())
             query = self.query_panel.apply_draft()
+            if query is None:
+                return False
             request = ReplayRequest(start, end, query)
         except (ValueError, TypeError):
             self.dirty = True
@@ -494,6 +496,7 @@ class ReplayPage(QWidget):
         self._clear_legend()
         self.chart.clear()
         self.heatmap.clear()
+        self.playback_controls.clear_context()
         self.achievement.setText("적용률 —")
         self.achievement.setToolTip("")  # 이전 조회의 대수 설명이 남지 않게 한다 (QA R-06).
         self.progress.setValue(0)
@@ -505,11 +508,14 @@ class ReplayPage(QWidget):
             self.drawer.close_panel(restore_focus=False)
         frame = self.frame
         if frame is None:
+            self.playback_controls.clear_context()
             return
         # 숨은 보기는 전환할 때 현재 시점을 표시한다. 재생 중에는 보이는 보기만 갱신한다.
         if self.view_tabs.currentIndex() == 0:
             self._draw_chart()
         groups = self.selected_groups() if self.grouping_mode == "group" else None
+        self.playback_controls.set_context(frame.day, frame.snapshot.base_date, self.index, len(self.frames),
+                                          selected_groups=groups is not None)
         summary, observed_count, carried_count = group_view(self.data, frame, groups)
         if summary is None:
             self.achievement.setText("적용률 —")
@@ -539,6 +545,7 @@ class ReplayPage(QWidget):
         self.progress.setToolTip(self.achievement.toolTip())
         if self.view_tabs.currentIndex() == 1:
             self.heatmap.show_frame(self.data, frame, groups)
+        self._position_playback()
 
     def select_date(self, index):
         if self.data is None or self.dirty or not 0 <= index < len(self.frames):

@@ -100,22 +100,22 @@ def test_saved_days_mode_survives_cancel_and_changes_to_custom_days_on_apply(app
     interval.set_saved_days()
     changed = QSignalSpy(interval.step_changed)
     first = interval.buttons[None]
-    assert interval._current_step is None and first.text() == "저장일마다"
+    assert interval._current_step is None and first.text() == "지정 일수"
     assert first.toolTip() == "실제 저장된 날짜마다 재생"
     first.click()
     interval.day_dialog.setIntValue(3)
     interval.day_dialog.reject()
     assert changed.count() == 0 and interval._current_step is None
-    assert first.text() == "저장일마다" and first.toolTip() == "실제 저장된 날짜마다 재생"
+    assert first.text() == "지정 일수" and first.toolTip() == "실제 저장된 날짜마다 재생"
 
     first.click()
     interval.day_dialog.setIntValue(3)
     interval.day_dialog.accept()
     assert changed.count() == 1 and changed.at(0) == [3]
-    assert interval._current_step == 3 and first.text() == "지정일마다"
+    assert interval._current_step == 3 and first.text() == "지정 일수"
     assert "3일 간격" in first.toolTip()
     interval.set_saved_days()
-    assert interval._current_step is None and first.text() == "저장일마다" and first.isChecked()
+    assert interval._current_step is None and first.text() == "지정 일수" and first.isChecked()
     interval.close()
 
 
@@ -149,6 +149,17 @@ def test_replay_controls_keep_one_row_and_scroll_only_inside_the_toolbar(app, wi
         assert controls.width() == width and controls.minimumSizeHint().width() == 0
         assert controls.verticalScrollBar().maximum() == 0
         assert (controls.horizontalScrollBar().maximum() > 0) == (width == 480)
+        assert controls.scroll_left.isVisible() == controls.scroll_right.isVisible() == (width == 480)
+        if width == 480:
+            scrollbar = controls.horizontalScrollBar()
+            assert not controls.scroll_left.isEnabled() and controls.scroll_right.isEnabled()
+            controls.scroll_right.click()
+            assert scrollbar.value() > 0 and controls.scroll_left.isEnabled()
+            while controls.scroll_right.isEnabled():
+                controls.scroll_right.click()
+            assert scrollbar.value() == scrollbar.maximum()
+            controls.scroll_left.click()
+            assert scrollbar.value() < scrollbar.maximum()
         changed = QSignalSpy(interval.step_changed)
         interval.buttons["week"].click()
         assert changed.count() == 1 and changed.at(0) == ["week"]
@@ -158,3 +169,15 @@ def test_replay_controls_keep_one_row_and_scroll_only_inside_the_toolbar(app, wi
         assert interval.buttons["week"].isChecked() and changed.count() == 1
     finally:
         controls.close()
+
+
+def test_non_custom_interval_keeps_saved_date_label_and_semantics(app):
+    interval = IntervalSelector(custom_days=False)
+    first = interval.buttons[None]
+    changed = QSignalSpy(interval.step_changed)
+    assert first.text() == "저장일마다" and interval._current_step is None
+    interval.set_step("week")
+    first.click()
+    assert first.text() == "저장일마다" and interval._current_step is None
+    assert changed.count() == 1 and changed.at(0) == [None] and interval.day_dialog is None
+    interval.close()

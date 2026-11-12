@@ -266,12 +266,15 @@ def test_management_save_blocks_starting_new_query(delayed_window, app, monkeypa
 
     monkeypatch.setattr(window.query_request, "start", start)
     window.management_saving = True
+    previous = window.query_state.applied
     try:
         query = window.query_panel.apply_draft()
         app.processEvents()
-        assert window.query_state.is_current(query) and not window.query_request.busy
+        assert query is None and window.query_state.applied is previous and not window.query_request.busy
         assert starts == [] and source.accepted == []
         assert window.pages["dashboard"].snapshot is None
+        assert window.query_panel.status.isVisibleTo(window) and "잠김" in window.query_panel.status.text()
+        assert "저장" in window.query_panel.status.toolTip()
         assert loaded_keys(window) == {"dashboard", "ai"}
     finally:
         window.management_saving = False

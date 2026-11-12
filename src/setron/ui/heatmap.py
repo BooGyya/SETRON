@@ -14,6 +14,7 @@ from setron.features.risk.schemas import RiskStatus
 from setron.ui.appearance import readable_color, set_color_style, surface_edge
 from setron.ui.appearance_data import HEATMAP_FIELDS, HEATMAP_STANDARD, HEATMAP_TIERS, Appearance
 from setron.ui.components import Card, StatusBadge, button, filter_checkbox, label
+from setron.ui.combo_box import ComboBox
 from setron.ui.dashboard import DashboardGrid, DashboardKpi
 from setron.ui.dashboard_data import RiskRuleState
 from setron.ui.deferred_result import DeferredResultMixin, ResultAttribute
@@ -22,7 +23,7 @@ from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import EquipmentSelection, GoalState, equipment_tiles
 from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups, group_families, tiles_for_grouping
 from setron.ui.heatmap_list import HeatmapListModel, HeatmapTreeView
-from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
+from setron.ui.theme import ACCENT_SOFT, ASSETS, INK, LINE, PRIMARY, SECONDARY, font, icon, set_widget_font, svg_size
 from setron.ui.view_controls import SegmentedControl
 
 
@@ -429,6 +430,8 @@ class HeatmapPage(DeferredResultMixin, QWidget):
         self.group_cards = []
         self.rebuilt_tiles = self.restyled_tiles = 0
         self._control_rows = None
+        self._navigation_rows = None
+        self._navigation_grouping = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
@@ -451,7 +454,7 @@ class HeatmapPage(DeferredResultMixin, QWidget):
             "below": DashboardKpi("목표 미달", "e53b6.svg", show_caption=False),
             "unknown": DashboardKpi("확인 필요", "60dbd.svg", show_caption=False),
         }
-        self.summary = DashboardGrid(tuple(self.metrics.values()), minimum_width=150, spacing=12)
+        self.summary = DashboardGrid(tuple(self.metrics.values()), minimum_width=150, spacing=12, compact_below=900)
         body.addWidget(self.summary)
         self.summary.setVisible(show_summary)
 
@@ -566,7 +569,13 @@ class HeatmapPage(DeferredResultMixin, QWidget):
         self.grouping_tabs.currentChanged.connect(self._change_grouping)
         grouping_row.addWidget(self.grouping_tabs)
         grouping_row.addStretch()
-        self.content.body.addWidget(self.grouping_bar)
+        self.navigation_host = QWidget()
+        self.grouping_bar.setParent(self.navigation_host)
+        self.navigation = QGridLayout(self.navigation_host)
+        self.navigation.setContentsMargins(0, 0, 0, 0)
+        self.navigation.setHorizontalSpacing(12)
+        self.navigation.setVerticalSpacing(8)
+        self.content.body.addWidget(self.navigation_host)
 
         self.legend = HeatmapLegend()
         self.content.body.addWidget(self.legend)
@@ -596,6 +605,40 @@ class HeatmapPage(DeferredResultMixin, QWidget):
         self.list_table.activated.connect(self._select_row)
         self.list_table.clicked.connect(self._select_row)
         self.list_table.hide()
+        self.list_tools = QWidget()
+        tree_tools = QHBoxLayout(self.list_tools)
+        tree_tools.setContentsMargins(0, 0, 0, 0)
+        tree_tools.setSpacing(8)
+        tree_tools.addWidget(label("계층 표시", 12, color=SECONDARY))
+        self.tree_depth = ComboBox()
+        self.tree_depth.setProperty("queryField", True)
+        set_widget_font(self.tree_depth, font(13))
+        caret = (ASSETS / "caret-down.svg").as_posix()
+        self.tree_depth.setStyleSheet(
+            "QComboBox {padding-right:28px;} QComboBox::drop-down {border:0;width:28px;}"
+            f'QComboBox::down-arrow {{image:url("{caret}");width:12px;height:12px;}}')
+        self.tree_depth.setAccessibleName("목록 계층 표시 단계")
+        self.tree_depth.setFixedWidth(156)
+        self.tree_depth.setFixedHeight(32)
+        for caption, depth in (("직접 조정", None), ("전체 펼치기", -1), ("전체 접기", 0),
+                               *((f"{level}단계까지", level) for level in range(2, 6))):
+            self.tree_depth.addItem(caption, depth)
+        self.tree_depth.model().item(0).setEnabled(False)
+        self.tree_depth.setCurrentIndex(1)
+        self.tree_depth.currentIndexChanged.connect(self._change_tree_depth)
+        tree_tools.addWidget(self.tree_depth)
+        tree_tools.addStretch()
+        self.copy_name = button("설비명 복사")
+        self.copy_name.setAccessibleName("선택한 설비명 복사")
+        self.copy_name.setToolTip("선택한 설비명을 복사합니다. Ctrl+C 또는 우클릭 메뉴로도 복사할 수 있습니다.")
+        self.copy_name.setEnabled(False)
+        self.copy_name.clicked.connect(self.list_table.copy_name_action.trigger)
+        self.list_table.copy_name_action.changed.connect(
+            lambda: self.copy_name.setEnabled(self.list_table.copy_name_action.isEnabled()))
+        tree_tools.addWidget(self.copy_name)
+        self.list_table.collapsed.connect(self._sync_tree_depth)
+        self.list_table.expanded.connect(self._sync_tree_depth)
+        self.list_tools.hide()
         self.content.body.addWidget(self.list_table)
         self.message = label("날짜나 필터를 선택하면 결과가 표시됩니다.", color=SECONDARY, wrap=True)
         ignore_width(self.message)
@@ -616,6 +659,24 @@ class HeatmapPage(DeferredResultMixin, QWidget):
         columns = len(GROUPING_MODES) if available >= segment_width else 2
         if self.grouping_tabs._columns != columns:
             self.grouping_tabs.set_columns(columns)
+        if hasattr(self, "list_tools"):
+            show_tools = self.layout_buttons.checkedId() == 1
+            grouping_width = self.grouping_tabs.grid.minimumSize().width() if self._show_grouping else 0
+            tools_width = self.list_tools.minimumSizeHint().width() if show_tools else 0
+            navigation_rows = (2 if self._show_grouping and show_tools
+                               and available < grouping_width + tools_width + 12 else 1)
+            if self._navigation_rows != navigation_rows or self._navigation_grouping != self._show_grouping:
+                self.navigation.removeWidget(self.grouping_bar)
+                self.navigation.removeWidget(self.list_tools)
+                if self._show_grouping:
+                    self.navigation.addWidget(self.grouping_bar, 0, 0, 1, 2 if navigation_rows == 2 else 1)
+                tools_span = 2 if navigation_rows == 2 or not self._show_grouping else 1
+                self.navigation.addWidget(self.list_tools, navigation_rows - 1, 0 if tools_span == 2 else 1,
+                                          1, tools_span)
+                self.navigation.setColumnStretch(0, 1)
+                self.navigation.setColumnStretch(1, 0)
+                self._navigation_rows = navigation_rows
+                self._navigation_grouping = self._show_grouping
         spacing = self.controls.horizontalSpacing()
         filter_width = self.filter_bar.minimumSizeHint().width()
         display_width = self.display_bar.minimumSizeHint().width()
@@ -818,6 +879,8 @@ class HeatmapPage(DeferredResultMixin, QWidget):
                                  "표시할 세부라인이 없습니다." if filtered and not grouping_filtered else
                                  f"'{self.search.text().strip()}' 검색 결과가 없습니다. 검색어를 지우면 전체 설비가 보입니다.")
         self.list_table.setVisible(list_mode and bool(grouping_filtered))
+        self.list_tools.setVisible(list_mode and bool(grouping_filtered))
+        self.navigation_host.setVisible(self._show_grouping or list_mode and bool(grouping_filtered))
         self.tile_host.setVisible(not list_mode)
         plan = ()
         if grouping_filtered and self.snapshot is not None:
@@ -1068,15 +1131,26 @@ class HeatmapPage(DeferredResultMixin, QWidget):
             position = tile.site_label, tile.area or "구역 미확인"
             location = (" / ".join(" ".join(part.splitlines()) for part in position)
                         if compact else "\n".join(position))
-            risk = tile.risk_label if compact else "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))
+            risk = "후보 아님" if tile.risk is RiskStatus.NO_RISK and tile.goal is not GoalState.EXCLUDED else tile.risk_label
             values = tile.code, location, names, versions, tile.goal.value, risk
-            tooltips = {3: tile.description}
+            tooltips = {0: tile.code + "\nCtrl+C로 설비명 복사", 3: tile.description,
+                        5: "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))}
             if tile.goal is GoalState.UNKNOWN:
                 tooltips[self.list_model.tone_column] = tile.description
             return values, tile.version_tone, tooltips
 
         self.list_table.set_groups(plan, row_values)
         self.list_table.select_equipment(self.selected_id, reveal=False)
+        self._sync_tree_depth()
+
+    def _change_tree_depth(self, index):
+        depth = self.tree_depth.itemData(index)
+        if depth is not None:
+            self.list_table.set_expansion_depth(depth)
+
+    def _sync_tree_depth(self, *_):
+        with QSignalBlocker(self.tree_depth):
+            self.tree_depth.setCurrentIndex(self.tree_depth.findData(self.list_table._expansion_depth))
 
     def _select_row(self, index):
         if index.isValid():

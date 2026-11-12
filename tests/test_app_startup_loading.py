@@ -99,11 +99,22 @@ def test_loading_window_precedes_worker_and_auto_close_starts_after_actual_windo
         release.set()
 
     monkeypatch.setattr(app_module, "dashboard_source_from_env", load)
-    QTimer.singleShot(80, inspect)
+    poll = QTimer()
+    poll.setInterval(5)
+
+    def inspect_after_worker_started():
+        # GUI가 처음 그려지는 속도와 스레드풀 기동 순서를 고정 80ms로 가정하지 않는다.
+        if started.is_set():
+            poll.stop()
+            inspect()
+
+    poll.timeout.connect(inspect_after_worker_started)
+    poll.start()
     begin = perf_counter()
     try:
         assert app_module.main(["--demo-excel", "--auto-close-ms", "40"]) == 0
     finally:
+        poll.stop()
         release.set()
     assert inspected == ["자료 불러오는 중"]
     assert threads and threads[0] != startup.main_thread

@@ -4,8 +4,8 @@ from collections import Counter
 from dataclasses import replace
 from datetime import date
 
-from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QSize, QTimer, Qt, Signal
+from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
 from setron.ui.calendar_widgets import DateEdit
@@ -38,8 +38,8 @@ class _WrapRow(QWidget):
         # 현재 한 줄의 너비를 부모 최소 너비로 강제하면, 좁아져야 발생하는 줄바꿈이 막힌다.
         return QSize(0, self.grid.minimumSize().height())
 
-    def _arrange(self, columns):
-        if self.columns == columns:
+    def _arrange(self, columns, *, force=False):
+        if self.columns == columns and not force:
             return
         for index in range(max(self.columns, columns) + 1):
             self.grid.setColumnStretch(index, 0)
@@ -58,14 +58,14 @@ class _WrapRow(QWidget):
         self.columns = columns
         self.updateGeometry()
 
-    def reflow(self, width=None):
+    def reflow(self, width=None, *, force=False):
         width = self.width() if width is None else width
         columns = max(1, min(len(self.widgets), (width + 12) // (self.minimum_width + 12)))
         if self.fields:
             needed = sum(max(w.minimumWidth(), self.minimum_width) if w.maximumWidth() >= 10000 else w.maximumWidth()
                          for w in self.widgets) + 12 * (len(self.widgets) - 1)
             columns = len(self.widgets) if width >= needed else min(3, columns)
-        self._arrange(columns)
+        self._arrange(columns, force=force)
 
     def resizeEvent(self, event):
         self.reflow(event.size().width())
@@ -121,11 +121,20 @@ class QueryPanel(QWidget):
         self.state = state
         self.period = period
         self.target_describer = None
+        self.apply_guard = None  # 허용 시 빈 값, 차단 시 사용자에게 보여 줄 사유를 반환한다.
         self.combos: dict[str, _FilterButton] = {}
         self.filter_popup = None
         self.date_edit = None
         self.original_date_field = None
         self.range_button = None
+        self._range_enabled = False
+        self._applied_range = None
+        self._collapsed = False
+        self._collapse_override = None
+        self._density_window = None
+        self._density_timer = QTimer(self)
+        self._density_timer.setSingleShot(True)
+        self._density_timer.timeout.connect(self._sync_density)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(12)
@@ -211,6 +220,7 @@ class QueryPanel(QWidget):
             control.setToolTip(caption)
             actions_body.addWidget(control, 0, Qt.AlignmentFlag.AlignBottom)
         actions.setFixedWidth(actions_body.sizeHint().width())
+        self.query_tools = actions
         fields.append(actions)
         self.fields_row = _WrapRow(fields, 128, fields=True)
         self.card.body.addWidget(self.fields_row)
@@ -224,9 +234,28 @@ class QueryPanel(QWidget):
             control.setFixedHeight(38)
             control.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.actions_row = _WrapRow([self.goal_button, self.version_button], 150)
-        self.card.body.addWidget(self.actions_row)
-        self.version_pending = label("버전 선택 변경 · 다음 조회에 반영", 12, color=SECONDARY)
-        self.card.body.addWidget(self.version_pending)
+        self.footer = QWidget()
+        footer = QHBoxLayout(self.footer)
+        self.footer_layout = footer
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(12)
+        self.compact_summary = label("", 12, color=SECONDARY)
+        self.compact_summary.setAccessibleName("적용된 조회 조건 요약")
+        self.compact_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        footer.addWidget(self.compact_summary, 1)
+        footer.addWidget(self.actions_row, 1)
+        self.status = StatusBadge("조회 전", "info")
+        self.status.setAccessibleName("조회 적용 상태")
+        footer.addWidget(self.status)
+        # 기존 버전 선택 표시를 참조하는 연결도 같은 공통 변경 상태를 사용한다.
+        self.version_pending = self.status
+        self.collapse_button = button("필터 접기")
+        self.collapse_button.setFixedHeight(38)
+        self.collapse_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.collapse_button.setAccessibleName("조회 필터 접기 또는 펼치기")
+        self.collapse_button.clicked.connect(lambda: self.set_collapsed(not self._collapsed, user=True))
+        footer.addWidget(self.collapse_button)
+        self.card.body.addWidget(self.footer)
         self.hint = label("날짜와 필터를 설정한 뒤 조회 버튼을 눌러 적용하세요.",
                           13, color=SECONDARY, wrap=True)
         self.card.body.addWidget(self.hint)
@@ -234,15 +263,13 @@ class QueryPanel(QWidget):
         applied = QHBoxLayout()
         applied.setContentsMargins(0, 0, 0, 0)
         applied.setSpacing(12)
-        self.status = StatusBadge("미적용", "info")
-        applied.addWidget(self.status, 0, Qt.AlignmentFlag.AlignTop)
         self.applied_summary = label("", 13, color=SECONDARY, wrap=True)
         self.applied_summary.setAccessibleName("실제 적용 조건")
         self.applied_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         applied.addWidget(self.applied_summary, 1)
         outer.addLayout(applied)
         # 화면 단순화: 안내 문구·선택지 출처·적용 상태 줄은 표시하지 않는다(값은 내부·접근성용으로 유지).
-        for hidden in (self.hint, self.source_label, self.status, self.applied_summary):
+        for hidden in (self.hint, self.source_label, self.applied_summary):
             hidden.hide()
         if not period:
             self.reset_button.clicked.connect(self.reset_draft)
@@ -342,6 +369,7 @@ class QueryPanel(QWidget):
         start, end = self.start_date.date().toPython(), self.end_date.date().toPython()
         if start <= end:
             self.range_button.set_range(start, end)
+        self._render()
 
     def enable_date_range(self, start, end):
         if self.original_date_field is None:
@@ -357,13 +385,18 @@ class QueryPanel(QWidget):
             self.range_button.setAccessibleName("기준날짜 기간")
             self.range_button.range_changed.connect(self._confirm_date_range)
             self.original_date_field.layout().addWidget(self.range_button)
+        if not self._range_enabled and self._applied_range is None and self.state.applied is not None:
+            # 처음 여는 추이 보기의 기본 기간은 이미 그린 결과와 같은 표시 메타데이터다.
+            self._applied_range = (start, end)
         self.range_button.set_range(start, end, maximum=None if self.period else date.today())
+        self._range_enabled = True
         if self.date_edit is not None:
             self.date_edit.hide()
         self.range_button.show()
         self.original_date_field.layout().itemAt(0).widget().setBuddy(self.range_button)
         self.original_date_field.setMinimumWidth(240)
         self.fields_row.reflow()
+        self._render()
 
     def disable_date_range(self):
         if self.range_button is None or self.period:
@@ -371,10 +404,12 @@ class QueryPanel(QWidget):
         if self.range_button.dialog is not None:
             self.range_button.dialog.reject()
         self.range_button.hide()
+        self._range_enabled = False
         self.date_edit.show()
         self.original_date_field.layout().itemAt(0).widget().setBuddy(self.date_edit)
         self.original_date_field.setMinimumWidth(128)
         self.fields_row.reflow()
+        self._render()
 
     def _confirm_date_range(self, start, end):
         if self.period:
@@ -384,6 +419,8 @@ class QueryPanel(QWidget):
         self.date_range_selected.emit(start, end)
         if not self.period:
             self.set_as_of(end)
+        else:
+            self._render()
         self.confirmed.emit()
 
     def _choose_date(self, value):
@@ -436,10 +473,126 @@ class QueryPanel(QWidget):
             self.targets_changed.emit(self.state.target_draft)
 
     def apply_draft(self):
+        if self.apply_guard is not None and self.apply_guard():
+            self._render()
+            return None
         query = self.state.apply()
+        self._applied_range = self._range_signature()
+        # 좁은 화면에서 펼쳐 편집한 조건은 조회 뒤 다시 요약해 결과 공간을 확보한다.
+        if self._collapse_override is False:
+            self._collapse_override = None
         self._render()
         self.applied.emit(query)
+        self._sync_density()
         return query
+
+    def _range_signature(self):
+        if self._range_enabled and self.range_button is not None:
+            return self.range_button.start, self.range_button.end
+        return None
+
+    def _narrow(self):
+        window = self.window()
+        return window is not self and (self.width() < 900 or window.height() <= 720)
+
+    def _sync_density(self):
+        if not hasattr(self, "collapse_button") or not hasattr(self, "applied_summary"):
+            return
+        collapsed = (self._collapse_override if self._collapse_override is not None else
+                     self.state.applied is not None and self._narrow())
+        self.set_collapsed(collapsed)
+
+    def set_collapsed(self, collapsed, *, user=False):
+        """공통 조회 입력을 숨겨도 적용 조건과 미적용 변경 상태는 계속 보여 준다."""
+        collapsed = bool(collapsed)
+        if user:
+            self._collapse_override = collapsed
+        focused = QApplication.focusWidget()
+        hides_focus = (focused is not None and (self.fields_row.isAncestorOf(focused)
+                       or self.actions_row.isAncestorOf(focused))
+                       and not self.query_tools.isAncestorOf(focused))
+        if collapsed and not self._collapsed:
+            if self.filter_popup is not None:
+                self.filter_popup.reject()
+            if self.range_button is not None and self.range_button.dialog is not None:
+                self.range_button.dialog.reject()
+        changed = collapsed != self._collapsed
+        self._collapsed = collapsed
+        if changed:
+            if collapsed:
+                self.fields_row.grid.removeWidget(self.query_tools)
+                self.footer_layout.insertWidget(self.footer_layout.indexOf(self.collapse_button), self.query_tools)
+                self.query_tools.show()
+            else:
+                self.footer_layout.removeWidget(self.query_tools)
+                self.fields_row.reflow(force=True)
+        self.fields_row.setVisible(not collapsed)
+        self.actions_row.setVisible(not collapsed)
+        self.compact_summary.setVisible(collapsed)
+        self.collapse_button.setText("필터 펼치기" if collapsed else "필터 접기")
+        self.collapse_button.setToolTip("날짜·분류·사업장·라인·설비군과 버전 조건을 편집합니다." if collapsed else
+                                       "입력을 접고 적용된 조건 요약을 표시합니다.")
+        if changed and collapsed and hides_focus:
+            self.collapse_button.setFocus()
+        elif changed and not collapsed and user:
+            (self.range_button if self._range_enabled else self.date_edit).setFocus()
+        self._render_compact_summary()
+        if changed:
+            self.updateGeometry()
+
+    def _render_compact_summary(self):
+        if not hasattr(self, "compact_summary") or not hasattr(self, "applied_summary"):
+            return
+        applied = self.state.applied
+        if applied is None:
+            text = "조회 전 · 날짜와 조건을 설정해 주세요."
+        else:
+            selection = applied.selection
+            period = self._applied_range if self._range_enabled else None
+            day = selection.as_of
+            when = (f"{period[0]:%Y-%m-%d} ~ {period[1]:%Y-%m-%d}" if period else
+                    f"기준일 {day:%Y-%m-%d}" if day else "기준일 최신")
+            parts = []
+            options = {"site_key": self.state.catalog.sites, "fab_key": self.state.catalog.fabs,
+                       "line_key": self.state.catalog.lines, "group_key": self.state.catalog.groups}
+            for field, caption in FILTER_CAPTIONS.items():
+                value = getattr(selection, field)
+                if value is not None:
+                    names = {option.key: option.label for option in options[field]}
+                    labels = ["미지정" if key is UNASSIGNED else names.get(key, "변경된 항목")
+                              for key in selection_keys(value)]
+                    parts.append(f"{caption} " + ", ".join(labels))
+            if not parts:
+                parts.append("전체 범위")
+            parts.append(when)
+            if selection.versions is not None:
+                parts.append(version_filter_caption(selection.versions))
+            text = " · ".join(parts)
+        self.compact_summary.setToolTip(self.applied_summary.text() or text)
+        self.compact_summary.setAccessibleDescription(self.applied_summary.text() or text)
+        self.compact_summary.setText(self.compact_summary.fontMetrics().elidedText(
+            text, Qt.TextElideMode.ElideRight, max(0, self.compact_summary.width())))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_density()
+        self._render_compact_summary()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        window = self.window()
+        if window is not self and window is not self._density_window:
+            if self._density_window is not None:
+                self._density_window.removeEventFilter(self)
+            self._density_window = window
+            window.installEventFilter(self)
+        self._sync_density()
+
+    def eventFilter(self, watched, event):
+        if watched is self._density_window and event.type() == QEvent.Type.Resize:
+            # 상단 패널 높이가 같아도 창 높이만 바뀌면 결과 공간을 다시 판단한다.
+            self._density_timer.start(0)
+        return super().eventFilter(watched, event)
 
     def set_catalog(self, catalog: QueryCatalog):
         if self.filter_popup is not None:
@@ -454,8 +607,6 @@ class QueryPanel(QWidget):
     def _render(self):
         self.version_button.setText(version_filter_caption(self.state.draft.versions))
         self.version_button.setAccessibleName(self.version_button.text())
-        applied_versions = self.state.applied.selection.versions if self.state.applied is not None else None
-        self.version_pending.setVisible(self.state.draft.versions != applied_versions)
         for field, combo in self.combos.items():
             selected = selection_keys(getattr(self.state.draft, field))
             options = self._filter_options(field)
@@ -493,3 +644,30 @@ class QueryPanel(QWidget):
         self.status.setText(status)
         self.status.set_tone(tone)
         self.applied_summary.setText(summary)
+        range_pending = (applied is not None and self._range_enabled
+                         and self._range_signature() != self._applied_range)
+        pending = (applied is not None and (not self.state.applied_is_current
+                                           or self.state.has_pending_changes or range_pending))
+        self.status.setVisible(applied is None or pending)
+        if pending:
+            self.status.setText("변경사항 미적용")
+            self.status.set_tone("warning")
+            range_hint = ""
+            if range_pending:
+                if self._applied_range is not None:
+                    range_hint += f"\n적용 기간 · {self._applied_range[0]:%Y-%m-%d} ~ {self._applied_range[1]:%Y-%m-%d}"
+                start, end = self._range_signature()
+                range_hint += f"\n변경 기간 · {start:%Y-%m-%d} ~ {end:%Y-%m-%d}"
+            self.status.setToolTip(summary + "\n\n변경 중 · " + self.state.describe(self.state.draft)
+                                   + range_hint + "\n조회 버튼을 누르면 반영됩니다.")
+        else:
+            self.status.setText("조회 전" if applied is None else status)
+            self.status.setToolTip(summary)
+        blocked = self.apply_guard() if self.apply_guard is not None else None
+        if blocked:
+            self.status.show()
+            self.status.setText("조회 잠김")
+            self.status.set_tone("warning")
+            self.status.setToolTip(blocked)
+        self.status.setAccessibleDescription(self.status.toolTip())
+        self._render_compact_summary()

@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from functools import partial
 from html import escape
 
-from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
+from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QCategoryAxis, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QCursor, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
 
 from setron.features.aggregation.schemas import RateCount, Summary
@@ -123,6 +123,7 @@ class DashboardChart(QChartView):
 
     def _chart(self):
         self._hide_hover_tooltip()
+        self.setAccessibleDescription("")
         chart = QChart()
         chart.setBackgroundBrush(QBrush(ui_color("white")))
         chart.setBackgroundRoundness(0)
@@ -137,6 +138,7 @@ class DashboardChart(QChartView):
 
     def clear(self):
         self._chart()
+        self.setAccessibleDescription("표시할 차트 자료가 없습니다.")
 
     def _hide_hover_tooltip(self):
         if self._active_tooltip is None:
@@ -202,7 +204,9 @@ class DashboardChart(QChartView):
         chart.plotAreaChanged.connect(place_center)
         # 조회를 다시 적용하면 차트 영역이 이미 배치되어 변경 신호가 추가로 오지 않을 수 있다.
         place_center(chart.plotArea())
-        self.setAccessibleDescription(" · ".join(f"{name} {value}건" for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)))
+        self.setAccessibleDescription(
+            f"원형 그래프 · 달성률은 판단 가능 {decided}건 기준 · 구성비는 판단 불가 포함 전체 {total}건 기준 · "
+            + " · ".join(f"{name} {value}건" for name, value in zip(("N 이상", "N 미만", "판단 불가"), counts)))
 
     def bars(self, plot, visible_groups):
         chart = self._chart()
@@ -219,6 +223,11 @@ class DashboardChart(QChartView):
             group_set.append([point.counts.rate * 100 if point.counts.rate is not None else 0 for point in points])
             series.append(group_set)
             shown[group_set] = label, points
+        descriptions = [
+            f"{areas[index]} {label}: N 이상 {point.counts.compliant}건, N 미만 {point.counts.below}건, "
+            f"판단 불가 {point.counts.undetermined}건"
+            for label, points in shown.values() for index, point in enumerate(points) if point.equipment_ids]
+        self.setAccessibleDescription("막대 그래프 · " + (" · ".join(descriptions) if descriptions else "표시한 설비군이 없습니다."))
         if not shown:
             return
         series.setLabelsVisible(False)
@@ -284,9 +293,44 @@ class DashboardChart(QChartView):
     def trend(self, snapshot, visible_groups):
         chart = self._chart()
         dates = [point.day for point in snapshot.observations]
-        x = QBarCategoryAxis()
-        x.append([day.strftime("%m-%d") for day in dates])
+        # 좌표는 모든 관측일의 원래 인덱스를 유지하고 눈금만 화면 폭에 맞춰 줄인다.
+        x = QCategoryAxis()
+        x.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
+        x.setTruncateLabels(False)
+        x.setRange(-0.5, max(0.5, len(dates) - 0.5))
         x.setGridLineVisible(False)
+        pattern = "%Y-%m-%d" if dates and dates[0].year != dates[-1].year else "%m-%d"
+        date_labels = tuple(day.strftime(pattern) for day in dates)
+        measured_widths = {}
+        ticks = None
+        def place_dates(rect):
+            nonlocal ticks
+            # 축 눈금은 plot 밖에도 그려지므로 양 끝 날짜가 차트 가장자리에서 잘리지 않게 한다.
+            # Qt 축 텍스트 문서의 안쪽 여백 8px도 실제 글꼴 폭과 함께 확보한다.
+            key = x.labelsFont().toString()
+            if key not in measured_widths:
+                metrics = QFontMetricsF(x.labelsFont())
+                measured_widths[key] = max((metrics.horizontalAdvance(text) for text in date_labels), default=0) + 8
+            label_width = measured_widths[key]
+            edge = label_width / 2 + 4
+            width = max(1, rect.width())
+            count = min(len(dates), max(2, int(max(0, width - 2 * edge) // max(85, label_width + 16)) + 1))
+            indices = (() if not dates else (0,) if len(dates) == 1 else
+                       tuple(round(i * (len(dates) - 1) / (count - 1)) for i in range(count)))
+            ratio = min(0.45, edge / width)
+            padding = max(0.5, (len(dates) - 1) * ratio / (1 - 2 * ratio)) if len(dates) > 1 else 0.5
+            state = indices, round(padding, 5)
+            if ticks == state:
+                return
+            ticks = state
+            for label in x.categoriesLabels():
+                x.remove(label)
+            x.setStartValue(-padding)
+            for index in indices:
+                x.append(date_labels[index], index)
+            x.setRange(-padding, max(0, len(dates) - 1) + padding)
+
+        chart.plotAreaChanged.connect(place_dates)
         y = QValueAxis()
         y.setRange(0, 100)
         y.setTickCount(5)
@@ -324,6 +368,20 @@ class DashboardChart(QChartView):
                 series.attachAxis(x)
                 series.attachAxis(y)
                 series.hovered.connect(partial(self._trend_hover, chart, series, group, segment))
+        place_dates(chart.plotArea())
+        descriptions = []
+        for group in snapshot.trends:
+            if (group.group_key not in visible_groups or not group.points
+                    or not any(point.summary.rate is not None for point in group.points)):
+                continue
+            point = group.points[-1]
+            counts = point.summary
+            rate = "계산 불가" if counts.rate is None else f"{counts.rate:.1%}"
+            descriptions.append(f"{group.label} 마지막 기준일 {point.day}: 달성률 {rate}, N 이상 {counts.compliant}건, "
+                                f"N 미만 {counts.below}건, 판단 불가 {counts.undetermined}건")
+        period = f"{dates[0]} ~ {dates[-1]} · " if dates else ""
+        self.setAccessibleDescription("꺾은선 그래프 · " + period + (
+            " · ".join(descriptions) if descriptions else "표시한 설비군이 없습니다."))
 
     def leaveEvent(self, event):
         self._hide_hover_tooltip()
