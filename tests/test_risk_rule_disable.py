@@ -207,6 +207,8 @@ def test_disable_from_popup_refreshes_badge_dashboard_and_toast(app, data):  # n
     from test_ui_management import FakeGateway
     gateway = _ToggleGateway(FakeGateway())
     window, page, dashboard = _toggle_window(data, gateway)
+    assert page.toast_timer.interval() == 4000
+    page.toast_timer.setInterval(600000)  # 느린 환경에서 확인 전에 사라지지 않게 하고, 사라짐은 아래에서 직접 발생시킨다
     assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건"
     before = dashboard.snapshot
 
