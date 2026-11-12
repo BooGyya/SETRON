@@ -6,9 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QLabel, QMainWindow
+from shiboken6 import isValid
 
 from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.management.service import ManagementService
@@ -23,9 +24,29 @@ from setron.ui.item_risk_dialog import ItemRiskDialog
 from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog
 from setron.ui.risk_rule_save import RiskRuleSaveController
 
-from test_ui_items import app, data
+from test_ui_items import app as _shared_app, data
 from test_release_revision import revision_storage, all_rows
 from test_management_service import service_for, observe
+
+
+@pytest.fixture(scope="module")
+def app(_shared_app):
+    """닫힌 테스트 창과 워커를 QApplication 종료 전에 정리한다."""
+    yield _shared_app
+    assert QThreadPool.globalInstance().waitForDone(10000), "Item 테스트 워커가 종료되지 않았습니다."
+    _shared_app.processEvents()
+    windows = [window for window in _shared_app.topLevelWidgets()
+               if isValid(window) and window.parentWidget() is None
+               and isinstance(window, (QMainWindow, ItemRiskDialog, ItemRuleVerdictDialog))]
+    for window in windows:
+        if isValid(window):
+            window.close()
+    assert QThreadPool.globalInstance().waitForDone(10000), "테스트 창을 닫은 뒤에도 Item 워커가 남았습니다."
+    for window in windows:
+        if isValid(window):
+            window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _shared_app.processEvents()
 
 
 def wait_until(predicate):

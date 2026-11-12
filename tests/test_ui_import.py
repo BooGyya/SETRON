@@ -436,13 +436,25 @@ def test_release_note_flow_saves_items_without_equipment_fields(page, saver):
     assert page.row_model.headings[2:] == (
         "SW 버전 원문", "출시일", "Item 번호", "변경 내용", "대상 모델",
         "설비군", "모델명", "SW 계열", "UI 구분", "구조 구분", "개조 정보", "개조 적용 표식",
+        "Memory/Foundry", "확인된 순서", "접미사", "Item 매핑",
     )
     assert "설비 호기" not in page.row_model.headings and "기준일" not in page.row_model.headings
+    physical_fields = {"base_date", "site", "line", "equipment_code", "pm_name", "engine_version", "epd_version"}
+    assert physical_fields.isdisjoint(page.draft.fields)
     assert page.save_button.isEnabled()
     page.save()
     wait_for_extraction(page)
-    assert [r.values["item_no"] for r in saver.saved[0].rows] == [1, 2]
-    assert saver.saved[0].rows[0].source_reference["content"] == {"sheet": "Release", "cells": ["D2"]}
+    request = saver.saved[0]
+    assert request.kind is ExtractKind.RELEASE_NOTE
+    assert [r.values["item_no"] for r in request.rows] == [1, 2]
+    assert {(r.values["version_raw"], r.values["model_name"], r.values["family_name"]) for r in request.rows} == {
+        ("v1.0.3", "C4", "C4"),
+    }
+    for row in request.rows:
+        assert physical_fields.isdisjoint(row.values)
+        for field in ("production_area", "version_order", "version_suffix", "item_mapping_status"):
+            assert row.values[field] is None and field not in row.source_reference
+    assert request.rows[0].source_reference["content"] == {"sheet": "Release", "cells": ["D2"]}
 
 
 def test_kind_change_discards_draft_and_inputs_lock_while_extracting(page):

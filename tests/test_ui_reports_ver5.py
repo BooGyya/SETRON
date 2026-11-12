@@ -61,8 +61,8 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     assert type(p.start) is type(replay.start) and type(p.end) is type(replay.end)
     assert (p.query_panel.range_button.start, p.query_panel.range_button.end) == (
         p.start.date().toPython(), p.end.date().toPython())
-    assert list(p.query_panel.combos) == ["site_key", "fab_key", "line_key"]
-    assert list(replay.query_panel.combos) == ["site_key", "fab_key", "line_key", "group_key"]
+    assert list(p.query_panel.combos) == ["fab_key", "site_key", "line_key"]
+    assert list(replay.query_panel.combos) == ["fab_key", "site_key", "line_key", "group_key"]
     assert not any("뒤로" in b.text() for b in p.findChildren(QPushButton))
     p.type_buttons["item"].click()
     until(lambda: not p.item_request.busy)
