@@ -49,11 +49,12 @@ def test_multiple_types_are_additive_and_unselected_item_does_not_require_input(
     result = generated(p)
     assert result.request.selected_types == ("upgrade", "change")
     assert {s.content_key for s in result.sections} == {"upgrade", "change"}
-    assert result.title == "맞춤 보고서" and p.item.isHidden()
+    assert result.title == "맞춤 보고서" and p.item.isVisibleTo(p) and not p.item.isEnabled()
 
 
 def test_select_all_clear_and_item_dependency_are_explicit(own, tmp_path):
-    p = page(own, tmp_path)
+    answer = ChatAnswer(ChatRequest("검증 질문", (Intent.SEARCH,)), "검증 범위", "선택한 AI 요약")
+    p = page(own, tmp_path, source=report_source(), ai_provider=lambda: answer)
     assert all(isinstance(c, QCheckBox) for c in p.type_buttons.values())
     saved = list(p.saved_entries)
     assert p.select_all_button.text() == "전체 선택"
@@ -61,7 +62,9 @@ def test_select_all_clear_and_item_dependency_are_explicit(own, tmp_path):
     until(lambda: not p.item_request.busy)
     assert all(c.isChecked() for c in (*p.content_checks.values(), *p.type_buttons.values(), *p.heatmap_checks.values()))
     assert p.select_all_button.text() == "전체 해제"
-    assert not p.generate() and "Item" in p.generation_status.text()
+    assert not p.generate() and "Item" in p.alert_dialog.message.text()
+    assert p.generation_status.isHidden()
+    p.alert_dialog.accept()
     p.item.setCurrentIndex(1)
     result = generated(p)
     assert set(result.request.selected_types) == {key for key, *_ in REPORT_TYPES}
@@ -73,7 +76,8 @@ def test_select_all_clear_and_item_dependency_are_explicit(own, tmp_path):
     p.select_all_button.click()
     assert not any(c.isChecked() for c in (*p.content_checks.values(), *p.type_buttons.values(), *p.heatmap_checks.values()))
     assert p.select_all_button.text() == "전체 선택"
-    assert not p.generate() and "하나 이상" in p.generation_status.text()
+    assert not p.generate() and "하나 이상" in p.alert_dialog.message.text()
+    p.alert_dialog.accept()
     assert p.result is result and p.saved_entries == saved
     p.content_checks["summary"].click()
     assert {s.content_key for s in generated(p).sections} == {"summary"}
@@ -84,7 +88,8 @@ def test_heatmap_views_directly_control_inclusion_without_an_extra_checkbox(own,
     p.select_contents(False)
     assert "heatmap" not in p.content_checks
     assert p.heatmap_options.isEnabled()
-    assert not p.generate() and "하나 이상" in p.generation_status.text()
+    assert not p.generate() and "하나 이상" in p.alert_dialog.message.text()
+    p.alert_dialog.accept()
     p.heatmap_checks["fab"].click()
     result = generated(p)
     assert [s.title for s in result.sections] == ["분류별 히트맵"]
@@ -189,7 +194,7 @@ def test_ai_navigation_selects_requested_type_without_keeping_previous_types(own
     p = page(own, tmp_path)
     p.type_buttons["upgrade"].click()
     assert p.open_period("change", DAYS[0], DAYS[-1])
-    assert p.selected_types == ("change",) and p.item.isHidden()
+    assert p.selected_types == ("change",) and p.item.isVisibleTo(p) and not p.item.isEnabled()
     assert p.start.date() == QDate(*DAYS[0].timetuple()[:3])
 
 

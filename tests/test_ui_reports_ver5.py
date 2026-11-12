@@ -32,7 +32,7 @@ def request(source, **kwargs):
 
 
 def page(own, tmp_path, **kwargs):
-    source = demo_dashboard_source()
+    source = kwargs.pop("source", None) or demo_dashboard_source()
     result = own(ReportsPage(source, targets_provider=lambda: initial_targets(source),
         version_loader=lambda: demo_version_catalog(source),
         settings=QSettings(str(tmp_path / "reports.ini"), QSettings.Format.IniFormat),
@@ -43,9 +43,11 @@ def page(own, tmp_path, **kwargs):
 
 
 def generated(page):
-    page.generate()
+    assert page.generate(), page.alert_dialog.message.text() if page.alert_dialog else "생성을 시작하지 못함"
     until(lambda: not page.request.busy)
-    assert page.result is not None, page.generation_status.text()
+    assert page.result is not None and page.format_dialog is not None, (
+        page.alert_dialog.message.text() if page.alert_dialog else page.generation_status.text())
+    page.format_dialog.reject()
     return page.result
 
 
@@ -55,7 +57,7 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     p = page(own, tmp_path)
     replay = own(ReplayPage(p.source))
     assert list(p.type_buttons) == ["status", "upgrade", "item", "change", "ai"]
-    assert p.kind == "status" and p.result_card.isHidden()
+    assert p.kind == "status" and not hasattr(p, "result_card")
     assert p.library_model.rowCount() == 0
     assert type(p.start) is type(replay.start) and type(p.end) is type(replay.end)
     assert (p.query_panel.range_button.start, p.query_panel.range_button.end) == (
@@ -65,16 +67,26 @@ def test_report_types_and_replay_filters_use_independent_state(own, tmp_path):
     assert not any("뒤로" in b.text() for b in p.findChildren(QPushButton))
     p.type_buttons["item"].click()
     until(lambda: not p.item_request.busy)
-    assert p.item.isVisibleTo(p) and p.item.count() > 1
+    assert p.item.isVisibleTo(p) and p.item.isEnabled() and p.item.count() > 1
+    p.item.setCurrentIndex(1)
+    selected_item = p.item.currentData()
     p.type_buttons["item"].click()
-    assert p.item.isHidden()
+    assert p.item.isVisibleTo(p) and not p.item.isEnabled()
+    assert p.item.currentData() == selected_item
     p.query_panel.select("site_key", p.source.catalog.sites[0].key)
     p.start.setDate(QDate(2026, 10, 1))
     p.end.setDate(QDate(2026, 10, 22))
     p.query_panel.search_button.click()
-    until(lambda: not p.request.busy)
+    assert p.result is None and not p.request.busy and p.format_dialog is None
+    assert p.state.applied.selection.site_key == p.source.catalog.sites[0].key
+    assert all(c.isChecked() for c in (*p.content_checks.values(), *p.heatmap_checks.values()))
+    assert p.selected_types == () and not p.item.isEnabled() and p.item.currentData() == selected_item
+    p.heatmap_checks["subline"].setChecked(False)  # 합성 자료에는 실제 세부라인이 없음
+    assert p.generate()
+    until(lambda: p.format_dialog is not None)
     r = p.result
-    assert r is not None, p.generation_status.text()
+    assert r is not None, p.alert_dialog.message.text() if p.alert_dialog else "보고서 없음"
+    p.format_dialog.reject()
     assert r.request.start == date(2026, 10, 1)
     assert r.request.end == date(2026, 10, 22)
     assert r.request.base_date == date(2026, 10, 21)
@@ -93,7 +105,8 @@ def test_reversed_dates_do_not_generate(own, tmp_path):
     p.start.setDate(QDate(2026, 11, 10))
     p.end.setDate(QDate(2026, 11, 9))
     assert not p.generate()
-    assert "시작 날짜" in p.generation_status.text() and p.result is None
+    assert "시작 날짜" in p.alert_dialog.message.text() and p.result is None
+    assert p.generation_status.isHidden()
 
 
 def test_report_counts_exact_denominator_dates_and_no_fake_lines():
@@ -157,10 +170,13 @@ def test_generated_report_keeps_original_scope_after_filters_change(own, tmp_pat
     p.type_buttons["change"].click()
     assert p.result is first and report_html(first) == html and not p.request.busy
     p.query_panel.search_button.click()
+    assert p.alert_dialog is None and p.format_dialog is None and not p.request.busy
+    assert p.result is first and report_html(first) == html
+    p.generate()
     until(lambda: not p.request.busy)
-    new = p.result
-    assert new.request.selected_types == ("status", "change") and new.scope != first.scope
-    assert new.request.start == date(2026, 9, 1) and new.request.end == date(2026, 9, 21)
+    assert p.alert_dialog is not None and p.format_dialog is None
+    assert p.result is first and report_html(first) == html
+    assert "다음 내용이 없습니다" in p.alert_dialog.message.text()
 
 
 def test_item_selection_and_existing_cumulative_service_used():
@@ -188,17 +204,18 @@ def test_change_and_upgrade_use_real_observations_and_missing_risk_stays_unknown
     assert any(row[0] == "확인 필요" for row in upgrades.rows)
 
 
-def test_ai_report_uses_completed_answer_or_numeric_fallback(own, tmp_path):
+def test_ai_report_uses_completed_answer_and_alerts_on_generate_if_missing(own, tmp_path):
     answer = ChatAnswer(ChatRequest("질문 <원문>", (Intent.SEARCH,)), "Site = 화성", "요약", date(2026, 10, 21))
     current = [answer]
     p = page(own, tmp_path, ai_provider=lambda: current[0])
     p.type_buttons["ai"].click()
+    assert p.alert_dialog is None and "완료된 AI 답변 없음" not in p.ai_note.text()
     r = generated(p)
     assert "질문 &lt;원문&gt;" in report_html(r)
     current[0] = None
-    r = generated(p)
-    assert not any(s.title.startswith("AI 분석 ·") for s in r.sections)
-    assert "AI 분석 결과 없음" in report_html(r)
+    assert not p.generate()
+    assert "완료된 AI 답변이 없습니다" in p.alert_dialog.message.text()
+    assert p.result is r and p.generation_status.isHidden()
 
 
 def test_cancel_discards_late_worker_result_and_generation_can_retry(own, tmp_path, monkeypatch):
@@ -229,7 +246,8 @@ def test_cancel_discards_late_worker_result_and_generation_can_retry(own, tmp_pa
     monkeypatch.setattr("setron.ui.reports_page.generate_report", fail)
     p.generate()
     until(lambda: not p.request.busy)
-    assert "검증용 오류" in p.generation_status.text() and p.result_card.isHidden()
+    assert "검증용 오류" in p.alert_dialog.message.text() and p.result is None
+    p.alert_dialog.accept()
     monkeypatch.setattr("setron.ui.reports_page.generate_report", real)
     assert generated(p)
 
@@ -258,14 +276,17 @@ def test_report_download_opens_preview_and_preserves_duplicate_names(own, tmp_pa
     from setron.ui import chat_report_preview as preview
 
     p = page(own, tmp_path)
-    r = generated(p)
+    assert p.generate()
+    until(lambda: p.format_dialog is not None)
+    r = p.result
     path = tmp_path / f"{r.request.filename} (1).{fmt}"
     path.write_bytes(b"existing")
     monkeypatch.setattr(preview.QFileDialog, "getSaveFileName", lambda *_, **__: (str(path), ""))
     accepted = [False]
     prompts = []
     monkeypatch.setattr(preview, "confirm_numbered_save", lambda _, requested: prompts.append(requested) or accepted[0])
-    p.download_buttons[fmt].click()
+    p.format_dialog.format_buttons[fmt].click()
+    until(lambda: p.preview_dialog is not None)
     dialog = p.preview_dialog
     assert dialog.isVisible() and dialog.pdf.pageCount() > 0
     assert dialog.print_button.isEnabled() and dialog.download_button.isEnabled()

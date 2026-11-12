@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QSettings, QSignalBlocker, Qt, QUrl
+from PySide6.QtCore import QDate, QSettings, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QCheckBox, QFrame, QHBoxLayout, QStyledItemDelegate, QVBoxLayout, QWidget
 
@@ -19,9 +19,9 @@ from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.heatmap_grouping import GROUPING_MODES
-from setron.ui.report_data import COMMON_CONTENTS, REPORT_TYPES, ReportRequest, generate_report
+from setron.ui.report_data import COMMON_CONTENTS, REPORT_TYPES, ReportRequest, generate_report, unavailable_report_contents
 from setron.ui.report_export import pdf_document, save_generated_report
-from setron.ui.report_widgets import GenerationDialog, report_pictures
+from setron.ui.report_widgets import GenerationDialog, ReportFormatDialog, ReportNoticeDialog, report_pictures
 from setron.ui.theme import ASSETS, LINE, SECONDARY, font, set_widget_font
 from setron.ui.version_management_widgets import actions, card, combo, note, table
 
@@ -38,12 +38,14 @@ _TYPE_DESCRIPTIONS = {
 def _content_check(caption):
     control = QCheckBox(caption)
     control.setAccessibleName(caption)
-    set_widget_font(control, font(14, medium=True))
+    caption_font = font(14)
+    caption_font.setBold(True)
+    set_widget_font(control, caption_font)
     tick = (ASSETS / "checkbox-tick.svg").as_posix()
     set_color_style(control, lambda t: (
         f"QCheckBox {{color:{readable_color(t['ink'], t['surface'])};background:transparent;spacing:7px;"
         "padding:2px;border:1px solid transparent;border-radius:4px;}"
-        f"QCheckBox:focus {{border-color:{t['accent']};}}"
+        f"QCheckBox:focus {{color:{readable_color(t['accent'], t['surface'])};}}"
         f"QCheckBox:disabled {{color:{readable_color(t['muted'], t['surface'])};}}"
         f"QCheckBox::indicator {{width:16px;height:16px;border:1px solid {t['line']};border-radius:4px;background:{t['soft']};}}"
         f"QCheckBox::indicator:checked {{background:#3655c7;border-color:#3655c7;image:url({tick});}}"
@@ -69,10 +71,13 @@ class ReportsPage(QWidget):
         self.source, self.targets_provider = source, targets_provider
         self.version_loader, self.ai_provider = version_loader, ai_provider
         self.generation_allowed = generation_allowed
+        self._controls_ready = False
         self.result = None
         self.pictures = None
         self.generation_dialog = self.preview_dialog = None
         self.preparing_dialog = None
+        self.format_dialog = self.alert_dialog = None
+        self._item_load_error = ""
         self.request = ReadRequest(self)
         self.request.completed.connect(self._generated)
         self.item_request = ReadRequest(self)
@@ -91,7 +96,7 @@ class ReportsPage(QWidget):
         self.query_panel = QueryPanel(self.state, period=True, show_group=True)
         self.query_panel.actions_row.hide()
         self.query_panel.reset_button.clicked.connect(self.reset_conditions)
-        self.query_panel.search_button.clicked.connect(self.generate)
+        self.query_panel.search_button.clicked.connect(self.search)
         self.start, self.end = self.query_panel.start_date, self.query_panel.end_date
         body.addWidget(self.query_panel)
 
@@ -133,12 +138,19 @@ class ReportsPage(QWidget):
         self.content_checks = {}
 
         def option(layout, caption, description):
+            row = QWidget()
+            row_body = QHBoxLayout(row)
+            row_body.setContentsMargins(0, 0, 0, 0)
+            row_body.setSpacing(8)
             control = _content_check(caption)
+            control.setAccessibleDescription(description)
             control.toggled.connect(self._kind_changed)
-            layout.addWidget(control)
+            row_body.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+            row_body.addWidget(label("|", 13, color=SECONDARY), 0, Qt.AlignmentFlag.AlignVCenter)
             text = label(description, 12, color=SECONDARY, wrap=True)
             text.setMinimumWidth(0)
-            layout.addWidget(text)
+            row_body.addWidget(text, 1)
+            layout.addWidget(row)
             return control, text
 
         for key, caption, description in COMMON_CONTENTS:
@@ -147,14 +159,22 @@ class ReportsPage(QWidget):
                 map_body = QVBoxLayout(self.heatmap_options)
                 map_body.setContentsMargins(0, 0, 0, 0)
                 map_body.setSpacing(6)
-                map_body.addWidget(label("히트맵", 14, medium=True))
+                self.heatmap_title = label("히트맵", 14)
+                title_font = font(14)
+                title_font.setBold(True)
+                set_widget_font(self.heatmap_title, title_font)
+                map_body.addWidget(self.heatmap_title)
                 self.heatmap_checks = {mode: _content_check(title) for mode, title in GROUPING_MODES}
                 for mode, control in self.heatmap_checks.items():
                     control.setAccessibleName(f"{control.text()}별 히트맵")
                     control.setChecked(mode == "group")
                     control.toggled.connect(self._kind_changed)
-                map_body.addWidget(DashboardGrid(list(self.heatmap_checks.values()),
-                                                minimum_width=90, maximum_columns=3, spacing=6))
+                choices = QWidget()
+                choices_body = QVBoxLayout(choices)
+                choices_body.setContentsMargins(24, 0, 0, 0)
+                choices_body.addWidget(DashboardGrid(list(self.heatmap_checks.values()),
+                                                    minimum_width=100, maximum_columns=5, spacing=6))
+                map_body.addWidget(choices)
                 common_body.addWidget(self.heatmap_options)
                 continue
             control, _ = option(common_body, caption, description)
@@ -174,6 +194,15 @@ class ReportsPage(QWidget):
         for key, caption, *_ in REPORT_TYPES:
             control, text = option(specific_body, caption, _TYPE_DESCRIPTIONS[key])
             self.type_buttons[key] = control
+            if key == "item":
+                self.item = combo("조회할 Item", ((None, "Item 선택"),))
+                self.item.setStyleSheet(self.item.styleSheet() +
+                    "QComboBox:disabled {color:#8b95a8;background:#f1f3f7;border:1px solid #e5eaf3;}")
+                self.item_label = note("조회할 Item")
+                self.item_label.setBuddy(self.item)
+                self.item.currentIndexChanged.connect(lambda: self.item.setToolTip(self.item.currentText()))
+                specific_body.addWidget(self.item_label)
+                specific_body.addWidget(self.item)
             if key == "ai":
                 self.ai_note = text
         self.type_buttons["status"].setChecked(True)
@@ -181,12 +210,6 @@ class ReportsPage(QWidget):
         contents_columns.addWidget(specific, 1)
         contents_body.addLayout(contents_columns)
         config.body.addWidget(contents)
-        self.item = combo("조회할 Item", ((None, "Item 선택"),))
-        self.item_label = note("조회할 Item")
-        self.item_label.setBuddy(self.item)
-        self.item.currentIndexChanged.connect(lambda: self.item.setToolTip(self.item.currentText()))
-        config.body.addWidget(self.item_label)
-        config.body.addWidget(self.item)
         self.generation_status = note()
         self.generation_status.hide()
         config.body.addWidget(self.generation_status)
@@ -194,20 +217,6 @@ class ReportsPage(QWidget):
         self.generate_button.clicked.connect(self.generate)
         config.body.addWidget(actions(None, self.generate_button))
         body.addWidget(config)
-
-        self.result_card = card("생성된 보고서")
-        self.result_title = label("", 16, medium=True, wrap=True)
-        self.result_scope = note()
-        self.result_card.body.addWidget(self.result_title)
-        self.result_card.body.addWidget(self.result_scope)
-        self.download_buttons = {}
-        for fmt, title in (("docx", "Word 다운로드"), ("pdf", "PDF 다운로드")):
-            control = button(title, primary=fmt == "docx")
-            control.clicked.connect(lambda checked=False, format_=fmt: self.open_preview(format_))
-            self.download_buttons[fmt] = control
-        self.result_card.body.addWidget(actions(None, *self.download_buttons.values()))
-        self.result_card.hide()
-        body.addWidget(self.result_card)
 
         library = card("저장한 보고서")
         self.library_model, self.library_table = table(
@@ -219,12 +228,13 @@ class ReportsPage(QWidget):
         self.library_note = note()
         library.body.addWidget(self.library_note)
         body.addWidget(library)
+        self._controls_ready = True
         self.reset_conditions()
         self.enter()
 
     @property
     def saving(self):
-        return self.preview_dialog is not None or self.preparing_dialog is not None
+        return self.preview_dialog is not None or self.preparing_dialog is not None or self.format_dialog is not None
 
     @property
     def kind(self):
@@ -292,27 +302,41 @@ class ReportsPage(QWidget):
         self.generation_status.setText(text)
         self.generation_status.setVisible(bool(text))
 
+    def _alert(self, text):
+        self._notice("")
+        if self.alert_dialog is not None:
+            return
+        dialog = self.alert_dialog = ReportNoticeDialog(text, self.window())
+
+        def finished(_):
+            self.alert_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+
     def _kind_changed(self, *_):
         # 생성 중의 초기 체크 상태 신호에는 아직 다른 컨트롤이 없다.
-        if not hasattr(self, "item"):
+        if not self._controls_ready:
             return
+        self._update_bulk_button()
+        item = "item" in self.selected_types
+        self.item.setEnabled(item)
+        self.item_label.setEnabled(item)
+        if item and self.version_loader and self.item.count() == 1 and not self.item_request.busy:
+            self._item_load_error = ""
+            self.item_request.start(BackgroundRead(self.version_loader))
+
+    def _update_bulk_button(self):
         caption = "전체 해제" if self._all_contents_checked() else "전체 선택"
         self.select_all_button.setText(caption)
         self.select_all_button.setAccessibleName(caption)
-        description = _TYPE_DESCRIPTIONS["ai"]
-        if "ai" in self.selected_types and self.ai_provider() is None:
-            description += "\n완료된 AI 답변 없음"
-        self.ai_note.setText(description)
-        item = "item" in self.selected_types
-        self.item.setVisible(item)
-        self.item_label.setVisible(item)
-        if item and self.version_loader and self.item.count() == 1 and not self.item_request.busy:
-            self.item_request.start(BackgroundRead(self.version_loader))
 
     def _items_loaded(self, result, error):
         if error is not None or result is None:
-            self._notice("Item 목록을 읽지 못했습니다. 보고서 유형을 다시 선택해 주세요.")
+            self._item_load_error = "Item 목록을 읽지 못했습니다. Item 배포를 다시 선택해 목록을 불러와 주세요."
             return
+        self._item_load_error = ""
         previous = self.item.currentData()
         self.item.clear()
         self.item.addItem("Item 선택", None)
@@ -323,26 +347,64 @@ class ReportsPage(QWidget):
             self.item.setItemData(self.item.count() - 1, caption, Qt.ItemDataRole.ToolTipRole)
         self.item.setCurrentIndex(max(0, self.item.findData(previous)))
 
-    def generate(self):
-        if self.request.busy or self.saving:
+    def _apply_scope(self):
+        start, end = self.start.date().toPython(), self.end.date().toPython()
+        if start > end:
+            raise ValueError("시작 날짜는 종료 날짜와 같거나 앞서야 합니다.")
+        if self.state.catalog != self.source.catalog:
+            self.query_panel.set_catalog(self.source.catalog)
+        days = self.source.analysis_dates or self.source.dates
+        base = max((day for day in days if start <= day <= end), default=end)
+        self.state.set_as_of(base)
+        self.state.set_target_draft(self.targets_provider())
+        query = self.query_panel.apply_draft()
+        return (query, start, end, base) if query is not None else None
+
+    def search(self):
+        """상단 조회 조건만 적용하고 공통 내용은 기본 선택한다. 문서 생성은 별도 동작이다."""
+        if self.request.busy or self.saving or self.alert_dialog is not None:
             return False
         if not self.generation_allowed():
-            self._notice("다른 화면의 저장·조회가 완료된 뒤 생성해 주세요.")
+            self._alert("다른 화면의 저장·조회가 완료된 뒤 검색해 주세요.")
+            return False
+        for control in (*self.content_checks.values(), *self.heatmap_checks.values()):
+            with QSignalBlocker(control):
+                control.setChecked(True)
+        for control in self.type_buttons.values():
+            with QSignalBlocker(control):
+                control.setChecked(False)
+        self._kind_changed()
+        try:
+            if self._apply_scope() is None:
+                return False
+        except ValueError as error:
+            self._alert(str(error))
+            return False
+        self._notice("")
+        return True
+
+    def generate(self):
+        if self.request.busy or self.saving or self.alert_dialog is not None:
+            return False
+        if not self.generation_allowed():
+            self._alert("다른 화면의 저장·조회가 완료된 뒤 생성해 주세요.")
             return False
         try:
-            start, end = self.start.date().toPython(), self.end.date().toPython()
-            if start > end:
-                raise ValueError("시작 날짜는 종료 날짜와 같거나 앞서야 합니다.")
-            if self.state.catalog != self.source.catalog:
-                self.query_panel.set_catalog(self.source.catalog)
-            days = self.source.analysis_dates or self.source.dates
-            base = max((day for day in days if start <= day <= end), default=end)
-            self.state.set_as_of(base)
-            self.state.set_target_draft(self.targets_provider())
-            query = self.query_panel.apply_draft()
+            scope = self._apply_scope()
+            if scope is None:
+                return False
+            query, start, end, base = scope
             kinds = self.selected_types
             kind = self.kind
+            if "item" in kinds and self.item_request.busy:
+                raise ValueError("Item 목록을 불러오는 중입니다. 완료 후 다시 생성해 주세요.")
+            if "item" in kinds and self._item_load_error:
+                raise ValueError(self._item_load_error)
+            if "item" in kinds and self.item.currentData() is None:
+                raise ValueError("조회할 Item을 선택해 주세요.")
             ai_answer = deepcopy(self.ai_provider()) if "ai" in kinds else None
+            if "ai" in kinds and ai_answer is None:
+                raise ValueError("완료된 AI 답변이 없습니다. AI 분석에서 질문을 완료하거나 AI 분석 항목을 해제해 주세요.")
             caption = (self.type_buttons[kind].text().replace("·", "_").replace(" ", "_")
                        if len(kinds) == 1 else "맞춤")
             request = ReportRequest(kind, query, base, start, end, "docx", f"SETRON_{caption}_보고서_{end}",
@@ -350,7 +412,7 @@ class ReportsPage(QWidget):
                                     contents=self.selected_contents,
                                     types=kinds, heatmap_modes=tuple(key for key, c in self.heatmap_checks.items() if c.isChecked()))
         except ValueError as error:
-            self._notice(str(error))
+            self._alert(str(error))
             return False
 
         self.generate_button.setEnabled(False)
@@ -381,16 +443,32 @@ class ReportsPage(QWidget):
     def _generated(self, result, error):
         self._close_generation()
         if error is not None:
-            self._notice("생성 실패 · " + str(error))
+            self._alert("보고서를 생성하지 못했습니다.\n" + str(error))
+            return
+        missing = unavailable_report_contents(result)
+        if missing:
+            self._alert("선택한 범위에 다음 내용이 없습니다.\n\n" + "\n".join(f"- {name}" for name in missing)
+                        + "\n\n선택 항목이나 조회 조건을 변경한 뒤 다시 생성해 주세요.")
             return
         self.result, self.pictures = result, None
-        self.result_title.setText(result.title)
-        self.result_scope.setText(f"{result.request.start} ~ {result.request.end} · 관측 기준일 {result.request.base_date}\n"
-                                  + result.scope)
-        self.result_card.show()
+        self._show_formats()
+
+    def _show_formats(self):
+        dialog = self.format_dialog = ReportFormatDialog(self.window())
+        result = self.result
+
+        def finished(_):
+            self.format_dialog = None
+            format_ = dialog.selected_format
+            dialog.deleteLater()
+            if format_:
+                QTimer.singleShot(0, self, lambda: self.open_preview(format_) if self.result is result else None)
+
+        dialog.finished.connect(finished)
+        dialog.open()
 
     def open_preview(self, format_):
-        if self.result is None or self.request.busy or self.saving:
+        if self.result is None or self.request.busy or self.saving or self.alert_dialog is not None:
             return None
         if self.pictures is None:
             dialog = self.preparing_dialog = GenerationDialog(self.window())
