@@ -28,9 +28,9 @@ def _show_table(section):
 def report_html(report, tab=None):
     """미리보기·PDF의 텍스트와 수치표. 시각화는 pdf_document에서 같은 위치에 넣는다."""
     esc = lambda x: escape(str(x)).replace("\n", "<br>")
-    parts = ["<style>body{font-family:'IBM Plex Sans KR';font-size:10pt;color:#142033;}"
-             "th{background:#eef1f5;}td,th{padding:6px;}h1{font-size:20pt;color:#000;}"
-             "h2{font-size:13pt;color:#000;}</style>",
+    parts = ["<html><head><style>body{font-family:'IBM Plex Sans KR';font-size:10pt;color:#142033;}"
+             "p,td,th{color:#142033;}th{background:#eef1f5;}td,th{padding:6px;}h1{font-size:20pt;color:#000;}"
+             "h2{font-size:13pt;color:#000;}</style></head><body style='color:#142033;background-color:white;'>",
              f"<h1>{esc(report.title)}</h1><p>생성 {report.created:%Y-%m-%d %H:%M} · {esc(report.scope)}</p>"]
     for section in report.sections:
         if tab is not None and section.tab != tab:
@@ -43,7 +43,7 @@ def report_html(report, tab=None):
             parts.extend("<tr>" + "".join(f"<td>{esc(display_value(c))}</td>" for c in row) + "</tr>"
                          for row in table.rows)
             parts.append("</table>" if table.rows else "</table><p>조건에 맞는 자료가 없습니다.</p>")
-    return "".join(parts)
+    return "".join((*parts, "</body></html>"))
 
 
 def _pictures(report, pictures):
