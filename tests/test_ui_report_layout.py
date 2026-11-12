@@ -6,7 +6,7 @@ import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QLabel, QStyleOptionViewItem
+from PySide6.QtWidgets import QLabel, QPushButton, QStyleOptionViewItem
 
 from setron.ui.report_data import REPORT_TYPES
 from setron.ui.version_demo import demo_version_catalog
@@ -18,14 +18,35 @@ from test_ui_reports_ver5 import page
 def test_report_controls_fit_and_no_current_time_is_displayed(own, tmp_path, width):
     p = page(own, tmp_path)
     p.resize(width, 1000)
-    for kind, _, _, description, _ in REPORT_TYPES:
+    common = p.common_note.text()
+    assert p.contents_title.text() == "보고서 포함 내용"
+    assert all(text in common for text in ("목표 N", "라인별 적용률", "히트맵", "위험 판정 근거", "관측 버전"))
+    assert not any("도움말" in b.text() for b in p.findChildren(QPushButton))
+    descriptions = {
+        "status": "선택 범위의 표준화 및 적용 현황",
+        "upgrade": "업그레이드 필요 설비, 우선순위, 부족 단계, 판정 근거",
+        "item": "선택 Item의 설비별 적용 결과, 판정 근거, 원본 문서 위치",
+        "change": "관측일 사이 설비와 PM별 이전 버전 및 다음 버전",
+        "ai": "최근 완료된 AI 답변의 요약, 원인 분석, 표, 주의사항\nAI 답변 없음: 공통 수치만 포함",
+    }
+    for kind, *_ in REPORT_TYPES:
         choice = p.type_buttons[kind]
         choice.click()
         QTest.qWait(20)
         assert p.kind == kind and p.item.isVisibleTo(p) == (kind == "item")
         assert p.type_note.isVisibleTo(p)
         assert not choice.toolTip()
-        assert p.type_note.text() == description + (" · 답변이 없으면 수치표만 포함" if kind == "ai" else "")
+        assert p.type_note.text() == descriptions[kind]
+        assert "·" not in p.common_note.text() + p.type_note.text() + p.type_heading.text()
+        assert p.type_heading.text() == choice.text().replace("·", " 및 ") + " 추가 내용"
+        assert p.common_note.isVisibleTo(p) and p.common_note.text() == common
+        divider_x = p.contents_divider.mapTo(p, QPoint()).x()
+        assert divider_x < p.width() / 2
+        assert p.common_note.mapTo(p, QPoint(p.common_note.width(), 0)).x() < divider_x
+        assert p.type_heading.mapTo(p, QPoint()).x() > divider_x
+        assert p.type_note.mapTo(p, QPoint()).x() > divider_x
+        for text in (p.common_note, p.type_note):
+            assert text.height() >= text.heightForWidth(text.width())
         for control in (p.query_panel.reset_button, p.query_panel.search_button, choice, p.generate_button):
             assert control.mapTo(p, QPoint(control.width(), 0)).x() <= p.width()
         reset, search = p.query_panel.reset_button, p.query_panel.search_button

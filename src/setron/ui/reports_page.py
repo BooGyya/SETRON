@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QDate, QSettings, QSignalBlocker, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QButtonGroup, QStyledItemDelegate, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QButtonGroup, QFrame, QHBoxLayout, QStyledItemDelegate, QVBoxLayout, QWidget
 
 from setron.ui.chat_report_library import ChatReportLibrary
 from setron.ui.chat_report_preview import PdfPreviewDialog
@@ -20,10 +20,17 @@ from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.report_data import REPORT_TYPES, ReportRequest, generate_report
 from setron.ui.report_export import pdf_document, save_generated_report
 from setron.ui.report_widgets import GenerationDialog, report_pictures
+from setron.ui.theme import LINE, SECONDARY
 from setron.ui.version_management_widgets import actions, card, combo, note, table
 
 
-_TYPE_DESCRIPTIONS = {key: description for key, _, _, description, _ in REPORT_TYPES}
+_TYPE_DESCRIPTIONS = {
+    "status": "선택 범위의 표준화 및 적용 현황",
+    "upgrade": "업그레이드 필요 설비, 우선순위, 부족 단계, 판정 근거",
+    "item": "선택 Item의 설비별 적용 결과, 판정 근거, 원본 문서 위치",
+    "change": "관측일 사이 설비와 PM별 이전 버전 및 다음 버전",
+    "ai": "최근 완료된 AI 답변의 요약, 원인 분석, 표, 주의사항",
+}
 
 
 class SavedReportDelegate(QStyledItemDelegate):
@@ -47,6 +54,7 @@ class ReportsPage(QWidget):
         self.result = None
         self.pictures = None
         self.generation_dialog = self.preview_dialog = None
+        self.preparing_dialog = None
         self.request = ReadRequest(self)
         self.request.completed.connect(self._generated)
         self.item_request = ReadRequest(self)
@@ -62,7 +70,7 @@ class ReportsPage(QWidget):
         body.setSpacing(16)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.state = QueryState(source.catalog)
-        self.query_panel = QueryPanel(self.state, period=True, show_group=False)
+        self.query_panel = QueryPanel(self.state, period=True, show_group=True)
         self.query_panel.actions_row.hide()
         self.query_panel.reset_button.clicked.connect(self.reset_conditions)
         self.query_panel.search_button.clicked.connect(self.generate)
@@ -81,8 +89,58 @@ class ReportsPage(QWidget):
             self.type_buttons[key] = choice
         self.type_buttons["status"].setChecked(True)
         config.body.addWidget(DashboardGrid(list(self.type_buttons.values()), minimum_width=120, maximum_columns=5, spacing=8))
-        self.type_note = note()
-        config.body.addWidget(self.type_note)
+        contents = QWidget()
+        contents_body = QVBoxLayout(contents)
+        contents_body.setContentsMargins(0, 4, 0, 0)
+        contents_body.setSpacing(8)
+        self.contents_title = label("보고서 포함 내용", 15, medium=True)
+        self.contents_title.setStyleSheet("font-weight:700;")
+        contents_body.addWidget(self.contents_title)
+
+        def divider(*, vertical=False):
+            line = QFrame()
+            line.setObjectName("reportContentsDivider")
+            if vertical:
+                line.setFixedWidth(1)
+            else:
+                line.setFixedHeight(1)
+            line.setStyleSheet(f"QFrame#reportContentsDivider {{background:{LINE};border:0;}}")
+            return line
+
+        contents_body.addWidget(divider())
+        contents_columns = QHBoxLayout()
+        contents_columns.setSpacing(16)
+        common = QWidget()
+        common.setMinimumWidth(0)
+        common_body = QVBoxLayout(common)
+        common_body.setContentsMargins(0, 0, 0, 0)
+        common_body.setSpacing(8)
+        common_body.addWidget(label("공통", 13, medium=True))
+        self.common_note = label("요약: 조회 조건, 목표 N, 설비 수, 달성률, 위험 현황\n"
+                                 "추이: 전체 및 라인별 적용률 그래프\n"
+                                 "시각화: 설비군/라인별 히트맵, 구성비, 막대, 트리맵\n"
+                                 "근거: 위험 판정 근거, 설비별 관측 버전 목록",
+                                 13, color=SECONDARY, wrap=True)
+        self.common_note.setMinimumWidth(0)
+        common_body.addWidget(self.common_note)
+        common_body.addStretch()
+        contents_columns.addWidget(common, 1)
+        self.contents_divider = divider(vertical=True)
+        contents_columns.addWidget(self.contents_divider)
+        specific = QWidget()
+        specific.setMinimumWidth(0)
+        specific_body = QVBoxLayout(specific)
+        specific_body.setContentsMargins(0, 0, 0, 0)
+        specific_body.setSpacing(8)
+        self.type_heading = label("", 13, medium=True, wrap=True)
+        specific_body.addWidget(self.type_heading)
+        self.type_note = label("", 13, color=SECONDARY, wrap=True)
+        self.type_note.setMinimumWidth(0)
+        specific_body.addWidget(self.type_note)
+        specific_body.addStretch()
+        contents_columns.addWidget(specific, 2)
+        contents_body.addLayout(contents_columns)
+        config.body.addWidget(contents)
         self.item = combo("조회할 Item", ((None, "Item 선택"),))
         self.item_label = note("조회할 Item")
         self.item_label.setBuddy(self.item)
@@ -126,7 +184,7 @@ class ReportsPage(QWidget):
 
     @property
     def saving(self):
-        return self.preview_dialog is not None
+        return self.preview_dialog is not None or self.preparing_dialog is not None
 
     @property
     def kind(self):
@@ -175,7 +233,9 @@ class ReportsPage(QWidget):
         kind = self.kind
         description = _TYPE_DESCRIPTIONS[kind]
         if kind == "ai" and self.ai_provider() is None:
-            description += " · 답변이 없으면 수치표만 포함"
+            description += "\nAI 답변 없음: 공통 수치만 포함"
+        caption = self.type_buttons[kind].text().replace("·", " 및 ")
+        self.type_heading.setText(caption + " 추가 내용")
         self.type_note.setText(description)
         item = kind == "item"
         self.item.setVisible(item)
@@ -263,7 +323,27 @@ class ReportsPage(QWidget):
         if self.result is None or self.request.busy or self.saving:
             return None
         if self.pictures is None:
-            self.pictures = report_pictures(self.result)
+            dialog = self.preparing_dialog = GenerationDialog(self.window())
+            dialog.heading.setText("보고서 미리보기 준비 중")
+            cancelled = []
+            dialog.cancelled.connect(lambda: cancelled.append(True))
+            dialog.open()
+
+            def progress():
+                QApplication.processEvents()
+                if cancelled:
+                    raise RuntimeError("보고서 미리보기 준비를 취소했습니다.")
+
+            try:
+                progress()
+                self.pictures = report_pictures(self.result, progress=progress)
+            except Exception as error:
+                self._notice(str(error))
+                return None
+            finally:
+                self.preparing_dialog = None
+                dialog.accept()
+                dialog.deleteLater()
         pictures = self.pictures
         report = replace(self.result, request=replace(self.result.request, format=format_))
         pdf = replace(report, request=replace(report.request, format="pdf"))
@@ -303,7 +383,7 @@ class ReportsPage(QWidget):
             values = json.loads(self.settings.value("files", "[]"))
             return [entry for entry in values if isinstance(entry, dict) and isinstance(entry.get("path"), str)
                     and isinstance(entry.get("created"), str)
-                    and Path(entry["path"]).suffix.lower() in {".xlsx", ".docx", ".pdf"}] if isinstance(values, list) else []
+                    and Path(entry["path"]).suffix.lower() in {".docx", ".pdf"}] if isinstance(values, list) else []
         except (ValueError, TypeError):
             return []
 

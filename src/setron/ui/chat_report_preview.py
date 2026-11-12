@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QHBoxLayout, Q
 from setron.features.chat.export import conditions_of
 from setron.features.chat.schemas import INTENT_LABELS
 from setron.features.export.schemas import ExportResult, ExportStatus
-from setron.ui.chat_components import asset_label, close_button
+from setron.ui.chat_components import asset_label
 from setron.ui.components import button, label
 from setron.ui.import_dialogs import confirm_numbered_save
 from setron.ui.management_integration import save_numbered_export
@@ -129,7 +129,6 @@ class PdfPreviewDialog(QDialog):
         header = QHBoxLayout()
         header.addWidget(asset_label("87080.svg", slot=40))
         header.addWidget(label(title, 18, medium=True), 1)
-        header.addWidget(close_button(self.reject))
         body.addLayout(header)
         self.metadata = label(filename, 12, wrap=True)
         body.addWidget(self.metadata)

@@ -14,6 +14,7 @@ from setron.features.version.groups import SLOT_LABELS
 from setron.ui.dashboard_data import family_name, missing_sw_count
 from setron.ui.query_state import UNASSIGNED, AppliedQuery, selection_keys
 from setron.ui.replay_data import ReplayRequest, load_replay
+from setron.ui.report_visual_data import hpa_rows, report_visuals
 
 
 REPORT_TYPES = (
@@ -23,7 +24,7 @@ REPORT_TYPES = (
     ("change", "변경 이력", "설비별 변경 이력 리포트", "기간 내 설비별 버전 변경 내역", "57213.svg"),
     ("ai", "AI 분석", "AI 분석 리포트", "AI 분석 탭에서 완료한 가장 최근 답변", "4c3e7.svg"),
 )
-FORMATS = (("xlsx", "Excel", "Excel (.xlsx)"), ("docx", "Word", "Word (.docx)"), ("pdf", "PDF · 대체", "PDF (.pdf)"))
+FORMATS = (("docx", "Word", "Word (.docx)"), ("pdf", "PDF", "PDF (.pdf)"))
 
 
 def safe_filename(value):
@@ -45,7 +46,7 @@ class ReportRequest:
     base_date: date
     start: date
     end: date
-    format: str = "xlsx"
+    format: str = "docx"
     filename: str = "SETRON_보고서"
     heatmap: bool = True
     distribution: bool = True
@@ -74,7 +75,8 @@ class ReportSection:
     title: str
     note: str = ""
     table: Table | None = None
-    chart: str = ""  # distribution / trend; 표의 숫자만 차트로 사용한다.
+    chart: str = ""  # distribution / trend / line_trend / heatmap
+    visual: object = None
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,7 @@ def _caption(options, value, all_text):
 
 def scope_caption(catalog, selection):
     return " · ".join((_caption(catalog.sites, selection.site_key, "전체 Site"),
-                       _caption(catalog.fabs, selection.fab_key, "Fab 전체"),
+                       _caption(catalog.fabs, selection.fab_key, "분류 전체"),
                        _caption(catalog.lines, selection.line_key, "Line 전체"),
                        _caption(catalog.groups, selection.group_key, "설비군 전체")))
 
@@ -125,9 +127,11 @@ def generate_report(source, request, versions=None):
     source_label = ("UI 시연 · " if request.demo else "") + frozen.source_label
     sections = []
 
-    def add(tab, title, note="", columns=(), rows=(), chart=""):
+    def add(tab, title, note="", columns=(), rows=(), chart="", visual=None):
         sections.append(ReportSection(tab, title, note, Table(title, tuple(columns), tuple(tuple(r) for r in rows))
-                                      if columns else None, chart))
+                                      if columns else None, chart, visual))
+
+    line_trends, heatmaps, line_counts, risk_rows = report_visuals(frozen, frames, current)
 
     missing = missing_sw_count(summary) if summary else 0
     total = summary.equipment_count if summary else 0
@@ -137,11 +141,11 @@ def generate_report(source, request, versions=None):
         excluded = 0
     rate = summary.rate if summary else None
     add(0, "조회 조건과 집계 기준", "조회 조건·분모·미확인/제외 수는 항상 포함합니다.",
-        ("물리 설비(대)", "분석 설비·계열(건)", "N 이상(건)", "N 미만(건)", "판단 불가(건)"),
+        ("물리 설비(대)", "버전 판정(건)", "N 이상(건)", "N 미만(건)", "판단 불가(건)"),
         ((total, sum(counts), *counts),))
     add(0, "목표 N 달성률", f"{'계산 불가' if rate is None else f'{rate:.1%}'} · 분모 {counts[0] + counts[1]}건 · "
         f"판단 불가 {counts[2]}건 · SW 미등록 {missing}대 · HPA 제외 {excluded}대. "
-        "달성률=N 이상/(N 이상+N 미만). 물리 설비 수와 설비·계열 건수는 다릅니다.")
+        "달성률=N 이상/(N 이상+N 미만). 물리 설비 수와 버전 판정 건수는 다릅니다.")
     add(0, "결함 위험 판정", "목표 N 달성과 별도입니다. 위험 기준이 없는 설비를 ‘안전’으로 판정하지 않습니다.",
         ("위험 후보(대)", "등록 규칙상 후보 아님(대)", "위험 미확인(대)"),
         (tuple(sum(frozen.risk_status(r) is status for r in records)
@@ -166,28 +170,47 @@ def generate_report(source, request, versions=None):
         ("N 그룹", "모델·계열별 저장 기준 적용" if frozen.saved_groups else "저장 그룹 없음 · 개별 목표 N 적용"), *target_rows))
     if current is None:
         add(0, "자료 없음", "선택한 기준일에 저장된 관측 자료가 없습니다. 다른 날짜의 자료나 0%로 대신하지 않습니다.")
-    if request.trend:
-        rows = tuple((str(f.day), f.snapshot.summary.compliant, f.snapshot.summary.below,
-                      f.snapshot.summary.undetermined,
-                      f.snapshot.summary.rate if f.snapshot.summary.rate is not None else None) for f in frames)
-        add(1, "날짜별 적용률 추이", "실제 저장된 날짜만 표시합니다. 미관측·분모 없음은 0 또는 이전 값으로 채우지 않습니다."
-            + (" 관측이 1장 이하이므로 추세·예측을 만들지 않습니다." if len(frames) < 2 else ""),
-            ("관측일", "N 이상", "N 미만", "판단 불가", "적용률"), rows,
-            "trend" if len(frames) >= 2 else "")
+    rows = tuple((str(f.day), f.snapshot.summary.compliant, f.snapshot.summary.below,
+                  f.snapshot.summary.undetermined, f.snapshot.summary.rate) for f in frames)
+    add(1, "날짜별 적용률 추이", "선택 범위 전체 추세입니다. 실제 관측일만 표시하며 미관측·분모 없음은 비워 둡니다."
+        + (" 관측이 1장 이하이므로 추세·예측을 만들지 않습니다." if len(frames) < 2 else ""),
+        ("관측일", "N 이상", "N 미만", "판단 불가", "적용률"), rows,
+        "trend" if len(frames) >= 2 else "")
+    if not line_trends:
+        add(1, "라인별 적용률 추이", "선택한 기간과 조건에 해당하는 관측 자료가 없습니다.")
+    for trend in line_trends:
+        title = f"{trend.area} · {trend.site} · {trend.group} 라인별 적용률 추이"
+        add(1, title, "같은 설비군의 실제 라인별 N 이상 적용률입니다. 미관측·판정 불가는 선을 끊고, 관측 1장은 점으로 표시합니다.",
+            ("관측일", *trend.lines),
+            tuple((str(day), *(rates[i] for rates in trend.rates)) for i, day in enumerate(trend.days)),
+            "line_trend" if trend.days else "", trend)
+        latest = tuple(row for row in line_counts if row[:3] == (trend.area, trend.site, trend.group))
+        add(1, f"{trend.area} · {trend.site} · {trend.group} 라인별 적용 현황",
+            "기준일 현재 값입니다. 달성률=N 이상/(N 이상+N 미만). 여러 설비군에 연결된 설비는 각 설비군에 표시됩니다.",
+            ("라인", "설비(대)", "N 이상(건)", "판단 불가(건)", "적용률", "위험 후보(대)"),
+            tuple((row[3], row[4], row[5], row[7], row[8], row[9]) for row in latest))
     if request.distribution:
-        # 한 설비의 같은 계열이 여러 모델에 연결되어도 한 건이다. 설비군별 중복 합산을 쓰지 않는다.
-        rows = tuple((family_name(frozen, g.family_id), g.compliant, g.below, g.undetermined)
-                     for g in (summary.by_family if summary else ()))
-        add(1, "구성비·막대·트리맵", "같은 수치표를 참조합니다. 트리맵 면적은 설비·계열 건수에 비례합니다.",
-            ("SW 계열", "N 이상", "N 미만", "판단 불가"), rows, "distribution")
-    if request.heatmap:
-        lines = {o.key: o.label for o in frozen.catalog.lines}
-        rows = tuple((tile.model_name or " · ".join(f.title for f in tile.families) or "미지정",
-                      lines.get(frozen.locations[tile.equipment_id].line_key, "Line 미지정"),
-                      tile.code, " · ".join(v for f in tile.families for v in f.versions) or "미입력", tile.goal.value)
-                     for tile in (current.tiles if current else ()))
-        add(1, "버전 히트맵 발췌", "설비군 → 명시적 Line → 설비. 원본 구역명으로 Line을 추정하지 않습니다.",
-            ("설비군", "Line", "설비", "관측 SW", "판정"), rows)
+        # 설비군별 판정 건수다. 복수 설비군 소속은 각각 집계하며 물리 설비 대수와 구분한다.
+        grouped = {}
+        for row in line_counts:
+            values = grouped.setdefault(row[2], [0, 0, 0])
+            for i, value in enumerate(row[5:8]):
+                values[i] += value
+        rows = tuple((name, *values) for name, values in grouped.items())
+        add(1, "구성비·막대·트리맵", "설비군별 SW 판정 건수입니다. DFB는 C4와 별도 표시하며 복수 설비군 소속은 각각 표시합니다.",
+            ("설비군", "N 이상", "N 미만", "판단 불가"), rows, "distribution")
+    add(1, "설비군·라인별 히트맵", "분류·사업장별로 나누고 설비군 → 원문 라인 → 설비명 순서로 표시합니다. "
+        "채움색은 버전 단계, 붉은 테두리와 ‘위험’은 별도 위험 후보입니다. HPA는 분석에서 제외합니다."
+        + (" 표시할 관측 자료가 없습니다." if not heatmaps else ""),
+        ("설비군", "라인", "설비", "버전 단계", "위험"),
+        tuple((panel.group, line, cell.code, cell.tier.value, cell.risk.value)
+              for panel in heatmaps for line, cells in panel.lines for cell in cells), "heatmap", heatmaps)
+    add(2, "위험 후보 설비와 근거", "목표 달성 여부와 별도입니다. 위험 후보가 없더라도 위험 미확인 설비를 안전으로 확정하지 않습니다.",
+        ("분류", "사업장", "설비군", "라인", "설비", "위험", "근거"), risk_rows)
+    excluded_rows = hpa_rows(current, frozen, request.query, request.base_date) if request.demo != "empty" else ()
+    if excluded_rows:
+        add(2, "HPA 관측 현황 · 분석 제외", "저장된 호기·라인·버전은 보존하며 목표 적용률과 위험 분석의 분모에서는 제외합니다.",
+            ("사업장", "분류", "라인", "설비", "관측일", "관측 버전", "비고"), excluded_rows)
     if request.kind == "item":
         if versions is None or not any(e.item.item_id == request.item_id for e in versions.items):
             raise ValueError("선택한 Item이 현재 릴리즈 자료에 없습니다. Item 목록을 다시 불러와 주세요.")
@@ -215,14 +238,14 @@ def generate_report(source, request, versions=None):
                   for e in candidates))
     if request.kind == "change":
         add(2, "설비별 변경 이력", "실제 패치 시각이 아닌 두 관측일 사이의 버전 차이입니다. 관측이 없으면 변경을 추정하지 않습니다.",
-            ("이전 관측일", "다음 관측일", "설비", "PM · 계열", "이전 버전", "다음 버전"), _changes(frames))
+            ("이전 관측일", "다음 관측일", "설비", "PM · 설비군", "이전 버전", "다음 버전"), _changes(frames, frozen))
         if len(frames) < 2:
             add(2, "변경 판단 불가", "관측이 1장 이하입니다. 두 관측일이 있는 기간을 선택하세요.")
     if request.evidence:
         add(2, "설비 목록·원문 근거", "관측 SW 원문입니다. 원본 위치 미연결 · 임의 생성 안 함. 관리값 수정 전 원본과의 대조는 제공된 근거만 사용합니다.",
-            ("설비", "관측일", "Site", "원본 구역", "PM", "SW 계열", "관측 버전 원문", "원본 위치"),
+            ("설비", "관측일", "Site", "원본 구역", "PM", "관측 버전 원문", "원본 위치"),
             tuple((r.equipment_code, str(r.base_date), r.site, r.line or "미지정", pm.pm_name or "일반 SW",
-                   family_name(frozen, pm.family_id), pm.version_raw or "미입력", "원본 위치 미연결")
+                   pm.version_raw or "미입력", "원본 위치 미연결")
                   for r in records for pm in r.pms))
     if request.kind == "ai" and not request.numeric_only:
         answer = request.ai_answer
@@ -234,7 +257,10 @@ def generate_report(source, request, versions=None):
                 f"응답 기준일: {answer.base_date or '미확인'}\n{answer.summary}\n{answer.cause or ''}\n"
                 "AI 응답과 보고서 조건·수치가 일치하는지 확인 필요. 보고서 생성은 AI를 다시 호출하지 않습니다.")
             for table in answer.tables:
-                add(3, table.title, "기존 AI 응답의 표 · 보고서 공통 집계와 별도", table.columns, table.rows)
+                indices = [i for i, name in enumerate(table.columns) if name.replace(" ", "") not in {"SW계열", "버전계열"}]
+                if indices:
+                    add(3, table.title, "기존 AI 응답의 표 · 보고서 공통 집계와 별도",
+                        tuple(table.columns[i] for i in indices), tuple(tuple(row[i] for i in indices) for row in table.rows))
             for notice in (*answer.issues, *answer.notices):
                 add(3, "AI 주의 사항", notice)
         add(3, "예측 안내", "참고용 계산이며 완료 약속이 아닙니다. 판단 불가·미관측·목표 미지정은 별도 표시하고 자료가 부족하면 예측을 생략합니다.")
@@ -244,7 +270,10 @@ def generate_report(source, request, versions=None):
     return GeneratedReport(request, datetime.now(), title, tuple(sections), scope, source_label)
 
 
-def _changes(frames):
+def _changes(frames, source):
+    from setron.features.management_format import equipment_group_name
+    models = {mid: group.label for group in source.catalog.groups for mid in source.bindings[group.key]}
+    models.update(getattr(source, "model_names", {}))
     rows = []
     for before, after in zip(frames, frames[1:]):
         def indexed(frame):
@@ -255,7 +284,8 @@ def _changes(frames):
             if old.get(key) == new.get(key):
                 continue
             code = (new.get(key) or old[key])[0]
-            rows.append((str(before.day), str(after.day), code, f"{key[1] or '일반 SW'} · 계열 {key[2]}",
+            group = equipment_group_name(models.get(key[3], "설비군 미확인"))
+            rows.append((str(before.day), str(after.day), code, f"{key[1] or '일반 SW'} · {group}",
                          old[key][1] or "미입력" if key in old else "이전 관측 없음",
                          new[key][1] or "미입력" if key in new else "다음 관측 없음"))
     return tuple(rows)
