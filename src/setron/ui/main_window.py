@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QThread, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLayout, QMainWindow, QPushButton, QScrollArea,
@@ -56,12 +56,12 @@ HIDDEN_MENUS = ("versions",)
 class BrandLogo(QLabel):
     """밝게/어둡게 모두 같은 크기로 원본 로고를 표시한다."""
 
-    def __init__(self):
+    def __init__(self, *, size=None):
         super().__init__()
         self.setObjectName("setronLogo")
         self.setAccessibleName("SETRON 로고 · SEMES Tracking Monitoring")
         self.setProperty("brandAsset", "setron-logo.png")
-        self.setFixedSize(128, 36)
+        self.setFixedSize(size if size is not None else QSize(128, 36))
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._source = QPixmap(str(ASSETS / self.property("brandAsset")))
         visible = QRegion(self._source.mask()).boundingRect()

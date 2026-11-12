@@ -1271,45 +1271,9 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName("SETRON")
     app.setWindowIcon(icon("setron-window-icon.svg"))
     install_theme(app)
-    from PySide6.QtWidgets import QMainWindow, QProgressBar, QVBoxLayout, QWidget
-    from setron.ui.components import label
+    from setron.ui.startup_window import StartupWindow
 
-    class StartupWindow(QMainWindow):
-        """DB를 기다리는 동안 먼저 표시하고 닫힌 뒤의 완료 응답은 받지 않는다."""
-
-        def __init__(self):
-            super().__init__()
-            self.accepting = True
-            self.request = ReadRequest(self)
-            self.setObjectName("startupWindow")
-            self.setWindowTitle("SETRON")
-            self.setWindowIcon(app.windowIcon())
-            self.setMinimumSize(960, 600)
-            self.resize(1440, 960)
-            content = QWidget()
-            body = QVBoxLayout(content)
-            body.setContentsMargins(40, 40, 40, 40)
-            body.setSpacing(18)
-            body.addStretch()
-            body.addWidget(label("SETRON", 28, medium=True), alignment=Qt.AlignmentFlag.AlignCenter)
-            message = label("자료를 불러오고 있습니다.", 16, wrap=True)
-            message.setObjectName("startupLoadingMessage")
-            body.addWidget(message, alignment=Qt.AlignmentFlag.AlignCenter)
-            progress = QProgressBar()
-            progress.setRange(0, 0)
-            progress.setTextVisible(False)
-            progress.setFixedWidth(240)
-            progress.setAccessibleName("자료 불러오기 진행 중")
-            body.addWidget(progress, alignment=Qt.AlignmentFlag.AlignCenter)
-            body.addStretch()
-            self.setCentralWidget(content)
-
-        def closeEvent(self, event):
-            self.accepting = False
-            self.request.cancel()
-            super().closeEvent(event)
-
-    startup = StartupWindow()
+    startup = StartupWindow(app.windowIcon())
     if screen := app.primaryScreen():
         area = screen.availableGeometry()
         startup.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
@@ -1317,6 +1281,16 @@ def main(argv: list[str] | None = None) -> int:
     window = None
     ai = ai_providers_from_env()
     app.aboutToQuit.connect(ai.close)
+    startup.complete_step("settings")
+
+    def abort_startup():
+        nonlocal window
+        if window is not None and not window.isVisible():
+            window.close()
+            window.deleteLater()
+            window = None
+
+    startup.closed.connect(abort_startup)
 
     def build_window(source, problem):
         current = create_window(source, excel=DemoExcel() if args.demo_excel else None,
@@ -1383,16 +1357,34 @@ def main(argv: list[str] | None = None) -> int:
         if not startup.accepting or not startup.isVisible():
             return
         source, problem = (None, f"DB 자료를 읽지 못해 합성 예시로 시작했습니다: {error}") if error is not None else result
+        startup.complete_step("source")
         window = build_window(source, problem)
         install_reconnect(problem)
         window.restoreGeometry(startup.saveGeometry())
-        window.show()
-        startup.close()
-        startup.deleteLater()
-        if args.auto_close_ms:
-            QTimer.singleShot(args.auto_close_ms, lambda: window.close())
+        startup.complete_step("window")
+
+        def show_ready_window():
+            if not startup.accepting or window is None:
+                return
+            startup.complete_step("query")
+            window.show()
+            startup.close()
+            if args.auto_close_ms:
+                QTimer.singleShot(args.auto_close_ms, lambda: window.close())
+
+        query_request = getattr(window, "query_request", None)
+        if query_request is not None and (source is None or source.dates):
+            def initial_query_finished(*_):
+                if not startup.accepting or query_request.busy:
+                    return
+                query_request.completed.disconnect(initial_query_finished)
+                show_ready_window()
+            query_request.completed.connect(initial_query_finished)
+        else:
+            # 자료가 없으면 조회 생략이 확정된 뒤, 단순 공급자는 예약된 첫 적용 뒤에 완료한다.
+            QTimer.singleShot(0, startup, show_ready_window)
 
     startup.request.completed.connect(finish_startup)
     # SETRON_DB_* 설정 확인과 첫 DB 읽기는 창을 표시한 뒤 워커에서 시작한다.
-    QTimer.singleShot(0, startup, lambda: startup.request.start(BackgroundRead(dashboard_source_from_env)))
+    QTimer.singleShot(0, startup, lambda: startup.request.start(BackgroundRead(dashboard_source_from_env)) if startup.accepting else None)
     return app.exec()

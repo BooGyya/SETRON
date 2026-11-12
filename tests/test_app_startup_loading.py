@@ -13,6 +13,7 @@ from PySide6.QtCore import QThreadPool, QTimer
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QPushButton
 
 import setron.ui.app as app_module
+from setron.ui.read_worker import BackgroundRead, ReadRequest
 
 
 @pytest.fixture(scope="module")
@@ -90,6 +91,8 @@ def test_loading_window_precedes_worker_and_auto_close_starts_after_actual_windo
     def inspect():
         window = loading_window(app)
         inspected.append(window.findChild(QLabel, "startupLoadingMessage").text())
+        assert window.progress.value() == 1 and window.progress.maximum() == 4
+        assert window.percentage.text() == "25% · 1/4"
         window.resize(960, 650)
         dimensions.append(window.size())
         assert started.is_set() and startup.created == []
@@ -102,7 +105,7 @@ def test_loading_window_precedes_worker_and_auto_close_starts_after_actual_windo
         assert app_module.main(["--demo-excel", "--auto-close-ms", "40"]) == 0
     finally:
         release.set()
-    assert inspected == ["자료를 불러오고 있습니다."]
+    assert inspected == ["자료 불러오는 중"]
     assert threads and threads[0] != startup.main_thread
     assert len(startup.created) == 1 and startup.created[0].source is source
     assert startup.created[0].size() == dimensions[0]
@@ -174,3 +177,92 @@ def test_initial_read_error_keeps_database_reconnect_and_window_geometry(app, st
     assert startup.created[1].source is source and startup.created[1].size() == retry_size[0]
     assert not startup.created[1].warnings[-1][1]
     assert all(thread != startup.main_thread for thread in calls)
+
+
+def test_loading_progress_waits_for_first_query_before_reaching_complete(app, startup, monkeypatch):
+    create = app_module.create_window
+    entered, release = Event(), Event()
+    observed, closed = [], []
+
+    def make_window(source, **kwargs):
+        current = create(source, **kwargs)
+        current.query_request = ReadRequest(current)
+
+        def load_query():
+            entered.set()
+            assert release.wait(2)
+            return True
+
+        def apply():
+            current.applied.append(True)
+            current.query_request.start(BackgroundRead(load_query))
+
+        current.query_panel.apply_draft = apply
+        return current
+
+    def inspect():
+        if not entered.is_set():
+            return
+        probe.stop()
+        loading = loading_window(app)
+        observed.append((loading.progress.value(), loading.percentage.text(), startup.created[0].isVisible()))
+        loading.closed.connect(lambda: closed.append((loading.completed_steps, loading.progress.value())))
+        release.set()
+
+    monkeypatch.setattr(app_module, "create_window", make_window)
+    monkeypatch.setattr(app_module, "dashboard_source_from_env", lambda: (None, None))
+    probe = QTimer()
+    probe.setInterval(5)
+    probe.timeout.connect(inspect)
+    probe.start()
+    try:
+        assert app_module.main(["--demo-excel", "--auto-close-ms", "30"]) == 0
+    finally:
+        probe.stop()
+        release.set()
+        QThreadPool.globalInstance().waitForDone(2000)
+    assert observed == [(3, "75% · 3/4", False)]
+    assert closed == [(4, 4)]
+    assert startup.created[0].applied == [True]
+
+
+def test_closing_during_first_query_does_not_reopen_prepared_main_window(app, startup, monkeypatch):
+    create = app_module.create_window
+    entered, release = Event(), Event()
+    observed = []
+
+    def make_window(source, **kwargs):
+        current = create(source, **kwargs)
+        current.query_request = ReadRequest(current)
+
+        def load_query():
+            entered.set()
+            assert release.wait(2)
+            return True
+
+        current.query_panel.apply_draft = lambda: current.query_request.start(BackgroundRead(load_query))
+        return current
+
+    def close():
+        if entered.is_set():
+            probe.stop()
+            loading = loading_window(app)
+            observed.append(loading.completed_steps)
+            loading.close()
+
+    monkeypatch.setattr(app_module, "create_window", make_window)
+    monkeypatch.setattr(app_module, "dashboard_source_from_env", lambda: (None, None))
+    probe = QTimer()
+    probe.setInterval(5)
+    probe.timeout.connect(close)
+    probe.start()
+    try:
+        assert app_module.main(["--demo-excel"]) == 0
+    finally:
+        probe.stop()
+        release.set()
+        QThreadPool.globalInstance().waitForDone(2000)
+        app.processEvents()
+    assert observed == [3] and len(startup.created) == 1
+    assert not any(window.isVisible() and window.objectName() == "testStartupActualWindow"
+                   for window in app.topLevelWidgets())
