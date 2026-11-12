@@ -178,7 +178,7 @@ def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, so
     assert model is page.model
     columns = range(model.columnCount())
     assert tuple(model.headerData(column, Qt.Orientation.Horizontal) for column in columns) == (
-        "설비명", "모델", "계열", "적용현황",
+        "설비명", "모델", "계열", "적용현황", "위험버전",
     )
     assert all(not page.table.isColumnHidden(column) for column in columns)
     assert sum(page.table.columnWidth(column) for column in columns) <= page.table.viewport().width()
@@ -186,12 +186,15 @@ def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, so
     assert all(model.index(row, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
                for row in range(model.rowCount()) for column in columns)
     assert model.rows[:2] == (
-        ("TEST-001", "M-O2\nM-O3", "O2 구UI\nO3 통합UI", "목표 미달\n복수 SW\nPM 불일치"),
-        ("TEST-002", "M-O2", "O2 구UI", "목표 달성"),
+        ("TEST-001", "M-O2\nM-O3", "O2 구UI\nO3 통합UI", "목표 미달\n복수 SW\nPM 불일치", "위험 후보"),
+        ("TEST-002", "M-O2", "O2 구UI", "목표 달성", "위험 후보"),
     )
     if not risk_only:
-        assert model.rows[3] == ("TEST-004", "TEST", "—", "정보 부족")
-        assert model.rows[4] == ("TEST-005", "TEST", "—", "HPA · 분석 제외")
+        assert model.rows[2][4] == "미확인"
+        assert model.rows[3] == ("TEST-004", "TEST", "—", "정보 부족", "후보 아님")
+        assert model.rows[4] == ("TEST-005", "TEST", "—", "HPA · 분석 제외", "분석 제외")
+    assert model.index(1, 3).data(Qt.ItemDataRole.ForegroundRole) != model.index(1, 4).data(Qt.ItemDataRole.ForegroundRole)
+    assert model.index(1, 4).data(Qt.ItemDataRole.ToolTipRole).startswith("위험 후보")
     assert tuple(t.equipment_id for t in page.visible_tiles) == ids
     assert page.metrics["total"].value.text() == f"{len(ids)}대"
     assert page.goal_filter.size() == page.sort.size()
@@ -237,9 +240,11 @@ def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(win
     table.setCurrentIndex(table.model().index(0, 0))
     table.setFocus()
     QTest.keyClick(table, Qt.Key.Key_Return)
+    QApplication.processEvents()
     assert window.route == "dashboard" and drawer.is_open and drawer.request.equipment_id == 2
     assert page.mode == "detail" and page.selected_id == 2
     assert drawer.panel.isAncestorOf(drawer.info_card)
+    assert drawer.risk_card.isVisibleTo(drawer.body_widget)
     assert drawer.list_scroll.isHidden() and not drawer.scroll.isHidden()
     assert not drawer.back_button.text() and not drawer.back_button.icon().isNull()
 
@@ -255,6 +260,20 @@ def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(win
     assert page.mode == "list" and page.model.ids == (2,) and page.search.text() == "TEST-002"
     window.header.back.click()
     assert not drawer.is_open and not window.header.back.isEnabled()
+
+
+def test_dashboard_risk_column_and_card_include_risky_sw_outside_selected_group(window, source):
+    source.risk_evaluator = lambda record: (RiskStatus.RISK if any(pm.group_id == 101 for pm in record.pms)
+                                            else RiskStatus.NO_RISK)
+    window.query_panel.set_draft(QuerySelection(group_key="o3"))
+    query = window.query_panel.apply_draft()
+    window.pages["dashboard"].drilldown_requested.emit(DashboardDrilldown(query, DAY, "O3", (1,), False))
+    page = window.pages["equipment"]
+    detail = page.data.details[0]
+    assert detail.selected.risk is RiskStatus.NO_RISK and detail.whole.risk is RiskStatus.RISK
+    assert page.model.rows[0][4] == "위험 후보"
+    assert page.open_row(0)
+    assert window.equipment_list_drawer.risk_status_badge.text() == detail.whole.risk_label
 
 
 def test_pagination_search_goal_and_sort_only_change_display(window):

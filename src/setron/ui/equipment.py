@@ -101,15 +101,17 @@ class ReadTableModel(QAbstractTableModel):
         super().__init__()
         self.headings, self.rows, self.ids, self.tones = headings, (), (), ()
         self.tooltips = {}
+        self.cell_tones = {}
         self.numeric_columns = numeric_columns
         self.tone_column = tone_column
         self.alignment = (Qt.AlignmentFlag.AlignCenter if centered else
                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-    def set_rows(self, rows, ids=(), tones=(), *, tooltips=None):
+    def set_rows(self, rows, ids=(), tones=(), *, tooltips=None, cell_tones=None):
         self.beginResetModel()
         self.rows, self.ids, self.tones = tuple(rows), tuple(ids), tuple(tones)
         self.tooltips = dict(tooltips or {})
+        self.cell_tones = dict(cell_tones or {})
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()):
@@ -136,8 +138,12 @@ class ReadTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.FontRole:
             return paint_font(14 if self.ids and index.column() == 0 else 13,
                         medium=bool(self.ids) and index.column() == 0, numeric=index.column() in self.numeric_columns)
-        if role == Qt.ItemDataRole.ForegroundRole and self.tones and index.column() == self.tone_column:
-            return ui_color(TONES[self.tones[index.row()]][1])
+        if role == Qt.ItemDataRole.ForegroundRole:
+            tone = self.cell_tones.get((index.row(), index.column()))
+            if tone is None and self.tones and index.column() == self.tone_column:
+                tone = self.tones[index.row()]
+            if tone is not None:
+                return ui_color(TONES[tone][1])
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return self.alignment
         return None
@@ -279,7 +285,7 @@ class EquipmentPage(QWidget):
         self.model = self.full_list_model = ReadTableModel(
             ("설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거"),
             numeric_columns=(3,))
-        self.drawer_list_model = ReadTableModel(("설비명", "모델", "계열", "적용현황"), centered=True, tone_column=3)
+        self.drawer_list_model = ReadTableModel(("설비명", "모델", "계열", "적용현황", "위험버전"), centered=True, tone_column=3)
         self.table = read_table(self.model, "선택 범위 설비 목록", (110, 164, 170, 216, 140, 220))
         self._full_list_widths = self.table.base_widths
         self._full_header_alignment = self.table.horizontalHeader().defaultAlignment()
@@ -341,7 +347,7 @@ class EquipmentPage(QWidget):
     def _set_list_compact(self, compact):
         selected_id = self.table.currentIndex().data(Qt.ItemDataRole.UserRole)
         self.model = self.drawer_list_model if compact else self.full_list_model
-        self.table.base_widths = (110, 110, 130, 130) if compact else self._full_list_widths
+        self.table.base_widths = (110, 110, 130, 130, 100) if compact else self._full_list_widths
         self.table.setModel(self.model)
         padding = 12 if compact else 24
         self.list_card.body.setContentsMargins(padding, padding, padding, padding)
@@ -753,13 +759,14 @@ class EquipmentPage(QWidget):
         total = len(self.visible_tiles)
         self.page_index = min(self.page_index, max(0, (total - 1) // self.page_size))
         start = self.page_index * self.page_size
-        rows, tones = [], []
+        rows, tones, tooltips, cell_tones = [], [], {}, {}
         page = self.visible_tiles[start:start + self.page_size]
         compact = self._list_host is not None
         if compact and page:
             records = {record.equipment_id: record for record in lookup_records(self.snapshot)}
             model_names = {mid: model_name(self.source, mid) for ids in self.source.bindings.values() for mid in ids}
-        for tile in page:
+            whole_tiles = {detail.record.equipment_id: detail.whole for detail in self.data.details}
+        for row, tile in enumerate(page):
             code = tile.code
             if self.sort.currentData() == "priority":
                 entry = self.data.priority.get(tile.equipment_id)
@@ -767,7 +774,15 @@ class EquipmentPage(QWidget):
             goal = tile.goal.value + ("\n복수 SW" if tile.multi_sw else "") + ("\nPM 불일치" if tile.pm_mismatch else "")
             if compact:
                 models, families = self._drawer_model_families(records[tile.equipment_id], model_names)
-                rows.append((code, models, families, goal))
+                whole = whole_tiles[tile.equipment_id]
+                excluded = whole.goal is GoalState.EXCLUDED
+                risk = "분석 제외" if excluded else {
+                    RiskStatus.RISK: "위험 후보", RiskStatus.NO_RISK: "후보 아님", RiskStatus.UNKNOWN: "미확인",
+                }[whole.risk]
+                rows.append((code, models, families, goal, risk))
+                tooltips[row, 4] = "\n".join(filter(None, (whole.risk_label, whole.risk_detail)))
+                cell_tones[row, 4] = ("neutral" if excluded else
+                                      {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning"}.get(whole.risk, "neutral"))
             else:
                 versions = "\n".join(tile.raw_versions or tuple(v for f in tile.families for v in f.versions)) or ("분석 제외" if tile.goal is GoalState.EXCLUDED else "SW 미등록")
                 names = tile.model_name or "\n".join(f.title for f in tile.families) or "—"
@@ -775,7 +790,7 @@ class EquipmentPage(QWidget):
                 rows.append((code, location.replace(" · ", "\n"), names, versions, goal,
                              "\n".join(filter(None, (tile.risk_label, tile.risk_detail)))))
             tones.append("success" if tile.goal is GoalState.MET else "warning" if tile.goal is GoalState.BELOW else "neutral")
-        self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones)
+        self.model.set_rows(rows, tuple(t.equipment_id for t in page), tones, tooltips=tooltips, cell_tones=cell_tones)
         fit_rows(self.table, compact=compact)
         self.table.setVisible(bool(page))
         self.message.setVisible(not page)
