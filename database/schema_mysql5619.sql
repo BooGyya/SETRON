@@ -172,6 +172,7 @@ CREATE TABLE item (
     batch_id INT UNSIGNED NOT NULL COMMENT '이 Item 정보의 입력 작업 ID',
     source_reference LONGTEXT NULL COMMENT '필드별 원본 시트명·셀 주소; 직접 입력은 NULL 허용',
     edited_fields LONGTEXT NOT NULL COMMENT '사용자가 직접 수정한 필드명 목록',
+    jira_code VARCHAR(200) NULL COMMENT 'Item별 Jira 코드(여러 개면 쉼표); 원본에 없으면 NULL',
     PRIMARY KEY (item_id),
     KEY ix_item_note_number (release_note_id, item_no),
     KEY ix_item_batch (batch_id),

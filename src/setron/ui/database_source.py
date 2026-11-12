@@ -290,7 +290,7 @@ def _version_catalog(groups, families, releases, items, links, observations, app
         tuple(pair.model_id for pair in known if pair.family_id == row["family_id"]),
         _source_references(row), row["item_mapping_status"] == "VERIFIED",
     ) for row in releases)
-    item_entries = tuple(ItemEntry(Item(row["item_id"], row["item_no"], row["content"]),
+    item_entries = tuple(ItemEntry(Item(row["item_id"], row["item_no"], row["content"], row.get("jira_code")),
                                    _source_references(row)) for row in items)
     memberships = tuple(VersionItem(row["release_version_id"], row["item_id"], ItemState(row["item_state"]),
                                     TargetScope(row["target_scope"]), tuple(row["target_group_ids"] or ()))
@@ -415,7 +415,11 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
     if not values.get("SETRON_DB_NAME"):
         return None, None
     try:
-        storage = StorageService(Database.from_env(values))
+        database = Database.from_env(values)
+        storage = StorageService(database)
+        # Item Jira 칸(11/12): 이미 만든 DB에 칸이 없으면 더하고, 빈 Jira를 원본 보관에서 한 번 채운다. 실패해도 계속.
+        from setron.features.item.jira_upgrade import upgrade as upgrade_jira
+        upgrade_jira(storage, database.engine)
         return DatabaseDashboardSource(lambda catalog=None: load_dashboard_source(storage, catalog)), None
     except (DatabaseError, StorageValidationError) as error:
         return None, f"DB 자료를 읽지 못해 합성 예시로 시작했습니다: {error}"

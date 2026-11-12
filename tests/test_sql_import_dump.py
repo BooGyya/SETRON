@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from setron.features.db_export.service import _header, _write_rows
-from setron.features.db_import.dump import DUMP_COLUMNS, DumpFormatError, read_dump
+from setron.features.db_import.dump import DUMP_COLUMNS, DumpFormatError, allowed_columns, read_dump
 from setron.features.storage.validation import TABLE_NAMES
 
 
@@ -19,7 +19,9 @@ def _export(rows):
     file.write(_header(datetime(2026, 11, 11), "5.6.19", "test", len(TABLE_NAMES), sum(map(len, rows.values()))))
     for table in TABLE_NAMES:
         table_rows = rows.get(table, ())
-        columns = DUMP_COLUMNS[table]
+        # 행 길이로 형식을 고른다: 지금 형식(item.jira_code 포함) 또는 그 칸이 없던 예전 형식(11/12)
+        columns = next((c for c in allowed_columns(table) if table_rows and len(table_rows[0]) == len(c)),
+                       DUMP_COLUMNS[table])
         fields = ",\n".join(f"  `{column}` text COMMENT '원문; 보존'" for column in columns)
         file.write(f"\n-- 테이블 {table} · {len(table_rows)}행\nCREATE TABLE `{table}` (\n{fields}\n"
                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n")
@@ -108,3 +110,14 @@ def test_legacy_dump_preserves_unambiguous_text_and_binary(tmp_path):
     path.write_text(sql.replace("''value''", r"\n"), encoding="utf-8")
     with pytest.raises(DumpFormatError, match="다시 내보내"):
         read_dump(path)
+
+
+def test_item_jira_code_round_trips_and_older_exports_without_it_still_read(tmp_path):
+    """11/12 item.jira_code: 칸이 있는 새 내보내기는 값을 지키고, 칸이 없던 예전 내보내기도 그대로 읽는다."""
+    new, old = tmp_path / "new.sql", tmp_path / "old.sql"
+    new.write_text(_export({"import_batch": [(1, "EXCEL", datetime(2026, 11, 12), "{}")],
+                            "item": [(1, None, 3, "Recipe Edit 경고", 1, None, "[]", "ETOJ-1793")]}), encoding="utf-8")
+    old.write_text(_export({"import_batch": [(1, "EXCEL", datetime(2026, 11, 12), "{}")],
+                            "item": [(1, None, 3, "Recipe Edit 경고", 1, None, "[]")]}), encoding="utf-8")
+    assert read_dump(new)["item"][0]["jira_code"] == "ETOJ-1793"
+    assert "jira_code" not in read_dump(old)["item"][0]
