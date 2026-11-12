@@ -285,16 +285,24 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.navigate("import")
     versions.import_requested.connect(import_from_version)
     item_risk_save_pending = False
-    def submit_item_risk(values):
-        nonlocal item_risk_save_pending
+    item_risk_action = None  # "create" / "disable" / "enable": 저장 결과 안내 문구를 고른다.
+    def start_item_risk(action, start):
+        nonlocal item_risk_save_pending, item_risk_action
         if risk_save.busy or risk_save.locked or window.management_saving or window.management_refresh.busy:
             return False
-        item_risk_save_pending = True
-        started = risk_save.create_risk_rule(values)
+        item_risk_save_pending, item_risk_action = True, action
+        started = start()
         if not started:
-            item_risk_save_pending = False
+            item_risk_save_pending, item_risk_action = False, None
         return started
-    items.manager.configure(management_gateway, release_refresh_context, submit_item_risk)
+    def submit_item_risk(values):
+        return start_item_risk("create", lambda: risk_save.create_risk_rule(values))
+    def toggle_item_risk(rule_id, enabled):
+        """위험 기준 상세의 해제·다시 사용. 등록과 같은 저장·재판정·갱신 경로(after_management_save)를 쓴다."""
+        return start_item_risk("enable" if enabled else "disable",
+                               lambda: risk_save.set_risk_rule_enabled(rule_id, enabled))
+    items.manager.configure(management_gateway, release_refresh_context, submit_item_risk,
+                            toggle_item_risk if management_gateway is not None else None)
     window.management_gateway = management_gateway
     window.management_refresh = ReadRequest(window)
     catalog_refresh = ReadRequest(window)
@@ -1000,7 +1008,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         replay.setEnabled(True)
         replay.invalidate()
         versions.refresh_after_save()
-        if preserve_detail and result:
+        if preserve_detail and result and item_risk_action == "create":
             items.last_saved_rule_id = next((r.key["risk_rule_id"] for r in result.records if r.table == "risk_rule"), None)
         items.refresh_after_save(preserve_detail=preserve_detail)
         if preserve_detail and result:
@@ -1046,12 +1054,24 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     versions.save_uncertain.connect(uncertain_management_save)
     versions.sql_requested.connect(lambda: export_sql())
     versions.history_panel.sql_button.setEnabled(db_exporter is not None)
+    toggle_notices = {
+        "disable": {"success": "기준을 해제했습니다.",
+                    "danger": "기준 해제 실패 · 기존 상태 유지 · DB 연결을 확인하고 위험 기준 상세에서 다시 시도해 주세요.",
+                    "warning": "기준 해제 결과 미확인 · 다시 누르지 말고 데이터 관리와 DB 기록을 확인해 주세요."},
+        "enable": {"success": "기준을 다시 사용합니다.",
+                   "danger": "기준 다시 사용 실패 · 기존 상태 유지 · DB 연결을 확인하고 위험 기준 상세에서 다시 시도해 주세요.",
+                   "warning": "기준 다시 사용 결과 미확인 · 다시 누르지 말고 데이터 관리와 DB 기록을 확인해 주세요."},
+    }
     def item_save_notice(text, tone):
-        nonlocal item_risk_save_pending
+        nonlocal item_risk_save_pending, item_risk_action
         if item_risk_save_pending:
-            if tone != "success":  # 성공 칩·안내는 띄우지 않고, 실패·결과 미확인만 알린다.
+            toggle = toggle_notices.get(item_risk_action)
+            if toggle is not None:
+                # 해제·다시 사용 완료는 몇 초 뒤 사라지는 안내로, 실패·결과 미확인은 남는 안내로 알린다.
+                (items.show_toast if tone == "success" else lambda t: items.show_save_feedback(t, tone))(toggle[tone])
+            elif tone != "success":  # 등록은 성공 칩·안내를 띄우지 않고, 실패·결과 미확인만 알린다.
                 items.show_save_feedback(text, tone)
-            item_risk_save_pending = False
+            item_risk_save_pending, item_risk_action = False, None
     risk_save.save_failed.connect(lambda: item_save_notice("저장 실패 · 기존 자료 유지 · DB 연결과 입력값을 확인해 주세요.", "danger"))
     risk_save.save_uncertain.connect(lambda: item_save_notice("저장 결과 미확인 · 중복 등록하지 말고 데이터 관리와 DB 기록을 확인해 주세요.", "warning"))
     risk_save.request.completed.connect(lambda *_: ai.refresh())

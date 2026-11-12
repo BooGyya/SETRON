@@ -79,14 +79,20 @@ class ItemManagerData:
         return ", ".join(names[mid] for mid in row.target_group_ids) or "지정 모델 없음"
 
 
+def _source_rules(source):
+    """해제된 기준까지 포함한 위험 기준. 전체 목록이 없는 자료원은 판정기(활성 기준)만 쓴다."""
+    rules = getattr(source, "all_risk_rules", None)
+    return tuple(rules if rules is not None else getattr(getattr(source, "assessor", None), "rules", ()))
+
+
 def item_data_from_source(versions, source):
     """대시보드와 같은 설비별 최신 관측을 쓴다 (QA Q-01). 표시 기준일은 최신 분석 관측일이다."""
     if not source.dates:
         return ItemManagerData(versions, observation_label=source.source_label + " · 관측 기준일 없음",
-                               risk_rules=tuple(getattr(getattr(source, "assessor", None), "rules", ())))
+                               risk_rules=_source_rules(source))
     day = (source.analysis_dates or source.dates)[-1]
     return ItemManagerData(versions, source.snapshot_records(day),
-                           day, True, source.source_label, tuple(getattr(getattr(source, "assessor", None), "rules", ())))
+                           day, True, source.source_label, _source_rules(source))
 
 
 @dataclass(frozen=True)

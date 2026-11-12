@@ -9,9 +9,11 @@ class ItemRiskPage(QWidget):
     def __init__(self):
         super().__init__()
         self.data, self.gateway, self.context_provider, self.submit = None, None, None, None
+        self.toggle = None  # (risk_rule_id, is_enabled) -> 저장 시작 여부. 위험 기준 해제·다시 사용.
 
-    def configure(self, gateway, context_provider, submit):
+    def configure(self, gateway, context_provider, submit, toggle=None):
         self.gateway, self.context_provider, self.submit = gateway, context_provider, submit
+        self.toggle = toggle
 
     def set_data(self, data):
         self.data = data

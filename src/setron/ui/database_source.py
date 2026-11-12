@@ -195,8 +195,8 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
         row["release_version_id"], row["item_id"], ItemState(row["item_state"]),
         TargetScope(row["target_scope"]), tuple(row["target_group_ids"] or ()),
     ) for row in links))
-    assessor = RiskAssessor(family_releases, item_catalog,
-                            tuple(rule_from_row(row, family_releases, links) for row in rules))
+    all_rules = tuple(rule_from_row(row, family_releases, links) for row in rules)
+    assessor = RiskAssessor(family_releases, item_catalog, all_rules)
 
     def risk_status(record):
         """표시하는 모델의 PM만 포함한 관측을 현재 위험 규칙으로 다시 판정한다.
@@ -241,6 +241,8 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None) -> Dashb
     source.risks_by_date = risks_by_date
     # AI 분석·예측 입력(ui/analysis_data.py)이 대시보드와 같은 위험 판정·Item 자료를 쓰도록 함께 둔다.
     source.assessor, source.item_catalog = assessor, item_catalog
+    # 판정기는 해제된 기준을 빼므로, 아이템 매니저가 '해제됨'·다시 사용을 보일 수 있게 전체 기준을 따로 둔다.
+    source.all_risk_rules = all_rules
     # 화면이 번호 대신 이름을 보이도록 계열·모델 이름을 둔다 (dashboard_data.family_name·model_name).
     source.family_names = {row["family_id"]: row["family_name"] for row in families}
     source.age_thresholds = age_thresholds
