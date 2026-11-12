@@ -143,7 +143,7 @@ def test_query_candidates_and_rule_drilldown(app, data):
     page.result_buttons[1].click()
     assert page.selected_id == 1 and page.application_details.isVisible()
     assert "필수 기능" in page.content_rules.text() and "위험 규칙" not in page.title.text()
-    assert "필수 기능" in page.inline_rules.text() and not page.inline_rules.isHidden()
+    assert not hasattr(page, "inline_rules")  # 펼침 영역의 위험 기준 노란 칸은 제거했다.
     # '위험 등록된 Item' 필터
     page.registered_only.setChecked(True)
     assert tuple(page.result_buttons) == (1,) and page.count.text() == "검색 결과 1건"
