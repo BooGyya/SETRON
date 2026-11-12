@@ -57,6 +57,22 @@ def _names(source, models: dict[int, str], owners: dict[int, int]) -> dict[int, 
     return names
 
 
+def _dropped_names(rules, retry) -> bool:
+    """규칙이 질문에서 찾은 이름 · 못 찾은 낱말이 AI 계획에서 사라졌는지.
+
+    규칙이 '없는 이름'으로 남긴 낱말(c2 · KCTC)은 AI 계획에도 설비군 · 계열 · 라인 · 사업장 · 호기로 들어 있어야 한다.
+    규칙이 이름으로 확정한 것(DFB → C4 DFB)을 AI가 아무 이름도 없이 버렸어도 마찬가지다.
+    """
+    def names(request):
+        c = request.conditions
+        return {*c.groups, *c.families, *c.lines, *c.sites, *request.codes}
+
+    rule_names, plan_names = names(rules), names(retry)
+    if rules.conditions.unresolved and not plan_names:
+        return True
+    return bool(rule_names) and not plan_names
+
+
 class ChatService:
     """질문 하나 → 답 묶음. 화면 밖(워커)에서 부른다.
 
@@ -169,7 +185,9 @@ class ChatService:
                 return missing_date_answer(rules, data, planned.missing_date)
             if planned is not None and planned.question:
                 retry = recognize(planned.question, data.catalog, previous=previous)
-                if retry.understood:          # 규칙 검사를 통과한 계획만 쓴다. 아니면 규칙의 이해로 대체
+                if retry.understood and not _dropped_names(rules, retry):
+                    # 규칙 검사를 통과한 계획만 쓴다. 질문의 이름처럼 보이는 낱말(DFB · c2)을 AI가 어떤 선택지로도
+                    # 확정하지 못하고 버렸으면 규칙을 따른다 (조용히 전체 설비로 답하던 문제, 11/12)
                     request, interpreted = replace(retry, question=question), planned.question
         step(2)                                            # 질문 이해 · 데이터 조회 끝
         result = answer(request, data)
