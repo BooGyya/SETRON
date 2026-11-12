@@ -142,6 +142,34 @@ def scope_caption(catalog, selection):
                        _caption(catalog.groups, selection.group_key, "설비군 전체")))
 
 
+def unavailable_report_contents(report):
+    """선택한 내용의 실제 출력 자료를 확인한다. 0%나 미확인 값은 누락으로 보지 않는다."""
+    missing = []
+    sections = report.sections
+    captions = {key: title for key, title, *_ in (*COMMON_CONTENTS, *REPORT_TYPES)}
+    for key in (*report.request.selected_contents, *report.request.selected_types):
+        chosen = tuple(section for section in sections if section.content_key == key)
+        if key == "heatmap":
+            for mode in report.request.heatmap_modes:
+                title = "설비군·라인별 히트맵" if mode == "group" else f"{dict(GROUPING_MODES)[mode]}별 히트맵"
+                if not any(s.title == title and s.visual for s in chosen):
+                    missing.append(title)
+            continue
+        if key == "summary":
+            available = any(s.title == "조회 조건과 집계 기준" and s.table and s.table.rows
+                            and s.table.rows[0][0] > 0 for s in chosen)
+        elif key == "trend":
+            available = any(s.chart in {"trend", "line_trend"} and s.table and s.table.rows for s in chosen)
+        elif key == "ai":
+            available = report.request.ai_answer is not None and not report.request.numeric_only
+        else:
+            available = any(s.table and s.table.rows for s in chosen
+                            if key != "item" or s.title.startswith("Item 배포"))
+        if not available:
+            missing.append(captions[key])
+    return tuple(missing)
+
+
 def generate_report(source, request, versions=None):
     """읽기 공급자만 호출. 날짜 보간·N 변경·AI 재호출·DB 쓰기는 하지 않는다."""
     if request.demo == "generation_failure":
