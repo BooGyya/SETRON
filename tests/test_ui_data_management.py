@@ -203,7 +203,8 @@ def test_edits_regroup_adds_and_deletes_wait_for_save_then_go_together(own, monk
     assert edits["equipment_version"] == ({"equipment_version_id": 21}, {"version_raw": "v1.2a", "release_version_id": None})
     assert edits["equipment_snapshot"] == ({"snapshot_id": 11}, {"line": "19L", "production_area": "FOUNDRY"})
     assert gateway.done["apply_rows"] == [((7, [({"equipment_code": "EC9", "line": "19L", "group_name": "M-C4", "model_name": "",
-                                                   "production_area": "FOUNDRY", "version_raw": "v2.0"}, None)], (12,), [(11, 3)]), {})]
+                                                   "production_area": "FOUNDRY", "version_raw": "v2.0"}, None)], (12,), [(11, 3)]),
+                                          {"base_date": date(2026, 11, 1)})]   # 현황표 = 입력 작업 · 기준일
     step = sheet.steps[-1]
     assert step[0] == "saved" and step[1]["regroup"] == [(11, 1)] and step[1]["added"] == [77] and step[1]["journal"] == 900
     assert not sheet.pending and saved and "4칸 수정 · 1행 추가 · 1행 삭제" in sheet.notice.text() and "라인 19L" in sheet.notice.text()
@@ -427,12 +428,14 @@ def test_group_change_sets_model_and_category_and_fixes_a_mismatched_model(own, 
 
     answer(monkeypatch)
     gateway = FakeGateway()
-    mismatched = replace(SHEET_ROWS.rows[1], model_name="M-O2")   # EC1: 설비군 M-C4인데 모델명 M-O2
-    rows = (SHEET_ROWS.rows[0], mismatched, SHEET_ROWS.rows[2])
+    mismatched = replace(SHEET_ROWS.rows[1], model_name="M-O2", model_mismatch=True)   # EC1: 설비군 M-C4인데 모델명 M-O2
+    original = replace(SHEET_ROWS.rows[0], model_name="M-C4 / Smart UI")                # EC2: 엑셀 원문 (같은 설비군)
+    rows = (original, mismatched, SHEET_ROWS.rows[2])
     gateway.data_admin = (lambda original: lambda method, *a, **k: replace(SHEET_ROWS, rows=rows)
                           if method == "sheet_rows" else original(method, *a, **k))(gateway.data_admin)
     page, sheet = sheet_page(own, gateway)
     assert cell(sheet, 0, 4).text() == "M-O2" and "설비군(M-C4)과 다릅니다" in cell(sheet, 0, 4).toolTip()
+    assert cell(sheet, 1, 4).text() == "M-C4 / Smart UI" and "다릅니다" not in cell(sheet, 1, 4).toolTip()   # 원문은 맞는 값
     editable = module.Qt.ItemFlag.ItemIsEditable
     assert cell(sheet, 0, 4).flags() & editable and not cell(sheet, 1, 4).flags() & editable  # 다른 줄만 맞출 수 있다
     cell(sheet, 0, 4).setText("M-O3")          # 설비군과 다른 이름으로는 못 바꾼다
@@ -875,4 +878,18 @@ def test_selected_new_row_still_shows_required_and_filled_colors(own):
     assert required.red() > required.green() and filled.green() > filled.blue()   # 분홍 · 노랑 기운이 남아 있다
     assert isinstance(sheet.table.itemDelegate(), module._KeepColorsDelegate)
     assert isinstance(page.release_panel.table.itemDelegate(), module._KeepColorsDelegate)
+
+
+def test_sheet_is_opened_by_batch_and_base_date():
+    from datetime import date as day
+
+    assert module._sheet_key(7, day(2026, 10, 21)) == "7|2026-10-21" and module._parse_key("7|2026-10-21") == (7, day(2026, 10, 21))
+    assert module._parse_key(module._sheet_key(8, None)) == (8, None)
+
+
+def test_sheet_rows_request_carries_the_chosen_base_date(own):
+    gateway = FakeGateway()
+    page, sheet = sheet_page(own, gateway)
+    assert gateway.done["sheet_rows"][-1] == ((7, date(2026, 11, 1)), {})   # 시연 seed처럼 한 입력 작업에 기준일이 여럿이어도 고른 날만
+    assert sheet.sheet_combo.currentData() == "7|2026-11-01"
 

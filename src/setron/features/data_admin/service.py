@@ -62,16 +62,38 @@ def with_workbook(raw, workbook_name):
     return {**raw, WORKBOOK_KEY: name} if name else dict(raw)
 
 
-def sheet_names(raw) -> tuple[str, ...]:
-    """raw_data의 시트 이름들. '['로 시작하는 키(파일 이름 · 직접 만든 현황표 정보)는 시트가 아니다.
+def sheet_cells(raw) -> dict:
+    """raw_data의 시트 → 원본 칸 {주소: 값}.
 
-    엑셀 시트 이름에는 '['·']'를 쓸 수 없으므로 실제 시트와 겹치지 않는다.
+    - 가져오기 · 직접 만든 현황표: 맨 위 키가 시트다. '['로 시작하는 키(파일 이름 · 직접 만든 현황표 정보)는 시트가 아니다
+      (엑셀 시트 이름에는 '['·']'를 쓸 수 없으므로 실제 시트와 겹치지 않는다).
+    - 시연 seed(`database/seed_source.py`, demo_seed.v2): 원본 시트가 ``sheets`` 안에 있고 맨 위에는 설명 키가 있다 (11-12).
     """
-    return tuple(str(k) for k in (raw or {}) if not str(k).startswith("["))
+    raw = raw if isinstance(raw, dict) else {}
+    if isinstance(raw.get("sheets"), dict):
+        return {str(k): v for k, v in raw["sheets"].items() if isinstance(v, dict)}
+    return {str(k): v for k, v in raw.items() if not str(k).startswith("[") and isinstance(v, dict)}
+
+
+def sheet_names(raw) -> tuple[str, ...]:
+    """raw_data의 시트 이름들 (:func:`sheet_cells` 순서)."""
+    return tuple(sheet_cells(raw))
+
+
+def _model_mismatch(model, group):
+    """모델명이 설비군과 맞지 않는가. 엑셀 원문 모델명('M-C4(DFB)', 'M-C3 (통합UI)')은 번역표로 같은 설비군이면 맞다.
+    번역표가 모르는 이름(새로 등록한 설비군 등)은 판단하지 않는다 (11-12)."""
+    if not model or not group or model.casefold() == group.casefold():
+        return False
+    from setron.features.extraction.model_candidates import find_candidate
+
+    candidate = find_candidate(model)
+    return candidate is not None and candidate.model_name.casefold() != group.casefold()
 
 
 def _workbook(raw):
-    value = (raw or {}).get(WORKBOOK_KEY) if isinstance(raw, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    value = raw.get(WORKBOOK_KEY) or raw.get("source_workbook")  # 시연 seed는 source_workbook에 원본 파일 이름을 둔다
     return value if isinstance(value, str) and value else None
 
 
@@ -268,6 +290,7 @@ class SheetRow:
     has_pm: bool
     sources: dict  # 항목 → 원본 셀 주소
     source_values: dict  # 항목 → 원본 셀 값
+    model_mismatch: bool = False  # 모델명(원문)이 번역표로 다른 설비군으로 읽힌다 (예: 설비군 M-C3인데 모델명 M-C4)
 
 
 @dataclass(frozen=True)
@@ -394,7 +417,7 @@ class DataAdminService:
             names = sheet_names(raw)
             require(bool(names), "이 입력 작업에는 원본 시트가 없습니다.")
             sheet = names[0]
-            cells = dict(raw.get(sheet) or {})
+            cells = dict(sheet_cells(raw).get(sheet) or {})
             bindings, owners = {}, {}
             equipment = {e["equipment_id"]: e for e in self.rows.rows(tx, "equipment")}
             for snapshot in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id):
@@ -490,7 +513,8 @@ class DataAdminService:
         ids = tuple(dict.fromkeys(int(i) for i in snapshot_ids))
         require(bool(ids), "지울 행을 골라 주세요.")
         batch = tx.get("import_batch", {"batch_id": batch_id})
-        sheet = (sheet_names(_raw(batch.get("raw_data"))) or ("",))[0]
+        sheets = sheet_names(_raw(batch.get("raw_data")))
+        sheet = (sheets or ("",))[0]
         equipment = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")}
         removed = []
         for sid in ids:
@@ -506,7 +530,7 @@ class DataAdminService:
                     if name not in row and name != "equipment_code":
                         continue  # 현황표에 보이지 않는 출처 칸(예: 설비군 이름)은 삭제 표시에서 뺀다
                     for location in _locations(row, name):
-                        if location.get("sheet") == sheet and location.get("batch_id", row.get("batch_id")) == batch_id:
+                        if location.get("sheet") in sheets and location.get("batch_id", row.get("batch_id")) == batch_id:
                             cells.update(dict.fromkeys(location.get("cells") or ()))
             code = equipment.get(snapshot["equipment_id"], "")
             for pm in pms:
@@ -567,8 +591,11 @@ class DataAdminService:
         return count
 
     # --- 현황표 행 추가 · 빈 현황표 (11-11) ------------------------------------------------
-    def _sheet_place(self, tx, batch_id):
-        """현황표(입력 작업)의 시트 이름 · Site · 기준일 · 원본."""
+    def _sheet_place(self, tx, batch_id, base_date=None):
+        """현황표(입력 작업 · 기준일)의 시트 이름 · Site · 기준일 · 원본.
+
+        시연 seed처럼 입력 작업 하나에 기준일이 여럿이면 ``base_date``로 그 날짜의 현황표를 고른다 (11-12).
+        """
         raw = _raw(tx.get("import_batch", {"batch_id": batch_id}).get("raw_data"))
         names = sheet_names(raw)
         require(bool(names), "이 입력 작업에는 원본 시트가 없습니다.")
@@ -576,6 +603,8 @@ class DataAdminService:
         if isinstance(meta, dict):
             return names[0], meta["site"], date.fromisoformat(meta["base_date"]), raw
         snapshots = self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id)
+        if base_date is not None:
+            snapshots = [s for s in snapshots if s["base_date"] == base_date]
         require(bool(snapshots), "이 현황표의 Site · 기준일을 알 수 없습니다. 데이터 가져오기로 다시 넣어 주세요.")
         return names[0], _text(snapshots[0]["site"]), snapshots[0]["base_date"], raw
 
@@ -633,14 +662,14 @@ class DataAdminService:
         with self.storage.transaction() as tx:
             return self._add_row_in(tx, batch_id, values, row_number)
 
-    def _add_row_in(self, tx, batch_id, values, row_number):
+    def _add_row_in(self, tx, batch_id, values, row_number, base_date=None):
         """설비 한 행을 더한다. 값: equipment_code · group_name(없으면 model_name으로 설비군을 찾음) · version_raw 필수,
         line · model_name · production_area 선택. ``row_number``가 None이면 원본 칸 위치를 남기지 않는다(DB 값 기준 현황표)."""
         values = {k: (v or "").strip() if isinstance(v, str) or v is None else v for k, v in values.items()}
         code, version, line = (values.get(k, "") for k in ("equipment_code", "version_raw", "line"))
         group_name = values.get("group_name") or values.get("model_name", "")
         require(bool(code) and bool(group_name) and bool(version), "호기 · 설비군 · SW 버전을 모두 적어 주세요.")
-        sheet, site, base_date, raw = self._sheet_place(tx, batch_id)
+        sheet, site, base_date, raw = self._sheet_place(tx, batch_id, base_date)
         columns = {} if row_number is None else {
             name: letter for letter, name in self._columns(raw, self._bound_fields(tx, batch_id, sheet)).items()}
         group = next((g for g in self.rows.rows(tx, "equipment_group")
@@ -697,13 +726,14 @@ class DataAdminService:
         tx.update("equipment_snapshot", {"snapshot_id": snapshot_id}, changes)
         return old_id
 
-    def apply_rows(self, batch_id, adds=(), deletes=(), regroup=()) -> dict:
+    def apply_rows(self, batch_id, adds=(), deletes=(), regroup=(), base_date=None) -> dict:
         """현황표 [저장]의 행 추가 · 삭제 · 설비군 변경을 한 트랜잭션으로 반영한다 (11-11 4차 · 6차).
 
         param
         - adds: [(값 dict, 새 행 번호 또는 None)] — :meth:`add_row`와 같은 값.
         - deletes: 지울 설비 현황 ID 목록.
         - regroup: [(설비 현황 ID, 새 설비군 ID)].
+        - base_date: 입력 작업 하나에 기준일이 여럿일 때 새 행을 넣을 기준일 (시연 seed).
 
         return
         - {"added": [새 설비 현황 ID], "journal": 삭제 기록 ID 또는 None, "regroup": [(설비 현황 ID, 옛 설비군 ID)]}
@@ -711,7 +741,7 @@ class DataAdminService:
         with self.storage.transaction() as tx:
             back = [(sid, self._regroup_in(tx, batch_id, sid, gid)) for sid, gid in regroup if sid not in set(deletes)]
             journal = self._delete_rows_in(tx, batch_id, deletes) if deletes else None
-            added = [self._add_row_in(tx, batch_id, values, row) for values, row in adds]
+            added = [self._add_row_in(tx, batch_id, values, row, base_date) for values, row in adds]
             if back:
                 names = {g["group_id"]: _text(g["group_name"]) for g in self.rows.rows(tx, "equipment_group")}
                 tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
@@ -731,20 +761,23 @@ class DataAdminService:
                 if old is not None and self.rows.rows(tx, "equipment_snapshot", snapshot_id=sid):
                     self._regroup_in(tx, batch_id, sid, old)
 
-    def sheet_rows(self, batch_id) -> SheetRows:
+    def sheet_rows(self, batch_id, base_date=None) -> SheetRows:
         """현황표를 DB 값 기준으로 읽는다 (11-11 6차): 설비 × SW 한 줄, 가져오기 3단계와 같은 항목.
 
         SW 계열은 화면에 보이지 않는다(11-11 VOC 1). 칸마다 원본 셀 위치 · 값을 함께 돌려 [원본 보기] · 툴팁에 쓴다.
         """
         with self.storage.transaction() as tx:
-            sheet, site, base_date, raw = self._sheet_place_or_empty(tx, batch_id)
-            cells = dict(raw.get(sheet) or {})
+            sheet, site, base_date, raw = self._sheet_place_or_empty(tx, batch_id, base_date)
+            all_cells = sheet_cells(raw)
+            many = len(all_cells) > 1  # 시트가 여럿이면 원본 칸 주소에 시트 이름을 붙인다 ('P3-S5!D5')
             equipment = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")}
             groups = self.rows.rows(tx, "equipment_group")
             names = {g["group_id"]: _text(g["group_name"]) for g in groups}
             families = {f["family_id"]: _text(f["family_name"]) for f in self.rows.rows(tx, "version_family")}
             rows = []
             for snapshot in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id):
+                if base_date is not None and snapshot["base_date"] != base_date:
+                    continue  # 입력 작업 하나에 기준일이 여럿이면(시연 seed) 고른 기준일만
                 versions = self.rows.rows(tx, "equipment_version", snapshot_id=snapshot["snapshot_id"])
                 pms = self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot["snapshot_id"])
                 pm_names = defaultdict(list)
@@ -753,11 +786,15 @@ class DataAdminService:
 
                 def source(row, name):
                     for location in _locations(row, name):
-                        if location.get("sheet") == sheet and location.get("batch_id", row.get("batch_id")) == batch_id:
+                        if location.get("sheet") in all_cells and location.get("batch_id", row.get("batch_id")) == batch_id:
                             address = (location.get("cells") or [None])[0]
                             if address:
-                                return address
+                                return f"{location['sheet']}!{address}" if many else address
                     return None
+
+                def value(address):
+                    where, _, cell = address.rpartition("!") if many else (sheet, "", address)
+                    return _text((all_cells.get(where) or {}).get(cell))
 
                 # 설비군은 원본의 모델 칸에서 정해진다 (가져올 때 남긴 group_name 출처는 제목 칸을 가리키는 경우가 있어 쓰지 않음)
                 model_cell = source(snapshot, "model_name")
@@ -771,7 +808,8 @@ class DataAdminService:
                         names.get(snapshot.get("group_id"), ""), _text(snapshot.get("model_name")), snapshot.get("production_area"),
                         _text(version["version_raw"]) if version else "", families.get(version["family_id"], "") if version else "",
                         ", ".join(pm_names.get(version["equipment_version_id"], [])) if version else "", bool(pms),
-                        {k: v for k, v in sources.items() if v}, {k: _text(cells.get(v)) for k, v in sources.items() if v}))
+                        {k: v for k, v in sources.items() if v}, {k: value(v) for k, v in sources.items() if v},
+                        _model_mismatch(_text(snapshot.get("model_name")), names.get(snapshot.get("group_id"), ""))))
             placed = {(r["site"], r["line"]) for r in registered_lines(tx)} | {
                 (_text(s.get("site")), _text(s.get("line"))) for s in self.rows.rows(tx, "equipment_snapshot")
                 if s.get("site") and s.get("line")}
@@ -786,7 +824,7 @@ class DataAdminService:
             latest = self._latest_versions(tx, groups)
             line_areas = self._line_areas(tx, site, lines)
         meta = raw.get(SHEET_KEY) if isinstance(raw.get(SHEET_KEY), dict) else {}
-        return SheetRows(batch_id, sheet, _workbook(raw), site, base_date, tuple(rows), choices, tuple(lines),
+        return SheetRows(batch_id, ", ".join(all_cells) or sheet, _workbook(raw), site, base_date, tuple(rows), choices, tuple(lines),
                          {line: tuple(sorted(sites)) for line, sites in elsewhere.items()},
                          meta.get("production_area") if meta.get("production_area") in FABS else None, latest, line_areas)
 
@@ -835,13 +873,13 @@ class DataAdminService:
                     result[(group["group_id"], area)] = _text(best["version_raw"])
         return result
 
-    def _sheet_place_or_empty(self, tx, batch_id):
+    def _sheet_place_or_empty(self, tx, batch_id, base_date=None):
         raw = _raw(tx.get("import_batch", {"batch_id": batch_id}).get("raw_data"))
         try:
-            return self._sheet_place(tx, batch_id)
+            return self._sheet_place(tx, batch_id, base_date)
         except Exception:  # noqa: BLE001 — 시트 · Site를 모르는 옛 입력 작업도 표는 보인다
             names = sheet_names(raw)
-            return (names[0] if names else ""), "", None, raw
+            return (names[0] if names else ""), "", base_date, raw
 
     def _bound_fields(self, tx, batch_id, sheet):
         """열 위치를 정하려고 쓰는 가벼운 연결 정보 (주소 → CellBinding)."""
