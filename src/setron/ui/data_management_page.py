@@ -231,6 +231,16 @@ SELECTION_TINT = QColor(60, 92, 233, 14)   # 고른 줄 위에 얹는 아주 옅
 SELECTION_EDGE = QColor(60, 92, 233, 220)  # 고른 줄은 위아래 파란 선으로 표시
 
 
+def _sheet_key(batch_id, base_date):
+    """현황표 하나 = 입력 작업 · 기준일. 시연 seed는 입력 작업 하나에 기준일이 여럿이라 둘 다로 가른다 (11-12)."""
+    return f"{batch_id}|{base_date or ''}"
+
+
+def _parse_key(key):
+    batch, _, day = str(key).partition("|")
+    return int(batch), (date.fromisoformat(day) if day else None)
+
+
 class _KeepColorsDelegate(QStyledItemDelegate):
     """고른 줄도 칸 색(분홍 필수 · 노랑 수정 · 빨강 삭제 예정)을 그대로 보이고, 그 위에 옅은 막과 위아래 선만 얹는다 (11-12).
 
@@ -405,12 +415,15 @@ class SheetPanel(_Panel):
             return
         self.loaded = True
         self.sheets = tuple(sheets)
-        previous = self.pending_batch if self.pending_batch is not None else self.sheet_combo.currentData()
-        self.pending_batch = None
+        previous = self.sheet_combo.currentData()
         self.sheet_combo.blockSignals(True)
         self.sheet_combo.clear()
         for sheet in self.sheets:
-            self.sheet_combo.addItem(sheet.label, sheet.batch_id)
+            self.sheet_combo.addItem(sheet.label, _sheet_key(sheet.batch_id, sheet.base_date))
+        if self.pending_batch is not None:  # 방금 만든 현황표(입력 작업 ID)를 고른다
+            previous = next((_sheet_key(s.batch_id, s.base_date) for s in self.sheets if s.batch_id == self.pending_batch),
+                            previous)
+        self.pending_batch = None
         self.sheet_combo.setCurrentIndex(max(0, self.sheet_combo.findData(previous)))
         self.sheet_combo.blockSignals(False)
         self._current = self.sheet_combo.currentData()
@@ -435,17 +448,17 @@ class SheetPanel(_Panel):
         return len(self.edits) + len(self.new_rows) + len(self.deletes)
 
     def _sheet_changed(self, *_):
-        batch_id = self.sheet_combo.currentData()
-        if batch_id is None or batch_id == self._current:
+        key = self.sheet_combo.currentData()
+        if key is None or key == self._current:
             return
         if not self._leave_ok():
             self.sheet_combo.blockSignals(True)
             self.sheet_combo.setCurrentIndex(max(0, self.sheet_combo.findData(self._current)))
             self.sheet_combo.blockSignals(False)
             return
-        self._current = batch_id
+        self._current = key
         self.steps, self.redo_steps = [], []
-        self._read(batch_id)
+        self._read(key)
 
     def _leave_ok(self):
         """저장하지 않은 변경이 있으면 저장 · 버리기 · 취소를 묻는다. 계속 가도 되면 True."""
@@ -465,18 +478,20 @@ class SheetPanel(_Panel):
             return True
         return False
 
-    def _read(self, batch_id):
+    def _read(self, key):
         self.say("현황표를 읽고 있습니다…")
-        self.run(lambda: self.page.gateway.data_admin("sheet_rows", batch_id), self._rows_loaded)
+        batch_id, base_date = _parse_key(key)
+        self.run(lambda: self.page.gateway.data_admin("sheet_rows", batch_id, base_date), self._rows_loaded)
 
     def _rows_loaded(self, data, error):
         if error is not None:
             self.say("현황표를 읽지 못했습니다. 다시 시도해 주세요.", error=True)
             return
-        if self.data is None or self.data.batch_id != data.batch_id:
+        if self.data is None or (self.data.batch_id, self.data.base_date) != (data.batch_id, data.base_date):
             self.steps, self.sort, self.redo_steps = [], None, []
         self._show(data)
-        sheet = next((s for s in self.sheets if s.batch_id == data.batch_id), None)
+        sheet = next((s for s in self.sheets if s.batch_id == data.batch_id and s.base_date == data.base_date), None) \
+            or next((s for s in self.sheets if s.batch_id == data.batch_id), None)
         when = _text(sheet.imported_at)[:16] if sheet and sheet.imported_at else ""
         if sheet is not None and sheet.origin == "직접 입력":  # 직접 만든 현황표는 원본 파일 · 시트가 없다
             self.source.setText(f"{data.site} · 기준일 {data.base_date or '모름'} · 데이터 관리에서 직접 만든 현황표"
@@ -535,9 +550,9 @@ class SheetPanel(_Panel):
         return value or ""
 
     def _mismatched(self, row):
-        """저장된 모델명이 설비군 이름과 다른 줄 (예전 편집으로 생긴 값). 모델명 칸에서 설비군 이름으로 맞출 수 있다."""
-        name = self._group_name(row.group_id)
-        return bool(name) and row.model_name != name and ("model", row.snapshot_id) not in self.edits \
+        """모델명이 다른 설비군을 가리키는 줄 (예전 편집으로 생긴 값). 모델명 칸에서 설비군 이름으로 맞출 수 있다.
+        엑셀 원문 모델명('M-C4(DFB)' 등)이 같은 설비군을 가리키면 맞는 값이다 (서버 판단 ``model_mismatch``)."""
+        return bool(getattr(row, "model_mismatch", False)) and ("model", row.snapshot_id) not in self.edits \
             and ("group", row.snapshot_id) not in self.edits
 
     def _editable(self, row, field):
@@ -877,7 +892,7 @@ class SheetPanel(_Panel):
                   "production_area": n["values"]["production_area"] or None, "version_raw": n["values"]["version_raw"]}, None)
                 for n in self.new_rows]
         deletes = tuple(self.deletes)
-        batch_id, gateway = self.data.batch_id, self.page.gateway
+        batch_id, base_date, gateway = self.data.batch_id, self.data.base_date, self.page.gateway
         save_edits = self.page.edit_work(self._edit_changes(edits)) if edits else None
 
         site, registers = self.data.site, [(line, fab) for line, fab in new_lines.items() if fab]
@@ -888,14 +903,15 @@ class SheetPanel(_Panel):
             for name, category in creates:
                 gateway.data_admin("create_group", name, category, None)
             saved = save_edits() if save_edits else None  # 검토 지문 충돌이 가장 잦으므로 칸 수정을 먼저 저장한다
-            result = gateway.data_admin("apply_rows", batch_id, adds, deletes, regroup) if (adds or deletes or regroup) \
+            result = gateway.data_admin("apply_rows", batch_id, adds, deletes, regroup, base_date=base_date) \
+                if (adds or deletes or regroup) \
                 else {"added": [], "journal": None, "regroup": []}
             return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None), rows=result)
 
         counts = (len(edits) + len(regroup), len(adds), len(deletes))
         registered = creates + [(f"라인 {line}", AREA_LABELS[fab]) for line, fab in registers]  # 저장 안내용
         rows = {r.snapshot_id: r for r in self.data.rows}
-        replay = {"batch": batch_id, "edits": dict(live), "new_rows": deepcopy(self.new_rows),
+        replay = {"batch": (batch_id, base_date), "edits": dict(live), "new_rows": deepcopy(self.new_rows),
                   "deletes": {rows[sid].equipment_id: code for sid, code in self.deletes.items() if sid in rows}}
         return self.page.change(work, self, message="저장하고 있습니다…",
                                 done=lambda result: self._saved_all(result, olds, counts, registered, replay))
@@ -1072,7 +1088,7 @@ class SheetPanel(_Panel):
         if self.pending:
             self.say("저장하지 않은 변경을 먼저 저장하거나 되돌린 뒤 다시 실행해 주세요.", error=True)
             return False
-        if replay["batch"] != self.data.batch_id:
+        if replay["batch"] != (self.data.batch_id, self.data.base_date):
             self.redo_steps = []
             self.say("다른 현황표를 열어서 되돌린 저장을 다시 실행할 수 없습니다.", error=True)
             self._sync()
