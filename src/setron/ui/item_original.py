@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import json
 import re
+
+from setron.features.data_admin import sheet_cells
 
 
 @dataclass(frozen=True)
@@ -133,7 +136,10 @@ def original_item_rows(tx, items):
                     batches[bid] = tx.get("import_batch", {"batch_id": bid})["raw_data"]
                 sheet_key = bid, ref["sheet"]
                 if sheet_key not in sheets:
-                    sheet = (batches[bid] or {}).get(ref["sheet"], {})
+                    # 가져오기 형식(맨 위 키가 시트)과 시연 seed 형식(raw_data["sheets"] 안) 둘 다에서 시트를 찾는다 (11-12)
+                    raw = batches[bid]
+                    raw = json.loads(raw) if isinstance(raw, str) and raw else raw
+                    sheet = sheet_cells(raw if isinstance(raw, dict) else {}).get(ref["sheet"], {})
                     cells = {}
                     for address, value in sheet.items():
                         match = re.fullmatch(r"([A-Z]+)([1-9][0-9]*)", address)

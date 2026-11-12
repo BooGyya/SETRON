@@ -206,3 +206,19 @@ def test_registered_risk_save_refreshes_items_and_dashboard(app, data):
     assert dashboard.snapshot is not None and dashboard.snapshot is not before
     assert window.query_state.is_current(dashboard.snapshot.query) and dashboard.snapshot.query == before.query
     window.close()
+
+
+def test_original_rows_are_found_in_both_import_and_demo_seed_raw_data():
+    """가져오기 형식(맨 위 키가 시트)과 시연 seed 형식(raw_data["sheets"] 안) 모두에서 원본 행 · Jira를 읽는다 (11-12)."""
+    from setron.ui.item_original import jira_by_item, original_item_rows
+
+    cells = {"D2": "JIRA", "E2": "Update내용", "D3": "ETOJ-4120", "E3": "보호동작 수정"}
+    seed = {"augmentation": "합성", "seed": "demo_seed.v2", "sheets": {"Release": cells},
+            "source_workbook": "P_PJT_M-O5_SW_정기_Release_List_교육용.xlsx"}
+    item = {"item_id": 1, "batch_id": 9, "source_reference": {"content": [{"sheet": "Release", "cells": ["E3"]}]}}
+    for raw in ({"Release": cells}, seed, __import__("json").dumps(seed)):
+        tx = SimpleNamespace(get=lambda table, key, raw=raw: {"raw_data": raw})
+        rows = original_item_rows(tx, [item])
+        assert [(r.sheet, r.row) for r in rows] == [("Release", 3)]
+        assert jira_by_item(rows, [1])[1].codes == ("ETOJ-4120",)
+
