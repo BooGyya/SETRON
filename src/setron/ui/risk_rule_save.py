@@ -30,15 +30,26 @@ class RiskRuleSaveController(QObject):
         return self.request.busy
 
     def create_risk_rule(self, values):
+        try:
+            values = deepcopy(values)
+        except Exception:
+            return False
+        return self._start(lambda context: self.gateway.create_risk_rule(values, context))
+
+    def set_risk_rule_enabled(self, risk_rule_id, enabled):
+        """위험 기준 해제(False)·다시 사용(True). 등록과 같은 상태·신호·갱신 경로를 쓴다."""
+        return self._start(lambda context: self.gateway.set_risk_rule_enabled(risk_rule_id, enabled, context))
+
+    def _start(self, call):
         if self.busy or self.locked or self.state == "saving" or self.gateway is None:
             return False
         try:
-            context, values = deepcopy(self.context_provider()), deepcopy(values)
+            context = deepcopy(self.context_provider())
         except Exception:
             return False
         self.state, self.operation_error = "saving", None
         self.save_started.emit()
-        return self.request.start(BackgroundRead(lambda: self.gateway.create_risk_rule(values, context)))
+        return self.request.start(BackgroundRead(lambda: call(context)))
 
     def _completed(self, value, error):
         self.operation_error = error

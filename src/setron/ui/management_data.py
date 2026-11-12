@@ -122,6 +122,11 @@ class ManagementGateway:
         with self._storage() as storage:
             return ManagementService(storage, context).create_risk_rule(values)
 
+    def set_risk_rule_enabled(self, risk_rule_id, enabled, context=RefreshContext()):
+        """위험 기준을 해제하거나 다시 사용하고 재판정한 결과를 돌려준다. 저장 결과 형식은 ``save``와 같다."""
+        with self._storage() as storage:
+            return ManagementService(storage, context).set_risk_rule_enabled(risk_rule_id, enabled)
+
     def preview_risk_rule(self, values, context=RefreshContext()):
         """위험 기준을 저장하지 않고 등록했을 때의 영향(릴리즈·설비)을 돌려준다 (BE-015). 값 형식은 ``create_risk_rule``과 같다."""
         with self._storage() as storage:

@@ -243,6 +243,19 @@ class ManagementService:
             record = self._view(tx, "risk_rule", tx.get("risk_rule", {"risk_rule_id": created["risk_rule_id"]}))
             return ManagementResult((record,), refresh, ages, thresholds, audit["batch_id"])
 
+    def set_risk_rule_enabled(self, risk_rule_id, enabled):
+        """위험 기준을 해제(is_enabled=false)하거나 다시 사용(true)한다. 행은 지우지 않아 이력이 남는다.
+
+        기존 관리값 수정(:meth:`save`)과 같은 트랜잭션·MANUAL 기록·재판정 경로를 쓴다. 이미 같은 상태면
+        (중복 클릭·다른 화면에서 먼저 바꿈) 저장하지 않고 오류로 알린다.
+        """
+        identifier(risk_rule_id, "risk_rule_id")
+        require(type(enabled) is bool, "해제·다시 사용 여부는 참/거짓이어야 합니다.")
+        view = self.get_record("risk_rule", {"risk_rule_id": risk_rule_id})
+        require(bool(view.current["is_enabled"]) is not enabled,
+                "이미 사용 중인 위험 기준입니다." if enabled else "이미 해제된 위험 기준입니다.")
+        return self.save((RecordEdit("risk_rule", view.key, view.revision, {"is_enabled": enabled}),))
+
     def preview_risk_rule(self, values) -> RuleImpact:
         """위험 정보를 저장하지 않고, 등록했을 때 최신 관측일 설비와 릴리즈에 주는 영향을 계산한다 (BE-015).
 
