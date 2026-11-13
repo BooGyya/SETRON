@@ -61,9 +61,9 @@ class ExtractKind(str, Enum):
 # 추출 결과에는 원본 표기를 담는다. features/extraction에서 출처를 대조하고 정리한다.
 EQUIPMENT_STATUS_FIELDS = (
     "base_date", "site", "line", "group_name", "model_name", "production_area",
-    "equipment_code", "pm_name", "family_name", "version_raw",
-    "ui_type", "structure_type", "geometry_type", "modification_type",
-    "engine_version", "epd_version",
+    "equipment_code", "pm_name", "process_name", "family_name", "version_raw",
+    "ui_type", "geometry_type", "modification_type",
+    "engine_version", "epd_version", "structure_type",
 )
 RELEASE_NOTE_FIELDS = (
     "version_raw", "release_date", "item_no", "content", "jira_code", "target_models",
