@@ -933,7 +933,7 @@ class EquipmentPage(DeferredResultMixin, QWidget):
         record = application.record
         self.detail_goal_badge.setText("N 비교 안 함")
         self.detail_goal_badge.set_tone("neutral")
-        rules = tuple(rule for rule in request.data.risk_rules if rule.item_id == request.item_id)
+        rules = tuple(rule for rule in request.data.risk_rules if rule.item_id == request.item_id and rule.is_enabled)
         catalog = request.data.catalog()
         result = RiskAssessor(catalog.families, catalog, rules).equipment_risk(record) if rules and not record.is_hpa else None
         risk_label = result.label if result else "해당 Item 위험 규칙 없음" if not rules else "분석 제외"
