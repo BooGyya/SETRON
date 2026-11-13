@@ -97,6 +97,8 @@ class ReplayPage(QWidget):
         self.pause_button = self.playback_controls.pause_button
         self.restart_button = self.playback_controls.restart_button
         self.speed_tabs = self.playback_controls.speed_tabs
+        self.position_slider = self.playback_controls.position
+        self.playback_controls.frame_dragged.connect(self.select_date)  # 막대로 고른 시점 (재생은 멈춘다)
         self.playback_controls.speed_changed.connect(self.set_playback_speed)
         self.speed_buttons = dict(zip(self.playback_controls.SPEEDS, self.speed_tabs.buttons))
         for speed, control in self.speed_buttons.items():
@@ -233,6 +235,7 @@ class ReplayPage(QWidget):
         self.play_button.setEnabled(ready and can_replay(self.frames) and not self.timer.isActive())
         self.pause_button.setEnabled(ready and self.timer.isActive())
         self.restart_button.setEnabled(ready and bool(self.frames))
+        self.position_slider.setEnabled(ready and len(self.frames) > 1)
         self.speed_tabs.setEnabled(ready)
         for step, control in self.interval_buttons.items():
             # 간격이 기간보다 길어 시점이 2개 미만이면 그 간격은 고를 수 없다. 저장일마다는 항상 고를 수 있다.
