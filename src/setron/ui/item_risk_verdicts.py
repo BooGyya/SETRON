@@ -30,9 +30,9 @@ IMPACT_UNKNOWN_HINT = "설비 관측 자료가 없거나 판정을 계산할 수
 DISABLED_CAPTION = "해제됨"
 CONDITIONS = {
     RuleType.SAFETY_REQUIRED: "대상 PM에 필수 Item이 적용되지 않으면 위험 후보로 판정합니다.",
-    RuleType.DIRECT_VERSION: "기준 버전과 동일한 SW 버전을 사용하면 위험 후보로 판정합니다.",
-    RuleType.VERSION_BELOW: "기준 버전보다 낮은 SW 버전을 사용하면 위험 후보로 판정합니다.",
-    RuleType.VERSION_ABOVE: "기준 버전보다 높은 SW 버전을 사용하면 위험 후보로 판정합니다.",
+    RuleType.DIRECT_VERSION: "버전 동일",
+    RuleType.VERSION_BELOW: "버전 미만",
+    RuleType.VERSION_ABOVE: "버전 초과",
     RuleType.DEFECT_ITEM: "시작 버전부터 해제 버전 전까지 결함 Item이 포함된 SW를 사용하면 위험 후보로 판정합니다.",
 }
 
@@ -57,6 +57,17 @@ def rule_reference(data, rule):
         end = releases.get(rule.end_release_version_id, "미확인") if rule.end_release_version_id is not None else "없음"
         return f"시작 {start} · 해제 {end}"
     return releases.get(rule.release_version_id, "미확인")
+
+
+def resize_rule_dialog(dialog, *, has_table=True):
+    """기준 목록과 상세 창에 같은 크기와 화면 여백을 적용한다."""
+    screen = dialog.screen() or QGuiApplication.primaryScreen()
+    width, height = 780, 700 if has_table else 440
+    if screen is not None:
+        available = screen.availableGeometry()
+        width = min(width, available.width() - 32)
+        height = min(height, available.height() - 60)
+    dialog.resize(width, max(dialog.minimumSizeHint().height(), height))
 
 
 def software_versions(record, rule):
@@ -336,10 +347,7 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.site.currentIndexChanged.connect(self._site_changed)
         self._rule_changed()
         has_table = not self.table.isHidden()
-        # 화면이 낮아도 하단 버튼 줄이 잘리지 않도록 높이를 화면에 맞추고, 남는 높이는 표가 흡수한다.
-        screen = QGuiApplication.primaryScreen()
-        available = screen.availableGeometry().height() - 60 if screen else 700
-        self.resize(780, max(self.minimumSizeHint().height(), min(700 if has_table else 440, available)))
+        resize_rule_dialog(self, has_table=has_table)
 
     def _rule_changed(self, *_):
         self.mutation_request.cancel()

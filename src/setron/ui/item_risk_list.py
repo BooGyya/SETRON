@@ -7,14 +7,14 @@ from setron.features.risk.schemas import RuleType
 from setron.ui.components import button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_risk_dialog import PopupDialog
-from setron.ui.item_risk_verdicts import rule_reference
+from setron.ui.item_risk_verdicts import resize_rule_dialog, rule_reference
 from setron.ui.theme import SECONDARY
 
 
 _CRITERIA = {
-    RuleType.VERSION_BELOW: "미만 버전",
-    RuleType.DIRECT_VERSION: "동일 버전",
-    RuleType.VERSION_ABOVE: "초과 버전",
+    RuleType.VERSION_BELOW: "버전 미만",
+    RuleType.DIRECT_VERSION: "버전 동일",
+    RuleType.VERSION_ABOVE: "버전 초과",
     RuleType.SAFETY_REQUIRED: "필수 Item 미적용",
     RuleType.DEFECT_ITEM: "범위 내 사용",
 }
@@ -75,11 +75,7 @@ class ItemRuleListDialog(PopupDialog):
         self.close_button.clicked.connect(self.reject)
         footer.addWidget(self.close_button)
         self.body.addLayout(footer)
-        width, height = 780, 230 + min(8, max(1, len(self.rules))) * 48
-        if screen := self.screen():
-            available = screen.availableGeometry().adjusted(16, 16, -16, -16)
-            width, height = min(width, available.width()), min(height, available.height())
-        self.resize(width, height)
+        resize_rule_dialog(self, has_table=bool(self.rules))
         if self.rules:
             self.table.selectRow(0)
             self.table.setFocus()
