@@ -165,7 +165,11 @@ def test_representative_states_are_real_data_not_figma_demo(window, source, eid,
     assert drawer.risk_card.isAncestorOf(drawer.risk_status_badge)
     assert drawer.risk_card.isAncestorOf(drawer.risk_reason)
     assert drawer.risk_reason.text()
-    assert drawer.body.itemAt(drawer.body.count() - 1).widget() is drawer.risk_card
+    # 결과(위험버전) 카드 바로 아래에 근거(위험 판정 이유) 카드가 온다.
+    last = drawer.body.itemAt(drawer.body.count() - 1).widget()
+    assert last is (drawer.risk_reasons or drawer.risk_card)
+    if drawer.risk_reasons is not None:
+        assert drawer.body.itemAt(drawer.body.count() - 2).widget() is drawer.risk_card
     if eid == 2:
         assert drawer.risk_badge.text() == status  # 목표 달성 ≠ 위험 해제
         observation = drawer.software_cards[0].observation
@@ -185,7 +189,9 @@ def test_risk_card_preserves_long_finding_as_plain_wrapped_text(window, app):
     whole = replace(drawer.detail.whole, findings=(finding,))
     detail = replace(drawer.detail, whole=whole)
     drawer.open_detail(drawer.request, detail, window.pages["equipment"].detail_model.rows)
-    assert drawer.risk_reason.text() == whole.risk_detail and reason in drawer.risk_reason.text()
+    # 근거 문장은 판정 이유 카드가 보여주고, 위험버전 카드는 결과 한 줄만 둔다(중복 없음).
+    assert reason[:20] in drawer.risk_reasons.text()
+    assert whole.risk_detail not in drawer.risk_reason.text()
     assert drawer.risk_reason.textFormat() == Qt.TextFormat.PlainText
     assert drawer.risk_reason.wordWrap()
     window.resize(960, 600)
