@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QFrame, QLabel
 
 from test_ui_items import app, data, window
 from setron.features.item.schemas import Application
@@ -58,8 +58,10 @@ def test_tile_keyboard_opens_side_panel_and_preserves_item_scope(window, app, sc
     assert drawer.application_badge.text() == "미확인"
     assert drawer.item_pm_rows[0][4] == "미확인"
     assert "저장 행 없음" in drawer.item_pm_rows[0][5]
-    assert any("저장 행 없음" in r[2] for r in drawer.item_evidence_rows)
-    assert any("C9" in r[3] for r in drawer.item_evidence_rows)
+    assert drawer.info_values["Item 기준일"].text() == str(page.data.base_date)
+    assert drawer.item_pm_rows[0][2:4] == ("v1000", "v1000")
+    assert not drawer.item_evidence_rows
+    assert not drawer.body_widget.findChildren(QFrame, "itemEquipmentEvidence")
     assert not window.header.actions["equipment_list"].isEnabled()
     assert window.nav["items"].isChecked()
     assert not window.query_panel.isVisible()
@@ -76,7 +78,7 @@ def test_tile_keyboard_opens_side_panel_and_preserves_item_scope(window, app, sc
     assert app.focusWidget() is page.distribution.tiles[3]
 
 
-def test_table_enter_and_release_source_are_connected(window, data):
+def test_table_enter_preserves_observation_and_source_data_without_source_card(window, data):
     page = window.pages["items"]
     from setron.ui.version_data import SourceReference
     versions = replace(data.versions, releases=(replace(data.versions.releases[0], sources=(
@@ -88,8 +90,13 @@ def test_table_enter_and_release_source_are_connected(window, data):
     QTest.keyClick(page.equipment_table, Qt.Key.Key_Return)
     detail = window.equipment_drawer
     assert window.route == "items" and detail.is_open
-    assert any("release.xlsx" in row[2] and "B8" in row[3] for row in detail.item_evidence_rows)
-    assert any("모델 A" in row[3] for row in detail.item_evidence_rows)
+    assert detail.item_pm_rows[0][:4] == ("PM1", "모델 A · SW A", "v99", "v99")
+    assert detail.info_values["모델"].text() == "모델 A"
+    sources = detail.request.data.versions.releases[0].sources
+    assert any(source.document == "release.xlsx" and source.cells == "B8" for source in sources)
+    assert not detail.item_evidence_rows
+    labels = {widget.text() for widget in detail.body_widget.findChildren(QLabel)}
+    assert "Item 적용 근거 · 원본 출처" not in labels
     assert detail.risk_status_badge.text() == "해당 Item 위험 규칙 없음"
 
 
@@ -124,8 +131,8 @@ def test_table_click_keeps_expanded_item_filters_selection_and_scroll(window, ap
 
 def test_item_panel_uses_item_observation_and_risk_instead_of_dashboard_goal(window, data):
     page = window.pages["items"]
-    rule = RiskRule(1, RuleType.DIRECT_VERSION, 10, "선택 Item 위험 버전", item_id=1,
-                    release_version_id=1, mapping_status=MappingStatus.VERIFIED)
+    rule = RiskRule(1, RuleType.VERSION_BELOW, 10, "선택 Item 위험 버전", item_id=1,
+                    release_version_id=2, mapping_status=MappingStatus.VERIFIED, memo="선택 기준 메모")
     other = replace(rule, risk_rule_id=2, item_id=2, risk_reason="다른 Item 위험 버전")
     page.loader = lambda: replace(data, risk_rules=(rule, other))
     page.reload()
@@ -135,13 +142,10 @@ def test_item_panel_uses_item_observation_and_risk_instead_of_dashboard_goal(win
     assert drawer.detail.record is data.records[0]
     assert drawer.software_cards[0].observation.current == "v99"
     assert drawer.software_cards[0].observation.target == "v99"
-    assert drawer.risk_status_badge.text() == "위험" and drawer.risk_reasons is not None
-    # 공통 패널은 요약 결과와 상세 근거를 나누고, 선택 Item의 근거만 이유 카드에 표시한다.
-    assert drawer.risk_reasons.isVisibleTo(drawer.body_widget)
-    assert "선택 Item 위험 버전" in drawer.risk_reasons.text()
-    assert "다른 Item 위험 버전" not in drawer.risk_reasons.text()
-    assert "선택 Item 위험 버전" not in drawer.risk_reason.text()
-    assert drawer.body.indexOf(drawer.risk_reasons) == drawer.body.indexOf(drawer.risk_card) + 1
+    assert drawer.risk_table is not None and drawer.risk_table.isVisibleTo(drawer.risk_card)
+    assert drawer.risk_table.rows == (("선택 Item 위험 버전", "v2", "선택 기준 메모", "버전 미만"),)
+    assert not drawer.risk_table.unknown_rows and drawer.risk_reason is None
+    assert not hasattr(drawer, "risk_reasons")
     assert drawer.goal_badge is None
     labels = {widget.text() for widget in drawer.body_widget.findChildren(QLabel) if widget.isVisibleTo(drawer.body_widget)}
     assert "대응 릴리즈" in labels and "목표 버전" not in labels

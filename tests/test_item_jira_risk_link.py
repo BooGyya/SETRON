@@ -220,6 +220,7 @@ def test_expanded_item_button_opens_list_before_exact_selected_rule_detail(app, 
 
     def show_detail(dialog):
         entered.append(("detail", dialog.item_id, dialog.rule.risk_rule_id))
+        assert not hasattr(dialog, "selector") and dialog.rule.risk_rule_id == selected
         QTimer.singleShot(0, dialog.close_button.click)
         return detail_exec(dialog)
 

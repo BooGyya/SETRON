@@ -138,15 +138,15 @@ def test_software_shows_current_and_target_on_separate_rows_without_verdict_or_c
     assert not any(text.startswith(("판정 요약", "관측된 SW (", "관측 SW ")) or "원본 근거" in text for text in captions)
 
 
-@pytest.mark.parametrize("eid,goal,cards,risk,status,tone", [
-    (1, GoalState.BELOW, 3, RiskStatus.RISK, "위험 후보", "danger"),
-    (2, GoalState.MET, 1, RiskStatus.RISK, "위험 후보", "danger"),
-    (2, GoalState.MET, 1, RiskStatus.NO_RISK, "등록 규칙상 후보 아님", "neutral"),
-    (3, GoalState.UNKNOWN, 1, RiskStatus.UNKNOWN, "위험 미확인", "warning"),
-    (4, GoalState.EXCLUDED, 0, RiskStatus.UNKNOWN, "위험 분석 제외", "neutral"),
-    (5, GoalState.UNKNOWN, 0, RiskStatus.UNKNOWN, "위험 미확인", "warning"),
+@pytest.mark.parametrize("eid,goal,cards,risk,tone", [
+    (1, GoalState.BELOW, 3, RiskStatus.RISK, "danger"),
+    (2, GoalState.MET, 1, RiskStatus.RISK, "danger"),
+    (2, GoalState.MET, 1, RiskStatus.NO_RISK, "neutral"),
+    (3, GoalState.UNKNOWN, 1, RiskStatus.UNKNOWN, "warning"),
+    (4, GoalState.EXCLUDED, 0, RiskStatus.UNKNOWN, "neutral"),
+    (5, GoalState.UNKNOWN, 0, RiskStatus.UNKNOWN, "warning"),
 ])
-def test_representative_states_are_real_data_not_figma_demo(window, source, eid, goal, cards, risk, status, tone):
+def test_representative_states_are_real_data_not_figma_demo(window, source, eid, goal, cards, risk, tone):
     if risk is RiskStatus.NO_RISK:
         source.risks[eid] = risk
         window.query_panel.apply_draft()
@@ -159,19 +159,20 @@ def test_representative_states_are_real_data_not_figma_demo(window, source, eid,
     else:
         assert drawer.goal_badge.text() == goal.value
     assert len(drawer.software_cards) == cards
-    assert drawer.risk_title.text() == "위험버전"
-    assert drawer.risk_status_badge.text() == status
+    assert drawer.detail.whole.risk is risk
+    assert not hasattr(drawer, "risk_title") and not hasattr(drawer, "risk_reasons")
     assert drawer.risk_status_badge.tone == tone
     assert drawer.risk_card.isAncestorOf(drawer.risk_status_badge)
     assert drawer.risk_card.isAncestorOf(drawer.risk_reason)
     assert drawer.risk_reason.text()
-    # 결과(위험버전) 카드 바로 아래에 근거(위험 판정 이유) 카드가 온다.
+    # 이 자료원은 규칙 근거 없이 상태만 제공하므로 기준 행을 만들지 않는다.
+    assert drawer.risk_table is None
     last = drawer.body.itemAt(drawer.body.count() - 1).widget()
-    assert last is (drawer.risk_reasons or drawer.risk_card)
-    if drawer.risk_reasons is not None:
-        assert drawer.body.itemAt(drawer.body.count() - 2).widget() is drawer.risk_card
+    assert last is drawer.risk_card
+    if risk is RiskStatus.RISK:
+        assert "확인할 수 없습니다" in drawer.risk_reason.text()
     if eid == 2:
-        assert drawer.risk_badge.text() == status  # 목표 달성 ≠ 위험 해제
+        assert drawer.risk_badge.text() == drawer.detail.whole.risk_label  # 목표 달성 ≠ 위험 해제
         observation = drawer.software_cards[0].observation
         assert observation.current == observation.target == "v2"
     if eid == 3:
@@ -181,19 +182,20 @@ def test_representative_states_are_real_data_not_figma_demo(window, source, eid,
     assert not any(control.text() == "버전 정보 수정" for control in drawer.findChildren(QPushButton))
 
 
-def test_risk_card_preserves_long_finding_as_plain_wrapped_text(window, app):
+def test_risk_table_preserves_long_rule_name_and_memo_as_plain_wrapped_text(window, app):
     drawer = open_tile(window)
     reason = "위험 지정 사유 <검토 중> " * 30
-    rule = RiskRule(1, RuleType.DIRECT_VERSION, 1001, reason)
+    memo = "설명 <원문> & 보존 " * 30
+    rule = RiskRule(1, RuleType.DIRECT_VERSION, 1001, reason, release_version_id=10012, memo=memo)
     finding = RiskFinding(rule, RiskStatus.RISK, FindingBasis.DIRECT_VERSION, drawer.detail.record.pms[0])
     whole = replace(drawer.detail.whole, findings=(finding,))
     detail = replace(drawer.detail, whole=whole)
     drawer.open_detail(drawer.request, detail, window.pages["equipment"].detail_model.rows)
-    # 근거 문장은 판정 이유 카드가 보여주고, 위험버전 카드는 결과 한 줄만 둔다(중복 없음).
-    assert reason[:20] in drawer.risk_reasons.text()
-    assert whole.risk_detail not in drawer.risk_reason.text()
-    assert drawer.risk_reason.textFormat() == Qt.TextFormat.PlainText
-    assert drawer.risk_reason.wordWrap()
+    assert drawer.risk_table.rows == ((reason, "v2", memo, "버전 일치"),)
+    assert drawer.risk_reason is None and not hasattr(drawer, "risk_reasons")
+    cells = drawer.risk_table.table.findChildren(QLabel)
+    assert all(cell.textFormat() == Qt.TextFormat.PlainText and cell.wordWrap() for cell in cells)
+    assert reason in [cell.text() for cell in cells] and memo in [cell.text() for cell in cells]
     window.resize(960, 600)
     app.processEvents()
     assert drawer.scroll.horizontalScrollBar().maximum() == 0

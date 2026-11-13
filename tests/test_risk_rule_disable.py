@@ -20,6 +20,7 @@ from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseS
 from setron.ui.app import create_window
 from setron.ui.database_source import load_dashboard_source
 from setron.ui.item_data import item_data_from_source
+from setron.ui.item_risk_list import ItemRuleListDialog
 from setron.ui.item_risk_verdicts import (ItemRuleVerdictDialog, RuleToggleConfirmDialog, rule_verdicts,
                                          toggle_impact, toggle_message)
 from setron.ui.read_worker import BackgroundRead
@@ -206,11 +207,18 @@ def test_disabled_rule_keeps_reenable_entry(app, data):  # noqa: F811
     with patch.object(RuleToggleConfirmDialog, "exec", lambda self: QDialog.DialogCode.Accepted):
         assert dialog._toggle_clicked()
     assert dialog.toggle_request == (9, True)
-    # 사용 중 기준과 해제된 기준이 함께 있으면 선택 목록에 '(해제됨)'으로 남는다.
+    # 사용 중/해제 기준은 목록에서 선택하고, 상세는 생성자로 고른 한 기준을 유지한다.
     both = replace(risky, risk_rules=(risky.risk_rules[0], replace(risky.risk_rules[0], risk_rule_id=11, is_enabled=False,
                                                                    display_name="예전 기준")))
-    mixed = ItemRuleVerdictDialog(None, both, 1, 9, toggle_allowed=True)
-    assert [mixed.selector.itemText(i) for i in range(mixed.selector.count())] == ["필수 기능", "예전 기준 (해제됨)"]
+    listing = ItemRuleListDialog(None, both, 1)
+    assert listing.model.ids == (9, 11)
+    assert [(row[0], row[3]) for row in listing.model.rows] == [("필수 기능", "적용됨"), ("예전 기준", "해제됨")]
+    mixed = ItemRuleVerdictDialog(None, both, 1, 11, toggle_allowed=True)
+    assert not hasattr(mixed, "selector") and mixed.rule.risk_rule_id == 11 and mixed.rule_name.text() == "예전 기준"
+    assert mixed.toggle_button.text() == "다시 사용" and mixed.table.isHidden()
+    with patch.object(RuleToggleConfirmDialog, "exec", lambda self: QDialog.DialogCode.Accepted):
+        assert mixed._toggle_clicked()
+    assert mixed.toggle_request == (11, True)
     window.close()
 
 

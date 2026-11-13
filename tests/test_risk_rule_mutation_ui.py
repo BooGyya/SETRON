@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QThreadPool, Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QDialog, QLabel
 
@@ -111,13 +112,13 @@ def gateway(app, data):
 
 
 @pytest.fixture
-def popup(app, gateway):
+def popup(app, gateway, request):
     manager = ItemRiskPage()
     controller = RiskRuleSaveController(gateway, parent=manager)
     manager.configure(gateway, RefreshContext, controller.create_risk_rule,
                       submit_edit=controller.update_risk_rule, submit_delete=controller.delete_risk_rule)
     manager.set_data(gateway.data())
-    dialog = ItemRuleVerdictDialog(None, manager.data, 1, 9, manager=manager)
+    dialog = ItemRuleVerdictDialog(None, manager.data, 1, getattr(request, "param", 9), manager=manager)
     dialog.show()
     app.processEvents()
     yield dialog, controller
@@ -132,9 +133,10 @@ def popup(app, gateway):
     app.processEvents()
 
 
+@pytest.mark.parametrize("popup", [10], indirect=True)
 def test_selected_rule_edit_prefills_and_updates_existing_id_without_create(app, popup, gateway, monkeypatch):
     dialog, controller = popup
-    dialog.selector.setCurrentIndex(dialog.selector.findData(10))
+    assert dialog.rule.risk_rule_id == 10 and not hasattr(dialog, "selector")
     other = deepcopy(gateway.rows[9])
     inspected = []
 
@@ -170,9 +172,10 @@ def test_selected_rule_edit_prefills_and_updates_existing_id_without_create(app,
 
 
 @pytest.mark.parametrize("accept", [False, True])
+@pytest.mark.parametrize("popup", [10], indirect=True)
 def test_selected_rule_delete_requires_confirmation_and_keeps_other_rules(app, popup, gateway, monkeypatch, accept):
     dialog, controller = popup
-    dialog.selector.setCurrentIndex(dialog.selector.findData(10))
+    assert dialog.rule.risk_rule_id == 10 and not hasattr(dialog, "selector")
     inspected = []
 
     def confirm(confirmation):
@@ -196,20 +199,44 @@ def test_selected_rule_delete_requires_confirmation_and_keeps_other_rules(app, p
 
 def test_busy_record_read_blocks_duplicate_actions_and_close_discards_late_result(app, popup, gateway, monkeypatch):
     dialog, _ = popup
+    dialog.toggle_allowed = True
+    dialog._update_mutation_buttons()
+    assert dialog.toggle_button.isEnabled()
     gateway.read_gate.clear()
     opened = []
     monkeypatch.setattr(dialog.manager, "open_edit", lambda *args: opened.append(args))
     QTest.mouseClick(dialog.edit_button, Qt.MouseButton.LeftButton)
     wait_for(app, lambda: bool(gateway.gets))
     assert dialog.mutation_request.busy
-    assert not dialog.edit_button.isEnabled() and not dialog.delete_button.isEnabled() and not dialog.selector.isEnabled()
+    assert not dialog.edit_button.isEnabled() and not dialog.delete_button.isEnabled() and not dialog.toggle_button.isEnabled()
+    assert dialog.close_button.isEnabled() and dialog.rule.risk_rule_id == 9 and not hasattr(dialog, "selector")
+    dialog._load_rule("edit")
     dialog._load_rule("delete")
-    assert len(gateway.gets) == 1
-    dialog.reject()
+    assert not dialog._toggle_clicked()
+    assert len(gateway.gets) == 1 and gateway.gets[0][1] == {"risk_rule_id": 9}
+    QTest.mouseClick(dialog.close_button, Qt.MouseButton.LeftButton)
     gateway.read_gate.set()
     wait_for(app, gateway.read_finished.is_set)
     app.processEvents()
     assert not opened and not gateway.updates and not gateway.deletes and not dialog.mutation_request.busy
+    assert dialog.rule.risk_rule_id == 9
+
+
+def test_detail_footer_groups_mutations_left_and_close_right_with_distinct_emphasis(app, popup):
+    dialog, _ = popup
+    actions = (dialog.toggle_button, dialog.edit_button, dialog.delete_button)
+    close = dialog.close_button
+    positions = [control.mapTo(dialog, QPoint()) for control in (*actions, close)]
+    assert len({point.y() for point in positions}) == 1
+    assert all(left.x() < right.x() for left, right in zip(positions, positions[1:]))
+    assert positions[-1].x() - (positions[-2].x() + actions[-1].width()) >= 24
+    assert dialog.edit_button.isEnabled() and dialog.delete_button.isEnabled()
+    role = QPalette.ColorRole
+    assert dialog.edit_button.palette().color(role.Button) != dialog.delete_button.palette().color(role.Button)
+    assert dialog.delete_button.palette().color(role.Button) == close.palette().color(role.Button)
+    danger = dialog.delete_button.palette().color(role.ButtonText)
+    assert danger.red() > danger.green() and danger.red() > danger.blue()
+    assert danger != dialog.edit_button.palette().color(role.ButtonText)
 
 
 @pytest.mark.parametrize("problem", ["read_failure", "changed_item"])

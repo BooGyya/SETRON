@@ -31,8 +31,7 @@ from test_ui_import_ver5 import own, until  # noqa: F401
 def replay_page(own, **kwargs):
     page = own(ReplayPage(demo_dashboard_source(), **kwargs))
     page.resize(1320, 1000)
-    assert page.apply_query()
-    until(lambda: not page.busy)
+    until(lambda: page.data is not None and not page.busy)
     assert page.data is not None
     return page
 
@@ -41,6 +40,221 @@ def set_period(page, start, end):
     with QSignalBlocker(page.start), QSignalBlocker(page.end):
         page.start.setDate(QDate.fromString(start, "yyyy-MM-dd"))
         page.end.setDate(QDate.fromString(end, "yyyy-MM-dd"))
+
+
+def test_first_show_and_enter_start_one_automatic_request(own):
+    source, gate, calls = demo_dashboard_source(), Event(), []
+
+    def load(request):
+        calls.append(request)
+        assert gate.wait(10)
+        return load_replay(source, request)
+
+    page = own(ReplayPage(source, loader=load))
+    try:
+        until(lambda: len(calls) == 1)
+        assert page.busy and page.state.applied is calls[0].query
+        assert not page.enter() and not page.apply_query()
+        QTest.qWait(20)  # showEvent의 지연 진입도 같은 실행 중 요청을 재시작하지 않는다.
+        assert len(calls) == 1
+        gate.set()
+        until(lambda: page.data is not None and not page.busy)
+        assert page.data.request is calls[0] and page.frames and not page.dirty
+        assert page.playback_controls.date_label.text() == f"재생일 {page.frame.day}"
+        assert page.playback_controls.frame_label.text() == "6 / 6"
+        assert not page.enter() and len(calls) == 1
+    finally:
+        gate.set()
+
+
+def test_navigation_cancel_then_reenter_resumes_applied_request_and_rejects_old_result(own, monkeypatch):
+    gates, calls, returned = (Event(), Event()), [], {}
+    actual_load = load_replay
+
+    def load(source, request):
+        index = len(calls)
+        calls.append(request)
+        assert gates[index].wait(10)
+        result = actual_load(source, request)
+        returned[index] = result
+        return result
+
+    monkeypatch.setattr("setron.ui.replay_page.load_replay", load)
+    window = own(create_window())
+    try:
+        window.navigate("replay")
+        page = window.pages["replay"]
+        until(lambda: len(calls) == 1)
+        applied = page.state.applied
+        window.navigate("dashboard")
+        assert not page.busy and page.data is None and page.pending_request is None
+        assert page.state.applied is applied
+        window.navigate("replay")
+        until(lambda: len(calls) == 2)
+        assert calls[1] is calls[0] and page.state.applied is applied
+        gates[1].set()
+        until(lambda: page.data is not None and not page.busy)
+        current = page.data
+        assert current is returned[1] and page.chart.values and page.frames
+        gates[0].set()
+        until(lambda: 0 in returned)
+        QTest.qWait(30)
+        assert page.data is current and page.data is not returned[0]
+        assert page.state.applied is applied and window.route == "replay"
+    finally:
+        for gate in gates:
+            gate.set()
+
+
+def test_reenter_with_cached_data_redraws_current_frame_without_reading_again(own):
+    source, calls = demo_dashboard_source(), []
+    page = replay_page(own, loader=lambda request: calls.append(request) or load_replay(source, request))
+    page.select_date(1)
+    data, frame, index = page.data, page.frame, page.index
+    page.hide()
+    page.chart.clear()
+    page.playback_controls.clear_context()
+    assert not page.chart.values and page.playback_controls.frame_label.text() == "0 / 0"
+    page.show()
+    until(lambda: bool(page.chart.values) and page.chart.current == index)
+    assert page.data is data and page.frame is frame and page.index == index and len(calls) == 1
+    assert page.playback_controls.date_label.text() == f"재생일 {frame.day}"
+    assert page.playback_controls.frame_label.text() == f"{index + 1} / {len(page.frames)}"
+
+
+@pytest.mark.parametrize("availability", ["visible", "hidden", "disabled"])
+def test_invalidated_replay_loads_only_when_visible_and_enabled(own, availability):
+    source, calls = demo_dashboard_source(), []
+    page = replay_page(own, loader=lambda request: calls.append(request) or load_replay(source, request))
+    request = page.data.request
+    if availability == "hidden":
+        page.hide()
+    elif availability == "disabled":
+        page.setEnabled(False)
+    page.invalidate()
+    assert page.data is None and not page.frames
+    if availability != "visible":
+        QTest.qWait(30)
+        assert not page.busy and len(calls) == 1
+        if availability == "hidden":
+            page.show()
+        else:
+            # 저장 완료 경로도 다시 활성화한 뒤 현재 자료를 무효화해 갱신한다.
+            page.setEnabled(True)
+            page.invalidate()
+    until(lambda: page.data is not None and not page.busy)
+    assert len(calls) == 2 and calls[1] is request and page.data.request is request
+    assert page.chart.values and page.playback_controls.frame_label.text() == "6 / 6"
+
+
+@pytest.mark.parametrize("edited", ["draft", "period"])
+def test_canceled_entry_does_not_auto_apply_unsubmitted_inputs(own, edited):
+    source, gate, calls, old_finished = demo_dashboard_source(), Event(), [], Event()
+
+    def load(request):
+        calls.append(request)
+        if len(calls) == 1:
+            assert gate.wait(10)
+        result = load_replay(source, request)
+        if len(calls) == 1:
+            old_finished.set()
+        return result
+
+    page = own(ReplayPage(source, loader=load))
+    try:
+        until(lambda: len(calls) == 1)
+        applied = page.state.applied
+        page.hide()
+        if edited == "draft":
+            page.query_panel.select("site_key", "hwaseong")
+        else:
+            set_period(page, "2026-06-01", "2026-08-21")
+        draft, period = page.state.draft, (page.start.date(), page.end.date())
+        page.show()
+        QTest.qWait(40)
+        assert len(calls) == 1 and not page.busy and page.data is None
+        assert page.state.applied is applied and page.state.draft == draft
+        assert (page.start.date(), page.end.date()) == period
+        gate.set()
+        until(old_finished.is_set)
+        QTest.qWait(20)
+        assert page.data is None
+        page.query_panel.search_button.click()
+        until(lambda: page.data is not None and not page.busy)
+        assert len(calls) == 2 and page.data.request.query.selection == draft
+        assert page.data.request.start == period[0].toPython() and page.data.request.end == period[1].toPython()
+        assert not page.dirty
+    finally:
+        gate.set()
+
+
+@pytest.mark.parametrize("edited", ["draft", "period", "targets"])
+def test_inflight_result_retains_new_inputs_and_disables_stale_replay_until_manual_apply(own, edited):
+    page = replay_page(own)
+    gate, calls = Event(), []
+
+    def load(request):
+        calls.append(request)
+        assert gate.wait(10)
+        return load_replay(page.source, request)
+
+    page.loader = load
+    try:
+        assert page.apply_query()
+        until(lambda: len(calls) == 1)
+        submitted = calls[0]
+        if edited == "draft":
+            page.query_panel.select("site_key", "hwaseong")
+        elif edited == "period":
+            set_period(page, "2026-06-01", "2026-08-21")
+        else:
+            page.state.set_target_draft(())
+        draft, targets = page.state.draft, page.state.target_draft
+        period = page.start.date(), page.end.date()
+        gate.set()
+        until(lambda: page.data is not None and not page.busy)
+        assert page.data.request is submitted and page.dirty
+        assert page.state.draft == draft and page.state.target_draft == targets
+        assert (page.start.date(), page.end.date()) == period
+        assert "데이터 조회" in page.message.text() and not page.play_button.isEnabled()
+        assert not page.select_date(0) and not page.enter() and len(calls) == 1
+        page.hide()
+        page.show()
+        QTest.qWait(20)
+        assert page.dirty and len(calls) == 1
+        page.query_panel.search_button.click()
+        until(lambda: not page.busy and not page.dirty)
+        assert len(calls) == 2 and page.data.request is calls[1]
+    finally:
+        gate.set()
+
+
+@pytest.mark.parametrize("changed_scope", [False, True])
+def test_catalog_refresh_rebinds_only_unchanged_submitted_scope(own, changed_scope):
+    source, calls = demo_dashboard_source(), []
+    page = own(ReplayPage(source, loader=lambda request: calls.append(request) or load_replay(source, request)))
+    until(lambda: page.data is not None and not page.busy)
+    page.query_panel.select("site_key", "hwaseong")
+    assert page.apply_query()
+    until(lambda: page.data is not None and not page.busy)
+    request = page.data.request
+    if changed_scope:
+        source.catalog = replace(source.catalog,
+                                 sites=tuple(s for s in source.catalog.sites if s.key != "hwaseong"),
+                                 fabs=tuple(f for f in source.catalog.fabs if f.site_key != "hwaseong"),
+                                 lines=tuple(line for line in source.catalog.lines if line.site_key != "hwaseong"))
+    else:
+        source.catalog = replace(source.catalog, source_label="현재 자료의 조회 선택지")
+    page.invalidate()
+    if changed_scope:
+        QTest.qWait(40)
+        assert page.data is None and not page.busy and len(calls) == 2
+        assert page.state.applied is request.query and page.state.draft.site_key is None
+    else:
+        until(lambda: page.data is not None and not page.busy)
+        assert len(calls) == 3 and page.data.request.query is not request.query
+        assert page.data.request.query.selection == request.query.selection
+        assert page.data.request.start == request.start and page.data.request.end == request.end
 
 
 def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
@@ -256,6 +470,7 @@ def test_group_buttons_hide_absent_groups_and_bulk_only_changes_available_groups
                            if source.locations[record.equipment_id].site_key != "hwaseong"
                            or not any(pm.group_id in source.bindings["c4"] for pm in record.pms))
     page = own(ReplayPage(source))
+    until(lambda: page.data is not None and not page.busy)
     page.set_grouping("group")
     page.query_panel.select("site_key", "hwaseong")
     page.query_panel.search_button.click()
@@ -567,10 +782,11 @@ def test_site_choices_close_and_reset_wait_for_search_and_preserve_targets(own):
 
 def test_inverted_period_never_starts_external_loader(own):
     calls = []
-    page = own(ReplayPage(demo_dashboard_source(), loader=lambda request: calls.append(request)))
+    page = ReplayPage(demo_dashboard_source(), loader=lambda request: calls.append(request))
     page.start.setDate(QDate(2026, 11, 1))
+    own(page)
     assert not page.busy and calls == []
-    assert "시작 날짜는 종료 날짜" not in page.message.text()
+    assert "시작 날짜는 종료 날짜와 같거나 앞서야" in page.message.text()
     page.query_panel.search_button.click()
     assert not page.busy and calls == []
     assert "시작 날짜는 종료 날짜와 같거나 앞서야" in page.message.text()
@@ -689,7 +905,7 @@ def test_slow_request_is_responsive_blocks_duplicate_and_ignores_late_result_aft
         return load_replay(source, request)
     page = own(ReplayPage(source, loader=load))
     try:
-        assert page.apply_query() and page.busy and not page.reset_button.isEnabled()
+        assert page.busy and not page.reset_button.isEnabled()
         assert not page.apply_query()
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, lambda: ticks.append(True))
@@ -972,8 +1188,7 @@ def test_saved_n_groups_remain_effective_without_query_summary(own):
     source.targets.clear()
     source.saved_groups = {key: VersionGroups({Slot.N: frozenset({release})})}
     page = own(ReplayPage(source))
-    assert page.apply_query()
-    until(lambda: not page.busy)
+    until(lambda: page.data is not None and not page.busy)
     assert len(page.frame.snapshot.effective_targets) == 1
     assert page.query_panel.applied_summary.isHidden()
     page.view_tabs.setCurrentIndex(1)

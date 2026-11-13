@@ -86,12 +86,17 @@ def test_equipment_panel_closes_on_context_invalidation(window, change):
 
 
 def test_heatmap_list_and_dashboard_detail_use_same_common_content(window, app):
+    def risk_content(panel):
+        return (panel.risk_table.rows if panel.risk_table else (),
+                panel.risk_table.unknown_rows if panel.risk_table else (),
+                panel.risk_reason.text() if panel.risk_reason is not None else "")
+
     page, query = open_list(window)
     assert page.open_row(0)
     drawer = window.equipment_drawer
     expected_info = {name: label.text() for name, label in drawer.info_values.items()}
     expected_software = tuple(card.observation for card in drawer.software_cards)
-    expected_risk = drawer.risk_status_badge.text(), drawer.risk_reason.text()
+    expected_risk = risk_content(drawer)
     drawer.close_button.click()
     wait_for(app, drawer.isHidden)
 
@@ -100,7 +105,7 @@ def test_heatmap_list_and_dashboard_detail_use_same_common_content(window, app):
     assert window.equipment_drawer is drawer and drawer.is_open
     assert {name: label.text() for name, label in drawer.info_values.items()} == expected_info
     assert tuple(card.observation for card in drawer.software_cards) == expected_software
-    assert (drawer.risk_status_badge.text(), drawer.risk_reason.text()) == expected_risk
+    assert risk_content(drawer) == expected_risk
     drawer.close_button.click()
     wait_for(app, drawer.isHidden)
     assert window.go_back_route("equipment")
@@ -115,7 +120,7 @@ def test_heatmap_list_and_dashboard_detail_use_same_common_content(window, app):
     assert cohort.is_open and cohort.request.equipment_id == 1 and window.route == "dashboard"
     assert {name: label.text() for name, label in cohort.info_values.items()} == expected_info
     assert tuple(card.observation for card in cohort.software_cards) == expected_software
-    assert (cohort.risk_status_badge.text(), cohort.risk_reason.text()) == expected_risk
+    assert risk_content(cohort) == expected_risk
     cohort.back_button.click()
     assert cohort.is_open and cohort.request is None and page.scope_ids == (1, 2)
 

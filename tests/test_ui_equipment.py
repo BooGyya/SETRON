@@ -278,7 +278,7 @@ def test_dashboard_risk_column_and_card_include_risky_sw_outside_selected_group(
     assert detail.selected.risk is RiskStatus.NO_RISK and detail.whole.risk is RiskStatus.RISK
     assert page.model.rows[0][4] == "위험 후보"
     assert page.open_row(0)
-    assert window.equipment_list_drawer.risk_status_badge.text() == detail.whole.risk_label
+    assert window.equipment_list_drawer.risk_status_badge.text() == "위험"
 
 
 def test_pagination_search_goal_and_sort_only_change_display(window):

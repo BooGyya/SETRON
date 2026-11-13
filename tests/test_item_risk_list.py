@@ -110,6 +110,7 @@ def test_list_and_detail_share_size_even_without_judged_equipment(own, rules_dat
         value = replace(value, records=(), base_date=None, observations_connected=False)
     listing = own(ItemRuleListDialog(None, value, 1, family_id=10))
     detail = own(ItemRuleVerdictDialog(None, value, 1, rule.risk_rule_id))
+    assert not hasattr(detail, "selector") and detail.rule.risk_rule_id == rule.risk_rule_id
     assert listing.size() == detail.size()
     available = listing.screen().availableGeometry()
     assert listing.width() == min(780, available.width() - 32)

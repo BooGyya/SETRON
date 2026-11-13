@@ -53,25 +53,27 @@ def test_verdict_table_preserves_statuses_versions_and_scope_filters(app, data, 
         dialog.group.setCurrentIndex(0)
         assert dialog.model.rowCount() == total and dialog.target_count.text() == "위험 적용 대상 1건"
         assert dialog.model.statuses == tuple(result.status for _, result, _ in dialog.verdicts)
-        assert dialog.selector.isHidden() and not dialog.rule_name.isHidden()
+        assert not hasattr(dialog, "selector") and not dialog.rule_name.isHidden()
     finally:
         _close(dialog)
 
 
-def test_verdict_order_filters_and_rule_selector(app, data):
+@pytest.mark.parametrize("selected_rule", [1, 2])
+def test_verdict_order_and_scope_filters_preserve_constructor_selected_rule(app, data, selected_rule):
     rule = _rule()
     records = tuple(replace(data.records[0], equipment_id=i + 1, equipment_code=f"EQ-{i + 1}") for i in range(16))
-    dialog = ItemRuleVerdictDialog(None, replace(data, records=records, risk_rules=(rule, replace(rule, risk_rule_id=2, display_name="둘째"))), 1, 2)
+    dialog = ItemRuleVerdictDialog(None, replace(data, records=records, risk_rules=(rule, replace(rule, risk_rule_id=2, display_name="둘째"))), 1, selected_rule)
     dialog.show()
     try:
-        assert not dialog.selector.isHidden() and dialog.rule.risk_rule_id == 2
+        assert not hasattr(dialog, "selector") and dialog.rule.risk_rule_id == selected_rule
+        assert dialog.rule_name.text() == ("필수 Item" if selected_rule == 1 else "둘째")
         ranks = [v[1].status for v in rule_verdicts(dialog.data, dialog.rule)]
         assert ranks == sorted(ranks, key=[RiskStatus.RISK, RiskStatus.UNKNOWN, RiskStatus.NO_RISK].index)
         assert dialog.model.rowCount() == 16
         dialog.site.setCurrentIndex(dialog.site.findData(records[0].site))
         assert dialog.model.rowCount() == 16 and dialog.group.count() > 1
-        dialog.selector.setCurrentIndex(0)
-        assert dialog.rule.risk_rule_id == 1
+        dialog.group.setCurrentIndex(dialog.group.findData(1))
+        assert dialog.model.rowCount() == 16 and dialog.rule.risk_rule_id == selected_rule
     finally:
         _close(dialog)
 

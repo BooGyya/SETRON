@@ -107,7 +107,7 @@ def test_heatmap_badge_shows_icon_count_and_kind_breakdown(window):
     assert "적용 위험 1대" in tip and "미적용 위험 1대" in tip and "근거 미연결" not in tip
 
 
-def test_side_panel_list_and_detail_show_risk_reason_by_kind(window):
+def test_side_panel_keeps_kind_data_and_shows_rule_reference_in_detail_table(window):
     query = window.query_panel.apply_draft()
     dashboard = window.pages["dashboard"]
     dashboard.drilldown_requested.emit(DashboardDrilldown(query, DAY, "위험 후보", (1, 2), True))
@@ -121,17 +121,20 @@ def test_side_panel_list_and_detail_show_risk_reason_by_kind(window):
     assert cells == {1: "미적용 위험", 2: "적용 위험"}
     tip = model.index(0, 5).data(Qt.ItemDataRole.ToolTipRole)
     assert "환경·안전 필수 Item이 적용되지 않았습니다." in tip
-    # 행을 열면 같은 패널의 상세에 '위험 판정 이유' 카드가 판정 기준별로 나온다.
+    # 상세는 기준별 한 행을 표시하고 위험 분류·관측 근거는 원래 판정 자료에 보존한다.
     page.open_row(0)
-    card = drawer.risk_reasons
-    assert card is not None and drawer.panel.isAncestorOf(card)
-    assert tuple(card.kind_badges) == (RiskKind.NOT_APPLIED,)
-    text = card.text()
-    assert "안전 인터록 필수 적용" in text and "PM1 · 버전 v1" in text and "필수 Item이 적용되지 않음" in text
+    assert drawer.panel.isAncestorOf(drawer.risk_table)
+    assert drawer.risk_table.rows == (("안전 인터록 필수 적용", "별도 기준 버전 없음", "—", "필수 Item 미적용"),)
+    findings = drawer.detail.whole.findings
+    assert risk_kinds(findings) == (RiskKind.NOT_APPLIED,)
+    assert findings[0].pm.version_raw == "v1" and findings[0].basis is FindingBasis.SAFETY_NOT_APPLIED
+    assert "환경·안전 필수 Item이 적용되지 않았습니다." == findings[0].message
     drawer.back_button.click()
     page.open_row(1)
-    assert tuple(drawer.risk_reasons.kind_badges) == (RiskKind.APPLIED,)
-    assert "v3 통신 오류" in drawer.risk_reasons.text() and "위험 버전으로 지정된 버전입니다." in drawer.risk_reasons.text()
+    assert drawer.risk_table.rows == (("v3 통신 오류", "v3", "—", "버전 일치"),)
+    assert risk_kinds(drawer.detail.whole.findings) == (RiskKind.APPLIED,)
+    assert drawer.detail.whole.findings[0].basis is FindingBasis.DIRECT_VERSION
+    assert not hasattr(drawer, "risk_reasons")
 
 
 def test_general_scope_keeps_whole_risk_column_and_no_reason_card_for_safe(window):
@@ -140,4 +143,5 @@ def test_general_scope_keeps_whole_risk_column_and_no_reason_card_for_safe(windo
     page = window.pages["equipment"]
     assert page.table.model().headings == ("설비명", "모델", "계열", "적용현황", "위험버전")
     page.open_row(page.table.model().ids.index(3))
-    assert window.equipment_list_drawer.risk_reasons is None
+    assert window.equipment_list_drawer.risk_table is None
+    assert window.equipment_list_drawer.detail.whole.risk is RiskStatus.NO_RISK
