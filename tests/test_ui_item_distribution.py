@@ -126,7 +126,8 @@ def test_item_panel_uses_item_observation_and_risk_instead_of_dashboard_goal(win
     page = window.pages["items"]
     rule = RiskRule(1, RuleType.DIRECT_VERSION, 10, "선택 Item 위험 버전", item_id=1,
                     release_version_id=1, mapping_status=MappingStatus.VERIFIED)
-    page.loader = lambda: replace(data, risk_rules=(rule,))
+    other = replace(rule, risk_rule_id=2, item_id=2, risk_reason="다른 Item 위험 버전")
+    page.loader = lambda: replace(data, risk_rules=(rule, other))
     page.reload()
     page.open_row(0)
     page.open_equipment(1)
@@ -135,7 +136,12 @@ def test_item_panel_uses_item_observation_and_risk_instead_of_dashboard_goal(win
     assert drawer.software_cards[0].observation.current == "v99"
     assert drawer.software_cards[0].observation.target == "v99"
     assert drawer.risk_status_badge.text() == "위험" and drawer.risk_reasons is not None
-    assert "선택 Item 위험 버전" in drawer.risk_reason.text()
+    # 공통 패널은 요약 결과와 상세 근거를 나누고, 선택 Item의 근거만 이유 카드에 표시한다.
+    assert drawer.risk_reasons.isVisibleTo(drawer.body_widget)
+    assert "선택 Item 위험 버전" in drawer.risk_reasons.text()
+    assert "다른 Item 위험 버전" not in drawer.risk_reasons.text()
+    assert "선택 Item 위험 버전" not in drawer.risk_reason.text()
+    assert drawer.body.indexOf(drawer.risk_reasons) == drawer.body.indexOf(drawer.risk_card) + 1
     assert drawer.goal_badge is None
     labels = {widget.text() for widget in drawer.body_widget.findChildren(QLabel) if widget.isVisibleTo(drawer.body_widget)}
     assert "대응 릴리즈" in labels and "목표 버전" not in labels
