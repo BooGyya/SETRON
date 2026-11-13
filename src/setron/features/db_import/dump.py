@@ -43,6 +43,102 @@ DUMP_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "app_setting": ("setting_key", "setting_value"),
 }
+LEGACY_ITEM_COLUMNS = DUMP_COLUMNS["item"][:-1]
+LEGACY_KEY_ITEM_COLUMNS = (*LEGACY_ITEM_COLUMNS[:3], "jira_key", *LEGACY_ITEM_COLUMNS[3:])
+LEGACY_RENAMED_CODE_ITEM_COLUMNS = (*LEGACY_ITEM_COLUMNS[:3], "jira_code", *LEGACY_ITEM_COLUMNS[3:])
+DUAL_ITEM_COLUMNS = (*LEGACY_KEY_ITEM_COLUMNS, "jira_code")
+
+
+def allowed_columns(table: str) -> tuple[tuple[str, ...], ...]:
+    """13개 표의 정해진 순서만 허용하고 Item의 다섯 역사적 구조만 호환한다."""
+    if table == "item":
+        return (DUMP_COLUMNS[table], LEGACY_ITEM_COLUMNS, LEGACY_KEY_ITEM_COLUMNS,
+                LEGACY_RENAMED_CODE_ITEM_COLUMNS, DUAL_ITEM_COLUMNS)
+    return (DUMP_COLUMNS[table],)
+
+
+def supported_columns(table: str, columns) -> bool:
+    """임의 열 누락이나 재정렬 없이 알려진 전체 구조만 허용한다."""
+    return table in DUMP_COLUMNS and tuple(columns) in allowed_columns(table)
+
+
+def columns_from_definition(table: str, definition: str) -> tuple[str, ...]:
+    """실제 SHOW CREATE 또는 번들 스키마의 허용된 열 순서를 읽는다. SQL을 실행하지 않는다."""
+    columns = tuple(re.findall(r"^  `([a-z_]+)` ", definition, re.M))
+    if not columns:
+        columns = tuple(re.findall(r"^    ([a-z_]+) [A-Z]+", definition, re.M))
+    if not supported_columns(table, columns):
+        raise DumpFormatError(f"{table}의 구조가 지원하는 SETRON 스키마와 다릅니다.")
+    return columns
+
+
+def _jira_value(row: dict):
+    if "jira_code" in row:
+        value = row["jira_code"]
+        if "jira_key" in row and row["jira_key"] != value:
+            raise DumpFormatError("item.jira_code와 이전 jira_key 값이 충돌합니다.")
+        return value
+    return row.get("jira_key")
+
+
+def project_row(table: str, row: dict, columns) -> dict:
+    """원본 행을 바꾸지 않고 실제 대상 열로 무손실 투영한다. NULL만 생략할 수 있다."""
+    columns = tuple(columns)
+    if not supported_columns(table, columns):
+        raise DumpFormatError(f"{table}의 열 순서가 올바르지 않습니다.")
+    required = set(LEGACY_ITEM_COLUMNS if table == "item" else columns)
+    allowed = required | {"jira_code", "jira_key"} if table == "item" else required
+    if required - row.keys() or row.keys() - allowed:
+        raise DumpFormatError(f"{table}의 필드가 지원하는 전체 구조와 다릅니다.")
+    values = {column: row[column] for column in columns if column in required}
+    if table == "item":
+        jira = _jira_value(row)
+        if "jira_code" in columns:
+            values["jira_code"] = jira
+        if "jira_key" in columns:
+            values["jira_key"] = jira
+        if jira is not None and not {"jira_code", "jira_key"} & set(columns):
+            raise DumpFormatError("item의 Jira 값을 이전 구조에 손실 없이 저장할 수 없습니다.")
+    return {column: values[column] for column in columns}
+
+
+def values_for_columns(table: str, row: dict, columns) -> tuple:
+    return tuple(project_row(table, row, columns).values())
+
+
+def with_legacy_jira(rows: dict, target_columns) -> dict:
+    """Jira 열이 전혀 없던 원본 입력만 새 대상용으로 보강한다. 백업·JSON 이력은 바꾸지 않는다."""
+    if not supported_columns("item", target_columns):
+        raise DumpFormatError("item의 열 순서가 올바르지 않습니다.")
+    if not {"jira_code", "jira_key"} & set(target_columns):
+        return rows
+    from setron.features.storage.validation import decode_record
+
+    legacy = []
+    for row in rows["item"]:
+        if "jira_code" in row or "jira_key" in row:
+            continue  # 저장 열의 NULL도 현재 값이며 원본으로 다시 채우지 않는다.
+        decoded = decode_record("item", row)
+        edited = {field.casefold().replace("_", "").replace(" ", "")
+                  for field in decoded.get("edited_fields") or () if isinstance(field, str)}
+        if not edited & {"jira", "jiracode", "jirakey"}:
+            legacy.append(decoded)
+    if not legacy:
+        return rows
+    from setron.features.item.jira import join_codes
+    from setron.features.item.original import jira_by_item, original_item_rows_from_batches
+
+    batches = [decode_record("import_batch", row) for row in rows["import_batch"]]
+    original = original_item_rows_from_batches(batches, legacy)
+    try:
+        found = {item_id: code for item_id, jira in jira_by_item(original, (row["item_id"] for row in legacy)).items()
+                 if (code := join_codes(jira.codes)) is not None}
+    except ValueError as error:
+        raise DumpFormatError("이전 Item의 원본 Jira 코드를 자르지 않고 저장할 수 없습니다.") from error
+    if not found:
+        return rows
+    return {**rows, "item": tuple({**row, "jira_code": found[row["item_id"]]} if row["item_id"] in found else row
+                                  for row in rows["item"])}
 
 _INVALID = "SETRON에서 내보낸 SQL 파일 형식과 일치하지 않거나 파일이 불완전합니다."
 _FOREIGN_KEY_START = (
@@ -118,6 +214,9 @@ def _read_file(source: TextIO) -> dict[str, tuple[dict[str, object], ...]]:
         count = _read_count(source.readline(), table)
         columns = _skip_table_definition(source, table, DUMP_COLUMNS[table])
         rows = _read_rows(source, table, columns, count, legacy)
+        if table == "item":
+            for row in rows:
+                _jira_value(row)
         tables[table] = tuple(rows)
         _expect(source, "\n")
 
@@ -138,17 +237,6 @@ def _read_count(line: str, name: str) -> int:
     if not match or match[1] != name:
         raise DumpFormatError(_INVALID)
     return int(match[2])
-
-
-# 나중에 더한 칸(11/12 item.jira_code). 이 칸이 있는 내보내기와 없는 예전 내보내기를 모두 읽는다.
-OPTIONAL_TRAILING: dict[str, tuple[str, ...]] = {"item": ("jira_code",)}
-
-
-def allowed_columns(table: str) -> tuple[tuple[str, ...], ...]:
-    """이 표로 읽을 수 있는 칸 순서들: 지금 형식, 그리고 나중에 더한 칸이 없는 예전 형식."""
-    columns = DUMP_COLUMNS[table]
-    older = tuple(name for name in columns if name not in OPTIONAL_TRAILING.get(table, ()))
-    return (columns,) if older == columns else (columns, older)
 
 
 def _skip_table_definition(source: TextIO, table: str, columns: tuple[str, ...]) -> tuple[str, ...]:

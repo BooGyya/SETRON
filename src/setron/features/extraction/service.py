@@ -315,6 +315,10 @@ def _text(value):
 
 
 def _matches(field, extracted, source_text, row_values):
+    if field in {"jira_code", "jira_key"}:
+        from setron.features.item.jira import matches_source
+
+        return matches_source(extracted, source_text)
     if not extracted or extracted not in source_text:
         return False
     if field in {"equipment_code", "engine_version", "epd_version", "content"}:

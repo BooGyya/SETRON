@@ -9,6 +9,7 @@ from setron.features.management_format import equipment_group_name
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.groups import Tier
 from setron.ui.heatmap_data import record_tiles
+from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class ReportHeatmapCell:
     tier: Tier
     risk: RiskStatus
     risk_detail: str = ""
+    equipment_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class ReportHeatmap:
     site: str
     group: str
     lines: tuple[tuple[str, tuple[ReportHeatmapCell, ...]], ...]
+    heading: str = ""
 
 
 @dataclass(frozen=True)
@@ -103,7 +106,7 @@ def report_visuals(source, frames, current):
             records = tuple(entries)
             summary = summarize(records, source.families, current.snapshot.effective_targets)
             tiles = record_tiles(records, summary, source)
-            cells = tuple(ReportHeatmapCell(t.code, t.tier, t.risk, t.risk_detail) for t in tiles)
+            cells = tuple(ReportHeatmapCell(t.code, t.tier, t.risk, t.risk_detail, t.equipment_id) for t in tiles)
             heatmap_lines.append((line, cells))
             counts.append((*panel, line, len({r.equipment_id for r in records}), summary.compliant,
                            summary.below, summary.undetermined, summary.rate,
@@ -115,6 +118,54 @@ def report_visuals(source, frames, current):
         if heatmap_lines:
             heatmaps.append(ReportHeatmap(*panel, tuple(heatmap_lines)))
     return tuple(trends), tuple(heatmaps), tuple(counts), tuple(risks)
+
+
+def grouped_report_heatmaps(source, current, mode, group_panels):
+    """화면의 공통 묶음 계획을 인쇄용 열로 바꾼다. 원문 라인과 모델별 판정은 유지한다."""
+    if mode == "group" or current is None:
+        return group_panels if mode == "group" else ()
+    records = tuple(r for r in current.snapshot.selected_records if not r.is_hpa)
+    tiles = record_tiles(records, current.snapshot.summary, source)
+    models = defaultdict(set)
+    for (_, _, name, _), members in _frame_groups(source, current).items():
+        models[name].update(r.equipment_id for r in members)
+    nodes = build_heatmap_groups(tiles, tuple((name, name, ids) for name, ids in sorted(models.items())),
+                                 mode=mode, site_order=tuple(o.key for o in source.catalog.sites))
+    cells = {(panel.area, panel.site, panel.group, line, cell.equipment_id): cell
+             for panel in group_panels for line, entries in panel.lines for cell in entries}
+    result = []
+
+    def leaves(node, group=None):
+        group = node.group_name or group
+        if node.children:
+            for child in node.children:
+                yield from leaves(child, group)
+        else:
+            yield node, group
+
+    for root in nodes:
+        columns = []
+        for node, group in leaves(root):
+            # 같은 묶음 안에서도 서로 다른 사업장/분류를 합치지 않는다.
+            buckets = defaultdict(list)
+            for tile in node.tiles:
+                area = tile.fab_label or "분류 미지정"
+                site = tile.site_label
+                line = tile.line_label or tile.area or "라인 미지정"
+                parts = (area, site, line, group or node.title)
+                omitted = {"site": 1, "fab": 0, "line": 2, "subline": 2}[mode]
+                # 라인 보기의 P1 아래에 P1F/P1D 원문을 남긴다.
+                caption = "\n".join(part for i, part in enumerate(parts)
+                                     if i != omitted or (mode == "line" and part != root.title))
+                cell = cells.get((area, site, group, line, tile.equipment_id))
+                if cell is None:
+                    cell = ReportHeatmapCell(tile.code, tile.tier, tile.risk, tile.risk_detail)
+                buckets[caption].append(cell)
+            columns.extend((caption, tuple(entries)) for caption, entries in buckets.items())
+        if columns:
+            title = f"{dict(GROUPING_MODES)[mode]}: {root.title}"
+            result.append(ReportHeatmap("", "", root.title, tuple(columns), title))
+    return tuple(result)
 
 
 def hpa_rows(frame, source, query, base_date):

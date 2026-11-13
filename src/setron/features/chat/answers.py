@@ -18,6 +18,7 @@ from setron.features.item.service import ItemCatalog
 from setron.features.priority.service import prioritize
 from setron.features.query.service import resolve_conditions, select_records
 from setron.features.reference_data import area_of
+from setron.features.production_area import production_area_label, production_area_text
 from setron.features.risk.service import RiskAssessor
 from setron.features.version.groups import Tier, target_label, tier_of
 from setron.features.version.schemas import CompareReason, CompareStatus
@@ -28,7 +29,7 @@ from .schemas import (
 )
 
 SUGGESTIONS = (
-    "화성 메모리 O3 설비 몇 대야?", "평택 P3 목표 N 미만 설비 보여줘", "확인 필요 설비 목록 뽑아줘",
+    "화성 Memory O3 설비 몇 대야?", "평택 P3 목표 N 미만 설비 보여줘", "확인 필요 설비 목록 뽑아줘",
     "목표 N 달성률이 가장 낮은 원본 구역을 분석해줘", "지난달보다 달성률이 떨어진 라인은?",
     "어디부터 업그레이드해야 해?", "C3 통합UI는 언제 통일될까?", "이번 달 표준화 보고서 만들어줘",
 )
@@ -117,10 +118,10 @@ def _pct(rate: float | None) -> str:
 
 def _family_name(data: ChatData, family_id: int) -> str:
     if family_id in data.family_names:
-        return data.family_names[family_id]
+        return production_area_text(data.family_names[family_id])
     for choice in data.catalog.families:
         if choice.family_id == family_id:
-            return choice.name
+            return production_area_text(choice.name)
     return f"계열 {family_id}"
 
 
@@ -134,7 +135,8 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
     def pick(records):
         chosen = select_records(records, replace(resolved, base_date=None), data.catalog)
         if request.areas:
-            chosen = tuple(r for r in chosen if area_of({"site": r.site, "line": r.line}) in request.areas)
+            chosen = tuple(r for r in chosen if not r.is_hpa and area_of({
+                "production_area": r.production_area, "site": r.site, "line": r.line}) in request.areas)
         if wanted_codes:                                   # 질문 속 설비 호기 (DEMO-0121 · ESPA02)
             chosen = tuple(r for r in chosen if (r.equipment_code or "").casefold() in wanted_codes)
         return tuple(chosen)
@@ -148,10 +150,10 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
     on_base = at(base)
     statuses = {r.equipment_id: equipment_status(r, data.catalog.releases, data.targets) for r in on_base if not r.is_hpa}
     groups = {g.group_id: g.model_name or g.name for g in data.catalog.groups}
-    families = {f.family_id: f.name for f in data.catalog.families}
+    families = {f.family_id: production_area_text(f.name) for f in data.catalog.families}
     parts, subject = [], []
     subject += list(resolved.sites)
-    subject += [{"MEMORY": "메모리", "FOUNDRY": "파운드리"}[a] for a in request.areas]
+    subject += [production_area_label(a) for a in request.areas]
     subject += list(resolved.lines)
     subject += [groups.get(i, str(i)) for i in resolved.group_ids]
     subject += [families.get(i, str(i)) for i in resolved.family_ids if families.get(i) not in subject]
@@ -161,7 +163,7 @@ def _scope(request: ChatRequest, data: ChatData) -> _Scope:
     if resolved.sites:
         parts.append("Site = " + ", ".join(resolved.sites))
     if request.areas:
-        parts.append("영역 = " + ", ".join({"MEMORY": "메모리", "FOUNDRY": "파운드리"}[a] for a in request.areas))
+        parts.append("영역 = " + ", ".join(production_area_label(a) for a in request.areas))
     if resolved.lines:
         parts.append("원본 구역 = " + ", ".join(resolved.lines))
     if resolved.group_ids:
@@ -762,7 +764,7 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     by = spec.by or ("line" if spec.measure in ("fragmentation", "versions", "baseline") else "")
     dim = agg.DIMENSIONS.get(by, "")
     notices = [f"HPA {scope.hpa}대는 분석에서 제외했습니다."] if scope.hpa else []
-    name = lambda fid: data.family_names.get(fid, str(fid))
+    name = lambda fid: production_area_text(data.family_names.get(fid, str(fid)))
     # 분포 이름: 같은 계열을 여러 설비군이 쓰면 설비군을 붙인다 ('C4 (M-C4 DFB)', 11/12 멘토 피드백 2)
     label = lambda s_: f"{name(s_.family_id)} ({s_.model})" if s_.shared and s_.model else name(s_.family_id)
     if spec.measure == "baseline":

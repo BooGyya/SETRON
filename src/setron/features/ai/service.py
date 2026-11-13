@@ -336,6 +336,24 @@ def _to_extract_result(
         row = _string_map(raw, "rows의 행")
         values = _string_map(row.get("values"), "values")
         sources = _string_map(row.get("sources"), "sources")
+        if kind is ExtractKind.RELEASE_NOTE:
+            if "jira_key" in values:
+                from setron.features.item.jira import normalize_jira
+
+                if "jira_code" in values and values["jira_code"] is not None and values["jira_key"] is not None:
+                    try:
+                        same = normalize_jira(values["jira_code"]) == normalize_jira(values["jira_key"])
+                    except ValueError as error:
+                        raise InvalidResponse(str(error)) from error
+                    if not same:
+                        raise InvalidResponse("Jira 코드와 이전 이름의 입력값이 상충합니다.")
+                if "jira_code" not in values:
+                    values["jira_code"] = values["jira_key"]
+                values.pop("jira_key")
+            if "jira_key" in sources:
+                if "jira_code" not in sources:
+                    sources["jira_code"] = sources["jira_key"]
+                sources.pop("jira_key")
         unknown = (set(values) | set(sources)) - set(fields)
         if unknown:
             raise InvalidResponse(f"정하지 않은 항목이 있습니다: {', '.join(sorted(unknown))}")

@@ -308,7 +308,7 @@ def test_catalog_replacement_rebuilds_controls_but_keeps_applied_summary(window)
     spy = QSignalSpy(panel.applied)
     window.set_query_catalog(QueryCatalog())
     assert panel.state.applied is old
-    assert panel.status.text() == "선택지 변경 · 재적용 필요"
+    assert panel.status.text() == "변경사항 미적용"
     assert "테스트 Line A" in panel.applied_summary.text()
     assert not panel.combos["site_key"].isEnabled() and panel.combos["site_key"].caption == "전체"
     assert panel.filter_popup is None
@@ -332,7 +332,7 @@ def test_navigation_preserves_draft_and_applied_and_query_is_opt_in(window, app)
     window.navigate("items")
     assert not panel.isHidden()
     window.navigate("dashboard")
-    assert "재적용 필요" in panel.status.text()
+    assert "미적용" in panel.status.text()
 
 
 def test_invalid_registration_flag_has_no_partial_mutation(window):

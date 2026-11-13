@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QThread, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLayout, QMainWindow, QPushButton, QScrollArea,
@@ -56,12 +56,12 @@ HIDDEN_MENUS = ("versions",)
 class BrandLogo(QLabel):
     """밝게/어둡게 모두 같은 크기로 원본 로고를 표시한다."""
 
-    def __init__(self):
+    def __init__(self, *, size=None):
         super().__init__()
         self.setObjectName("setronLogo")
         self.setAccessibleName("SETRON 로고 · SEMES Tracking Monitoring")
         self.setProperty("brandAsset", "setron-logo.png")
-        self.setFixedSize(128, 36)
+        self.setFixedSize(size if size is not None else QSize(128, 36))
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._source = QPixmap(str(ASSETS / self.property("brandAsset")))
         visible = QRegion(self._source.mask()).boundingRect()
@@ -180,6 +180,22 @@ class PageStack(QWidget):
     def currentWidget(self) -> QWidget | None:
         return self._current
 
+    def replaceWidget(self, previous: QWidget, page: QWidget) -> None:
+        """지연 페이지 자리를 바꾸고 현재 페이지와 등록 순서를 유지한다."""
+        if previous not in self._pages or page in self._pages:
+            raise ValueError("교체할 페이지와 새 페이지를 확인해 주세요.")
+        index = self._pages.index(previous)
+        current = self._current is previous
+        if current:
+            self._body.removeWidget(previous)
+        previous.hide()
+        page.setParent(self)
+        page.hide()
+        self._pages[index] = page
+        if current:
+            self._current = None
+            self.setCurrentWidget(page)
+
     def setCurrentWidget(self, page: QWidget) -> None:
         if page not in self._pages:
             raise ValueError("등록되지 않은 페이지입니다.")
@@ -194,6 +210,35 @@ class PageStack(QWidget):
         self._body.invalidate()
         self.updateGeometry()
         self.current_changed.emit()
+
+
+class PageRegistry(dict[str, QWidget]):
+    """키 조회만 지연 페이지를 만든다. 순회는 등록된 자리 위젯을 그대로 반환한다."""
+
+    def __init__(self, owner):
+        super().__init__()
+        self._owner = owner
+
+    def __getitem__(self, key):
+        if key in self._owner._page_factories:
+            return self._owner._resolve_lazy_page(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
+
+    def peek(self, key, default=None):
+        """생성된 페이지만 반환한다. 미등록·미생성 페이지에는 default를 반환한다."""
+        if key in self._owner._page_factories:
+            return default
+        return super().get(key, default)
+
+    def is_loaded(self, key):
+        return key in self and key not in self._owner._page_factories
+
+    def loaded_items(self):
+        """종료·무효화 처리에서 이미 생성된 페이지만 순회한다."""
+        return ((key, page) for key, page in self.items() if self.is_loaded(key))
 
 
 class _ContentCanvas(QWidget):
@@ -236,7 +281,9 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icon("setron-window-icon.svg"))
         self.setMinimumSize(960, 600)
         self.resize(1440, 960)
-        self.pages: dict[str, QWidget] = {}
+        self._page_factories = {}
+        self._resolving_pages = set()
+        self.pages = PageRegistry(self)
         self.route = "dashboard"
         self._route_history: list[tuple[str, int]] = []
         self._navigation_id = 0
@@ -386,6 +433,49 @@ class MainWindow(QMainWindow):
         if key == self.route:
             self.navigate(key)
 
+    def register_lazy_page(self, key: str, factory, *, uses_query: bool | None = None) -> None:
+        """메뉴를 즉시 등록하고 화면은 최초 이동 또는 pages[key] 조회에서 만든다."""
+        if key not in self._menus:
+            raise ValueError(f"알 수 없는 메뉴입니다: {key}")
+        if key in self.pages:
+            raise ValueError(f"이미 등록된 메뉴입니다: {key}")
+        if not callable(factory):
+            raise ValueError("페이지를 만드는 함수를 전달해 주세요.")
+        if uses_query is not None and not isinstance(uses_query, bool):
+            raise ValueError("uses_query는 bool 또는 None이어야 합니다.")
+        placeholder = QWidget()
+        placeholder.setObjectName("pendingPage_" + key)
+        placeholder.setAccessibleName(self._menus[key].title + " 화면 준비 전")
+        self._page_factories[key] = factory
+        self.register_page(key, placeholder, uses_query=uses_query)
+
+    def peek_page(self, key: str, default=None):
+        """미생성 페이지를 만들지 않고 현재 생성된 화면을 확인한다."""
+        return self.pages.peek(key, default)
+
+    def _resolve_lazy_page(self, key: str) -> QWidget:
+        if QThread.currentThread() != self.thread():
+            raise RuntimeError("지연 페이지는 GUI 스레드에서만 만들 수 있습니다.")
+        if key in self._resolving_pages:
+            raise RuntimeError(f"페이지 생성 중 같은 페이지를 다시 요청했습니다: {key}")
+        factory = self._page_factories[key]
+        previous = dict.__getitem__(self.pages, key)
+        self._resolving_pages.add(key)
+        try:
+            page = factory()
+            if not isinstance(page, QWidget) or page in (self, self.placeholder) or page in self.pages.values():
+                raise ValueError("각 메뉴에 별도의 QWidget을 만들어 주세요.")
+            playback_host = getattr(page, "set_playback_host", None)
+            if callable(playback_host):
+                playback_host(self.scroll.viewport())
+            dict.__setitem__(self.pages, key, page)
+            del self._page_factories[key]
+            self.stack.replaceWidget(previous, page)
+            previous.deleteLater()
+            return page
+        finally:
+            self._resolving_pages.discard(key)
+
     def register_auxiliary_page(self, key: str, widget: QWidget, *, parent_key: str, title: str, uses_query: bool = True) -> None:
         """목록/상세 같은 하위 화면은 새 사이드바 메뉴 없이 기존 메뉴 아래에 등록한다."""
         if not isinstance(key, str) or not key or key in self._menus or key in self.pages:
@@ -402,18 +492,35 @@ class MainWindow(QMainWindow):
         if uses_query:
             self._query_routes.add(key)
 
+    def register_lazy_auxiliary_page(self, key: str, factory, *, parent_key: str, title: str,
+                                     uses_query: bool = True) -> None:
+        """보조 화면도 부모·메뉴 연결만 먼저 등록하고 최초 사용 때 만든다."""
+        if not isinstance(key, str) or not key or key in self._menus or key in self.pages:
+            raise ValueError("중복되지 않는 하위 화면 key가 필요합니다.")
+        if parent_key not in self._menus or parent_key not in self.pages:
+            raise ValueError("등록된 상위 메뉴가 필요합니다.")
+        if not isinstance(title, str) or not title.strip() or not isinstance(uses_query, bool):
+            raise ValueError("하위 화면 제목과 조회 패널 여부가 올바르지 않습니다.")
+        if not callable(factory):
+            raise ValueError("페이지를 만드는 함수를 전달해 주세요.")
+        placeholder = QWidget()
+        placeholder.setObjectName("pendingPage_" + key)
+        placeholder.setAccessibleName(title + " 화면 준비 전")
+        self._page_factories[key] = factory
+        self.register_auxiliary_page(key, placeholder, parent_key=parent_key, title=title, uses_query=uses_query)
+
     def navigate(self, key: str, *, record_history: bool = True) -> bool:
         if key not in self._menus and key not in self._page_parents:
             raise ValueError(f"알 수 없는 메뉴입니다: {key}")
         if key not in self.pages and key != "dashboard":
             return False
+        current = self.pages.get(key, self.placeholder)
         if key != self.route:
             if record_history:
                 self._route_history.append((self.route, self.scroll.verticalScrollBar().value()))
             self._page_back = None
             self._is_subpage = False
         self._navigation_id += 1
-        current = self.pages.get(key, self.placeholder)
         for index in range(self.stack.count()):
             page = self.stack.widget(index)
             page.setSizePolicy(QSizePolicy.Policy.Expanding,

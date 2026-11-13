@@ -44,6 +44,41 @@ def _pm_text(pm, value):
     return f"{name} · {value}" if name and "".join(name.split()) != "일반SW" else value
 
 
+def _jira_text(jira):
+    return ", ".join(jira.codes) if jira and jira.codes else "-"
+
+
+class _ItemResultHeader(QWidget):
+    """목록 행과 같은 열 폭을 공유하는 머리글."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("itemResultHeader")
+        self.setFixedHeight(38)
+        self.setStyleSheet("QWidget#itemResultHeader {background:#f7f9fc;border-left:3px solid transparent;}")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(17, 0, 16, 0)
+        row.setSpacing(16)
+        self.version_label = label("버전", 15, medium=True, color=INK)
+        self.caption = label("업데이트 내용", 15, medium=True, color=INK)
+        self.jira_label = label("JIRA", 15, medium=True, color=INK)
+        self.caption.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.badge_slot, self.arrow_slot = QWidget(), QWidget()
+        row.addWidget(self.version_label)
+        row.addWidget(self.caption, 1)
+        row.addWidget(self.jira_label)
+        row.addWidget(self.badge_slot)
+        row.addWidget(self.arrow_slot)
+        self.set_columns(80, 90, 0)
+
+    def set_columns(self, version_width, jira_width, badge_width, *, arrow_width=16):
+        self.version_label.setFixedWidth(version_width)
+        self.jira_label.setFixedWidth(jira_width)
+        self.badge_slot.setFixedWidth(badge_width)
+        self.badge_slot.setVisible(badge_width > 0)
+        self.arrow_slot.setFixedWidth(arrow_width)
+
+
 class _ItemResultButton(QPushButton):
     """Keep the title and disclosure icon in fixed slots in all interaction states."""
 
@@ -76,10 +111,10 @@ class _ItemResultButton(QPushButton):
         self.display_content = ""
         self.version_label = label("", 15, medium=True, color=INK)
         self.version_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        # 릴리즈노트 원본의 Jira 코드. 없으면 'Jira 없음'(빈 칸)·'Jira 미확인'(열/원본 없음)으로 구분한다.
+        # 목록에는 코드 또는 '-'만 쓰고, 출처·미확인 사유는 툴팁에 보존한다.
         self.jira = None
         self.jira_slot_width = 0
-        self.jira_label = label("", 13, color=SECONDARY)
+        self.jira_label = label("", 15, medium=True, color=INK)
         self.jira_label.setObjectName("itemJira")
         self.jira_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         for widget in (self.caption, self.version_label, self.jira_label, self.arrow):
@@ -122,13 +157,13 @@ class _ItemResultButton(QPushButton):
         # 긴 제목은 한 줄로 줄이고 전체 제목을 툴팁으로 보여 준다. 릴리즈 정보도 같은 툴팁 하나에 합친다.
         self.setToolTip(content + (f"\n{version_tip}" if version_tip else "") + (f"\n{jira.tooltip}" if jira else ""))
         self.jira = jira
-        jira_text = jira.row_text if jira else ""
+        jira_text = _jira_text(jira)
         jira_metrics = self.jira_label.fontMetrics()
         self.jira_slot_width = ((min(180, jira_metrics.horizontalAdvance(jira_text) + 2) if jira_text else 0)
                                 if jira_width is None else jira_width)
         self.jira_label.setFixedWidth(self.jira_slot_width)
         self.jira_label.setText(jira_metrics.elidedText(jira_text, Qt.TextElideMode.ElideRight, self.jira_slot_width))
-        self.jira_label.setStyleSheet(f"color:{INK if jira and jira.codes else SECONDARY};")
+        self.jira_label.setStyleSheet(f"color:{INK};")
         self.jira_label.setVisible(self.jira_slot_width > 0)
         description = f"포함 릴리즈 {version}" if version else ""
         if jira:
@@ -228,15 +263,10 @@ def _style_raw_table(table):
 
 
 class _PageBar(QWidget):
-    """« ‹ 1 2 3 4 5 … 54 › » 형태의 번호 페이지 이동. 번호 슬롯은 최대 7개라 좁은 창에서도 한 줄에 들어간다.
-
-    '…'를 누르면 해당 방향으로 10페이지 이동한다. 입력 칸이나 팝업 없이 54쪽 같은 긴 목록에서도
-    몇 번 눌러 가까이 갈 수 있고, 키보드 포커스·접근성 흐름이 번호 버튼과 같다.
-    """
+    """처음·이전·다음·끝 이동과 다섯 개 단위의 페이지 번호."""
 
     page_requested = Signal(int)  # 0부터 시작하는 페이지
-    slots = 7
-    jump = 10
+    slots = 5
 
     def __init__(self):
         super().__init__()
@@ -276,37 +306,30 @@ class _PageBar(QWidget):
         return widget
 
     def window_tokens(self):
-        """표시할 번호 목록. 정수는 1부터 시작하는 페이지, 'L'/'R'은 왼쪽/오른쪽 말줄임."""
-        total, page = self.total, self.current + 1
-        if total <= self.slots:
-            return list(range(1, total + 1))
-        if page <= 4:
-            return [1, 2, 3, 4, 5, "R", total]
-        if page >= total - 3:
-            return [1, "L", *range(total - 4, total + 1)]
-        return [1, "L", page - 1, page, page + 1, "R", total]
+        """현재 페이지가 속한 1~5, 6~10 등의 번호 블록."""
+        start = self.current // self.slots * self.slots + 1
+        return list(range(start, min(start + self.slots - 1, self.total) + 1))
 
     def set_state(self, current, total):
-        self.current, self.total = current, max(1, total)
+        self.total = max(1, total)
+        self.current = max(0, min(current, self.total - 1))
         tokens = self.window_tokens()
         self.setVisible(self.total > 1)
         for slot, token in zip(self.numbers, tokens + [None] * (self.slots - len(tokens))):
             slot.setVisible(token is not None)
             if token is None:
+                slot.target = 0
+                slot.setText("")
+                slot.setAccessibleName("")
+                slot.setAccessibleDescription("")
+                slot.setToolTip("")
+                slot.setProperty("current", False)
                 continue
-            is_gap = token in ("L", "R")
-            if is_gap:
-                slot.target = max(1, self.current - self.jump) if token == "L" else min(self.total - 2, self.current + self.jump)
-                slot.setText("…")
-                name = f"{self.jump}페이지 {'앞' if token == 'L' else '뒤'}로 이동"
-                slot.setAccessibleName(name)
-                slot.setToolTip(name)
-            else:
-                slot.target = token - 1
-                slot.setText(str(token))
-                slot.setAccessibleName(f"{token}페이지로 이동")
-                slot.setToolTip(f"{token}페이지로 이동" + (" (현재)" if token - 1 == self.current else ""))
-            current_slot = not is_gap and token - 1 == self.current
+            slot.target = token - 1
+            slot.setText(str(token))
+            slot.setAccessibleName(f"{token}페이지로 이동")
+            slot.setToolTip(f"{token}페이지로 이동" + (" (현재)" if token - 1 == self.current else ""))
+            current_slot = token - 1 == self.current
             slot.setProperty("current", current_slot)
             slot.setAccessibleDescription("현재 페이지" if current_slot else "")
             slot.style().unpolish(slot)
@@ -418,10 +441,10 @@ class _ContentWrapRow(_WrapRow):
 class _RightWrapRow(_ContentWrapRow):
     """상태 배지를 읽는 순서대로 두되 각 줄의 오른쪽 끝을 맞춘다."""
 
-    def _arrange(self, columns):
-        if self.columns == columns:
+    def _arrange(self, columns, *, force=False):
+        if self.columns == columns and not force:
             return
-        super()._arrange(columns)
+        super()._arrange(columns, force=force)
         self.grid.setColumnStretch(columns, 0)
         self.grid.setColumnStretch(0, 1)
         for index, widget in enumerate(self.widgets):
@@ -560,6 +583,8 @@ class ItemsPage(QWidget):
         self.result_rows.setContentsMargins(0, 0, 0, 0)
         self.result_rows.setSpacing(0)
         self.result_rows.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.result_header = _ItemResultHeader()
+        self.result_rows.addWidget(self.result_header)
         self.page_filler = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
         self.result_rows.addSpacerItem(self.page_filler)
         card.body.addWidget(self.result_host)
@@ -662,10 +687,11 @@ class ItemsPage(QWidget):
         self.filter_row = _ContentWrapRow([self.application_heading, self.site_filter, self.state_filter], 184)
         self.application_toolbar = _Toolbar(self.filter_row, self.summary, wrap_trailing=True)
         application_body.insertWidget(0, self.application_toolbar)
-        # 버전·Item·Jira를 한 줄로 함께 보인다. Jira는 릴리즈노트 원본 행의 값만 쓴다.
+        # 기존 외부 참조는 유지하되 펼침 영역의 중복 요약줄은 표시하지 않는다.
         self.item_facts = _text("", 12)
         self.item_facts.setObjectName("itemFacts")
-        application_body.insertWidget(0, self.item_facts)
+        self.item_facts.setParent(self.application_details)
+        self.item_facts.hide()
         self.distribution = ItemDistribution()
         application_body.addWidget(self.distribution)
         self.distribution.scope_selected.connect(self.select_distribution_scope)
@@ -1015,7 +1041,14 @@ class ItemsPage(QWidget):
         release_captions = [self._release_caption(entry.item.item_id) for entry in self.visible_entries]
         jira = self.data.jira([e.item.item_id for e in self.visible_entries]) if self.data else {}
         self.visible_jira = jira
-        version_width = jira_width = None
+        version_metrics = self.result_header.version_label.fontMetrics()
+        jira_metrics = self.result_header.jira_label.fontMetrics()
+        version_width = max(version_metrics.horizontalAdvance("버전") + 2,
+                            min(168, max((version_metrics.horizontalAdvance(text) + 2
+                                          for text, _ in release_captions if text), default=0)))
+        jira_width = max(jira_metrics.horizontalAdvance("JIRA") + 2,
+                         min(180, max((jira_metrics.horizontalAdvance(_jira_text(value)) + 2
+                                       for value in jira.values()), default=0)))
         previous_release = None
         for row, entry in enumerate(self.visible_entries):
             if row == len(self.row_pool):
@@ -1027,13 +1060,6 @@ class ItemsPage(QWidget):
             control = self.row_pool[row]
             control.row = row
             version, version_tip = release_captions[row]
-            if version_width is None:
-                metrics = control.version_label.fontMetrics()
-                version_width = min(168, max((metrics.horizontalAdvance(text) + 2 for text, _ in release_captions if text), default=0))
-                # Jira 칸도 페이지 안에서 같은 폭을 써 제목·배지 위치가 행마다 흔들리지 않게 한다.
-                jira_metrics = control.jira_label.fontMetrics()
-                jira_width = min(180, max((jira_metrics.horizontalAdvance(j.row_text) + 2
-                                           for j in jira.values()), default=0))
             included = releases.get(entry.item.item_id, ())
             representative = included[0].release_version_id if included else None
             # 페이지 첫 행은 항상 버전을 보이고, 현재 페이지 안의 연속 중복만 생략한다.
@@ -1056,6 +1082,8 @@ class ItemsPage(QWidget):
         badge_width = max((c.badge_slot_width for c in visible_controls), default=0)
         for control in visible_controls:
             control.set_badge_slot(badge_width)
+        self.result_header.set_columns(version_width, jira_width, badge_width,
+                                       arrow_width=visible_controls[0].arrow.width() if visible_controls else 16)
         for control in self.row_pool[len(self.visible_entries):]:
             control.hide()
             control.setChecked(False)
@@ -1164,10 +1192,10 @@ class ItemsPage(QWidget):
         self.equipment = summary.equipment if summary else ()
         version_text, _ = self._release_caption(item.item_id)
         jira = self.data.jira([item.item_id])[item.item_id]
-        self.item_facts.setText(" · ".join((f"포함 릴리즈 {version_text or '미확인'}",
-                                            f"Item No {item.item_no if item.item_no is not None else '미확인'}",
-                                            f"JIRA {jira.label}" if jira.codes else jira.label)))
-        self.item_facts.setToolTip(jira.tooltip)
+        self.title.setToolTip("\n".join((item.content, f"포함 릴리즈 {version_text or '미확인'}",
+                                       f"Item No {item.item_no if item.item_no is not None else '미확인'}", jira.tooltip)))
+        self.item_facts.clear()
+        self.item_facts.hide()
         if summary:
             for state, count in summary.counts().items():
                 self.summary_badges[state].setText(f"{APPLICATION_LABELS[state]} {count}대")

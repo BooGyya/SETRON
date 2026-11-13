@@ -26,6 +26,7 @@ from setron.features.export.management_files import read_management_data, select
 from setron.features.export.schemas import ExportResult, ExportStatus
 from setron.features.item.original import jira_by_item, original_item_rows_from_batches
 from setron.features.management_format import EQUIPMENT_HEADERS, PRODUCTION_AREAS, RELEASE_HEADERS, equipment_group_name
+from setron.features.production_area import production_area_label
 from setron.features.reference_data import FOUNDRY_FAMILY_MODELS, strip_foundry
 from setron.infrastructure.database import DatabaseError
 
@@ -106,7 +107,7 @@ def _equipment(sheet: Worksheet, data, names: _Names, snapshots) -> None:
     for snapshot in snapshots:
         base = [codes[snapshot["equipment_id"]], snapshot["base_date"], snapshot["site"], snapshot["line"] or "",
                 snapshot["model_name"], names.group(snapshot["group_id"]) if snapshot["group_id"] else "혼합·미확인",
-                snapshot["production_area"] or "", snapshot["structure_type"] or "",
+                production_area_label(snapshot["production_area"]), snapshot["structure_type"] or "",
                 snapshot["geometry_type"] or "", snapshot["modification_type"] or ""]
         # 버전이 없는 저장 설비도 출력한다. HPA를 분석 제외 조건으로 걸러내지 않는다.
         for version in versions.get(snapshot["snapshot_id"], []) or [None]:
@@ -126,7 +127,13 @@ def _equipment(sheet: Worksheet, data, names: _Names, snapshots) -> None:
 
 def _releases(sheet: Worksheet, data, names: _Names, families=None, *, production_area=None, include_unlinked=True) -> None:
     items = {i["item_id"]: i for i in data["item"]}
-    jira = jira_by_item(original_item_rows_from_batches(data["import_batch"], data["item"]), items)
+    # 저장된 NULL도 현재값이다. 두 Jira 열 모두 없던 이전 DB만 원본 셀로 보완한다.
+    legacy_items = [item for item in data["item"] if "jira_code" not in item and "jira_key" not in item]
+    legacy_jira = jira_by_item(original_item_rows_from_batches(data["import_batch"], legacy_items),
+                               (item["item_id"] for item in legacy_items))
+    jira = {item_id: (item["jira_code"] or "") if "jira_code" in item else
+            (item["jira_key"] or "") if "jira_key" in item else ", ".join(legacy_jira[item_id].codes)
+            for item_id, item in items.items()}
     links_by_release = {}
     for link in data["release_version_item"]:
         links_by_release.setdefault(link["release_version_id"], []).append(link)
@@ -142,7 +149,7 @@ def _releases(sheet: Worksheet, data, names: _Names, families=None, *, productio
         area = names.area(release["family_id"])
         if area is None and production_area in ("MEMORY", "FOUNDRY"):
             area = production_area  # 두 분류에서 함께 쓰는 노트는 선택한 관측 범위에 포함한다.
-        extra = [family.get("ui_type") or "", family.get("structure_type") or "", area or "", equipment_group_name(owner)]
+        extra = [family.get("ui_type") or "", family.get("structure_type") or "", production_area_label(area), equipment_group_name(owner)]
         base = [owner, release["version_raw"],
                 release["version_suffix"] or "", release["released_at"] or "",
                 "" if release["version_order"] is None else release["version_order"],
@@ -157,10 +164,10 @@ def _releases(sheet: Worksheet, data, names: _Names, families=None, *, productio
                          STATE_LABELS.get(link["item_state"], link["item_state"]),
                          SCOPE_LABELS.get(link["target_scope"], link["target_scope"]),
                          ", ".join(names.group(g) for g in link["target_group_ids"] or ()),
-                         ", ".join(item["edited_fields"] or ()), *extra, ", ".join(jira[item["item_id"]].codes)])
+                         ", ".join(item["edited_fields"] or ()), *extra, jira[item["item_id"]]])
     rows += [["", "", "", "", "", "", "", i["batch_id"],
               _item_no(i), i["content"], "", "", "", ", ".join(i["edited_fields"] or ())]
-              + ["", "", "", "", ", ".join(jira[i["item_id"]].codes)]
+              + ["", "", "", "", jira[i["item_id"]]]
               for i in data["item"] if include_unlinked and i["item_id"] not in linked]
     _rows(sheet, RELEASE_HEADERS, rows)
 

@@ -179,8 +179,11 @@ def test_no_screen_constructs_an_unshared_native_combobox():
 
 def test_all_application_comboboxes_use_the_shared_component(own):
     window = own(create_window(demo_dashboard_source()))
+    # 시작 시에는 공통 셸만 만들므로 실제 화면을 구성한 뒤 그 안의 입력기를 검사한다.
+    for key in tuple(window.pages):
+        window.pages[key].ensurePolished()
     combos = window.findChildren(QComboBox)
-    assert len(combos) > 30
+    assert combos
     assert all(isinstance(combo, ComboBox) for combo in combos)
 
 

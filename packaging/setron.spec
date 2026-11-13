@@ -20,8 +20,8 @@ analysis = Analysis(
         (str(database_dir / "schema_mysql5619.sql"), "database"),
         (str(database_dir / "seed.sql"), "database"),
     ],
-    # SQLAlchemy는 접속 주소(mysql+pymysql)로 드라이버를 찾으므로 자동 분석에 잡히지 않는다.
-    hiddenimports=["pymysql", *collect_submodules("sqlalchemy.dialects.mysql")],
+    # DB 드라이버와 최초 사용 시 불러오는 AI·Excel SDK도 배포 폴더에 포함한다.
+    hiddenimports=["pymysql", "openai", "xlwings", *collect_submodules("sqlalchemy.dialects.mysql")],
     excludes=["pytest", "tkinter"],
     noarchive=False,
 )

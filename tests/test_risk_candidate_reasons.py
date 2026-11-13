@@ -114,10 +114,12 @@ def test_side_panel_list_and_detail_show_risk_reason_by_kind(window):
     drawer, page = window.equipment_list_drawer, window.pages["equipment"]
     assert drawer.is_open
     model = page.table.model()
-    assert model.headerData(4, Qt.Orientation.Horizontal) == "위험 기준"
-    cells = {model.ids[row]: model.rows[row][4] for row in range(model.rowCount())}
+    assert model.headerData(4, Qt.Orientation.Horizontal) == "위험버전"
+    assert model.headerData(5, Qt.Orientation.Horizontal) == "위험 기준"
+    assert all(model.rows[row][4] == "위험 후보" for row in range(model.rowCount()))
+    cells = {model.ids[row]: model.rows[row][5] for row in range(model.rowCount())}
     assert cells == {1: "미적용 위험", 2: "적용 위험"}
-    tip = model.index(0, 4).data(Qt.ItemDataRole.ToolTipRole)
+    tip = model.index(0, 5).data(Qt.ItemDataRole.ToolTipRole)
     assert "환경·안전 필수 Item이 적용되지 않았습니다." in tip
     # 행을 열면 같은 패널의 상세에 '위험 판정 이유' 카드가 판정 기준별로 나온다.
     page.open_row(0)
@@ -132,10 +134,10 @@ def test_side_panel_list_and_detail_show_risk_reason_by_kind(window):
     assert "v3 통신 오류" in drawer.risk_reasons.text() and "위험 버전으로 지정된 버전입니다." in drawer.risk_reasons.text()
 
 
-def test_general_scope_keeps_four_column_panel_list_and_no_reason_card_for_safe(window):
+def test_general_scope_keeps_whole_risk_column_and_no_reason_card_for_safe(window):
     query = window.query_panel.apply_draft()
     window.pages["dashboard"].drilldown_requested.emit(DashboardDrilldown(query, DAY, "전체", (1, 2, 3), False))
     page = window.pages["equipment"]
-    assert page.table.model().columnCount() == 4
+    assert page.table.model().headings == ("설비명", "모델", "계열", "적용현황", "위험버전")
     page.open_row(page.table.model().ids.index(3))
     assert window.equipment_list_drawer.risk_reasons is None

@@ -6,7 +6,7 @@ import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QLabel, QPushButton, QStyleOptionViewItem
+from PySide6.QtWidgets import QCheckBox, QLabel, QPushButton, QStyleOptionViewItem
 
 from setron.ui.report_data import REPORT_TYPES
 from setron.ui.version_demo import demo_version_catalog
@@ -18,35 +18,59 @@ from test_ui_reports_ver5 import page
 def test_report_controls_fit_and_no_current_time_is_displayed(own, tmp_path, width):
     p = page(own, tmp_path)
     p.resize(width, 1000)
-    common = p.common_note.text()
-    assert p.contents_title.text() == "보고서 포함 내용"
-    assert all(text in common for text in ("목표 N", "라인별 적용률", "히트맵", "위험 판정 근거", "관측 버전"))
+    assert list(p.content_checks) == ["summary", "trend", "distribution", "risk", "evidence"]
+    assert not hasattr(p, "clear_all_button")
+    assert not any("복수 선택" in text.text() or "히트맵 보기" in text.text()
+                   for text in p.config_card.findChildren(QLabel))
+    assert p.heatmap_options.parentWidget().isAncestorOf(p.content_checks["summary"])
+    assert p.heatmap_title.font().bold()
+    common = [control.isChecked() for control in p.content_checks.values()]
     assert not any("도움말" in b.text() for b in p.findChildren(QPushButton))
     descriptions = {
         "status": "선택 범위의 표준화 및 적용 현황",
         "upgrade": "업그레이드 필요 설비, 우선순위, 부족 단계, 판정 근거",
         "item": "선택 Item의 설비별 적용 결과, 판정 근거, 원본 문서 위치",
         "change": "관측일 사이 설비와 PM별 이전 버전 및 다음 버전",
-        "ai": "최근 완료된 AI 답변의 요약, 원인 분석, 표, 주의사항\nAI 답변 없음: 공통 수치만 포함",
+        "ai": "최근 완료된 AI 답변의 요약, 원인 분석, 표, 주의사항",
     }
     for kind, *_ in REPORT_TYPES:
+        for control in p.type_buttons.values():
+            control.setChecked(False)
         choice = p.type_buttons[kind]
         choice.click()
         QTest.qWait(20)
-        assert p.kind == kind and p.item.isVisibleTo(p) == (kind == "item")
-        assert p.type_note.isVisibleTo(p)
+        title_center = p.contents_title.mapTo(p, p.contents_title.rect().center()).y()
+        button_center = p.select_all_button.mapTo(p, p.select_all_button.rect().center()).y()
+        assert abs(title_center - button_center) <= 1
+        assert isinstance(choice, QCheckBox) and p.selected_types == (kind,)
+        assert p.item.isVisibleTo(p) and p.item.isEnabled() == (kind == "item")
+        assert p.item_label.isVisibleTo(p) and p.item_label.isEnabled() == (kind == "item")
+        assert p.item.parentWidget().isAncestorOf(p.type_buttons["item"])
+        assert (p.type_buttons["item"].mapTo(p, QPoint()).y()
+                < p.item_label.mapTo(p, QPoint()).y()
+                < p.item.mapTo(p, QPoint()).y()
+                < p.type_buttons["change"].mapTo(p, QPoint()).y())
         assert not choice.toolTip()
-        assert p.type_note.text() == descriptions[kind]
-        assert "·" not in p.common_note.text() + p.type_note.text() + p.type_heading.text()
-        assert p.type_heading.text() == choice.text().replace("·", " 및 ") + " 추가 내용"
-        assert p.common_note.isVisibleTo(p) and p.common_note.text() == common
+        assert descriptions[kind] in [text.text() for text in p.config_card.findChildren(QLabel)]
+        row = choice.parentWidget()
+        assert choice.font().bold()
+        assert {text.text() for text in row.findChildren(QLabel)} == {"|", descriptions[kind]}
+        description = next(text for text in row.findChildren(QLabel) if text.text() != "|")
+        assert description.mapTo(p, QPoint()).x() > choice.mapTo(p, QPoint(choice.width(), 0)).x()
+        assert [control.isChecked() for control in p.content_checks.values()] == common
         divider_x = p.contents_divider.mapTo(p, QPoint()).x()
-        assert divider_x < p.width() / 2
-        assert p.common_note.mapTo(p, QPoint(p.common_note.width(), 0)).x() < divider_x
-        assert p.type_heading.mapTo(p, QPoint()).x() > divider_x
-        assert p.type_note.mapTo(p, QPoint()).x() > divider_x
-        for text in (p.common_note, p.type_note):
-            assert text.height() >= text.heightForWidth(text.width())
+        assert p.content_checks["summary"].mapTo(p, QPoint()).x() < divider_x
+        assert choice.mapTo(p, QPoint()).x() > divider_x
+        title_left = p.heatmap_title.mapTo(p, QPoint()).x()
+        title_bottom = p.heatmap_title.mapTo(p, QPoint(0, p.heatmap_title.height())).y()
+        assert all(control.mapTo(p, QPoint()).x() >= title_left + 24 for control in p.heatmap_checks.values())
+        assert all(control.mapTo(p, QPoint()).y() > title_bottom for control in p.heatmap_checks.values())
+        assert (p.content_checks["trend"].mapTo(p, QPoint()).y()
+                < p.heatmap_options.mapTo(p, QPoint()).y()
+                < p.content_checks["distribution"].mapTo(p, QPoint()).y())
+        for text in p.config_card.findChildren(QLabel):
+            if text.wordWrap():
+                assert text.height() >= text.heightForWidth(text.width())
         for control in (p.query_panel.reset_button, p.query_panel.search_button, choice, p.generate_button):
             assert control.mapTo(p, QPoint(control.width(), 0)).x() <= p.width()
         reset, search = p.query_panel.reset_button, p.query_panel.search_button

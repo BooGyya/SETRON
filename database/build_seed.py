@@ -4,7 +4,8 @@
     uv run --locked python database/build_seed.py --excel-dir ../docs/04_데이터/가공
 
 --excel-dir는 설비 현황·릴리즈·Item 원문을 새로 읽는다. Excel 파일을 수정하지 않는다.
-기본 재생성은 저장소의 demo_release_catalog.json만 사용한다.
+기본 재생성은 저장소의 demo_release_catalog.json을 읽고 누락된 시연 자료를 메모리에서 합성한다.
+원본 catalog·Excel은 수정하지 않으며 합성 릴리즈·Item·모델 적용 근거는 별도 입력 작업에 표시한다.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 CATALOG = HERE / "demo_release_catalog.json"
-from seed_source import SEED_KEY, LEGACY_KEY
+from seed_source import SEED_KEY
 DATES = tuple(date(2026, month, 21) for month in range(5, 11))
 # 시연 목표 N (11/09 팀 결정 A): 모델·계열마다 적용 가능한 릴리즈 중 '최신 바로 아래' 버전을 N으로 저장해 둔다.
 # 최신 버전은 N+1(진초록), 그 아래로 N·N-1·N-2 이하가 함께 보여 버전 히트맵 5단계 색을 모두 시연할 수 있다.
@@ -32,7 +33,7 @@ DEMO_TARGET_MEMO = "시연 기준: 최신 바로 아래 버전을 N"
 def demo_target(catalog, candidates, model, key):
     """모델·계열의 시연 목표 N 릴리즈 위치(i). 모델 적용 근거가 확인된 후보 중에서만 고른다.
 
-    근거가 하나도 없으면(예: 개조형 M-O5 Prime — 집계 포함 여부 멘토 확인 전) None: N 그룹을 만들지 않는다.
+    실제 또는 명시적으로 표시된 합성 시연 근거가 하나도 없으면 None: N 그룹을 만들지 않는다.
     목표 N은 적용 근거가 확인된 버전만 쓴다는 규칙(목표 N 편집·대시보드 계산)과 맞춘다.
     """
     choices = candidates(catalog, model, key) if key in catalog['families'] else []
@@ -103,9 +104,12 @@ def read_excel_catalog(folder):
 
 def build_sql(catalog):
     from seed_source import (FAMILIES as SOURCE_FAMILIES, SEED_KEY as KEY, GENERATOR_REVISION,
-                             make_plan, candidates, lineage_for_model)
+                             candidates, lineage_for_model)
+    from seed_augmentation import REGISTERED_LINES_KEY, prepare_seed, snapshot_template
     if catalog.get('schema') != 2:
         raise ValueError('원본 참조 목록을 --excel-dir로 다시 생성해 주세요.')
+    digest = hashlib.sha256(json.dumps(catalog, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    catalog, plan = prepare_seed(catalog)
     statements = []
     def emit(sql):
         statements.append(sql)
@@ -127,11 +131,11 @@ def build_sql(catalog):
     for key, owner, family_name, ui in SOURCE_FAMILIES:
         emit(f'SET @f_{key} = (SELECT family_id FROM version_family WHERE group_id = {model_var(owner).sql} '
              f'AND family_name = {literal(family_name)} AND ui_type <=> {literal(ui)})')
-    digest = hashlib.sha256(json.dumps(catalog, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    plan = make_plan(catalog)
     plan_digest = hashlib.sha256(json.dumps(plan, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
     emit(f'SET @seed_done = EXISTS(SELECT 1 FROM app_setting WHERE setting_key = {literal(KEY)})')
-    collisions = [f'EXISTS(SELECT 1 FROM equipment WHERE equipment_code BETWEEN {literal("DEMO-0001")} AND {literal("DEMO-0300")})']
+    equipment_codes = ','.join(literal(entry['code']) for entry in plan)
+    collisions = [f'EXISTS(SELECT 1 FROM equipment WHERE equipment_code IN ({equipment_codes}))']
+    collisions.append(f'EXISTS(SELECT 1 FROM app_setting WHERE setting_key = {literal(REGISTERED_LINES_KEY)})')
     pairs = sorted({(t['model'], t['family']) for t in catalog['templates'] if t['model'] != 'HPA'})
     for key, family in catalog['families'].items():
         names = ','.join(literal(v['name']) for v in family['versions'])
@@ -144,7 +148,8 @@ def build_sql(catalog):
     emit('SET @seed_install = NOT @seed_done AND NOT (' + '\n OR '.join(collisions) + ')')
     for index, book in enumerate(catalog['workbooks']):
         raw = {'seed': KEY, 'synthetic': True, 'source_workbook': book['name'], 'source_sha256': book['sha256'],
-               'sheets': book['sheets'], 'augmentation': 'DEMO 호기와 6개월 관측은 합성. 원본 셀 값은 별도 보존.'}
+               'sheets': book['sheets'], 'augmentation': book.get('notice', '원본 호기·패턴 보완 호기의 6개월 관측은 증강. 원본 셀 값은 별도 보존.'),
+               'source_kind': 'SYNTHETIC' if book.get('synthetic') else 'ORIGINAL_EXCEL'}
         insert('import_batch', {'source_type': 'MANUAL', 'raw_data': Expr(json_sql(raw))})
         emit(f'SET @batch_{index} = IF(@seed_install, LAST_INSERT_ID(), NULL)')
     model_rows = {name: {'group_id': model_var(name), 'group_name': name, 'category': category,
@@ -154,6 +159,9 @@ def build_sql(catalog):
                    for key, owner, name, ui in SOURCE_FAMILIES}
     release_rows = {}
     owned_settings = []
+    insert('app_setting', {'setting_key': REGISTERED_LINES_KEY,
+                          'setting_value': Expr(json_sql({'lines': catalog['seed_augmentation']['registered_lines']}))})
+    owned_settings.append(REGISTERED_LINES_KEY)
     for key, family in catalog['families'].items():
         batch = Expr(f"@batch_{family['workbook']}")
         owner = next(row[1] for row in SOURCE_FAMILIES if row[0] == key)
@@ -161,20 +169,27 @@ def build_sql(catalog):
         emit(f'SET @note_{key} = IF(@seed_install, LAST_INSERT_ID(), NULL)')
         item_rows = {}
         for i, item in enumerate(family['items']):
-            source = ref('content', family['workbook'], family['sheet'], item['cell'])
-            row = {'release_note_id': Expr(f'@note_{key}'), 'item_no': item['no'], 'content': item['content'],
-                   'batch_id': batch, 'source_reference': Expr(json_sql(source)), 'edited_fields': '[]'}
+            item_workbook, item_sheet = item.get('workbook', family['workbook']), item.get('sheet', family['sheet'])
+            source = ref('content', item_workbook, item_sheet, item['cell'])
+            jira = catalog['seed_augmentation']['source_item_jira'].get(key, {}).get(str(i)) if not item.get('synthetic') else None
+            if jira:
+                source.update(jira['source_reference'])
+            row = {'release_note_id': Expr(f'@note_{key}'), 'item_no': item['no'],
+                   'jira_code': jira['jira_key'] if jira else None, 'content': item['content'],
+                   'batch_id': Expr(f'@batch_{item_workbook}'), 'source_reference': Expr(json_sql(source)), 'edited_fields': '[]'}
             insert('item', row)
             emit(f'SET @i_{key}_{i} = IF(@seed_install, LAST_INSERT_ID(), NULL)')
             item_rows[i] = {**row, 'item_id': Expr(f'@i_{key}_{i}'), 'source_reference': source, 'edited_fields': []}
         for i, version in enumerate(family['versions']):
-            source = {**ref('version_raw', family['workbook'], family['sheet'], version['cell']),
-                      **ref('released_at', family['workbook'], family['sheet'], version['date_cell']),
-                      **ref('version_order', family['workbook'], family['sheet'], version['cell'])}
+            version_workbook = version.get('workbook', family['workbook'])
+            version_sheet = version.get('sheet', family['sheet'])
+            source = {**ref('version_raw', version_workbook, version_sheet, version['cell']),
+                      **ref('released_at', version_workbook, version_sheet, version['date_cell']),
+                      **ref('version_order', version_workbook, version_sheet, version.get('order_cell', version['cell']))}
             row = {'release_note_id': Expr(f'@note_{key}'), 'family_id': Expr(f'@f_{key}'),
                    'version_raw': version['name'], 'version_suffix': version['variant'] or None,
                    'released_at': version['date'], 'version_order': version['order'], 'item_mapping_status': 'VERIFIED',
-                   'batch_id': batch, 'source_reference': Expr(json_sql(source)), 'edited_fields': '[]'}
+                   'batch_id': Expr(f'@batch_{version_workbook}'), 'source_reference': Expr(json_sql(source)), 'edited_fields': '[]'}
             insert('release_version', row)
             emit(f'SET @r_{key}_{i} = IF(@seed_install, LAST_INSERT_ID(), NULL)')
             release = {**row, 'release_version_id': Expr(f'@r_{key}_{i}'), 'source_reference': source, 'edited_fields': []}
@@ -223,6 +238,9 @@ def build_sql(catalog):
         values = []
         for i, version in choices:
             source = ref('model_applicability', family['workbook'], family['sheet'], version['cell'])
+            supporting_items = [family['items'][n] for n in version['items'] if model in family['items'][n]['models']]
+            synthetic_item = next((item for item in supporting_items if item.get('synthetic')), None)
+            synthetic_basis = bool(synthetic_item) and all(item.get('synthetic') for item in supporting_items)
             # 모델 표식이 있는 계열은 실제 O의 셀 주소를 근거로 쓴다.
             for n in version['items']:
                 item = family['items'][n]
@@ -230,10 +248,16 @@ def build_sql(catalog):
                 if mark:
                     source = ref('model_applicability', family['workbook'], family['sheet'], mark['cell'])
                     break
+            source_text = KEY + ' / ' + catalog['workbooks'][family['workbook']]['name']
+            if synthetic_basis:
+                source_text = (KEY + ' / ' + catalog['workbooks'][synthetic_item['workbook']]['name'] +
+                               ' / ' + synthetic_item['sheet'] + '!' + synthetic_item['model_cell'])
+                # 기존 릴리즈와 합성 Item의 입력 작업이 다를 수 있으므로 출처 문구로 작업·셀을 명시한다.
+                source = None
             values.append({'confirmation': {'release_id': Expr(f'@r_{key}_{i}'),
-                           'applicability_basis': '예시 문서의 모델 또는 O 표식에 한정',
-                           'order_basis': '예시 릴리즈 시트의 나열 순서. 파생형을 뒤에 덧붙이지 않음.',
-                           'source_text': KEY + ' / ' + catalog['workbooks'][family['workbook']]['name'], 'source_reference': source},
+                           'applicability_basis': '합성 시연에서 지정한 적용 모델. 실제 제품 적용 근거가 아님' if synthetic_basis else '예시 문서의 모델 또는 O 표식에 한정',
+                           'order_basis': '합성 시연 비교순서. 실제 제품 출시·분기 순서가 아님' if version.get('synthetic') else '예시 릴리즈 시트의 나열 순서. 파생형을 뒤에 덧붙이지 않음.',
+                           'source_text': source_text, 'source_reference': source},
                            'fingerprint': string_expr(f'SHA2({json_sql(release_rows[key,i])},256)')})
         payload = {'schema': 1, 'model_id': model_var(model), 'family_id': Expr(f'@f_{key}'),
                    'pair_fingerprint': string_expr(fp), 'candidates': values}
@@ -252,35 +276,67 @@ def build_sql(catalog):
         setting = Expr(f"CONCAT('version_groups.v1:',{model_var(model).sql},':',@f_{key})")
         insert('app_setting', {'setting_key': setting, 'setting_value': Expr(json_sql(payload))})
         owned_settings.append(string_expr(setting.sql))
+    for rule in catalog['seed_augmentation']['scenarios'].get('risk_rules', []):
+        key, index = rule['family'], rule['release']
+        version = catalog['families'][key]['versions'][index]
+        target = {**rule.get('target_reference', {}), 'synthetic': True,
+                  'family': {'family_id': Expr(f'@f_{key}'), 'family_name': family_rows[key]['family_name']},
+                  'release': {'release_version_id': Expr(f'@r_{key}_{index}'), 'version_raw': version['name']}}
+        insert('risk_rule', {'rule_type': rule['rule_type'], 'family_id': Expr(f'@f_{key}'),
+            'group_id': model_var(rule['model']) if rule.get('model') else None,
+            'item_id': None, 'release_version_id': Expr(f'@r_{key}_{index}'),
+            'start_release_version_id': None, 'end_release_version_id': None,
+            'risk_reason': rule['risk_reason'], 'is_enabled': 1,
+            'target_reference': Expr(json_sql(target)), 'mapping_status': 'VERIFIED'})
     for entry in plan:
-        t = catalog['templates'][entry['template']]
+        t = snapshot_template(catalog, entry)
         batch = Expr(f"@batch_{t['workbook']}")
         insert('equipment', {'equipment_code': entry['code']})
         emit('SET @equipment = IF(@seed_install, LAST_INSERT_ID(), NULL)')
         for obs in entry['observations']:
             source = ref('template_equipment_code', t['workbook'], t['sheet'], t['equipment_cell'])
+            for field, location in entry.get('snapshot_sources', {}).items():
+                source[field] = {'sheet': location['sheet'], 'cells': location['cells'],
+                                 'batch_id': Expr(f"@batch_{location['workbook']}")}
+            representative_model = t.get('group_model', t['model'])
             insert('equipment_snapshot', {'equipment_id': Expr('@equipment'), 'base_date': obs['date'], 'site': t['site'],
-                'line': t['line'], 'model_name': t['model_raw'], 'group_id': model_var(t['model']),
+                'line': t['line'], 'model_name': t['model_raw'], 'group_id': model_var(representative_model) if representative_model else None,
                 'production_area': t['area'], 'structure_type': t['structure'], 'geometry_type': t['geometry'],
                 'modification_type': t['modification'], 'batch_id': batch, 'source_reference': Expr(json_sql(source))})
             emit('SET @snapshot = IF(@seed_install, LAST_INSERT_ID(), NULL)')
-            if obs['version']:
-                rid = Expr(f"@r_{t['family']}_{obs['release']}") if obs['release'] is not None else None
-                source = ref('version_raw', obs['workbook'], obs['sheet'], obs['cell'])
-                insert('equipment_version', {'snapshot_id': Expr('@snapshot'), 'family_id': Expr(f"@f_{t['family']}"),
-                    'version_raw': obs['version'], 'release_version_id': rid, 'batch_id': Expr(f"@batch_{obs['workbook']}"),
+            for software in obs.get('software', [{**obs, 'family': t['family']}]):
+                if not software['version']:
+                    raise ValueError(f"{entry['code']}: SW 버전 원문이 필요합니다.")
+                key, index = software['family'], software['release']
+                rid = Expr(f"@r_{key}_{index}") if index is not None else None
+                source = ref('version_raw', software['workbook'], software['sheet'], software['cell'])
+                insert('equipment_version', {'snapshot_id': Expr('@snapshot'), 'family_id': Expr(f"@f_{key}"),
+                    'version_raw': software['version'], 'release_version_id': rid, 'batch_id': Expr(f"@batch_{software['workbook']}"),
                     'source_reference': Expr(json_sql(source))})
+                emit('SET @equipment_version = IF(@seed_install, LAST_INSERT_ID(), NULL)')
+                for pm in software.get('pms', []):
+                    insert('equipment_pm', {'snapshot_id': Expr('@snapshot'), 'equipment_version_id': Expr('@equipment_version'),
+                        'pm_name': pm['name'], 'group_id': model_var(pm['model']), 'model_name_raw': pm['model_raw'],
+                        'batch_id': Expr(f"@batch_{pm['workbook']}"),
+                        'source_reference': Expr(json_sql(pm.get('source_reference', {})))})
     manifest = {'seed': KEY, 'synthetic': True, 'dataset_sha256': digest,
                 'generator_revision': GENERATOR_REVISION, 'plan_sha256': plan_digest,
                 'equipment': 300, 'snapshots': 1800,
+                'equipment_versions': sum(len(obs.get('software', [obs])) for entry in plan for obs in entry['observations']),
+                'equipment_pms': sum(len(sw.get('pms', [])) for entry in plan for obs in entry['observations']
+                                     for sw in obs.get('software', [obs])),
                 'hpa_equipment': 15, 'dates': [d.isoformat() for d in DATES],
                 'owned_settings': owned_settings,
-                'source_workbooks': [{'name': b['name'], 'sha256': b['sha256']} for b in catalog['workbooks']]}
+                'source_workbooks': [{'name': b['name'], 'sha256': b['sha256']} for b in catalog['workbooks'] if not b.get('synthetic')],
+                'synthetic_sources': [{'name': b['name'], 'sha256': b['sha256'], 'notice': b['notice']} for b in catalog['workbooks'] if b.get('synthetic')],
+                'augmentation': catalog['seed_augmentation']}
     insert('app_setting', {'setting_key': KEY, 'setting_value': Expr(json_sql(manifest))})
     emit('SELECT @seed_install AS installed, @seed_done AS already_installed')
     emit('COMMIT')
     return ('-- 예시 설비 현황·Item 원문 기반 증강: 300대 / 2026년 5~10월 1,800개 관측\n'
-            '-- 원본 Excel 보존. DEMO 호기·월별 관측만 합성. Item 원문·버전·모델 표식 출처 보존.\n'
+            '-- 원본 Excel·catalog 보존. 호기는 원본·패턴 보완, 월별 관측 및 부족한 릴리즈·Item·모델 적용 근거는 추정.\n'
+            '-- 추정 자료는 별도 MANUAL 입력 작업과 출처 메타데이터로 구분하며 실제 제품 정보로 확정하지 않는다.\n'
+            '-- 평택 P4F 19대는 합성 테스트 라인 P4H 10대/P4D 9대로 표시하며 원본 라인과 SW 이력을 보존한다.\n'
             '-- 실행: 저장소 최상위 폴더에서 init_local_db.bat 실행 (기본 설정 dist/SETRON/setron.env)\n\n' +
             ';\n\n'.join(statements) + ';\n')
 

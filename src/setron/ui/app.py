@@ -61,6 +61,52 @@ from setron.ui.settings_page import SettingsPage
 from setron.ui.import_dialogs import ImportProgressDialog, confirm_numbered_save
 
 
+class _DeferredPage:
+    """화면 연결은 보관하고 실제 QWidget은 메뉴나 명시적 접근에서 한 번 만든다."""
+
+    def __init__(self, window, key, factory, *, uses_query=False, parent_key=None, title=None):
+        self.window, self.key, self._page, self._callbacks = window, key, None, []
+
+        def build():
+            page = factory()
+            self._page = page
+            try:
+                for callback in self._callbacks:
+                    callback(page)
+            except Exception:
+                self._page = None
+                page.deleteLater()
+                raise
+            self._callbacks.clear()
+            return page
+
+        if parent_key is None:
+            window.register_lazy_page(key, build, uses_query=uses_query)
+        else:
+            window.register_lazy_auxiliary_page(key, build, parent_key=parent_key, title=title, uses_query=uses_query)
+
+    @property
+    def loaded(self):
+        return self._page is not None
+
+    def ready(self, callback):
+        if self.loaded:
+            callback(self._page)
+        else:
+            self._callbacks.append(callback)
+
+    def if_loaded(self, callback):
+        if self.loaded:
+            return callback(self._page)
+
+    def connect(self, name, callback):
+        self.ready(lambda page: getattr(page, name).connect(callback))
+
+    def __getattr__(self, name):
+        page = self._page if self.loaded else self.window.pages[self.key]
+        return getattr(page, name)
+
+
 def create_window(source: DashboardSource | None = None, *, version_loader=None, item_loader=None,
                   excel=None, extractor=None, import_saver=None, ai_parser=None, ai_analyzer=None,
                   db_exporter=None, sheet_extractor=None, management_gateway=None, data_exporter=None, ai_client=None,
@@ -215,8 +261,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     dashboard.trend_period_changed.connect(sync_dashboard_date_mode)
     dashboard.tabs.currentChanged.connect(sync_dashboard_date_mode)
     window.page_changed.connect(sync_dashboard_date_mode)
-    heatmap = HeatmapPage(window.query_state, source, detail_connected=True)
-    equipment = EquipmentPage(window.query_state, source)
+    window.register_page("dashboard", dashboard)
+    heatmap = _DeferredPage(window, "heatmap", lambda: HeatmapPage(window.query_state, source, detail_connected=True), uses_query=True)
+    equipment = _DeferredPage(window, "equipment", lambda: EquipmentPage(window.query_state, source),
+                              parent_key="heatmap", title="설비 목록", uses_query=True)
     custom_versions = version_loader is not None
     if version_loader is None:
         def version_loader():
@@ -230,8 +278,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             return catalog_from_dashboard(source)
         if hasattr(source, "load_version_catalog"):
             version_loader = BackgroundRead(version_loader)
-    versions = VersionManagementPage(version_loader, source, targets_provider=lambda: (
-        window.query_state.applied.targets if window.query_state.applied is not None else initial_targets(source)))
+    versions = _DeferredPage(window, "versions", lambda: VersionManagementPage(version_loader, source, targets_provider=lambda: (
+        window.query_state.applied.targets if window.query_state.applied is not None else initial_targets(source))))
     if item_loader is None:
         # 외부 릴리즈 ID를 기본 합성 설비 ID와 임의로 연결하지 않는다.
         item_loader = (lambda: ItemManagerData(version_loader())) if custom_versions else (
@@ -240,7 +288,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             item_loader = BackgroundRead(source.load_item_data)
         elif isinstance(version_loader, BackgroundRead):
             item_loader = BackgroundRead(item_loader)
-    items = ItemsPage(item_loader, ai_client=ai_client)
+    items = _DeferredPage(window, "items", lambda: ItemsPage(item_loader, ai_client=ai_client))
     # 저장 서비스·회사 AI 연결 전: 각 화면의 기본값은 메모리 저장소와 예제 응답이며 출처를 표시한다.
     def release_refresh_context():
         """GUI 스레드에서 현재 적용 N을 불변 저장 요청용 조건으로 복사한다.
@@ -252,38 +300,41 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     if extractor is None and sheet_extractor is None and isinstance(excel, DemoExcel):
         extractor = example_extractor
-    importer = ImportPage(excel, extractor, import_saver, refresh_context_provider=release_refresh_context,
+    importer = _DeferredPage(window, "import", lambda: ImportPage(excel, extractor, import_saver, refresh_context_provider=release_refresh_context,
                           sheet_extractor=sheet_extractor, rule_extractor=rule_extractor,
                           comparison_loader=import_comparison_loader, delete_gateway=import_delete_gateway,
-                          sql_importer=sql_importer)
+                          sql_importer=sql_importer))
     def configure_import_choices():
-        importer.configure_choices(dates=source.dates, sites=(s.label for s in source.catalog.sites),
-                                   families=(family_name(source, key) for key in source.families))
-    configure_import_choices()
+        importer.if_loaded(lambda page: page.configure_choices(dates=source.dates, sites=(s.label for s in source.catalog.sites),
+                                   families=(family_name(source, key) for key in source.families)))
+    importer.ready(lambda page: page.configure_choices(dates=source.dates, sites=(s.label for s in source.catalog.sites),
+                                   families=(family_name(source, key) for key in source.families)))
     window.release_refresh_context = release_refresh_context
     def replay_targets():
         applied = window.query_state.applied
         return (applied.targets if applied is not None and applied.targets is not None else
                 initial_targets(source))
-    replay = ReplayPage(source, targets_provider=replay_targets, drawer_parent=window.centralWidget())
-    replay.query_panel.goal_button.setEnabled(True)
-    replay.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
-    replay.query_panel.goal_button.clicked.connect(open_groups)
+    replay = _DeferredPage(window, "replay", lambda: ReplayPage(source, targets_provider=replay_targets, drawer_parent=window.centralWidget()))
+    def configure_replay(page):
+        page.query_panel.goal_button.setEnabled(True)
+        page.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
+        page.query_panel.goal_button.clicked.connect(open_groups)
+    replay.ready(configure_replay)
     risk_save = RiskRuleSaveController(management_gateway, context_provider=release_refresh_context, parent=window)
     # 데이터 관리 (11-10 개편): 설비현황 · 릴리즈노트 · 변경 이력. 고치기·더하기·지우기는 바로 DB에 반영하고
     # 같은 관리 저장 흐름(after_management_save)으로 조회 선택지와 화면을 다시 읽는다. 위험 지정은 아이템 매니저에서만 한다 (11-11).
-    data_page = DataManagementPage(management_gateway, context_provider=release_refresh_context,
-                                   drawer_parent=window.centralWidget())  # 변경 이력 세부 정보는 대시보드처럼 창 오른쪽에서
+    data_page = _DeferredPage(window, "data", lambda: DataManagementPage(management_gateway, context_provider=release_refresh_context,
+                                   drawer_parent=window.centralWidget()))  # 변경 이력 세부 정보는 대시보드처럼 창 오른쪽에서
     # 데이터 가져오기의 '저장된 데이터 삭제'는 데이터 관리 › 설비현황 › 가져온 엑셀 삭제로 옮긴다 (같은 객체·연결 유지).
-    data_page.attach_deletion(importer.deletion)
-    importer.tabs.setTabVisible(1, False)
-    versions.configure(management_gateway, release_refresh_context,
-                       edit_allowed=lambda: not risk_save.busy and not risk_save.locked)
-    versions.navigate_requested.connect(window.navigate)
+    data_page.ready(lambda page: page.attach_deletion(importer.deletion))
+    importer.ready(lambda page: page.tabs.setTabVisible(1, False))
+    versions.ready(lambda page: page.configure(management_gateway, release_refresh_context,
+                       edit_allowed=lambda: not risk_save.busy and not risk_save.locked))
+    versions.connect("navigate_requested", window.navigate)
     def import_from_version(kind):
         importer.request_kind(kind)      # 자료 종류 판단은 가져오기 화면이 한다 (앱 조립 파일은 업무 코드를 직접 부르지 않음)
         window.navigate("import")
-    versions.import_requested.connect(import_from_version)
+    versions.connect("import_requested", import_from_version)
     item_risk_save_pending = False
     def submit_item_risk(values):
         nonlocal item_risk_save_pending
@@ -294,7 +345,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if not started:
             item_risk_save_pending = False
         return started
-    items.manager.configure(management_gateway, release_refresh_context, submit_item_risk)
+    items.ready(lambda page: page.manager.configure(management_gateway, release_refresh_context, submit_item_risk))
     window.management_gateway = management_gateway
     window.management_refresh = ReadRequest(window)
     catalog_refresh = ReadRequest(window)
@@ -335,8 +386,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     if ai_analyzer is not None:
         hooks["explainer"] = None  # 분석 공급자를 직접 넘기면 그 공급자로 분석한다
     analysis_allowed = lambda: not (risk_save.busy or risk_save.locked or window.management_saving  # noqa: E731
-                                     or window.management_refresh.busy or importer.state == "saving"
-                                     or importer.deletion.phase == "deleting")
+                                     or window.management_refresh.busy or importer.if_loaded(
+                                         lambda page: page.state == "saving" or page.deletion.phase == "deleting"))
     if chat_enabled:
         # 대화형 AI 분석(VER4 10-1~10-5). 대시보드와 같은 자료·목표 N·저장한 N 그룹으로 답하고 조건은 바꾸지 않는다.
         def chat_targets():
@@ -347,27 +398,18 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         ai = AIPage(window.query_state, ai_parser, ai_analyzer, apply_ai_selection, current_facts,
                     fresh_loader=fresh_analysis_loader if hasattr(source, "refresh") else None,
                     analysis_allowed=analysis_allowed, **hooks)
-    window.register_page("dashboard", dashboard)
-    window.register_page("heatmap", heatmap)
-    window.register_page("versions", versions, uses_query=False)
-    window.register_page("data", data_page, uses_query=False)
-    window.register_page("items", items, uses_query=False)
-    window.register_page("import", importer, uses_query=False)
-    window.register_page("replay", replay, uses_query=False)
     window.register_page("ai", ai, uses_query=False)
     def latest_report_answer():
         # 완료된 답만 복사한다. 보고서 생성에서 AI 요청이나 기존 초기 화면을 변경하지 않는다.
         return next((card.answer for card in reversed(getattr(ai, "cards", ()))
                      if not card.is_stale and not card.answer.issues and card.answer.request.understood), None)
-    reports = ReportsPage(source, targets_provider=replay_targets, version_loader=version_loader,
-                          ai_provider=latest_report_answer, generation_allowed=analysis_allowed)
+    reports = _DeferredPage(window, "reports", lambda: ReportsPage(source, targets_provider=replay_targets, version_loader=version_loader,
+                          ai_provider=latest_report_answer, generation_allowed=analysis_allowed))
     if chat_enabled:
-        ai.report_saved.connect(reports.add)
-    window.register_page("reports", reports, uses_query=False)
+        ai.report_saved.connect(lambda *args: reports.add(*args))
     window.page_changed.connect(lambda key: reports.enter() if key == "reports" else None)
-    settings = SettingsPage(scroll_area=window.scroll, preview_background=window.canvas.set_preview_background)
-    window.register_page("settings", settings, uses_query=False)
-    window.page_changed.connect(lambda key: settings.enter() if key == "settings" else settings.leave())
+    settings = _DeferredPage(window, "settings", lambda: SettingsPage(scroll_area=window.scroll, preview_background=window.canvas.set_preview_background))
+    window.page_changed.connect(lambda key: settings.enter() if key == "settings" else settings.if_loaded(lambda page: page.leave()))
 
     def navigate_item_answer(route, answer):
         if answer is None or answer is not items.answer or answer.data is not items.data:
@@ -413,7 +455,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.query_panel.apply_draft()
         return window.navigate(route)
 
-    items.answer_navigation.connect(navigate_item_answer)
+    items.connect("answer_navigation", navigate_item_answer)
     window.navigate_item_answer = navigate_item_answer
 
     def show_item_risk_candidates(title, equipment_ids):
@@ -436,9 +478,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         dashboard.drilldown_requested.emit(DashboardDrilldown(snapshot.query, snapshot.base_date, title, shown, True))
         return True
 
-    items.risk_candidates_requested.connect(show_item_risk_candidates)
+    items.connect("risk_candidates_requested", show_item_risk_candidates)
     window.show_item_risk_candidates = show_item_risk_candidates
-    window.register_auxiliary_page("equipment", equipment, parent_key="heatmap", title="설비 목록")
     drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
     list_drawer = window.equipment_list_drawer = EquipmentListDrawer(window.centralWidget())
 
@@ -452,7 +493,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             list_drawer.close_panel(restore_focus=False)
 
     window.page_changed.connect(close_inactive_drawers)
-    equipment.mode_changed.connect(lambda mode: close_drawer() if mode != "detail" else None)
+    equipment.connect("mode_changed", lambda mode: close_drawer() if mode != "detail" else None)
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
     origin_scroll = {}
@@ -513,7 +554,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             list_action.setEnabled(False)
         else:
             window.notice.setText(overview_notice)
-            list_action.setEnabled(equipment.snapshot is not None and window.query_state.applied_is_current)
+            list_action.setEnabled(dashboard.snapshot is not None and window.query_state.applied_is_current)
         if window.route == "equipment":
             window.header.title.setText("설비 상세" if equipment.mode == "detail" else "설비 목록")
             window.query_panel.setVisible(equipment.mode == "list")
@@ -590,10 +631,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         return result
 
     window.export_sql = export_sql
-    importer.deletion.setProperty("backupAvailable", db_exporter is not None)
-    importer.deletion.backup_button.setEnabled(db_exporter is not None)
+    importer.ready(lambda page: page.deletion.setProperty("backupAvailable", db_exporter is not None))
+    importer.ready(lambda page: page.deletion.backup_button.setEnabled(db_exporter is not None))
     if db_exporter is not None:
-        importer.deletion.backup_requested.connect(export_sql)
+        importer.ready(lambda page: page.deletion.backup_requested.connect(export_sql))
     def export_data(path=None):
         """현재 관리값을 선택한 생산 영역의 요약 Excel 형식으로 내보낸다."""
         interactive = path is None
@@ -630,9 +671,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.export_data = export_data
     window.export_request = ReadRequest(window)
     window.export_title = None
-    export_page = DataExportPage()
-    export_page.set_file_support(export_file_loader is not None)
-    window.register_page("export", export_page, uses_query=False)
+    export_page = _DeferredPage(window, "export", DataExportPage)
+    export_page.ready(lambda page: page.set_file_support(export_file_loader is not None))
     window.export_files_request = ReadRequest(window)
 
     def load_export_files():
@@ -645,7 +685,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         export_page.set_files(tuple(files or ()), error=error is not None)
 
     window.export_files_request.completed.connect(finish_export_files)
-    export_page.files_requested.connect(load_export_files)
+    export_page.connect("files_requested", load_export_files)
     window.page_changed.connect(lambda route: load_export_files() if route == "export" and
                                 export_page.selected_files_button.isChecked() else None)
 
@@ -715,8 +755,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.export_request.completed.connect(finish_management_export)
     window.export_management_xlsx = lambda path=None: management_export("management", path)
     window.export_current_xlsx = lambda path=None: management_export("status", path)
-    export_page.buttons["sql"].clicked.connect(lambda: export_sql())
-    export_page.buttons["summary"].clicked.connect(lambda: export_data())
+    export_page.ready(lambda page: page.buttons["sql"].clicked.connect(lambda: export_sql()))
+    export_page.ready(lambda page: page.buttons["summary"].clicked.connect(lambda: export_data()))
 
     def choose_export():
         if management_gateway is None and db_exporter is None and data_exporter is not None:
@@ -752,7 +792,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 window.navigate("equipment")
 
     def go_back(origin):
-        item_revision = items.revision
+        item_revision = items.revision if origin == "items" else None
         restored_by_history = window.go_back_route(origin)
         if restored_by_history or window.navigate(origin, record_history=False):
             if origin == "items":
@@ -779,32 +819,32 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.scroll.verticalScrollBar().setValue(0)
 
     def invalidate_item_detail():
-        if equipment.item_request is not None:
+        if equipment.loaded and equipment.item_request is not None:
             equipment.close_item_detail()
             if window.route == "equipment":
                 if not window.go_back_route("items"):
                     window.navigate("items", record_history=False)
 
     def leave_item_detail(*_):
-        if window.route != "equipment" and equipment.item_request is not None:
+        if window.route != "equipment" and equipment.loaded and equipment.item_request is not None:
             equipment.close_item_detail()
 
-    items.equipment_selected.connect(open_item_equipment)
-    items.selection_invalidated.connect(invalidate_item_detail)
+    items.connect("equipment_selected", open_item_equipment)
+    items.connect("selection_invalidated", invalidate_item_detail)
     window.page_changed.connect(leave_item_detail)
 
     dashboard.drilldown_requested.connect(open_scope)
-    heatmap.equipment_selected.connect(open_detail)
-    list_drawer.back_requested.connect(equipment.return_to_list)
+    heatmap.connect("equipment_selected", open_detail)
+    list_drawer.back_requested.connect(lambda: equipment.return_to_list())
     list_drawer.closed.connect(sync_back)
     drawer.closed.connect(sync_back)
-    replay.drawer.closed.connect(sync_back)
-    replay.drawer_opened.connect(sync_back)
-    equipment.back_requested.connect(go_back)
-    equipment.mode_changed.connect(equipment_mode_changed)
-    equipment.mode_changed.connect(sync_mode)
-    versions.mode_changed.connect(sync_mode)
-    items.mode_changed.connect(sync_mode)
+    replay.ready(lambda page: page.drawer.closed.connect(sync_back))
+    replay.connect("drawer_opened", sync_back)
+    equipment.connect("back_requested", go_back)
+    equipment.connect("mode_changed", equipment_mode_changed)
+    equipment.connect("mode_changed", sync_mode)
+    versions.connect("mode_changed", sync_mode)
+    items.connect("mode_changed", sync_mode)
     window.page_changed.connect(sync_mode)
     sync_mode()  # 첫 화면(대시보드)에도 안내 배지 표시 규칙을 바로 적용한다.
     def ensure_loaded(key):
@@ -822,20 +862,98 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     defer_query_apply = False
 
+    def query_apply_block_reason():
+        # 저장 후 같은 조건을 새 선택지에 연결하는 내부 재적용은 조회 워커를 따로 실행한다.
+        if defer_query_apply:
+            return ""
+        if window.management_saving:
+            return "관리 데이터 저장 중입니다. 저장이 완료된 뒤 조회해 주세요."
+        if risk_save.locked:
+            return "저장 결과를 확인하지 못해 조회할 수 없습니다. DB 기록을 먼저 확인해 주세요."
+        return ""
+
+    window.query_panel.apply_guard = query_apply_block_reason
+    replay.ready(lambda page: setattr(page.query_panel, "apply_guard", query_apply_block_reason))
+    query_request = window.query_request = ReadRequest(window)
+    pending_query = None
+
+    def cancel_query(*_):
+        nonlocal pending_query
+        query_request.cancel()
+        pending_query = None
+
+    def distribute_snapshot(query, snapshot):
+        if not dashboard.accept_result(query, snapshot):
+            return False
+        heatmap.if_loaded(lambda page: (page.accept_result(query, snapshot) if window.route == "heatmap"
+                                       else page.queue_result(query, snapshot)))
+        equipment.if_loaded(lambda page: (page.accept_result(query, snapshot) if window.route == "equipment" or
+                                         list_drawer.is_open or drawer.is_open else page.queue_result(query, snapshot)))
+        list_action.setEnabled(True)
+        return True
+
+    def finish_query(value, error):
+        query = pending_query
+        if query is None or not window.query_state.is_current(query) or window.management_saving or risk_save.locked:
+            return
+        if error is None:
+            _, fresh, snapshot = value
+            try:
+                if snapshot.query is not query:
+                    raise ValueError("조회 요청과 결과가 다릅니다.")
+                if fresh is not None:
+                    if source.accept_query(fresh) is False:
+                        apply_query(query)
+                        return
+                distribute_snapshot(query, snapshot)
+            except (ValueError, RuntimeError) as caught:
+                error = caught
+        if error is not None:
+            dashboard.fail_query(query, error)
+            heatmap.if_loaded(lambda page: page.fail_query(query, dashboard.failure_reason))
+            equipment.if_loaded(lambda page: page.clear("설비 결과 표시 실패 · 다시 적용해 주세요"))
+            list_action.setEnabled(False)
+        ai.refresh()
+
+    query_request.completed.connect(finish_query)
+    window.query_panel.catalog_changed.connect(cancel_query)
+
+    def initialize_result_page(page):
+        snapshot = dashboard.snapshot
+        if snapshot is not None and window.query_state.is_current(snapshot.query):
+            page.accept_result(snapshot.query, snapshot)
+        elif query_request.busy and pending_query is not None:
+            if hasattr(page, "begin_query"):
+                page.begin_query(pending_query)
+
+    heatmap.ready(initialize_result_page)
+    equipment.ready(initialize_result_page)
+
     def apply_query(query):
+        nonlocal pending_query
         if defer_query_apply:
             return
-        if not heatmap.begin_query(query):
+        cancel_query()
+        if window.management_saving or risk_save.locked:
             return
-        equipment.clear(f"{getattr(source, 'result_label', '예시 결과')} 계산 중")
+        if not dashboard.begin_query(query):
+            return
+        pending_query = query
+        heatmap.if_loaded(lambda page: page.begin_query(query))
+        equipment.if_loaded(lambda page: page.clear(f"{getattr(source, 'result_label', '예시 결과')} 계산 중"))
         list_action.setEnabled(False)
-        if dashboard.apply_query(query):
-            # 한 번 계산한 같은 불변 결과를 두 화면에서 공유한다.
-            heatmap.accept_result(query, dashboard.snapshot)
-            list_action.setEnabled(equipment.accept_result(query, dashboard.snapshot))
-        else:
-            heatmap.fail_query(query, getattr(dashboard, "failure_reason", None))
-            equipment.clear("설비 결과 표시 실패 · 다시 적용해 주세요")
+
+        catalog = window.query_state.catalog
+        def load():
+            if not catalog.is_view_of(source.catalog):
+                raise ValueError("조회 선택지와 데이터 공급자의 매핑이 다릅니다.")
+            if hasattr(source, "read_query"):
+                fresh, snapshot = source.read_query(query)
+                return query, fresh, snapshot
+            return query, None, source.snapshot(query)
+
+        background = hasattr(source, "read_query") or hasattr(source, "refresh")
+        query_request.start(BackgroundRead(load) if background else load)
 
     window.query_applied.connect(apply_query)
     # 대시보드 계산 뒤에 연결해야 AI 화면이 같은 적용 조건의 결과를 읽는다.
@@ -854,7 +972,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             except ValueError:
                 pass
     ai.navigate_requested.connect(ai_navigate)
-    importer.requery_requested.connect(lambda: window.navigate("dashboard"))
+    importer.connect("requery_requested", lambda: window.navigate("dashboard"))
 
     def show_import_result(day, site, route):
         key = next((o.key for o in window.query_state.catalog.sites if o.label == site), None)
@@ -865,35 +983,31 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.navigate(route)
         window.query_panel.apply_draft()
 
-    importer.saved_scope_requested.connect(show_import_result)
+    importer.connect("saved_scope_requested", show_import_result)
 
     def show_import_history():
         window.navigate("versions")
         versions.select_tab(4)
 
-    importer.saved_history_requested.connect(show_import_history)
-    importer.navigate_requested.connect(window.navigate)
+    importer.connect("saved_history_requested", show_import_history)
+    importer.connect("navigate_requested", window.navigate)
     def show_saved_date(day):
         window.query_panel.set_draft(replace(window.query_state.draft, as_of=day))
         window.navigate("dashboard")
         window.query_panel.apply_draft()
-    importer.date_selected.connect(show_saved_date)
+    importer.connect("date_selected", show_saved_date)
     window.query_panel.catalog_changed.connect(dashboard.invalidate)
-    window.query_panel.catalog_changed.connect(heatmap.invalidate)
-    window.query_panel.catalog_changed.connect(equipment.clear)
-    window.query_panel.catalog_changed.connect(replay.invalidate)
+    window.query_panel.catalog_changed.connect(lambda *_: heatmap.if_loaded(lambda page: page.invalidate()))
+    window.query_panel.catalog_changed.connect(lambda *_: equipment.if_loaded(lambda page: page.clear()))
+    window.query_panel.catalog_changed.connect(lambda *_: replay.if_loaded(lambda page: page.invalidate()))
     window.query_panel.catalog_changed.connect(lambda *_: list_action.setEnabled(False))
 
     def accept_current_snapshot(snapshot):
         query = snapshot.query
         if not window.query_state.is_current(query):
             return False
-        if dashboard.accept_result(query, snapshot):
-            heatmap.begin_query(query)
-            heatmap.accept_result(query, snapshot)
-            list_action.setEnabled(equipment.accept_result(query, snapshot))
-            return True
-        return False
+        cancel_query()
+        return distribute_snapshot(query, snapshot)
 
     ai.fresh_data_ready.connect(lambda data: accept_current_snapshot(data.snapshot))
 
@@ -905,19 +1019,20 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.management_progress.set_operation(None)
 
     def begin_management_save():
+        cancel_query()
         window.management_saving = True
         sync_export_page()
-        if not versions.progress.isVisible():
+        if not versions.loaded or not versions.progress.isVisible():
             window.management_progress.set_operation("save", "변경 사항 저장 중", "검토한 변경 사항을 저장하고 있습니다. 잠시만 기다려 주세요.")
         cancel_management_refresh()
         dashboard.invalidate()
-        heatmap.invalidate()
-        replay.invalidate()
-        equipment.clear("관리 데이터 저장 중 · 현재 자료 확인 대기")
+        heatmap.if_loaded(lambda page: page.invalidate())
+        replay.if_loaded(lambda page: page.invalidate())
+        equipment.if_loaded(lambda page: page.clear("관리 데이터 저장 중 · 현재 자료 확인 대기"))
         list_action.setEnabled(False)
-        versions.setEnabled(False)
-        items.setEnabled(False)
-        replay.setEnabled(False)
+        versions.if_loaded(lambda page: page.setEnabled(False))
+        items.if_loaded(lambda page: page.setEnabled(False))
+        replay.if_loaded(lambda page: page.setEnabled(False))
         ai.invalidate_data()
         sync_mode()
 
@@ -995,14 +1110,15 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.management_saving = False
         sync_export_page()
         window.management_last_success = result is not None
-        versions.setEnabled(True)
-        items.setEnabled(True)
-        replay.setEnabled(True)
-        replay.invalidate()
-        versions.refresh_after_save()
+        versions.if_loaded(lambda page: page.setEnabled(True))
+        items.if_loaded(lambda page: page.setEnabled(True))
+        replay.if_loaded(lambda page: page.setEnabled(True))
+        replay.if_loaded(lambda page: page.invalidate())
+        versions.if_loaded(lambda page: page.refresh_after_save())
         if preserve_detail and result:
-            items.last_saved_rule_id = next((r.key["risk_rule_id"] for r in result.records if r.table == "risk_rule"), None)
-        items.refresh_after_save(preserve_detail=preserve_detail)
+            items.if_loaded(lambda page: setattr(page, "last_saved_rule_id",
+                next((r.key["risk_rule_id"] for r in result.records if r.table == "risk_rule"), None)))
+        items.if_loaded(lambda page: page.refresh_after_save(preserve_detail=preserve_detail))
         if preserve_detail and result:
             item_save_notice("저장 완료 · 현재 자료로 다시 조회합니다.", "success")
         ai.invalidate_data()
@@ -1030,22 +1146,22 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.notice.setText("저장 결과 미확인 · 같은 수정 묶음을 다시 저장하지 말고 DB 기록을 확인해 주세요.")
 
     risk_save.save_started.connect(begin_management_save)
-    data_page.save_started.connect(begin_management_save)
-    data_page.saved.connect(after_management_save)
-    data_page.save_failed.connect(lambda: after_management_save(None))
-    risk_save.saved.connect(data_page.invalidate)
-    importer.saved.connect(data_page.invalidate)
-    importer.deletion.deleted.connect(data_page.invalidate)
-    importer.sql_page.saved.connect(data_page.invalidate)
+    data_page.connect("save_started", begin_management_save)
+    data_page.connect("saved", after_management_save)
+    data_page.connect("save_failed", lambda: after_management_save(None))
+    risk_save.saved.connect(lambda *_: data_page.if_loaded(lambda page: page.invalidate()))
+    importer.connect("saved", lambda *_: data_page.if_loaded(lambda page: page.invalidate()))
+    importer.ready(lambda page: page.deletion.deleted.connect(lambda *_: data_page.if_loaded(lambda data: data.invalidate())))
+    importer.ready(lambda page: page.sql_page.saved.connect(lambda *_: data_page.if_loaded(lambda data: data.invalidate())))
     risk_save.saved.connect(after_management_save)
     risk_save.save_uncertain.connect(uncertain_management_save)
     risk_save.save_failed.connect(lambda: after_management_save(None))
-    versions.save_started.connect(begin_management_save)
-    versions.saved.connect(after_management_save)
-    versions.save_failed.connect(lambda: after_management_save(None))
-    versions.save_uncertain.connect(uncertain_management_save)
-    versions.sql_requested.connect(lambda: export_sql())
-    versions.history_panel.sql_button.setEnabled(db_exporter is not None)
+    versions.connect("save_started", begin_management_save)
+    versions.connect("saved", after_management_save)
+    versions.connect("save_failed", lambda: after_management_save(None))
+    versions.connect("save_uncertain", uncertain_management_save)
+    versions.connect("sql_requested", lambda: export_sql())
+    versions.ready(lambda page: page.history_panel.sql_button.setEnabled(db_exporter is not None))
     def item_save_notice(text, tone):
         nonlocal item_risk_save_pending
         if item_risk_save_pending:
@@ -1057,11 +1173,16 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     risk_save.request.completed.connect(lambda *_: ai.refresh())
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
-    window.close_guard = lambda: (risk_save.state != "saving" and not versions.saving and not data_page.saving
-                                 and not settings.operation.busy
-                                 and not reports.saving
-                                 and not versions.history_panel.read_request.busy and importer.state != "saving"
-                                 and importer.deletion.phase != "deleting" and not importer.sql_page.busy)
+    def close_guard():
+        busy = (risk_save.state == "saving" or versions.if_loaded(lambda page: page.saving or page.history_panel.read_request.busy)
+                or data_page.if_loaded(lambda page: page.saving) or settings.if_loaded(lambda page: page.operation.busy)
+                or reports.if_loaded(lambda page: page.saving) or importer.if_loaded(
+                    lambda page: page.state == "saving" or page.deletion.phase == "deleting" or page.sql_page.busy))
+        if busy:
+            return False
+        cancel_query()
+        return True
+    window.close_guard = close_guard
 
     def invalidate_saved_results(receipt):
         """DB 저장 후 이전 판정·대기 중 AI 요청을 폐기하고 N 재확인을 안내한다.
@@ -1071,12 +1192,13 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         """
         if not is_database_import_saver(importer.saver):
             return
+        cancel_query()
         cancel_management_refresh()
         dashboard.invalidate()
         ai.invalidate_data()
-        heatmap.invalidate()
-        replay.invalidate()
-        equipment.clear("저장 자료 변경 · 조회 조건을 다시 선택해 주세요.")
+        heatmap.if_loaded(lambda page: page.invalidate())
+        replay.if_loaded(lambda page: page.invalidate())
+        equipment.if_loaded(lambda page: page.clear("저장 자료 변경 · 조회 조건을 다시 선택해 주세요."))
         list_action.setEnabled(False)
         read_saved_catalog(finish_import_catalog, background=importer.progress_dialog.isVisible())
         judgments = getattr(receipt, "refresh", None)
@@ -1094,27 +1216,28 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 "대상 버전·Item과 적용 범위를 확인해 주세요. 위험이 해제된 상태가 아닙니다.", "warning", 10000)
         window.notice.setText(f"DB 저장 완료 · 입력 작업 {receipt.batch_id} · {receipt.row_count}행")
 
-    importer.saved.connect(invalidate_saved_results)
-    importer.saved.connect(lambda receipt: versions.record_import(
+    importer.connect("saved", invalidate_saved_results)
+    importer.connect("saved", lambda receipt: versions.record_import(
         receipt, importer.draft, persisted=is_database_import_saver(importer.saver)))
     def update_import_choices_for_memory(*_):
         if not is_database_import_saver(importer.saver):
             configure_import_choices()
 
-    importer.saved.connect(update_import_choices_for_memory)
+    importer.connect("saved", update_import_choices_for_memory)
     def finish_import_catalog(catalog):
         apply_saved_catalog(catalog)
-        versions.refresh_after_save()
-        items.refresh_after_save()
+        versions.if_loaded(lambda page: page.refresh_after_save())
+        items.if_loaded(lambda page: page.refresh_after_save())
         configure_import_choices()
         window.management_progress.set_operation(None)
 
     def refresh_after_data_change(message, *, background):
         cancel_management_refresh()
         dashboard.invalidate()
-        heatmap.invalidate()
-        replay.invalidate()
-        equipment.clear(message)
+        cancel_query()
+        heatmap.if_loaded(lambda page: page.invalidate())
+        replay.if_loaded(lambda page: page.invalidate())
+        equipment.if_loaded(lambda page: page.clear(message))
         ai.invalidate_data()
         list_action.setEnabled(False)
         read_saved_catalog(finish_import_catalog, background=background)
@@ -1126,8 +1249,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def after_sql_import(_result):
         refresh_after_data_change("SQL 자료 저장 완료 · 조회 조건을 다시 선택해 주세요.", background=True)
 
-    importer.deletion.deleted.connect(after_import_delete)
-    importer.sql_page.saved.connect(after_sql_import)
+    importer.ready(lambda page: page.deletion.deleted.connect(after_import_delete))
+    importer.ready(lambda page: page.sql_page.saved.connect(after_sql_import))
     return window
 
 
@@ -1161,10 +1284,26 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName("SETRON")
     app.setWindowIcon(icon("setron-window-icon.svg"))
     install_theme(app)
-    # SETRON_DB_* 접속 설정이 있으면 조회 화면은 DB 자료를 읽고 가져오기 저장도 DB로 한다.
-    source, problem = dashboard_source_from_env()
+    from setron.ui.startup_window import StartupWindow
+
+    startup = StartupWindow(app.windowIcon())
+    if screen := app.primaryScreen():
+        area = screen.availableGeometry()
+        startup.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
+    startup.show()
+    window = None
     ai = ai_providers_from_env()
     app.aboutToQuit.connect(ai.close)
+    startup.complete_step("settings")
+
+    def abort_startup():
+        nonlocal window
+        if window is not None and not window.isVisible():
+            window.close()
+            window.deleteLater()
+            window = None
+
+    startup.closed.connect(abort_startup)
 
     def build_window(source, problem):
         current = create_window(source, excel=DemoExcel() if args.demo_excel else None,
@@ -1192,8 +1331,9 @@ def main(argv: list[str] | None = None) -> int:
             QTimer.singleShot(0, current, current.query_panel.apply_draft)
         return current
 
-    window = build_window(source, problem)
-    if problem:
+    def install_reconnect(problem):
+        if not problem:
+            return
         reconnect = ReadRequest(window)
 
         def retry_database():
@@ -1224,10 +1364,40 @@ def main(argv: list[str] | None = None) -> int:
 
         window.db_reconnect_button.clicked.connect(retry_database)
         reconnect.completed.connect(finish_reconnect)
-    if screen := app.primaryScreen():
-        area = screen.availableGeometry()
-        window.resize(min(1440, area.width() - 32), min(960, area.height() - 48))
-    window.show()
-    if args.auto_close_ms:
-        QTimer.singleShot(args.auto_close_ms, lambda: window.close())
+
+    def finish_startup(result, error):
+        nonlocal window
+        if not startup.accepting or not startup.isVisible():
+            return
+        source, problem = (None, f"DB 자료를 읽지 못해 합성 예시로 시작했습니다: {error}") if error is not None else result
+        startup.complete_step("source")
+        window = build_window(source, problem)
+        install_reconnect(problem)
+        window.restoreGeometry(startup.saveGeometry())
+        startup.complete_step("window")
+
+        def show_ready_window():
+            if not startup.accepting or window is None:
+                return
+            startup.complete_step("query")
+            window.show()
+            startup.close()
+            if args.auto_close_ms:
+                QTimer.singleShot(args.auto_close_ms, lambda: window.close())
+
+        query_request = getattr(window, "query_request", None)
+        if query_request is not None and (source is None or source.dates):
+            def initial_query_finished(*_):
+                if not startup.accepting or query_request.busy:
+                    return
+                query_request.completed.disconnect(initial_query_finished)
+                show_ready_window()
+            query_request.completed.connect(initial_query_finished)
+        else:
+            # 자료가 없으면 조회 생략이 확정된 뒤, 단순 공급자는 예약된 첫 적용 뒤에 완료한다.
+            QTimer.singleShot(0, startup, show_ready_window)
+
+    startup.request.completed.connect(finish_startup)
+    # SETRON_DB_* 설정 확인과 첫 DB 읽기는 창을 표시한 뒤 워커에서 시작한다.
+    QTimer.singleShot(0, startup, lambda: startup.request.start(BackgroundRead(dashboard_source_from_env)) if startup.accepting else None)
     return app.exec()

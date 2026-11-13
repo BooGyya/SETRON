@@ -55,7 +55,7 @@ def test_screen_has_all_replay_controls_and_defaults_to_latest_observation(own):
     assert set(page.query_panel.combos) == {"site_key", "fab_key", "line_key", "group_key"}
     assert [b.text() for b in page.legend_tools] == ["전체 해제"]  # 버튼 하나로 선택·해제 전환
     # 요청 2-1: 날짜 칩 대신 재생 간격
-    assert [b.text() for b in page.interval_buttons.values()] == ["저장일마다", "1주", "1개월", "3개월"]
+    assert [b.text() for b in page.interval_buttons.values()] == ["지정 일수", "1주", "1개월", "3개월"]
     assert page.interval_buttons[None].isChecked()
     assert [page.view_controls.row_body.itemAt(i).widget() for i in range(3)] == [
         page.view_tabs, page.grouping_tabs, page.timeline]
@@ -124,6 +124,29 @@ def test_play_pause_restart_and_end_use_cached_frames_without_more_reads(own):
     assert page.index == 5 and not page.pause_button.isEnabled()
     assert page.data is data and len(calls) == 1
     assert 0 <= page.progress.value() <= 1000
+
+
+def test_position_slider_under_play_buttons_drags_to_a_frame_and_follows_playback(own):
+    """11-13 요청: 실행/일시정지 아래 막대를 끌면 그 시점으로 옮기고(재생은 멈춤), 재생하면 막대가 따라간다."""
+    calls = []
+    source = demo_dashboard_source()
+
+    def load(request):
+        calls.append(request)
+        return load_replay(source, request)
+
+    page = replay_page(own, loader=load)
+    controls = page.playback_controls
+    slider = page.position_slider
+    layout = controls.layout()
+    assert layout.indexOf(slider) == layout.count() - 1                    # 재생 버튼 줄 아래
+    assert slider.isEnabled() and (slider.minimum(), slider.maximum(), slider.value()) == (0, 5, 5)
+    assert page.play() and page.index == 0 and slider.value() == 0
+    page.advance()
+    assert slider.value() == 1                                              # 재생하면 막대가 따라간다
+    slider.setValue(3)                                                      # 끌어서 옮기기
+    assert page.index == 3 and not page.timer.isActive() and controls.frame_label.text() == "4 / 6"
+    assert page.play_button.isEnabled() and len(calls) == 1                 # 다시 읽지 않는다
 
 
 def test_real_timer_advances_and_hiding_page_stops_it(own):
@@ -249,8 +272,11 @@ def test_interval_buttons_rebuild_frames_without_reading_again(own):
     page.advance()
     assert page.index == 1 and page.frame.day == date(2026, 5, 28)
     assert "마지막 저장일 2026-05-21 기준" in page.achievement.toolTip()
-    # 플로팅에는 적용률만 표시하고 저장 기준일은 툴팁에서 확인한다.
+    # 플로팅에서 재생일과 이어받은 관측 기준일을 함께 확인한다.
     assert "05-21 저장 기준" in page.achievement.toolTip()
+    assert page.playback_controls.date_label.text() == "재생일 2026-05-28"
+    assert page.playback_controls.observation_label.text() == "관측 기준 2026-05-21 · 이전 자료"
+    assert page.playback_controls.frame_label.text() == f"2 / {len(page.frames)}"
     # 재생 중 간격을 바꾸면 멈추지 않고, 보던 날짜(05-28) 전 가장 가까운 시점부터 이어서 재생한다.
     page.interval_buttons["quarter"].click()
     assert [f.day for f in page.frames] == [date(2026, 5, 21), date(2026, 8, 21), date(2026, 10, 21)]
@@ -286,13 +312,13 @@ def test_interval_too_long_for_period_is_disabled(own):
     assert not any(page.interval_buttons[s].isEnabled() for s in ("week", "month", "quarter"))
     assert not page.set_interval("week") and page.step is None
     first = page.interval_buttons[None]
-    assert first.text() == "저장일마다" and page.timeline._current_step is None
+    assert first.text() == "지정 일수" and page.timeline._current_step is None
     assert first.toolTip() == "실제 저장된 날짜마다 재생"
     first.click()
     page.timeline.day_dialog.setIntValue(3)
     page.timeline.day_dialog.accept()
     assert page.step is None and page.timeline._current_step is None
-    assert first.text() == "저장일마다" and first.toolTip() == "실제 저장된 날짜마다 재생"
+    assert first.text() == "지정 일수" and first.toolTip() == "실제 저장된 날짜마다 재생"
 
 
 def test_chart_line_and_points_show_dashboard_trend_hover(own):
@@ -328,6 +354,9 @@ def test_playback_buttons_share_design_and_float_at_body_bottom(own):
     assert page.height() - controls.geometry().bottom() == 17
     assert page.content.body.indexOf(controls) == -1
     assert controls.isAncestorOf(page.achievement) and controls.isAncestorOf(page.progress)
+    assert controls.date_label.text() == "재생일 2026-10-21" and controls.frame_label.text() == "6 / 6"
+    assert controls.observation_label.text() == "실제 저장일과 같은 시점"
+    assert controls.scope_label.text() == "전체 범위"
     assert page.content.body.indexOf(page.achievement) == page.content.body.indexOf(page.progress) == -1
     assert page.progress.height() == 4 and y(page.progress) < y(page.play_button)
     assert page.play_button.styleSheet() == page.pause_button.styleSheet() == page.restart_button.styleSheet()
@@ -349,6 +378,32 @@ def test_playback_speed_changes_active_timer_without_reloading_or_resetting_fram
     assert page.playback_speed == 4 and page.timer.interval() == 250
 
 
+def test_floating_rate_scope_explains_legend_display_and_group_filtering(own):
+    page = replay_page(own)
+    controls, data = page.playback_controls, page.data
+    full = page.achievement.text(), page.progress.value()
+    assert controls.scope_label.text() == "전체 범위"
+    page.set_all_trends(False)
+    assert not page.chart.trends
+    assert (page.achievement.text(), page.progress.value()) == full
+    assert controls.scope_label.text() == "전체 범위" and "표시만" in controls.scope_label.toolTip()
+    page.view_tabs.setCurrentIndex(1)
+    assert page.heatmap.visible_ids and controls.scope_label.text() == "전체 범위"
+    page.set_grouping("group")
+    page.set_all_groups(False)
+    assert controls.scope_label.text() == "선택 설비군"
+    assert page.achievement.text() == "적용률 —" and page.heatmap.visible_ids == ()
+    assert controls.date_label.text() == f"재생일 {page.frame.day}" and controls.frame_label.text() == "6 / 6"
+    page.legend_buttons["c3"].click()
+    assert controls.scope_label.text() == "선택 설비군" and page.heatmap.visible_ids
+    page.set_all_groups(True)
+    assert controls.scope_label.text() == "전체 범위"
+    assert (page.achievement.text(), page.progress.value()) == full and page.data is data
+    page.invalidate()
+    assert controls.date_label.text() == "재생일 —" and controls.frame_label.text() == "0 / 0"
+    assert controls.observation_label.text() == "" and controls.scope_label.toolTip() == ""
+
+
 def test_playback_overlay_tracks_viewport_and_hides_on_other_pages_and_drawer(own):
     window = own(create_window())
     window.resize(1100, 800)
@@ -358,12 +413,19 @@ def test_playback_overlay_tracks_viewport_and_hides_on_other_pages_and_drawer(ow
     controls, viewport = page.playback_controls, window.scroll.viewport()
     assert controls.parentWidget() is viewport and controls.isVisible()
     assert abs(controls.geometry().center().x() - viewport.rect().center().x()) <= 1
-    initial = controls.geometry()
     page.view_tabs.setCurrentIndex(1)
     QTest.qWait(40)
+    # 보기를 바꾸면 문서 높이에 따라 수직 스크롤바가 생겨 viewport 폭이 달라질 수 있다.
+    assert abs(controls.geometry().center().x() - viewport.rect().center().x()) <= 1
+    initial = controls.geometry()
+    initial_viewport = viewport.size()
     window.scroll.verticalScrollBar().setValue(window.scroll.verticalScrollBar().maximum())
     QTest.qWait(20)
-    assert controls.geometry() == initial
+    assert controls.size() == initial.size()
+    assert abs(controls.geometry().center().x() - viewport.rect().center().x()) <= 1
+    assert viewport.height() - controls.geometry().bottom() == 17
+    if viewport.size() == initial_viewport:
+        assert controls.geometry() == initial
     page.open_equipment(next(iter(page.heatmap.tile_buttons)))
     QTest.qWait(20)
     assert not controls.isVisible()
@@ -676,8 +738,21 @@ def test_replay_has_no_main_horizontal_overflow_and_header_layout_recovers(own, 
     until(lambda: not page.busy)
     QTest.qWait(50)
     assert window.scroll.horizontalScrollBar().maximum() == 0
+    controls = page.playback_controls
+    assert controls.geometry().left() >= 12 and controls.geometry().right() <= window.scroll.viewport().width() - 12
+    assert controls.height() <= 110
+    for widget in (controls.date_label, controls.frame_label, controls.observation_label, controls.scope_label,
+                   page.play_button, page.pause_button, page.restart_button, page.speed_tabs):
+        assert controls.rect().contains(widget.mapTo(controls, widget.rect().topLeft()))
+        assert controls.rect().contains(widget.mapTo(controls, widget.rect().bottomRight()))
     assert page.width() <= window.scroll.viewport().width()
     assert page.reset_button.iconSize() == window.query_panel.reset_button.iconSize()
+    if page.query_panel._collapsed:
+        assert page.query_panel.compact_summary.isVisible()
+        assert page.query_panel.collapse_button.text() == "필터 펼치기"
+        page.query_panel.collapse_button.click()
+        QTest.qWait(20)
+        assert not page.query_panel._collapsed and window.scroll.horizontalScrollBar().maximum() == 0
     assert page.query_panel.search_button.isVisible() and page.query_panel.search_button.text() == ""
     assert page.query_panel.search_button.x() > page.reset_button.geometry().right()
     assert page.query_panel.card.property("outlined") is True
@@ -832,6 +907,9 @@ def test_empty_period_clears_previous_achievement_tooltip(own):
     assert page.apply_query()
     until(lambda: not page.busy)
     assert page.data.frames == () and page.achievement.toolTip() == ""
+    assert page.playback_controls.date_label.text() == "재생일 —"
+    assert page.playback_controls.frame_label.text() == "0 / 0"
+    assert page.playback_controls.observation_label.text() == ""
 
 
 def test_heatmap_reuses_tiles_and_matches_version_heatmap_presentation(own):

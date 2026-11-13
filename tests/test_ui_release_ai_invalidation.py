@@ -36,6 +36,7 @@ def saved_ai_window(app, storage):
         ready_pages(window)
         window.query_panel.set_target_draft((TargetN(1, 1, selected),))
         window.query_panel.apply_draft()
+        wait_until(lambda: window.pages["dashboard"].snapshot is not None)
         assert window.pages["dashboard"].snapshot.summary.compliant == 1
         yield window, saver, calls
     finally:

@@ -16,6 +16,10 @@ class OriginalItemRow:
     row: int
     headers: tuple[str, ...]
     values: tuple[str, ...]
+    # 시트에서 가져오기 규칙(release_rules)으로 정한 Jira 열 (11-13). None이면 정하지 못한 시트라 행 머리글로 읽는다.
+    # "": 그 시트에 Jira 열이 없다 · 그 밖: 읽는 법을 정하는 머리글('JIRA' · 'Issue' · 'REMARK' 등).
+    jira_header: str | None = None
+    jira_value: str = ""
 
     @property
     def document(self):
@@ -39,11 +43,13 @@ class ItemJira:
     - codes: 원본에 적힌 Jira 코드(중복 제거, 원본 순서).
     - status: found(코드 있음)·empty(Jira 열은 있으나 빈 칸)·no_column(원본 행에 Jira 열 없음)·no_original(보관 원본 행 없음).
     - sources: 코드가 나온 '입력 작업 N · 시트 · 행' 위치.
+    - stored: 정식 jira_key 저장값이면 True. 비워 둔 저장값도 원본에서 다시 채우지 않는다.
     """
 
     codes: tuple[str, ...]
     status: str
     sources: tuple[str, ...] = ()
+    stored: bool = False
 
     @property
     def label(self):
@@ -59,6 +65,8 @@ class ItemJira:
 
     @property
     def tooltip(self):
+        if self.stored:
+            return ("JIRA 이슈코드: " + ", ".join(self.codes) + ("\n" + "\n".join(self.sources) if self.sources else "")) if self.codes else "저장된 JIRA 이슈코드가 없습니다."
         if self.codes:
             return "릴리즈노트 원본 Jira: " + ", ".join(self.codes) + ("\n" + "\n".join(self.sources) if self.sources else "")
         return {JIRA_EMPTY: "릴리즈노트 원본의 Jira 칸이 비어 있습니다.",
@@ -86,15 +94,23 @@ def item_jira(rows, item_id):
     mine = [r for r in rows if r.item_id == item_id]
     if not mine:
         return ItemJira((), JIRA_NO_ORIGINAL)
+    from setron.features.item.jira import codes_in
+
     codes, sources, has_column = [], [], False
     for row in mine:
         found = []
-        for header, value in zip(row.headers, row.values):
-            if _jira_column(header):
+        if row.jira_header is not None:
+            # 가져오기와 같은 규칙으로 정한 열 하나만 읽는다 (Jira 열이 있으면 비고 열은 합치지 않는다)
+            if row.jira_header:
                 has_column = True
-                found.extend(_jira_cell_codes(value))
-            elif _header_key(header) in _REMARK_HEADERS:
-                found.extend(_JIRA_KEY.findall(value))
+                found.extend(codes_in(row.jira_value, row.jira_header))
+        else:
+            for header, value in zip(row.headers, row.values):
+                if _jira_column(header):
+                    has_column = True
+                    found.extend(_jira_cell_codes(value))
+                elif _header_key(header) in _REMARK_HEADERS:
+                    found.extend(_JIRA_KEY.findall(value))
         if found:
             sources.append(f"{row.document} · {row.row}행")
         codes.extend(found)
@@ -134,6 +150,47 @@ def original_item_rows_from_batches(batches, items):
     return _original_item_rows(raw_by_batch.get, items)
 
 
+# 내용 머리글 (가져오기 규칙의 content 별칭과 같은 이름). C3 노트는 'Description'이다 (11-13).
+_CONTENT_HEADERS = frozenset(("내용", "update내용", "update", "변경내용", "변경사항", "description", "desc"))
+
+
+def _letters(number):
+    text = ""
+    while number:
+        number, rest = divmod(number - 1, 26)
+        text = chr(ord("A") + rest) + text
+    return text
+
+
+def _sheet_jira(cells):
+    """시트의 Jira 열을 가져오기와 같은 규칙으로 정한다 (11-12 멘토 답변: 설비군마다 머리글이 다르다).
+
+    O2 'Issue' · O5 'JIRA' · O3 'JIRA ID' · C4 'REMARK'. 머리글 이름(두 줄 머리글 포함) → 'ETOJ-1234' 모양이 많은 열.
+    return
+    - None: 세로형 머리글을 찾지 못한 시트 (예: 버전이 열로 놓인 시트). 행 머리글로 읽는다.
+    - ("", ""): 머리글은 찾았지만 Jira 열이 없다.
+    - (열 문자, 읽는 법 머리글).
+    """
+    from setron.features.rule_extraction.release_rules import _jira_column, find_header
+
+    if not cells:
+        return None
+    last_row = max(cells)
+    last_column = max((_column_number(c) for values in cells.values() for c in values), default=0)
+    rows = [[None] * last_column for _ in range(last_row)]
+    for r, values in cells.items():
+        for c, value in values.items():
+            rows[r - 1][_column_number(c) - 1] = value
+    found = find_header(rows)
+    if found is None:
+        return None
+    h, cols, _ = found
+    jira = _jira_column(rows, h, cols)
+    if jira is None:
+        return "", ""
+    return _letters(jira[0] + 1), jira[1]
+
+
 def _original_item_rows(raw_for_batch, items):
     """없는 문서명·셀·열은 만들지 않고 현재 Item의 출처가 가리키는 행만 읽는다."""
     batches, sheets, result, seen = {}, {}, [], set()
@@ -157,10 +214,9 @@ def _original_item_rows(raw_for_batch, items):
                         if match:
                             cells.setdefault(int(match[2]), {})[match[1]] = value
                     headers = [r for r, values in cells.items() if any(
-                        re.sub(r"\s+", "", _text(v)).casefold() in {"내용", "update내용", "update", "변경내용"}
-                        for v in values.values())]
-                    sheets[sheet_key] = cells, headers
-                cells, header_rows = sheets[sheet_key]
+                        re.sub(r"\s+", "", _text(v)).casefold() in _CONTENT_HEADERS for v in values.values())]
+                    sheets[sheet_key] = cells, headers, _sheet_jira(cells)
+                cells, header_rows, jira = sheets[sheet_key]
                 rows = {int(match[1]) for address in ref["cells"]
                         if (match := re.fullmatch(r"[A-Z]+([1-9][0-9]*)", address))}
                 for row in sorted(rows):
@@ -172,7 +228,12 @@ def _original_item_rows(raw_for_batch, items):
                     candidates = [r for r in header_rows if r < row]
                     header = cells[max(candidates)] if candidates else {}
                     columns = sorted(set(cells[row]) | set(header), key=_column_number)
+                    jira_header, jira_value = None, ""
+                    if jira is not None:
+                        column, label = jira
+                        jira_header = label if column else ""
+                        jira_value = _text(cells[row].get(column)) if column else ""
                     result.append(OriginalItemRow(item["item_id"], bid, ref["sheet"], row,
                         tuple(_text(header.get(c)) or c for c in columns),
-                        tuple(_text(cells[row].get(c)) for c in columns)))
+                        tuple(_text(cells[row].get(c)) for c in columns), jira_header, jira_value))
     return tuple(result)

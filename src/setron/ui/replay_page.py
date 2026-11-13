@@ -97,6 +97,8 @@ class ReplayPage(QWidget):
         self.pause_button = self.playback_controls.pause_button
         self.restart_button = self.playback_controls.restart_button
         self.speed_tabs = self.playback_controls.speed_tabs
+        self.position_slider = self.playback_controls.position
+        self.playback_controls.frame_dragged.connect(self.select_date)  # 막대로 고른 시점 (재생은 멈춘다)
         self.playback_controls.speed_changed.connect(self.set_playback_speed)
         self.speed_buttons = dict(zip(self.playback_controls.SPEEDS, self.speed_tabs.buttons))
         for speed, control in self.speed_buttons.items():
@@ -151,7 +153,7 @@ class ReplayPage(QWidget):
         if not hasattr(self, "playback_controls"):
             return
         host, controls = self._playback_host, self.playback_controls
-        controls.adjustSize()
+        controls.fit_width(host.width() - 24)
         size = controls.size()
         margins = self.layout().contentsMargins()
         bottom = size.height() + 32
@@ -233,6 +235,7 @@ class ReplayPage(QWidget):
         self.play_button.setEnabled(ready and can_replay(self.frames) and not self.timer.isActive())
         self.pause_button.setEnabled(ready and self.timer.isActive())
         self.restart_button.setEnabled(ready and bool(self.frames))
+        self.position_slider.setEnabled(ready and len(self.frames) > 1)
         self.speed_tabs.setEnabled(ready)
         for step, control in self.interval_buttons.items():
             # 간격이 기간보다 길어 시점이 2개 미만이면 그 간격은 고를 수 없다. 저장일마다는 항상 고를 수 있다.
@@ -275,6 +278,8 @@ class ReplayPage(QWidget):
         try:
             self.state.set_target_draft(self.targets_provider())
             query = self.query_panel.apply_draft()
+            if query is None:
+                return False
             request = ReplayRequest(start, end, query)
         except (ValueError, TypeError):
             self.dirty = True
@@ -494,6 +499,7 @@ class ReplayPage(QWidget):
         self._clear_legend()
         self.chart.clear()
         self.heatmap.clear()
+        self.playback_controls.clear_context()
         self.achievement.setText("적용률 —")
         self.achievement.setToolTip("")  # 이전 조회의 대수 설명이 남지 않게 한다 (QA R-06).
         self.progress.setValue(0)
@@ -505,11 +511,14 @@ class ReplayPage(QWidget):
             self.drawer.close_panel(restore_focus=False)
         frame = self.frame
         if frame is None:
+            self.playback_controls.clear_context()
             return
         # 숨은 보기는 전환할 때 현재 시점을 표시한다. 재생 중에는 보이는 보기만 갱신한다.
         if self.view_tabs.currentIndex() == 0:
             self._draw_chart()
         groups = self.selected_groups() if self.grouping_mode == "group" else None
+        self.playback_controls.set_context(frame.day, frame.snapshot.base_date, self.index, len(self.frames),
+                                          selected_groups=groups is not None)
         summary, observed_count, carried_count = group_view(self.data, frame, groups)
         if summary is None:
             self.achievement.setText("적용률 —")
@@ -539,6 +548,7 @@ class ReplayPage(QWidget):
         self.progress.setToolTip(self.achievement.toolTip())
         if self.view_tabs.currentIndex() == 1:
             self.heatmap.show_frame(self.data, frame, groups)
+        self._position_playback()
 
     def select_date(self, index):
         if self.data is None or self.dirty or not 0 <= index < len(self.frames):

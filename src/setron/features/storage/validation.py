@@ -1,6 +1,7 @@
 """앱 입력값을 MySQL 5.6의 저장 형식으로 변환하고 기존 CHECK 규칙을 검사한다."""
 
 import json
+import re
 from copy import deepcopy
 
 
@@ -37,7 +38,7 @@ BINARY_COLUMNS = {
 DEFAULTS = {
     "equipment_group": {"analysis_enabled": True},
     "release_version": {"item_mapping_status": "UNKNOWN", "edited_fields": []},
-    "item": {"edited_fields": []},
+    "item": {"edited_fields": [], "jira_code": None},
     "release_version_item": {"target_scope": "UNKNOWN", "target_group_ids": None},
     "risk_rule": {"is_enabled": True, "mapping_status": "UNRESOLVED"},
 }
@@ -141,6 +142,28 @@ def json_text(table, field, value, rule):
         fail(table, field, "JSON으로 저장할 수 없는 값입니다.")
 
 
+def normalize_item_jira(values):
+    """이전 jira_key 요청을 canonical jira_code로 바꾼다. 서로 다른 두 값은 거부한다."""
+    from setron.features.item.jira import normalize_jira
+
+    result = deepcopy(values)
+    try:
+        provided = {name: normalize_jira(result[name]) for name in ("jira_code", "jira_key") if name in result}
+    except (TypeError, ValueError) as error:
+        raise StorageValidationError(f"item.jira_code: {error}") from error
+    if len(provided) == 2 and provided["jira_code"] != provided["jira_key"]:
+        fail("item", "jira_code", "jira_code와 이전 jira_key 값이 서로 다릅니다.")
+    if provided:
+        result["jira_code"] = provided.get("jira_code", provided.get("jira_key"))
+    result.pop("jira_key", None)
+    if isinstance(result.get("jira_code"), str):
+        try:
+            result["jira_code"].encode("utf-8")
+        except UnicodeError:
+            fail("item", "jira_code", "UTF-8로 저장할 수 없는 문자열입니다.")
+    return result
+
+
 def encode_record(table, values, *, inserting=False):
     """앱 형식의 관리값을 검증하고 JSON 문자열·UTF-8 바이트로 변환한다.
 
@@ -161,7 +184,7 @@ def encode_record(table, values, *, inserting=False):
     if table not in TABLE_NAMES:
         raise StorageValidationError("지원하지 않는 관리 테이블입니다.")
     result = deepcopy(DEFAULTS.get(table, {})) if inserting else {}
-    result.update(deepcopy(values))
+    result.update(normalize_item_jira(values) if table == "item" else deepcopy(values))
     for field, allowed in ENUMS.get(table, {}).items():
         value = result.get(field)
         if not isinstance(value, (str, type(None))) or value not in allowed:

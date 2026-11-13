@@ -300,23 +300,25 @@ class ImportDeletePage(QWidget):
         self.kind_combo.addItem("릴리즈 노트", ExtractKind.RELEASE_NOTE)
         self.site_combo.addItem("전체", None)
         self.family_combo.addItem(self._family_placeholder, None)
+        # 기간은 버전 리플레이와 같은 '시작 ~ 종료' 칸 하나와 기간 달력으로 고른다 (11-12). 칸 어디를 눌러도 달력이 열린다.
+        # 고른 값은 숨긴 시작일 · 종료일 칸에 넣어 검색 · 확인 규칙은 그대로 쓴다.
+        from setron.ui.date_range import DateRangeButton
+
         self.start, self.end = PeriodDateField(), PeriodDateField()
+        for hidden in (self.start, self.end):
+            hidden.setParent(self)
+            hidden.hide()
+        self.period_button = DateRangeButton()
+        self.period_button.setAccessibleName("삭제할 기간")
+        self.period_button.range_changed.connect(self._period_chosen)
         from setron.ui.versions import _field
-        self.start_box, self.end_box = _field("시작일", self.start), _field("종료일", self.end)
+        self.period_box = _field("기간", self.period_button)
+        self.start_box = self.end_box = self.period_box  # 예전 이름으로 찾는 곳(보이기 · 숨기기)도 같은 칸을 쓴다
         self.site_box, self.family_box = _field("Site", self.site_combo), _field("설비군/계열", self.family_combo)
         self.kind_box = _field("자료 종류", self.kind_combo)
-        self.end_group = QWidget()
-        date_end = QHBoxLayout(self.end_group)
-        date_end.setContentsMargins(0, 0, 0, 0)
-        date_end.setSpacing(12)
-        separator = label("~", 18, medium=True, color=SECONDARY)
-        separator.setFixedSize(12, 42)
-        date_end.addWidget(separator, 0, Qt.AlignmentFlag.AlignBottom)
-        date_end.addWidget(self.end_box)
-        for field, width in ((self.kind_box, 200), (self.site_box, 160), (self.start_box, 190),
-                             (self.end_group, 214), (self.family_box, 200)):
+        for field, width in ((self.kind_box, 200), (self.site_box, 160), (self.period_box, 260), (self.family_box, 200)):
             field.setFixedWidth(width)
-        self.fields_row = _DeleteFilterRow((self.kind_box, self.site_box, self.start_box, self.end_group),
+        self.fields_row = _DeleteFilterRow((self.kind_box, self.site_box, self.period_box),
                                            (self.kind_box, self.family_box))
         filters.body.addWidget(self.fields_row)
         self.quick_choices = QWidget()
@@ -465,6 +467,8 @@ class ImportDeletePage(QWidget):
                 control.currentIndexChanged.connect(self.apply_filter)
             else:
                 control.textChanged.connect(self.apply_filter)
+                control.textChanged.connect(self._show_period)
+        self._show_period()
         self.apply_filter()
 
     @property
@@ -573,7 +577,7 @@ class ImportDeletePage(QWidget):
             return
         if mode == "manual":
             self.quick_buttons[-1].setChecked(True)
-            self.start.setFocus()
+            self.period_button.open_range()  # 직접 선택: 기간 달력을 연다
             return
         days = [b.day for b in self.catalog.batches if b.day and b.kind is ExtractKind.EQUIPMENT_STATUS
                 and (self.site_combo.currentData() is None or b.site == self.site_combo.currentData())] if self.catalog else []
@@ -586,6 +590,19 @@ class ImportDeletePage(QWidget):
         self.start.setText(first.isoformat())
         self.end.setText(end.isoformat())
         self.quick_buttons[("latest", "month", "quarter").index(mode)].setChecked(True)
+
+    def _period_chosen(self, start, end):
+        """기간 달력에서 고른 시작 ~ 종료를 시작일 · 종료일에 넣는다 (직접 선택)."""
+        self.start.setText(start.isoformat())
+        self.end.setText(end.isoformat())
+
+    def _show_period(self, *_):
+        """시작일 · 종료일 값을 기간 칸 글자로 보인다. 비었으면 전체 기간."""
+        days = self._dates()
+        if days is not None:
+            self.period_button.set_range(*days)
+        else:
+            self.period_button.setText("전체 기간" if not (self.start.text() or self.end.text()) else "기간 확인 필요")
 
     def _applied_dates(self):
         _, _, _, start, end = self.applied
@@ -680,7 +697,7 @@ class ImportDeletePage(QWidget):
 
     def _render(self):
         locked = self.busy or self.phase == "unknown"
-        for widget in (self.kind_combo, self.site_combo, self.family_combo, self.start, self.end,
+        for widget in (self.kind_combo, self.site_combo, self.family_combo, self.start, self.end, self.period_button,
                        self.reload_button, self.search_button, self.cancel_button, *self.quick_buttons):
             widget.setEnabled(not locked)
         selected = self._selected_batches()

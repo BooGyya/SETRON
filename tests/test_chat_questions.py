@@ -113,7 +113,7 @@ def test_search_questions(question, expected):
 def test_memory_area_and_count_question():
     result = ask("화성 메모리 O3 설비 몇 대야?")
     assert result.request.areas == ("MEMORY",)
-    assert codes(result) == ["H-004"] and "화성 메모리 M-O3 설비는 1대입니다." in result.summary
+    assert codes(result) == ["H-004"] and "화성 Memory M-O3 설비는 1대입니다." in result.summary
 
 
 def test_hpa_is_excluded_and_reported():

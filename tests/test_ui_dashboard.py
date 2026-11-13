@@ -285,7 +285,7 @@ def test_matrix_distinguishes_site_from_area_and_divides_only_at_site_changes(wi
         ["테스트 A", "P1"], ["테스트 A", "구역 미확인"], ["테스트 B", "P1"], ["전체"],
     ]
     (site, area), (same_site, unknown_area), (other_site, _), (total,) = locations
-    assert unknown_area.accessibleName() == "Site 테스트 A · 원본 구역 미확인"
+    assert unknown_area.accessibleName() == "사업장 테스트 A · 원본 구역 미확인"
     group = grid.itemAtPosition(0, 1).widget()
     assert summarized_ids == [(1, 2, 3, 4), (5,)]
     assert "테스트 A 전체" in site.toolTip() and "설비 4대" in site.toolTip()
@@ -374,7 +374,8 @@ def test_composition_labels_stay_centered_after_applying_another_site(window):
         window.query_panel.apply_draft()
         QTest.qWait(20)
 
-        chips = [page.composition_rows.itemAt(row).layout().itemAt(0).widget() for row in range(3)]
+        chips = [widget for widget in page.composition_legend.findChildren(QLabel)
+                 if widget.text() in ("달성", "미달", "확인 필요")]
         assert [chip.text() for chip in chips] == ["달성", "미달", "확인 필요"]
         assert all("border:none" in chip.styleSheet() for chip in chips)
         assert not any("대와 중복" in caption.text() for caption in page.content.findChildren(QLabel))
@@ -732,8 +733,9 @@ def test_responsive_dashboard_has_only_internal_table_scroll(window, size, mode)
     for metric in page.metrics.values():
         point = metric.mapTo(page, QPoint(0, 0))
         assert point.x() >= 0 and point.x() + metric.width() <= page.width()
-    # VER4 상단 지표는 5장(달성률·분석 대상·목표 미달·버전 확인 필요·위험 후보), 최소 폭 200·간격 12로 줄바꿈한다.
-    assert page.kpi_grid.columns == (5 if page.width() >= 1048 else 4 if page.width() >= 836 else 3)
+    # 좁은 화면에서도 요약 지표는 작은 카드 한 행으로 유지해 차트를 가리지 않는다.
+    assert page.kpi_grid.columns == 5
+    assert len({card.mapTo(page, QPoint()).y() for card in page.metrics.values()}) == 1
 
 
 def test_real_entrypoint_registers_dashboard_and_heatmap_and_does_not_auto_apply(app):

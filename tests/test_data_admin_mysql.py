@@ -328,7 +328,7 @@ def test_lines_are_registered_under_memory_or_foundry_and_judge_new_imports(stor
     assert next(r for r in service.lines() if r.site == "QA라인") == module_line("QA라인", "QL1", "FOUNDRY", 0, True)
     assert default_area("QA라인", "QL1") == "FOUNDRY"  # 가져오기 판정에 바로 쓰인다
     for args, message in ((("QA라인", "ql1", "MEMORY"), "이미 있는"), (("없는Site", "X1", "MEMORY"), "없는 Site"),
-                          (("QA라인", "X2", "HPA"), "메모리 또는 파운드리")):
+                          (("QA라인", "X2", "HPA"), "Memory 또는 Foundry")):
         with pytest.raises(StorageValidationError, match=message):
             service.add_line(*args)
     assert service.rename_line("QA라인", "QL1", "QL2") == 0
@@ -345,6 +345,67 @@ def test_lines_are_registered_under_memory_or_foundry_and_judge_new_imports(stor
     assert "QA라인2" not in service.sites()
     kinds = [e.kind for e in service.history()[:3]]
     assert kinds and all(kinds)
+
+
+def test_group_table_edits_rename_added_groups_and_category_follows_variants(storage):
+    """11-12: 설비 탭 표 수정. 추가한 설비군은 쓰여도 이름을 바꾸고(설비 현황 모델명 · 계열도), 기본 설비군 이름은 막는다."""
+    service = DataAdminService(storage)
+    base = service.create_group("QA표군", "KCTC")
+    variant = service.create_group("QA표군 개조", "KCTC", base.group_id)
+    service.add_site("QA표")
+    batch = service.create_sheet("QA표", date(2026, 11, 8), "MEMORY")
+    sid = service.add_row(batch, {"group_name": "QA표군", "line": "T1", "equipment_code": "QA-T1", "version_raw": "v1"}, None)
+    assert service.update_groups([(base.group_id, "QA표군2", "OXIDE")]) == 2
+    groups = {g.group_id: g for g in service.equipment_overview()[0]}
+    assert (groups[base.group_id].name, groups[base.group_id].category) == ("QA표군2", "OXIDE")
+    assert groups[variant.group_id].category == "OXIDE"                      # 개조형은 상위 대분류를 따라간다
+    row = next(r for r in service.sheet_rows(batch).rows if r.snapshot_id == sid)
+    assert row.model_name == "QA표군2"                                          # 모델명은 설비군을 따라간다
+    assert [f.name for f in service.release_families() if f.group_id == base.group_id] == ["QA표군2"]
+    assert [(e.field, e.before, e.after) for e in service.history()[:2]] == [("대분류", "KCTC", "OXIDE"),
+                                                                             ("이름", "QA표군", "QA표군2 (설비 현황 1건)")]
+    c4 = next(g for g in groups.values() if g.name == "M-C4")
+    assert c4.builtin and not groups[base.group_id].builtin
+    with pytest.raises(StorageValidationError, match="기본 설비군"):
+        service.update_groups([(c4.group_id, "M-C4X", None)])
+    with pytest.raises(StorageValidationError, match="이미 있는"):
+        service.update_groups([(base.group_id, "m-c4", None)])
+    with pytest.raises(StorageValidationError, match="개조형"):
+        service.update_groups([(variant.group_id, None, "POLY")])
+
+
+def test_locations_rename_merge_and_move_equipment_in_one_save(storage):
+    """11-12: 위치 탭 표 수정을 순서대로 한 번에 저장한다. 있는 라인 이름이면 합치고, 고른 설비는 다른 라인으로 옮긴다."""
+    service = DataAdminService(storage)
+    service.add_site("QA위치")
+    service.add_line("QA위치", "QA1", "MEMORY")
+    service.add_line("QA위치", "QA2", "FOUNDRY")
+    batch = service.create_sheet("QA위치", date(2026, 11, 9), "MEMORY")
+    first = service.add_row(batch, {"group_name": "M-C4", "line": "QA1", "equipment_code": "QA-L1", "version_raw": "v1"}, None)
+    second = service.add_row(batch, {"group_name": "M-C4", "line": "QA1", "equipment_code": "QA-L2", "version_raw": "v1"}, None)
+    rows = {r.snapshot_id: r for r in service.sheet_rows(batch).rows}
+    moved = rows[second].equipment_id
+    counts = service.apply_locations([
+        {"kind": "move", "site": "QA위치", "to": "QA2", "equipment": [[moved, "QA1"]]},   # QA-L2만 파운드리 QA2로
+        {"kind": "line", "site": "QA위치", "old": "QA1", "new": "QA1A"},                  # 새 이름
+        {"kind": "site", "old": "QA위치", "new": "QA위치2"}])
+    assert counts == {"move": 1, "line": 1, "site": 2}
+    rows = {r.snapshot_id: r for r in service.sheet_rows(batch).rows}
+    assert (rows[first].line, rows[first].production_area) == ("QA1A", "MEMORY")
+    assert (rows[second].line, rows[second].production_area) == ("QA2", "FOUNDRY")   # 대상 라인의 메모리/파운드리를 따른다
+    assert service.apply_locations([{"kind": "line", "site": "QA위치2", "old": "QA2", "new": "qa1a"}]) == {"line": 1}
+    lines = {(r.line, r.equipment_count) for r in service.lines() if r.site == "QA위치2"}
+    assert lines == {("QA1A", 2)}                                                     # QA2를 QA1A에 합쳤다
+    assert {r.production_area for r in service.sheet_rows(batch).rows} == {"MEMORY"}
+    assert service.history()[0].field == "라인 합치기"
+    with pytest.raises(StorageValidationError, match="없는 라인으로는"):
+        service.apply_locations([{"kind": "move", "site": "QA위치2", "to": "없음", "equipment": [[moved, "QA1A"]]}])
+    _save(storage, "QA-DA-LOC")   # 화성 설비 현황
+    with pytest.raises(StorageValidationError, match="이미 있는 Site"):
+        service.apply_locations([{"kind": "site", "old": "QA위치2", "new": "화성"}])
+    service.add_line("QA위치2", "QX", "MEMORY")
+    with pytest.raises(StorageValidationError, match="이미 있는 라인"):
+        service.rename_line("QA위치2", "QX", "qa1a")   # 합치기 없는 이름 변경은 그대로 막는다
 
 
 def module_line(*values):
@@ -372,7 +433,7 @@ def test_new_row_on_a_registered_foundry_line_gets_the_foundry_family(storage):
 def test_empty_sheet_keeps_its_area_and_rows_know_the_latest_group_version(storage):
     service = DataAdminService(storage)
     service.add_site("QA기본영역")
-    with pytest.raises(StorageValidationError, match="메모리 또는 파운드리"):
+    with pytest.raises(StorageValidationError, match="Memory 또는 Foundry"):
         service.create_sheet("QA기본영역", date(2026, 11, 7), "HPA")
     batch = service.create_sheet("QA기본영역", date(2026, 11, 7), "FOUNDRY")
     service.add_line("QA기본영역", "QB1", "MEMORY")

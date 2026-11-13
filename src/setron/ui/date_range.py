@@ -173,6 +173,9 @@ class DatePickerEdit(DateEdit):
         super().__init__(parent, open_on_click=open_on_click)
         self.dialog = None
 
+    def is_calendar_visible(self):
+        return self.dialog is not None and self.dialog.isVisible()
+
     def open_calendar(self):
         if not self.isEnabled() or self.isReadOnly() or not self.calendarPopup():
             return
@@ -195,7 +198,7 @@ class DatePickerEdit(DateEdit):
         if day != self.date():
             self.setDate(day)
         else:
-            self.calendarWidget().activated.emit(day)
+            self.calendar_activated.emit(day)
 
     def _open_from_click(self, event):
         if (event.button() != Qt.MouseButton.LeftButton or not self.isEnabled()

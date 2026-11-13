@@ -16,6 +16,7 @@ AI에는 수가 적은 선택지(사업장·라인·설비군·모델명·계열
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from datetime import date
 
 from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
@@ -191,5 +192,4 @@ def _pm_matches(
 
 
 def _with_pms(record: EquipmentRecord, pms: tuple[PmVersion, ...]) -> EquipmentRecord:
-    return EquipmentRecord(record.equipment_id, record.equipment_code, record.base_date, record.site,
-                           record.line, record.model_name, pms, record.is_hpa)
+    return replace(record, pms=pms)

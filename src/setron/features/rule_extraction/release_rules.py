@@ -117,6 +117,65 @@ def _item_no(value: Any) -> str | None:
     return text or None
 
 
+def _short_text(value: Any) -> str:
+    text = _text(value).strip()
+    return text if text and len(text) <= 32 else ""
+
+
+def _jira_column(rows: list[list[Any]], h: int, cols: dict[str, int]):
+    """Item별 Jira 코드를 읽을 열 (11/12 멘토 답변: 설비군마다 머리글이 다르다).
+
+    O2 'Issue'(적용대상 아래 두 번째 머리글 줄) · O5 'JIRA' · O3 'JIRA ID' · C4 'REMARK'.
+    A. 머리글 이름: 머리글 줄과 바로 아래 보조 머리글 줄에서 Jira 열(jira · 지라 · issue · ticket · 항목id)을 먼저,
+       없으면 비고 열(remark · 비고)을 쓴다. 둘 다 있으면 Jira 열만 쓴다(O5의 '비고' 코드는 합치지 않는다).
+    B. 이름으로 못 찾으면: Item 행의 절반 이상(최소 2행)에 'ETOJ-1234' 모양이 있는 열 중 가장 많은 열.
+
+    return
+    - (열, 읽기 방식에 쓸 머리글, 찾은 방법 'header' · 'values', 머리글 줄) 또는 None.
+    """
+    from setron.features.item.jira import JIRA_KEY, header_kind
+
+    content_col, version_col = cols.get("content"), cols.get("version")
+    candidates = []
+    for header_row in (h, h + 1):
+        if header_row >= len(rows):
+            continue
+        row = rows[header_row]
+        if header_row == h + 1 and (_text(row[content_col]).strip() if content_col is not None else "") \
+                or (header_row == h + 1 and version_col is not None and _text(row[version_col]).strip()):
+            continue                                   # 아래 줄이 Item 행이면 보조 머리글 줄이 아니다
+        for c, value in enumerate(row):
+            kind = header_kind(_short_text(value)) if _short_text(value) else None
+            if kind:
+                candidates.append((0 if kind == "jira" else 1, header_row, c, _short_text(value)))
+    if candidates:
+        _, header_row, c, text = min(candidates)
+        return c, text, "header", header_row
+    items = [r for r in range(h + 1, len(rows)) if content_col is not None and _text(rows[r][content_col]).strip()]
+    counts: dict[int, int] = {}
+    for r in items:
+        for c, value in enumerate(rows[r]):
+            if c in (content_col, version_col) or not JIRA_KEY.search(_text(value)):
+                continue
+            counts[c] = counts.get(c, 0) + 1
+    if counts:
+        c, count = max(counts.items(), key=lambda item: (item[1], -item[0]))
+        if count >= max(2, (len(items) + 1) // 2):
+            return c, "REMARK", "values", h                # 값 모양으로 찾은 열은 그 안의 Jira 키만 읽는다
+    return None
+
+
+def _jira_note(found, out):
+    """어느 열에서 Jira를 읽었는지 검토 화면에 남긴다(저장을 막지 않는 확인 안내)."""
+    column, header, how, header_row = found
+    items = [row for row in out if row.values]
+    filled = sum(1 for row in items if row.values.get("jira_code"))
+    where = (f"머리글 '{header}' 열" if how == "header"
+             else "머리글 이름이 없어 'ETOJ-1234' 모양 값이 가장 많은 열")
+    return (f"Jira 코드: {where}에서 읽었습니다 · 저장 행 {len(items)}개 중 {filled}개에 코드가 있습니다. "
+            "다른 열이면 검토 표에서 고쳐 주세요.", "jira_code", (header_row, column))
+
+
 def parse_release(rows: list[list[Any]]) -> list[ReleaseRow] | None:
     """시트 값에서 버전·Item 행을 읽는다. 세로형이 아니면 None."""
     width = max((len(r) for r in rows), default=0)
@@ -125,6 +184,10 @@ def parse_release(rows: list[list[Any]]) -> list[ReleaseRow] | None:
     if not found:
         return None
     h, cols, flags = found
+    jira_found = _jira_column(rows, h, cols)                # A: 머리글 이름(두 줄 머리글 포함) → B: 값 모양
+    cols = {key: value for key, value in cols.items() if key != "jira"}
+    if jira_found is not None:
+        cols["jira"] = jira_found[0]
     out: list[ReleaseRow] = []
     title = _title(rows, h)
     common: dict[str, str] = {}
@@ -169,8 +232,15 @@ def parse_release(rows: list[list[Any]]) -> list[ReleaseRow] | None:
         no_value, no_col = cell(row, "no")
         date_value, date_col = cell(row, "date")
         jira_value, jira_col = cell(row, "jira")         # JIRA 열 값 · 비고 속 ETOJ-1234 (11/11 멘토링)
-        jira_header = rows[h][jira_col] if jira_col is not None and jira_col < len(rows[h]) else None
-        jira = join_codes(codes_in(jira_value, jira_header)) if jira_col is not None else None
+        jira_header = jira_found[1] if jira_found is not None else None
+        jira_notes = []
+        parts = codes_in(jira_value, jira_header) if jira_col is not None else ()
+        try:
+            jira = join_codes(parts)
+        except ValueError as error:
+            # 검토 화면에서 전체 원문과 길이 오류를 보이도록 보존한다. 저장 검증이 명시적으로 차단한다.
+            jira = ", ".join(parts)
+            jira_notes.append((str(error), "jira_code", (r, jira_col)))
         row_date = current_date
         if _text(date_value).strip() and (found_date := _DATE.search(_text(date_value))):
             row_date = (found_date.group(0), (r, date_col))
@@ -187,12 +257,14 @@ def parse_release(rows: list[list[Any]]) -> list[ReleaseRow] | None:
             if row_date:
                 base_positions["release_date"] = row_date[1]
             if not marks:
-                out.append(ReleaseRow(dict(base_values), dict(base_positions)))
+                out.append(ReleaseRow(dict(base_values), dict(base_positions), list(jira_notes)))
                 continue
             for c, header, mark in marks:
                 values = {**base_values, "target_models": header, "modification_mark": mark}
                 positions = {**base_positions, "target_models": (h, c), "modification_mark": (r, c)}
-                out.append(ReleaseRow(values, positions))
+                out.append(ReleaseRow(values, positions, list(jira_notes)))
+    if out and jira_found is not None:
+        out[0].notes.append(_jira_note(jira_found, out))
     if out and header_notes:
         out[0].notes.extend(header_notes)
     # 재배포(같은 버전·다른 출시일) 안내는 AI 추출과 같이 검증 단계(excel_import._release_issues)가 남긴다.

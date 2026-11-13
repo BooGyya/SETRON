@@ -12,7 +12,7 @@ from setron.features.release.refresh_schemas import RefreshContext
 from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
 from setron.features.risk.service import validate_rule
 from setron.features.storage.inputs import identifier, require, required_text
-from setron.features.storage.validation import encode_record
+from setron.features.storage.validation import encode_record, normalize_item_jira
 
 
 _SOFTWARE_FIELDS = frozenset({"family_id", "version_raw", "release_version_id"})
@@ -27,6 +27,8 @@ def validate_changes_in(tx, table, current, changes):
     """
     require(isinstance(current, Mapping) and isinstance(changes, Mapping),
             "현재 관리값과 수정할 항목이 필요합니다.")
+    if table == "item":
+        current, changes = normalize_item_jira(current), normalize_item_jira(changes)
     if table == "equipment_pm":
         pm = {field: value for field, value in current.items() if field not in _SOFTWARE_FIELDS}
         pm.update({field: value for field, value in changes.items() if field not in _SOFTWARE_FIELDS})
@@ -54,7 +56,9 @@ def validate_changes_in(tx, table, current, changes):
 
 def _validate_record_in(tx, table, row):
     encoded = encode_record(table, row)
-    tx.repository.validate_columns(tx.repository.table(table), encoded)
+    definition = tx.repository.table(table)
+    encoded = tx.repository._legacy_jira_values(definition, encoded)
+    tx.repository.validate_columns(definition, encoded)
 
 
 def validate_snapshot_in(tx, snapshot_id):

@@ -288,7 +288,7 @@ class VersionManagementPage(VersionsPage):
         metadata = self.workspace.metadata.get(("item", entry.item.item_id), {}) if entry else {}
         data = dict(number=str(entry.item.item_no or "미기재") if entry else "미기재", content=entry.item.content if entry else "Item을 선택하세요.",
                     state=values[row][1] if entry else "미확인", scope=values[row][2] if entry else "미확인", category=metadata.get("category", "미기재"),
-                    jira=metadata.get("jira", "미기재"), remark=metadata.get("remark", "미기재"))
+                    jira=(entry.item.jira_code if entry else None) or metadata.get("jira", "미기재"), remark=metadata.get("remark", "미기재"))
         for key, field in self.item_info.items():
             field.setText(data[key])
         self.edit_item_button.setEnabled(entry is not None)
