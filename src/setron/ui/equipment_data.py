@@ -15,6 +15,8 @@ class EquipmentDetail:
     whole: EquipmentTile
     record: EquipmentRecord
     status: EquipmentStatus | None
+    # 설치 버전·목표 N과 구분한 위험 규칙의 기준 버전 원문. 같은 조회의 상세들이 공유한다.
+    risk_reference_versions: dict[tuple[int, int], str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -41,14 +43,18 @@ def equipment_data(snapshot: DashboardSnapshot, source: DashboardSource) -> Equi
     normal = tuple(current[eid] for eid in normal_ids)
     # 전체 판정은 같은 기준일/같은 호기의 모든 SW로 따로 계산한다. 선택 판정을 덮지 않는다.
     # 날짜가 다른 HPA는 공통 집계에 섞지 않고 원본 표시만 추가한다.
-    summary = summarize(normal, source.families, snapshot.effective_targets)
+    families = source.families
+    summary = summarize(normal, families, snapshot.effective_targets)
     whole = {t.equipment_id: t for t in record_tiles(normal + hpa, summary, source,
              hpa_locations=dict(snapshot.hpa_lookup_locations))}
     records = {r.equipment_id: r for r in normal + hpa}
     statuses = {e.record.equipment_id: e for e in summary.equipment}
+    reference_versions = {(family_id, release.release_version_id): release.version_raw
+                          for family_id, family in families.items() for release in family.releases}
     thresholds = age_thresholds(source)
     return EquipmentData(snapshot, tuple(EquipmentDetail(tile, whole[tile.equipment_id], records[tile.equipment_id],
-                                                        statuses.get(tile.equipment_id)) for tile in selected),
+                                                        statuses.get(tile.equipment_id),
+                                                        risk_reference_versions=reference_versions) for tile in selected),
                          upgrade_priority(snapshot, source, normal, thresholds))
 
 

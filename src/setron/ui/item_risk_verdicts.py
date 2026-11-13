@@ -21,7 +21,7 @@ from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_risk_dialog import PopupDialog, choice, field, warning_icon
 from setron.ui.import_dialogs import ImportConfirmDialog
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.theme import INK, LINE, SECONDARY, TONES, paint_font
+from setron.ui.theme import INK, LINE, SECONDARY, TONES, font, paint_font, set_widget_font
 
 STATUS_CAPTIONS = {RiskStatus.RISK: "위험 후보", RiskStatus.UNKNOWN: "미확인", RiskStatus.NO_RISK: "위험 없음"}
 STATUS_TONES = {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning", RiskStatus.NO_RISK: "success"}
@@ -79,12 +79,17 @@ def software_versions(record, rule):
     return " / ".join(versions) or "버전 미입력"
 
 
-def _action_style(widget, *, danger=False):
-    ink = TONES["danger"][1] if danger else INK
+def _action_style(widget, *, danger=False, emphasis=False, secondary=False):
+    ink = TONES["danger"][1] if danger else SECONDARY if secondary else INK
+    background = "#f1f3f6" if emphasis else "white"
+    hover = "#e7ebf0" if emphasis else "#f5f6f8"
+    set_widget_font(widget, font(14, medium=True))
+    widget.setMinimumSize(84, 40)
+    widget.setAutoDefault(False)
     widget.setStyleSheet(
-        f"QPushButton {{background:white;color:{ink};border:1px solid {LINE};"
+        f"QPushButton {{background:{background};color:{ink};border:1px solid {LINE};"
         "border-radius:10px;padding:8px 18px;}"
-        "QPushButton:hover {background:#f1f3f6;border-color:#aab2bf;}"
+        f"QPushButton:hover {{background:{hover};border-color:#aab2bf;}}"
         "QPushButton:pressed {background:#e7ebf0;}"
         "QPushButton:focus {border:2px solid #8b95a8;padding:7px 17px;}"
         "QPushButton:disabled {background:#f9fafb;color:#8b95a8;border-color:#e9eef6;}")
@@ -161,8 +166,7 @@ class RuleToggleConfirmDialog(PopupDialog):
         self.cancel_button = button("취소")
         self.confirm_button = button("다시 사용" if enabled else "해제")
         for action in (self.cancel_button, self.confirm_button):
-            _action_style(action)
-            action.setMinimumHeight(40)
+            _action_style(action, emphasis=action is self.confirm_button)
         self.cancel_button.setDefault(True)
         self.confirm_button.setAutoDefault(False)
         self.cancel_button.clicked.connect(self.reject)
@@ -238,14 +242,6 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.setWindowTitle("위험 기준 판정")
         outer = self.body
         outer.setSpacing(12)
-        self.selector = choice("위험 기준 선택")
-        self.selector.setFixedHeight(34)
-        for rule in self.rules:
-            self.selector.addItem((rule.display_name or rule.risk_reason) + ("" if rule.is_enabled else f" ({DISABLED_CAPTION})"),
-                                  rule.risk_rule_id)
-        self.selector.setCurrentIndex(max(0, self.selector.findData(rule_id)))
-        self.selector.setVisible(len(self.rules) > 1)
-        outer.addWidget(self.selector)
         # 이름·버전·판정 설명을 한 블록에 모으고 작업 버튼은 하단에 둔다.
         self.condition_box = QFrame()
         self.condition_box.setObjectName("ruleCondition")
@@ -317,18 +313,20 @@ class ItemRuleVerdictDialog(PopupDialog):
         outer.addWidget(self.notice)
         outer.addStretch(0)
         footer = QHBoxLayout()
+        footer.setContentsMargins(0, 8, 0, 0)
         footer.setSpacing(8)
         self.close_button = button("닫기")
         self.close_button.clicked.connect(self.accept)
-        footer.addStretch()
         for action in (self.toggle_button, self.edit_button, self.delete_button, self.close_button):
-            _action_style(action, danger=action is self.delete_button)
-            action.setMinimumWidth(84)
-            action.setMinimumHeight(40)
-            action.setAutoDefault(False)
-            footer.addWidget(action)
+            _action_style(action, danger=action is self.delete_button, emphasis=action is self.edit_button,
+                          secondary=action is self.close_button)
+        footer.addWidget(self.toggle_button)
+        footer.addWidget(self.edit_button)
+        footer.addSpacing(4)
+        footer.addWidget(self.delete_button)
+        footer.addStretch()
+        footer.addWidget(self.close_button)
         outer.addLayout(footer)
-        self.selector.currentIndexChanged.connect(self._rule_changed)
         for combo in (self.line, self.group):
             combo.currentIndexChanged.connect(self._render)
         self.site.currentIndexChanged.connect(self._site_changed)
@@ -338,9 +336,7 @@ class ItemRuleVerdictDialog(PopupDialog):
     def _rule_changed(self, *_):
         self.mutation_request.cancel()
         self._mutation_target = None
-        self.selector.setEnabled(True)
         self.mutation_notice.hide()
-        self.rule = next((r for r in self.rules if r.risk_rule_id == self.selector.currentData()), self.rule)
         rule, data = self.rule, self.data
         self._update_mutation_buttons()
         name = (rule.display_name or rule.risk_reason) if rule else ""
@@ -393,7 +389,6 @@ class ItemRuleVerdictDialog(PopupDialog):
             return
         rule_id, gateway = self.rule.risk_rule_id, self.manager.gateway
         self._mutation_target = action, rule_id
-        self.selector.setEnabled(False)
         self.mutation_notice.setText("선택한 위험 기준의 현재 저장값을 확인하고 있습니다.")
         self.mutation_notice.show()
         self.mutation_request.start(BackgroundRead(lambda: gateway.get("risk_rule", {"risk_rule_id": rule_id})))
@@ -401,7 +396,6 @@ class ItemRuleVerdictDialog(PopupDialog):
 
     def _record_loaded(self, record, error):
         target, self._mutation_target = self._mutation_target, None
-        self.selector.setEnabled(True)
         self._update_mutation_buttons()
         if target is None or not self.isVisible() or self.rule is None or self.rule.risk_rule_id != target[1]:
             return

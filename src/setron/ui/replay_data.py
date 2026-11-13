@@ -313,10 +313,13 @@ def replay_detail(data, frame, equipment_id):
     source = data.source
     # 그날 저장되지 않은 설비는 이어받은 이전 관측(실제 관측일 유지)의 전체 SW를 보여 준다.
     record = next(r for r in source.snapshot_records(frame.snapshot.base_date) if r.equipment_id == equipment_id)
-    summary = summarize((record,), source.families, with_saved_groups(source.targets, source.saved_groups))
+    families = source.families
+    summary = summarize((record,), families, with_saved_groups(source.targets, source.saved_groups))
     whole = record_tiles((record,), summary, source)[0]
     status = next((s for s in summary.equipment if s.record.equipment_id == equipment_id), None)
-    detail = EquipmentDetail(selected, whole, record, status)
+    reference_versions = {(family_id, release.release_version_id): release.version_raw
+                          for family_id, family in families.items() for release in family.releases}
+    detail = EquipmentDetail(selected, whole, record, status, risk_reference_versions=reference_versions)
     names = {mid: group.label for group in source.catalog.groups for mid in source.bindings[group.key]}
     rows = []
     if status is not None:

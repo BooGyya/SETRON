@@ -32,7 +32,7 @@ class ReplayPage(QWidget):
         super().__init__()
         self.source, self.loader, self.targets_provider = source, loader, targets_provider
         self.state = QueryState(source.catalog)  # 공통 조회 초안·적용 N과 독립적인 조회 상태.
-        self.data, self.pending_request = None, None
+        self.data, self.pending_request, self._last_request = None, None, None
         self.index, self.epoch, self.dirty = 0, 0, True
         self.version_dialog = None
         self.drawer = (EquipmentDrawer(drawer_parent, object_name="replayEquipmentDrawer")
@@ -181,6 +181,17 @@ class ReplayPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._position_playback()
+        # 지연 생성·탭 전환 배치가 끝난 뒤 조회를 재개하거나 보관된 프레임을 표시한다.
+        QTimer.singleShot(0, self, self._resume_visible)
+
+    def _resume_visible(self):
+        if not self.isVisible() or not self.isEnabled():
+            return
+        if self.data is None:
+            self.enter()
+        elif not self.dirty:
+            self._render_frame()
+            self._sync_controls()
 
     def set_playback_speed(self, speed):
         if speed not in self.playback_controls.SPEEDS:
@@ -266,11 +277,39 @@ class ReplayPage(QWidget):
         self.message.setStyleSheet("color:#ad344d;" if error else f"color:{SECONDARY};")
         self.message.setVisible(bool(text))
 
+    def _matches_request_inputs(self, request):
+        return (not self.state.has_pending_changes and self.start.date().toPython() == request.start
+                and self.end.date().toPython() == request.end)
+
     def enter(self):
+        if not self.isEnabled():
+            return False
         if self.state.catalog != self.source.catalog:
             self.invalidate()
-        if self.data is None and not self.busy and self.state.applied is None:
-            self.apply_query()
+        if self.data is not None or self.busy:
+            return False
+        request = self._last_request
+        if request is not None:
+            if self.state.is_current(request.query):
+                # 미제출 초안이 있으면 유지하고, 입력이 그대로인 취소 요청만 재개한다.
+                if not self._matches_request_inputs(request):
+                    return False
+                return self._start_request(request)
+            # 카탈로그만 바뀌고 조회 범위·목표·기간은 그대로일 때만 같은 조건을 새 선택지에 연결한다.
+            # 삭제된 선택지로 초안이 정규화됐거나 사용자가 바꾼 입력이 있으면 직접 조회하도록 둔다.
+            same = (self.state.draft == request.query.selection and self.state.target_draft == request.query.targets
+                    and self.start.date().toPython() == request.start and self.end.date().toPython() == request.end)
+            if same:
+                try:
+                    query = self.query_panel.apply_draft()
+                    if query is not None:
+                        return self._start_request(ReplayRequest(request.start, request.end, query))
+                except (ValueError, TypeError):
+                    self._notice("조회 조건과 기준 버전을 확인해 주세요.", error=True)
+            return False
+        if self.state.applied is None:
+            return self.apply_query()
+        return False
 
     def apply_query(self):
         if self.busy:
@@ -293,8 +332,14 @@ class ReplayPage(QWidget):
             self._notice("조회 조건과 기준 버전을 확인해 주세요.", error=True)
             self._sync_controls()
             return False
+        return self._start_request(request)
+
+    def _start_request(self, request):
+        if self.busy or not self.state.is_current(request.query):
+            return False
+        self.pause()
         self.epoch += 1
-        self.pending_request = request
+        self.pending_request = self._last_request = request
         # 이전 결과의 조작은 막고 새 결과가 도착할 때까지 화면은 유지한다.
         self.data, self.index, self.frames = None, 0, ()
         self.dirty = False
@@ -318,7 +363,7 @@ class ReplayPage(QWidget):
             self._notice("관측 자료를 읽지 못했습니다. 날짜와 조건을 확인한 뒤 다시 조회해 주세요.", error=True)
             self._sync_controls()
             return
-        self.data, self.dirty = data, False
+        self.data, self.dirty = data, not self._matches_request_inputs(request)
         self.frames = data.frames_for(self.step)
         if self.step is not None and not can_replay(self.frames):
             self.step, self.frames = None, data.frames  # 새 기간에 맞지 않는 간격이면 저장일마다로 되돌린다
@@ -330,7 +375,8 @@ class ReplayPage(QWidget):
             self._render_frame()
         else:
             self._clear_display()
-        self._notice("기간 안에 저장된 관측일이 없습니다." if not data.frames else
+        self._notice("조회 조건이 변경되었습니다. 데이터 조회를 눌러 적용해 주세요." if self.dirty else
+                     "기간 안에 저장된 관측일이 없습니다." if not data.frames else
                      "재생하려면 조건에 맞는 실제 관측일이 두 개 이상 필요합니다." if not data.can_replay else "")
         self._sync_controls()
 
@@ -706,6 +752,7 @@ class ReplayPage(QWidget):
         if self.drawer is not None:
             self.drawer.close_panel(restore_focus=False)
         self._sync_controls()
+        QTimer.singleShot(0, self, self._resume_visible)
 
     def hideEvent(self, event):
         self.playback_controls.hide()

@@ -11,14 +11,13 @@ from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from setron.features.risk.schemas import RiskStatus
+from setron.features.risk.schemas import RISK_LABELS, RiskStatus
 from setron.features.risk.service import RiskAssessor
 from setron.ui.components import StatusBadge, label
 from setron.ui.drawer import SideDrawer
 from setron.ui.equipment import ignore_width
+from setron.ui.equipment_risk_table import RiskCriteriaTable
 from setron.ui.heatmap_data import GoalState
-from setron.ui.item_data import item_evidence_rows
-from setron.ui.risk_reasons import RiskReasonCard
 from setron.ui.theme import CANVAS, LINE, SECONDARY
 
 
@@ -94,7 +93,8 @@ class EquipmentDrawer(SideDrawer):
         self.request, self.detail, self.return_focus = None, None, None
         self.software_cards = []
         self.item_pm_rows, self.item_evidence_rows = (), ()
-        self.risk_reasons = None
+        self.risk_table = None
+        self.risk_reason = None
         self.title = label("설비 정보", 24, medium=True, wrap=True)
         ignore_width(self.title)
         heading = QVBoxLayout()
@@ -120,11 +120,6 @@ class EquipmentDrawer(SideDrawer):
         self.request, self.detail, self.return_focus = request, detail, return_focus
         self.title.setText("설비 정보")
         self._build_info(detail)
-        whole = detail.whole
-        self.risk_reasons = None
-        if not detail.record.is_hpa and (whole.risk is RiskStatus.RISK
-                                         or (whole.risk is RiskStatus.UNKNOWN and whole.findings)):
-            self.risk_reasons = RiskReasonCard(whole.risk, whole.findings)
         observations = observed_software(detail, rows)
         model_counts = Counter(observation.model for observation in observations)
         for observation in observations:
@@ -139,10 +134,6 @@ class EquipmentDrawer(SideDrawer):
             ignore_width(empty)
             self.body.addWidget(empty)
         self._build_risk(detail)
-        # 결과(위험버전 카드) 바로 아래에 근거(위험 판정 이유)를 둔다. 위험 후보는 근거가 없으면 '미연결'로 둔다.
-        # 미확인은 판정기가 남긴 근거가 있을 때만 보인다(기준 미등록 등으로 근거가 없으면 상단 배지로 충분).
-        if self.risk_reasons is not None:
-            self.body.addWidget(self.risk_reasons)
         self.show_panel()
         self.scroll.verticalScrollBar().setValue(0)
 
@@ -161,10 +152,6 @@ class EquipmentDrawer(SideDrawer):
         self._info_fields(card, (("Site", record.site or "미확인"), ("Line", record.line or "미지정"),
                                  ("모델", record.model_name or "미확인"), ("설비명", record.equipment_code),
                                  ("관측일", str(record.base_date)), ("Item 기준일", str(request.data.base_date))))
-        entry = next(entry for entry in request.data.versions.items if entry.item.item_id == request.item_id)
-        context = label(f"Item {request.item_id} · {entry.item.content}", 14, wrap=True)
-        ignore_width(context)
-        card.addWidget(context)
         pairs = {(pair.model_id, pair.family_id): pair for pair in request.data.versions.pairs}
         grouped, rows = {}, []
         for pm in application.pms:
@@ -173,16 +160,13 @@ class EquipmentDrawer(SideDrawer):
             current = pm.pm.version_raw if pm.pm.version_raw is not None else "미입력"
             release = pm.release.version_raw if pm.release else "대응 미확인 / 대상 외"
             rows.append((pm.pm.pm_name or "공통 SW", model, current, release, pm.label, pm.basis_label))
-            key = pm.pm.group_id, pm.pm.family_id, model, current, release, pm.label, pm.basis_label
+            key = pm.pm.group_id, pm.pm.family_id, model, current, release
             grouped.setdefault(key, []).append(pm.pm.pm_name)
         self.item_pm_rows = tuple(rows)
         for key, pms in grouped.items():
             observation = ObservedSoftware(key[2], tuple(pm for pm in pms if pm), key[3], key[4])
             title = " · ".join(filter(None, (observation.model, ", ".join(observation.pms))))
             software = SoftwareCard(observation, title, target_label="대응 릴리즈")
-            basis = label(f"{key[5]} · {key[6]}", 13, color=SECONDARY, wrap=True)
-            ignore_width(basis)
-            software.layout().addWidget(basis)
             self.software_cards.append(software)
             self.body.addWidget(software)
         if not grouped:
@@ -191,25 +175,12 @@ class EquipmentDrawer(SideDrawer):
         catalog = request.data.catalog()
         result = RiskAssessor(catalog.families, catalog, rules).equipment_risk(record) if rules else None
         risk_label = result.label if result else "해당 Item 위험 규칙 없음"
-        if result and result.findings:
-            self.risk_reasons = RiskReasonCard(result.status, result.findings)
         tone = {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning"}.get(result.status, "neutral") if result else "neutral"
-        reason = RISK_REASONS[result.status] if self.risk_reasons is not None else risk_label
-        self._build_risk_card(risk_label, reason, tone)
-        if self.risk_reasons is not None:
-            self.body.addWidget(self.risk_reasons)
-        self.item_evidence_rows = item_evidence_rows(request, application)
-        evidence = QFrame()
-        evidence.setObjectName("itemEquipmentEvidence")
-        evidence.setStyleSheet(f"QFrame#itemEquipmentEvidence {{background:white;border:1px solid {LINE};border-radius:12px;}}")
-        evidence_body = QVBoxLayout(evidence)
-        evidence_body.setContentsMargins(14, 12, 14, 12)
-        evidence_body.addWidget(label("Item 적용 근거 · 원본 출처", 16, medium=True))
-        for row in self.item_evidence_rows:
-            text = label("\n".join(filter(None, row)), 13, color=SECONDARY, wrap=True)
-            ignore_width(text)
-            evidence_body.addWidget(text)
-        self.body.addWidget(evidence)
+        reference_versions = {(family_id, release.release_version_id): release.version_raw
+                              for family_id, family in catalog.families.items() for release in family.releases}
+        reason = RISK_REASONS[result.status] if result else risk_label
+        self._build_risk_card(risk_label, reason, tone, findings=result.findings if result else (),
+                              reference_versions=reference_versions)
         self.show_panel()
         self.scroll.verticalScrollBar().setValue(0)
 
@@ -219,26 +190,33 @@ class EquipmentDrawer(SideDrawer):
         tone = "neutral" if excluded else {
             RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning",
         }.get(whole.risk, "neutral")
-        # 긴 판정 근거는 바로 아래 이유 카드에서 한 번만 표시한다.
-        detail_text = "" if self.risk_reasons is not None else whole.risk_detail
         reason = ("HPA는 위험 분석에서 제외됩니다." if excluded else
-                  detail_text or RISK_REASONS[whole.risk])
-        self._build_risk_card(whole.risk_label, reason, tone)
+                  "적용된 위험 기준 정보를 확인할 수 없습니다." if whole.risk is RiskStatus.RISK and not whole.findings
+                  else RISK_REASONS[whole.risk])
+        self._build_risk_card(whole.risk_label if excluded else RISK_LABELS[whole.risk], reason, tone,
+                              findings=() if excluded else whole.findings,
+                              reference_versions=detail.risk_reference_versions)
 
-    def _build_risk_card(self, status, reason, tone):
+    def _build_risk_card(self, status, reason, tone, *, findings=(), reference_versions=None):
         self.risk_card = QFrame()
         self.risk_card.setObjectName("drawerRisk")
         self.risk_card.setStyleSheet(f"QFrame#drawerRisk {{background:white;border:1px solid {LINE};border-radius:12px;}}")
         body = QVBoxLayout(self.risk_card)
         body.setContentsMargins(14, 12, 14, 12)
         body.setSpacing(8)
-        self.risk_title = label("위험버전", 16, medium=True, wrap=True)
+        self.risk_reason = None
         self.risk_status_badge = StatusBadge(status, tone)
-        self.risk_reason = label(reason, 14, color=SECONDARY, wrap=True)
-        ignore_width(self.risk_title, self.risk_reason)
-        body.addWidget(self.risk_title)
         body.addWidget(self.risk_status_badge, alignment=Qt.AlignmentFlag.AlignLeft)
-        body.addWidget(self.risk_reason)
+        self.risk_table = RiskCriteriaTable(findings, reference_versions)
+        if self.risk_table.rows or self.risk_table.unknown_rows:
+            body.addWidget(self.risk_table)
+        else:
+            self.risk_table.hide()
+            self.risk_table.deleteLater()
+            self.risk_table = None
+            self.risk_reason = label(reason, 14, color=SECONDARY, wrap=True)
+            ignore_width(self.risk_reason)
+            body.addWidget(self.risk_reason)
         self.body.addWidget(self.risk_card)
 
     def _build_info(self, detail):
@@ -297,7 +275,8 @@ class EquipmentDrawer(SideDrawer):
                         child.widget().deleteLater()
         self.software_cards = []
         self.item_pm_rows, self.item_evidence_rows = (), ()
-        self.risk_reasons = None
+        self.risk_table = None
+        self.risk_reason = None
 
     def clear_detail(self):
         self.request, self.detail = None, None
