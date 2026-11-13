@@ -222,6 +222,40 @@ def test_forecast_is_reference():
     assert result.charts and result.charts[0].series
 
 
+def test_forecast_compare_line_is_not_a_copy_of_the_family_line():
+    """'C3 통합UI는 언제?'는 범위의 설비가 C3뿐이라 범위 전체 선이 C3 선과 같다 → 모든 설비로 센다 (11-13)."""
+    (name, family), (other, whole) = ask("C3 통합UI는 언제 통일될까?").charts[0].series
+    assert other == "전체 평균"
+    assert whole != tuple(p for p in family if not p.projected)
+    # 모든 일반 설비: 9월 6/10, 10월 5/9 (HPA · 목표 없는 O3 · 10월 버전 없는 DM-020은 판단 불가라 뺀다)
+    assert [p.rate for p in whole] == [60.0, 55.6]
+
+
+def _family_forecast(status, *, below=0, undetermined=0, reasons=(), completion=None):
+    from setron.features.forecast.schemas import FamilyForecast
+    return FamilyForecast(C3, SEP, OCT, 2, 1, 2, below, undetermined, status, completion_date=completion, reasons=reasons)
+
+
+@pytest.mark.parametrize("status, kwargs, expected", [
+    ("COMPLETE", {}, "C3 통합UI는 이미 모든 설비가 목표 N 이상입니다."),
+    ("NOT_CONFIRMED", {"undetermined": 2, "reasons": ("UNDETERMINED_LEFT",)},
+     "C3 통합UI는 목표 N 미만 설비는 없지만 판단 불가 2대가 남아 통일됐다고 단정할 수 없습니다."),
+    ("ESTIMATED", {"below": 3, "completion": date(2027, 1, 19)},
+     "현재 속도라면 C3 통합UI 미달 3대가 모두 목표 N에 이르는 시점은 약 2027-01로 예상됩니다 (참고)."),
+    ("NOT_ESTIMABLE", {"below": 3, "reasons": ("NO_PROGRESS",)},
+     "C3 통합UI는 이 기간에 목표 N 이상 설비가 늘지 않아 통일 시점을 예측할 수 없습니다."),
+    ("NOT_ESTIMABLE", {"below": 3, "reasons": ("SINGLE_DATE",)},
+     "C3 통합UI는 통일 시점을 예측할 수 없습니다. 이 계열의 현황이 한 날짜뿐이라 예측할 수 없습니다. "
+     "날짜가 다른 현황표가 2장 이상 필요합니다."),
+])
+def test_forecast_sentence_follows_status(status, kwargs, expected):
+    """완료(미달 0대)를 '0대가 ○월에 통일'처럼 예측 문장으로 쓰지 않는다 (11-13 멘토 피드백)."""
+    from setron.features.chat.answers import _forecast_text
+    from setron.features.forecast.schemas import ForecastReason, ForecastStatus
+    kwargs = {**kwargs, "reasons": tuple(ForecastReason(r) for r in kwargs.get("reasons", ()))}
+    assert _forecast_text("C3 통합UI", _family_forecast(ForecastStatus(status), **kwargs)) == expected
+
+
 # --- 버전·보고서 ------------------------------------------------------------------------
 def test_latest_version_info():
     result = ask("C3 통합UI 최신 버전은?")

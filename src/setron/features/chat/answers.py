@@ -9,10 +9,11 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
+from datetime import date
 
 from setron.features.aggregation.service import equipment_status, summarize
 from setron.features.analysis.schemas import AnalysisInput
+from setron.features.forecast.schemas import REASON_MESSAGES, ForecastReason, ForecastStatus
 from setron.features.forecast.service import forecast, forecast_line
 from setron.features.item.service import ItemCatalog
 from setron.features.priority.service import prioritize
@@ -474,20 +475,47 @@ def _forecast(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tup
         return tuple(found)
 
     label = f"{where} {name}" if where else name
-    series = [(f"{label} (실선 실적 · 점선 예측)", points(forecast_line(family)))]
-    if whole.overall:
-        series.append(("전체 평균", points(whole.overall)))
+    line = points(forecast_line(family))
+    series = [(f"{label} (실선 실적 · 점선 예측)", line)]
+    compare = _compare_line(data, scope, whole, line, points)
+    if compare:
+        series.append(("전체 평균", compare))
     chart = LineChart(f"{label} 목표 N 달성률 추이 및 통일 예측 (노선도)", tuple(series), "예측은 지금까지의 증가 속도로 그린 참고선입니다.")
-    name = label
-    if family.remaining_days is not None and family.end_date is not None:
-        when = family.end_date + timedelta(days=family.remaining_days)
-        text = (f"현재 속도라면 {name} 미달 {family.end_below}대가 모두 목표 N에 이르는 시점은 약 {when:%Y-%m}로 "
-                f"예상됩니다 (참고).")
-    elif family.end_below == 0:
-        text = f"{josa(name, '은/는')} 이미 모든 설비가 목표 N 이상입니다."
-    else:
-        text = f"{josa(name, '은/는')} 이 기간에 목표 N 이상 설비가 늘지 않아 통일 시점을 예측할 수 없습니다."
-    return text, [chart], ["통일 예측은 지금까지의 속도로 계산한 참고값입니다."]
+    return _forecast_text(label, family), [chart], ["통일 예측은 지금까지의 속도로 계산한 참고값입니다."]
+
+
+def _compare_line(data: ChatData, scope: _Scope, whole, line, points) -> tuple:
+    """노선도의 '전체 평균' 선. 질문 범위 전체를 먼저 쓰고, 그 선이 예측 계열 선과 같으면
+    (예: 'C3 통합UI는 언제?'처럼 범위의 설비가 그 계열뿐이면) 모든 일반 설비로 다시 센다.
+    그래도 같으면 겹쳐서 한 줄로 보이므로 그리지 않는다 (11-13 멘토 피드백: 그래프가 이상함)."""
+    actual = tuple(p for p in line if not p.projected)
+
+    def candidates():
+        yield whole.overall
+        everyone = [r for r in data.records if not r.is_hpa and (scope.base is None or r.base_date <= scope.base)]
+        yield forecast(everyone, data.catalog.releases, data.targets).overall
+
+    for overall in candidates():
+        found = points(overall)
+        if found and found != actual:
+            return found
+    return ()
+
+
+def _forecast_text(name: str, family) -> str:
+    """예측 판정(status)에 맞는 한 문장. 남은 일수만 보면 '미달 0대가 ○월에 통일'처럼 완료를 예측으로 쓴다 (11-13)."""
+    if family.status is ForecastStatus.ESTIMATED and family.completion_date is not None:
+        return (f"현재 속도라면 {name} 미달 {family.end_below}대가 모두 목표 N에 이르는 시점은 "
+                f"약 {family.completion_date:%Y-%m}로 예상됩니다 (참고).")
+    if family.status is ForecastStatus.COMPLETE:
+        return f"{josa(name, '은/는')} 이미 모든 설비가 목표 N 이상입니다."
+    if family.status is ForecastStatus.NOT_CONFIRMED:
+        return (f"{josa(name, '은/는')} 목표 N 미만 설비는 없지만 판단 불가 {family.end_undetermined}대가 남아 "
+                f"통일됐다고 단정할 수 없습니다.")
+    if ForecastReason.NO_PROGRESS in family.reasons:
+        return f"{josa(name, '은/는')} 이 기간에 목표 N 이상 설비가 늘지 않아 통일 시점을 예측할 수 없습니다."
+    reason = next((REASON_MESSAGES[r] for r in family.reasons if r is not ForecastReason.UNDETERMINED_LEFT), "")
+    return f"{josa(name, '은/는')} 통일 시점을 예측할 수 없습니다." + (f" {reason}" if reason else "")
 
 
 def _version_info(request: ChatRequest, data: ChatData, scope: _Scope) -> tuple[str, list]:
