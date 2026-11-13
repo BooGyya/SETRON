@@ -226,8 +226,9 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
     assert tile.isChecked() and "설비 상세" in page.selection_notice.text()
     assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "data", "items", "import", "ai", "replay",
                                    "reports", "settings", "export"}
-    assert window.route == "heatmap" and window.pages["equipment"].mode == "detail"
+    assert window.route == "heatmap" and window.pages["equipment"].mode == "list"
     assert window.equipment_drawer.isVisible()
+    assert window.equipment_drawer.detail.record.equipment_id == request.equipment_id
     page.view_toggle.setChecked(True)
     assert page.tile_buttons[1].isChecked()
     page.tile_buttons[2].click()
