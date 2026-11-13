@@ -3,7 +3,6 @@
 from datetime import date
 import os
 from threading import Event, get_ident
-from time import perf_counter
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -79,7 +78,7 @@ def loading_window(app):
 
 def test_loading_window_precedes_worker_and_auto_close_starts_after_actual_window(app, startup, monkeypatch):
     release, started = Event(), Event()
-    threads, inspected, dimensions = [], [], []
+    threads, inspected, dimensions, auto_close_states = [], [], [], []
     source = SimpleNamespace(dates=(date(2026, 10, 21),), analysis_dates=(date(2026, 10, 21),))
 
     def load():
@@ -99,6 +98,19 @@ def test_loading_window_precedes_worker_and_auto_close_starts_after_actual_windo
         release.set()
 
     monkeypatch.setattr(app_module, "dashboard_source_from_env", load)
+    single_shot = QTimer.singleShot
+
+    def schedule(interval, *args):
+        if interval == 40:
+            # 총 기동 시간 대신 자동 종료를 예약하는 순간의 두 창 상태를 직접 검증한다.
+            # 빠른 기동도 허용하되 로딩 도중 시작한 타이머는 통과시키지 않는다.
+            auto_close_states.append((len(startup.created),
+                                      bool(startup.created and startup.created[0].isVisible()),
+                                      any(window.objectName() == "startupWindow" and window.isVisible()
+                                          for window in app.topLevelWidgets())))
+        return single_shot(interval, *args)
+
+    monkeypatch.setattr(QTimer, "singleShot", schedule)
     poll = QTimer()
     poll.setInterval(5)
 
@@ -110,7 +122,6 @@ def test_loading_window_precedes_worker_and_auto_close_starts_after_actual_windo
 
     poll.timeout.connect(inspect_after_worker_started)
     poll.start()
-    begin = perf_counter()
     try:
         assert app_module.main(["--demo-excel", "--auto-close-ms", "40"]) == 0
     finally:
@@ -121,7 +132,7 @@ def test_loading_window_precedes_worker_and_auto_close_starts_after_actual_windo
     assert len(startup.created) == 1 and startup.created[0].source is source
     assert startup.created[0].size() == dimensions[0]
     assert startup.created[0].applied == [True] and startup.created[0].dates == list(source.dates)
-    assert perf_counter() - begin >= 0.1 and startup.closed_ai == [True]
+    assert auto_close_states == [(1, True, False)] and startup.closed_ai == [True]
 
 
 def test_closing_loading_window_ignores_late_worker_response(app, startup, monkeypatch):

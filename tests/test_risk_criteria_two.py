@@ -100,6 +100,7 @@ def test_dialog_requires_reference_version_before_preview_or_save(app, data):
     dialog = _dialog(data, calls)
     dialog.show()
     try:
+        dialog.name.setText("직접 입력한 기준명")
         dialog.start.setCurrentIndex(-1)
         wait_until(lambda: dialog.next_step.text() == "기준 버전을 선택하세요.")
         assert not calls and not dialog.save_button.isEnabled() and not dialog.save()

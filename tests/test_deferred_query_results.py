@@ -129,8 +129,10 @@ def test_selection_materializes_pending_result_before_emitting_request(view):
         page._select(eid)
         assert spy.count() == 1 and spy.at(0)[0].query is query
     else:
+        spy = QSignalSpy(page.equipment_selected)
         assert page.open_row(0)
-        assert page.selected_id in snapshot.equipment_ids and page.mode == "detail"
+        assert spy.count() == 1 and spy.at(0)[0].query is query
+        assert spy.at(0)[0].equipment_id in snapshot.equipment_ids and page.mode == "list"
     assert calls == [snapshot]
 
 
