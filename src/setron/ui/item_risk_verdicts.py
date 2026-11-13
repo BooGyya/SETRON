@@ -5,10 +5,10 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt
 from PySide6.QtGui import QGuiApplication, QPainter
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QSizePolicy, QStyledItemDelegate, QVBoxLayout, QWidget,
+    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QStyledItemDelegate, QVBoxLayout, QWidget,
 )
 
 from setron.features.risk.impact import preview_rule_impact
@@ -18,11 +18,10 @@ from setron.features.risk.service import RiskAssessor
 from setron.ui.appearance import ui_color
 from setron.ui.components import StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
-from setron.ui.item_risk_dialog import FIRST_HINT, PopupDialog, choice, field, warning_icon
+from setron.ui.item_risk_dialog import PopupDialog, choice, field, warning_icon
 from setron.ui.import_dialogs import ImportConfirmDialog
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.theme import SECONDARY, TONES, font, paint_font
-from setron.ui.version_data import family_display_name
+from setron.ui.theme import SECONDARY, TONES, paint_font
 
 STATUS_CAPTIONS = {RiskStatus.RISK: "위험 후보", RiskStatus.UNKNOWN: "미확인", RiskStatus.NO_RISK: "위험 없음"}
 STATUS_TONES = {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning", RiskStatus.NO_RISK: "success"}
@@ -30,11 +29,11 @@ UNKNOWN_HINT = "버전·관측 자료가 없어 위험 여부를 판단할 수 �
 IMPACT_UNKNOWN_HINT = "설비 관측 자료가 없거나 판정을 계산할 수 없어 대수를 세지 못했습니다. 저장은 그대로 할 수 있습니다."
 DISABLED_CAPTION = "해제됨"
 CONDITIONS = {
-    RuleType.SAFETY_REQUIRED: "대상 PM 중 하나라도 필수 아이템이 미적용이면 위험 후보입니다.",
-    RuleType.DIRECT_VERSION: "대상 PM이 지정된 위험 버전을 사용하면 위험 후보입니다.",
-    RuleType.VERSION_BELOW: "대상 PM이 기준 버전보다 낮은 버전을 사용하면 위험 후보입니다.",
-    RuleType.VERSION_ABOVE: "대상 PM이 기준 버전보다 높은 버전을 사용하면 위험 후보입니다.",
-    RuleType.DEFECT_ITEM: "지정한 버전 범위의 대상 PM에 결함 아이템이 포함되면 위험 후보입니다.",
+    RuleType.SAFETY_REQUIRED: "대상 PM에 필수 Item이 적용되지 않으면 위험 후보로 판정합니다.",
+    RuleType.DIRECT_VERSION: "기준 버전과 동일한 SW 버전을 사용하면 위험 후보로 판정합니다.",
+    RuleType.VERSION_BELOW: "기준 버전보다 낮은 SW 버전을 사용하면 위험 후보로 판정합니다.",
+    RuleType.VERSION_ABOVE: "기준 버전보다 높은 SW 버전을 사용하면 위험 후보로 판정합니다.",
+    RuleType.DEFECT_ITEM: "시작 버전부터 해제 버전 전까지 결함 Item이 포함된 SW를 사용하면 위험 후보로 판정합니다.",
 }
 
 
@@ -45,17 +44,39 @@ def category(rule):
 
 
 def rule_condition(data, rule):
-    reference = next((entry.release for entry in data.versions.releases
-                      if entry.release.release_version_id == rule.release_version_id), None)
-    if reference is not None:
-        version = reference.version_raw
-        if rule.rule_type is RuleType.VERSION_BELOW:
-            return f"대상 PM의 버전이 {version} 미만이면 위험 후보입니다."
-        if rule.rule_type is RuleType.VERSION_ABOVE:
-            return f"대상 PM의 버전이 {version} 초과이면 위험 후보입니다."
-        if rule.rule_type is RuleType.DIRECT_VERSION:
-            return f"대상 PM이 {version} 버전을 사용하면 위험 후보입니다."
     return CONDITIONS[rule.rule_type]
+
+
+def rule_reference(data, rule):
+    releases = {entry.release.release_version_id: entry.release.version_raw
+                for entry in data.versions.releases if entry.release.family_id == rule.family_id}
+    if rule.rule_type is RuleType.SAFETY_REQUIRED:
+        return "별도 기준 버전 없음"
+    if rule.rule_type is RuleType.DEFECT_ITEM:
+        start = releases.get(rule.start_release_version_id, "미확인")
+        end = releases.get(rule.end_release_version_id, "미확인") if rule.end_release_version_id is not None else "없음"
+        return f"시작 {start} · 해제 {end}"
+    return releases.get(rule.release_version_id, "미확인")
+
+
+def software_versions(record, rule):
+    """위험 기준의 계열·설비군에 해당하는 관측 SW 버전만 원문대로 표시한다."""
+    versions = dict.fromkeys(pm.version_raw if pm.version_raw and pm.version_raw.strip() else "버전 미입력"
+                             for pm in record.pms if pm.family_id == rule.family_id
+                             and (rule.group_id is None or pm.group_id == rule.group_id)
+                             and (not rule.target_model_ids or pm.group_id in rule.target_model_ids))
+    return " / ".join(versions) or "버전 미입력"
+
+
+def _action_tone(widget, tone):
+    background, ink, border = TONES[tone]
+    widget.setStyleSheet(
+        f"QPushButton {{background:{background};color:{ink};border:1px solid {border};"
+        "border-radius:10px;padding:8px 18px;}"
+        f"QPushButton:hover {{border-color:{ink};}}"
+        f"QPushButton:pressed {{background:{border};}}"
+        f"QPushButton:focus {{border:2px solid {ink};padding:7px 17px;}}"
+        "QPushButton:disabled {background:#f9fafb;color:#8b95a8;border-color:#e9eef6;}")
 
 
 def repeats_item(name, content):
@@ -161,7 +182,7 @@ class _VerdictDelegate(QStyledItemDelegate):
         painter.setFont(paint_font(12, medium=True))
         text = STATUS_CAPTIONS[status]
         width = painter.fontMetrics().horizontalAdvance(text) + 20
-        rect = QRectF(option.rect.left() + 8, option.rect.center().y() - 12, width, 24)
+        rect = QRectF(option.rect.center().x() - width / 2, option.rect.center().y() - 12, width, 24)
         painter.setBrush(ui_color(background))
         painter.setPen(ui_color(border))
         painter.drawRoundedRect(rect, 4, 4)
@@ -173,63 +194,16 @@ class _VerdictDelegate(QStyledItemDelegate):
         return QSize(100, 44)
 
 
-class _Tile(QFrame):
-    """판정별 대수를 보여 주고 누르면 그 판정만 거르는 켜고 끄는 타일."""
-
-    clicked = Signal(bool)
-
-    def __init__(self, accessible_name):
-        super().__init__()
-        self.checked = False
-        self.setObjectName("verdictTile")
-        self.setAccessibleName(accessible_name)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setMinimumHeight(60)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def set_tone(self, background, border):
-        self.tone = (background, border)
-        self._style()
-
-    def _style(self):
-        background, border = self.tone
-        self.setStyleSheet(
-            "QFrame#verdictTile {background:" + (background if self.checked else "white") + ";border:" +
-            (f"2px solid {border}" if self.checked else "1px solid #e5eaf3") + ";border-radius:8px;}"
-            f"QFrame#verdictTile:hover {{background:{background};}}")
-
-    def isChecked(self):
-        return self.checked
-
-    def setChecked(self, checked):
-        self.checked = bool(checked)
-        self._style()
-
-    def click(self):
-        self.setChecked(not self.checked)
-        self.clicked.emit(self.checked)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
-            self.click()
-        super().mouseReleaseEvent(event)
-
-    def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.click()
-        else:
-            super().keyPressEvent(event)
-
-
 class _VerdictModel(ReadTableModel):
     def __init__(self):
-        super().__init__(("설비 호기", "위치", "판정", "근거"))
+        super().__init__(("설비", "위치", "판정", "SW 버전"), centered=True)
         self.statuses = ()
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid() and role == Qt.ItemDataRole.UserRole + 1:
             return self.statuses[index.row()] if index.column() == 2 else None
+        if role == Qt.ItemDataRole.FontRole and index.isValid():
+            return paint_font(13, medium=index.column() == 0)
         if index.isValid() and index.column() == 2 and role == Qt.ItemDataRole.ToolTipRole and \
                 self.statuses[index.row()] is RiskStatus.UNKNOWN:
             return UNKNOWN_HINT
@@ -237,11 +211,11 @@ class _VerdictModel(ReadTableModel):
 
 
 class ItemRuleVerdictDialog(PopupDialog):
-    """Item의 위험 기준 판정 팝업: 기준 선택 → 조건 → 판정별 대수 → 설비 필터 → 설비별 판정 표."""
+    """위험 기준 설명과 적용 대상 수, 설비별 SW 버전을 표시한다."""
 
     def __init__(self, parent, data, item_id, rule_id=None, *, manager=None, toggle_allowed=False):
         entry = next((e for e in data.versions.items if e.item.item_id == item_id), None)
-        super().__init__(parent, entry.item.content if entry else "Item", title_lines=2)
+        super().__init__(parent, entry.item.content if entry else "Item", title_lines=2, show_close=False)
         self.content = entry.item.content if entry else ""
         self.data, self.item_id = data, item_id
         self.manager = manager
@@ -252,92 +226,61 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.toggle_request = None
         self.toggle_allowed = toggle_allowed
         self.rule = next((r for r in self.rules if r.risk_rule_id == rule_id), self.rules[0] if self.rules else None)
-        self.status_filter = None
         self.verdicts = []
         self.setWindowTitle("위험 기준 판정")
         outer = self.body
         outer.setSpacing(12)
-        family_id = self.rule.family_id if self.rule else None
-        family = next((family_display_name(p.family_name) for p in data.versions.pairs if p.family_id == family_id), "계열 미확인")
-        overview = data.catalog().overview(entry.item, ()) if entry else None
-        first = next((f.first_included for f in overview.families if f.family_id == family_id), None) if overview else None
-        meta = QHBoxLayout()
-        meta.setSpacing(6)
-        meta.addWidget(StatusBadge(family))
-        first_chip = StatusBadge(f"최초 포함 버전 {first.version_raw if first else '미확인'}")
-        first_chip.setToolTip("" if first else FIRST_HINT)
-        meta.addWidget(first_chip)
-        meta.addStretch()
-        outer.addLayout(meta)
         self.selector = choice("위험 기준 선택")
         self.selector.setFixedHeight(34)
         for rule in self.rules:
             self.selector.addItem((rule.display_name or rule.risk_reason) + ("" if rule.is_enabled else f" ({DISABLED_CAPTION})"),
                                   rule.risk_rule_id)
         self.selector.setCurrentIndex(max(0, self.selector.findData(rule_id)))
-        self.rule_name = label("", 13, color=SECONDARY, wrap=True)
         self.selector.setVisible(len(self.rules) > 1)
         outer.addWidget(self.selector)
-        outer.addWidget(self.rule_name)
-        # 조건 설명: 종류 칩 하나와 한두 문장만 회색 박스에 둔다.
+        # 이름·버전·판정 설명을 한 블록에 모으고 작업 버튼은 하단에 둔다.
         self.condition_box = QFrame()
         self.condition_box.setObjectName("ruleCondition")
         self.condition_box.setStyleSheet("QFrame#ruleCondition {background:#f7f9fc;border:1px solid #e5eaf3;border-radius:8px;}")
-        condition = QVBoxLayout(self.condition_box)
-        condition.setContentsMargins(14, 10, 14, 10)
-        condition.setSpacing(6)
-        self.kind_chip = StatusBadge("", "info")
+        condition = QGridLayout(self.condition_box)
+        condition.setContentsMargins(16, 14, 16, 14)
+        condition.setHorizontalSpacing(16)
+        condition.setVerticalSpacing(10)
+        condition.setColumnStretch(1, 1)
+        self.rule_name = label("", 13, medium=True, wrap=True)
+        self.reference_text = label("", 13, wrap=True)
+        self.condition_text = label("", 13, wrap=True)
         self.state_chip = StatusBadge(DISABLED_CAPTION)
         self.state_chip.setToolTip("해제한 기준은 위험 후보 판정에 쓰지 않습니다. '다시 사용'으로 되돌릴 수 있습니다.")
-        self.toggle_button = button("기준 해제")
-        self.toggle_button.setFixedHeight(30)
+        self.toggle_button = button("해제")
         self.toggle_button.clicked.connect(self._toggle_clicked)
-        self.condition_text = label("", 13, wrap=True)
-        self.scope_text = label("", 12, color=SECONDARY, wrap=True)
-        top = QHBoxLayout()
-        top.addWidget(self.kind_chip)
-        top.addWidget(self.state_chip)
-        top.addStretch()
-        self.edit_button, self.delete_button = button("기준 수정"), button("기준 삭제")
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.addWidget(self.rule_name, 1)
+        name_row.addWidget(self.state_chip)
+        for row, (caption, value) in enumerate((("위험 기준명", name_row), ("기준 버전", self.reference_text),
+                                               ("판정 기준", self.condition_text))):
+            condition.addWidget(label(caption, 12, medium=True, color=SECONDARY), row, 0,
+                                Qt.AlignmentFlag.AlignTop)
+            if isinstance(value, QHBoxLayout):
+                condition.addLayout(value, row, 1)
+            else:
+                value.setMinimumWidth(0)
+                condition.addWidget(value, row, 1)
+        self.edit_button, self.delete_button = button("수정"), button("삭제")
         self.edit_button.setToolTip("현재 선택한 위험 기준을 수정합니다.")
         self.delete_button.setToolTip("현재 선택한 위험 기준 한 건만 삭제합니다.")
         self.edit_button.clicked.connect(lambda: self._load_rule("edit"))
         self.delete_button.clicked.connect(lambda: self._load_rule("delete"))
-        top.addWidget(self.edit_button)
-        top.addWidget(self.delete_button)
-        top.addWidget(self.toggle_button)
-        condition.addLayout(top)
-        condition.addWidget(self.condition_text)
-        condition.addWidget(self.scope_text)
+        _action_tone(self.edit_button, "info")
+        _action_tone(self.delete_button, "danger")
         outer.addWidget(self.condition_box)
         self.mutation_notice = label("", 12, color=SECONDARY, wrap=True)
         self.mutation_notice.hide()
         outer.addWidget(self.mutation_notice)
-        # 판정별 대수: 누르면 그 판정만 거른다. 한 번 더 누르면 전체로 돌아간다.
-        self.tiles = QWidget()
-        tiles = QHBoxLayout(self.tiles)
-        tiles.setContentsMargins(0, 0, 0, 0)
-        tiles.setSpacing(8)
-        self.tile_buttons, self.tile_values = {}, {}
-        for status, caption in STATUS_CAPTIONS.items():
-            tile = _Tile(f"{caption} 설비만 보기")
-            background, ink, border = TONES[STATUS_TONES[status]]
-            tile.set_tone(background, border)
-            column = QVBoxLayout(tile)
-            column.setContentsMargins(14, 8, 14, 8)
-            column.setSpacing(0)
-            value = label("0", 18, medium=True)
-            value.setStyleSheet(f"color:{ink};")
-            name = label(caption, 12, color=SECONDARY)
-            for widget in (value, name):
-                widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-                column.addWidget(widget)
-            if status is RiskStatus.UNKNOWN:
-                tile.setToolTip(UNKNOWN_HINT)
-            tile.clicked.connect(lambda checked=False, s=status: self._toggle_status(s if checked else None))
-            tiles.addWidget(tile, 1)
-            self.tile_buttons[status], self.tile_values[status] = tile, value
-        outer.addWidget(self.tiles)
+        self.target_count = label("위험 적용 대상 0건", 15, medium=True)
+        self.target_count.setAccessibleName("위험 적용 대상 수")
+        outer.addWidget(self.target_count)
         self.site, self.line, self.group = (choice("판정 Site"), choice("판정 Line"), choice("판정 설비군"))
         for combo in (self.site, self.line, self.group):
             combo.setFixedHeight(32)
@@ -349,13 +292,15 @@ class ItemRuleVerdictDialog(PopupDialog):
             filters.addWidget(field(name, combo), 1)
         outer.addWidget(self.filters)
         self.model = _VerdictModel()
-        self.table = read_table(self.model, "기준별 설비 판정 결과", (110, 150, 100, 360))
+        self.table = read_table(self.model, "위험 기준별 설비 SW 버전", (130, 150, 110, 290))
         self.table.fit_to_viewport = True
         self.table.setMinimumHeight(180)
         self.table.verticalHeader().setMinimumSectionSize(40)
         self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.setWordWrap(False)
         self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setStyleSheet(self.table.styleSheet().replace("text-align:left", "text-align:center"))
         self.table.setItemDelegateForColumn(2, _VerdictDelegate(self.table))
         outer.addWidget(self.table, 1)
         # 자료가 없으면 표와 필터 대신 안내 한 블록만 둔다. 조건 박스(실선·회색 배경)와 달리 점선 테두리·가운데 정렬로 구분한다.
@@ -375,10 +320,15 @@ class ItemRuleVerdictDialog(PopupDialog):
         outer.addWidget(self.notice)
         outer.addStretch(0)
         footer = QHBoxLayout()
+        footer.setSpacing(8)
         self.close_button = button("닫기", primary=True)
         self.close_button.clicked.connect(self.accept)
         footer.addStretch()
-        footer.addWidget(self.close_button)
+        for action in (self.toggle_button, self.edit_button, self.delete_button, self.close_button):
+            action.setMinimumWidth(84)
+            action.setMinimumHeight(40)
+            action.setAutoDefault(False)
+            footer.addWidget(action)
         outer.addLayout(footer)
         self.selector.currentIndexChanged.connect(self._rule_changed)
         for combo in (self.line, self.group):
@@ -399,26 +349,18 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.rule = next((r for r in self.rules if r.risk_rule_id == self.selector.currentData()), self.rule)
         rule, data = self.rule, self.data
         self._update_mutation_buttons()
-        self.status_filter = None
-        for tile in self.tile_buttons.values():
-            tile.setChecked(False)
         name = (rule.display_name or rule.risk_reason) if rule else ""
-        self.rule_name.setText(name)
-        self.rule_name.setVisible(len(self.rules) == 1 and not repeats_item(name, self.content))
+        self.rule_name.setText(" ".join(name.split()))
         self.verdicts = rule_verdicts(data, rule) if rule else []
         if rule:
             self.state_chip.setVisible(not rule.is_enabled)
-            self.toggle_button.setText("기준 해제" if rule.is_enabled else "다시 사용")
+            self.toggle_button.setText("해제" if rule.is_enabled else "다시 사용")
+            _action_tone(self.toggle_button, "warning" if rule.is_enabled else "success")
             self.toggle_button.setAccessibleName(("위험 기준 해제 · " if rule.is_enabled else "위험 기준 다시 사용 · ") + name)
             self.toggle_button.setEnabled(self.toggle_allowed)
             self.toggle_button.setToolTip("" if self.toggle_allowed else "DB에 연결된 경우에만 기준을 해제·다시 사용할 수 있습니다.")
-            self.kind_chip.setText(category(rule))
+            self.reference_text.setText(rule_reference(data, rule))
             self.condition_text.setText(rule_condition(data, rule))
-            names = {p.model_id: p.model_name for p in data.versions.pairs}
-            model_ids = rule.target_model_ids or ((rule.group_id,) if rule.group_id is not None else ())
-            family = next((family_display_name(p.family_name) for p in data.versions.pairs if p.family_id == rule.family_id), "미확인 계열")
-            self.scope_text.setText(" · ".join((family, ", ".join(names.get(m, str(m)) for m in model_ids) or "계열 전체",
-                                                rule.target_site or "전체 Site", rule.target_line or "전체 Line")))
         has_rows = bool(self.verdicts)
         if rule is None:
             message = "이 Item에 등록된 위험 기준이 없습니다."
@@ -432,7 +374,7 @@ class ItemRuleVerdictDialog(PopupDialog):
             message = ""
         self.notice_text.setText(message)
         self.notice.setVisible(bool(message))
-        for widget in (self.tiles, self.filters, self.table):
+        for widget in (self.filters, self.table):
             widget.setVisible(has_rows)
         self.condition_box.setVisible(rule is not None)
         records = [v[0] for v in self.verdicts]
@@ -524,22 +466,14 @@ class ItemRuleVerdictDialog(PopupDialog):
                 self.line.addItem(pair[1] if site is not None else f"{pair[0]} · {pair[1]}", pair)
         self._render()
 
-    def _toggle_status(self, status):
-        self.status_filter = status
-        for key, tile in self.tile_buttons.items():
-            with QSignalBlocker(tile):
-                tile.setChecked(key is status)
-        self._render()
-
     def _render(self, *_):
         site, line, group = self.site.currentData(), self.line.currentData(), self.group.currentData()
         scoped = [v for v in self.verdicts
                   if (site is None or v[0].site == site) and (line is None or (v[0].site, v[0].line) == line)
                   and (group is None or any(pm.group_id == group for pm in v[0].pms))]
-        for status, value in self.tile_values.items():
-            value.setText(f"{sum(v[1].status is status for v in scoped)}대")
-        shown = [v for v in scoped if self.status_filter is None or v[1].status is self.status_filter]
-        self.model.statuses = tuple(v[1].status for v in shown)
+        self.target_count.setText(f"위험 적용 대상 {sum(v[1].status is RiskStatus.RISK for v in scoped)}건")
+        self.model.statuses = tuple(v[1].status for v in scoped)
         self.model.set_rows(
-            [(r.equipment_code, f"{r.site} · {r.line or '라인 미지정'}", STATUS_CAPTIONS[res.status], reason) for r, res, reason in shown],
-            tuple(r.equipment_id for r, _, _ in shown))
+            [(r.equipment_code, f"{r.site} · {r.line or '라인 미지정'}", STATUS_CAPTIONS[res.status],
+              software_versions(r, self.rule)) for r, res, _ in scoped],
+            tuple(r.equipment_id for r, _, _ in scoped))

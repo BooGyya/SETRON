@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOptionButton, QStyledItemDelegate, QVBoxLayout, QWidget,
 )
 
-from setron.features.risk.schemas import FindingBasis, RiskStatus
+from setron.features.risk.schemas import RiskStatus
 from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import button, label
@@ -196,7 +196,7 @@ def warning_icon(color="#856009", size=14):
 class PopupDialog(QDialog):
     """앱 안의 모달 팝업: 제목줄 없이 메인 창 가운데에 뜨고, 자체 헤더(제목·닫기)와 그림자를 가진다. ESC로 닫힌다."""
 
-    def __init__(self, parent, title, title_lines=1):
+    def __init__(self, parent, title, title_lines=1, *, show_close=True):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -220,16 +220,18 @@ class PopupDialog(QDialog):
         self.title = _ClampLabel(title_lines)
         set_widget_font(self.title, font(18, medium=True))
         self.title.set_full_text(title)
-        self.close_x = QPushButton("×")
-        self.close_x.setAccessibleName("닫기")
-        self.close_x.setToolTip("닫기")
-        self.close_x.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.close_x.setFixedSize(30, 30)
-        self.close_x.setStyleSheet("QPushButton {border:0;border-radius:15px;background:transparent;color:#5b6880;padding:0;min-height:0;}"
-                                   "QPushButton:hover {background:#f0f3f8;}")
-        self.close_x.clicked.connect(self.reject)
         header.addWidget(self.title, 1)
-        header.addWidget(self.close_x)
+        self.close_x = None
+        if show_close:
+            self.close_x = QPushButton("×")
+            self.close_x.setAccessibleName("닫기")
+            self.close_x.setToolTip("닫기")
+            self.close_x.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.close_x.setFixedSize(30, 30)
+            self.close_x.setStyleSheet("QPushButton {border:0;border-radius:15px;background:transparent;color:#5b6880;padding:0;min-height:0;}"
+                                       "QPushButton:hover {background:#f0f3f8;}")
+            self.close_x.clicked.connect(self.reject)
+            header.addWidget(self.close_x)
         self.body.addLayout(header)
 
     def showEvent(self, event):
@@ -245,7 +247,8 @@ FIRST_HINT = "이 계열에서 이 Item이 처음 포함된 버전을 확정하�
 
 class ItemRiskDialog(PopupDialog):
     def __init__(self, parent, data, gateway, context_provider, submit, *, family_id=None, item_id=None, edit_record=None):
-        super().__init__(parent, "위험 기준 수정" if edit_record is not None else "위험 기준 등록")
+        super().__init__(parent, "위험 기준 수정" if edit_record is not None else "위험 기준 등록",
+                         show_close=edit_record is None)
         self.data, self.gateway, self.context_provider, self.submit = data, gateway, context_provider, submit
         self.edit_record = edit_record
         self.original_values = deepcopy(edit_record.current) if edit_record is not None else None
@@ -352,8 +355,11 @@ class ItemRiskDialog(PopupDialog):
         preview_column.addWidget(self.target_summary)
         preview_column.addWidget(self.preview)
         layout.addWidget(preview_box)
-        self.impact_model = ReadTableModel(("설비 · 위치", "판정 결과", "해당 PM · 버전 및 근거"))
-        self.impact_table = read_table(self.impact_model, "영향 미리보기 설비", (105, 108, 198))
+        self.impact_model = ReadTableModel(("설비", "위치", "SW 버전"), centered=True)
+        self.impact_table = read_table(self.impact_model, "영향 미리보기 설비", (130, 160, 210))
+        self.impact_table.fit_to_viewport = True
+        self.impact_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.impact_table.setStyleSheet(self.impact_table.styleSheet().replace("text-align:left", "text-align:center"))
         layout.addWidget(self.impact_table)
         layout.addStretch()
         self.scroll.setWidget(content)
@@ -765,20 +771,12 @@ class ItemRiskDialog(PopupDialog):
             self._set_preview(f"미확인 {unknown}건 · 판정 자료 확인 필요" if unknown else "")
         rows = []
         for impact in getattr(result, "equipment", ()):
-            findings = impact.findings
-            reasons = {}
-            for finding in findings:
-                reason = ("필수 아이템 미적용" if finding.basis is FindingBasis.SAFETY_NOT_APPLIED else finding.message)
-                version = (finding.pm.version_raw or "버전 미확인") if finding.pm else ""
-                pms = reasons.setdefault((version, reason), [])
-                if finding.pm:
-                    pms.append(finding.pm.pm_name or "공통 SW")
-            details = [" · ".join(filter(None, (", ".join(pms), version, reason)))
-                       for (version, reason), pms in reasons.items()]
+            versions = dict.fromkeys(
+                finding.pm.version_raw if finding.pm.version_raw and finding.pm.version_raw.strip() else "버전 미입력"
+                for finding in impact.findings if finding.pm is not None)
             record = impact.record
             location = " · ".join(filter(None, (record.site, record.line)))
-            status = "미확인" if impact.status is RiskStatus.UNKNOWN else "대상"
-            rows.append((f"{record.equipment_code}\n{location}", status, "\n".join(details)))
+            rows.append((record.equipment_code, location, " / ".join(versions) or "버전 미입력"))
         self.impact_model.set_rows(rows)
         self.impact_table.resizeRowsToContents()
         self.impact_table.setFixedHeight(min(280, max(110, 50 + sum(self.impact_table.rowHeight(i) for i in range(min(6, len(rows)))))))
