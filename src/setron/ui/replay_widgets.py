@@ -5,7 +5,7 @@ from functools import partial
 from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
 from PySide6.QtCore import QPointF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
 from setron.ui.appearance import ui_color
 from setron.ui.components import button, label
@@ -117,6 +117,7 @@ class ReplayPlaybackControls(QFrame):
     """보기와 스크롤 위치에 관계없이 공유하는 재생 도구 모음."""
 
     speed_changed = Signal(float)
+    frame_dragged = Signal(int)  # 재생 위치 막대를 끌거나 눌러 고른 프레임 번호
     SPEEDS = (0.5, 1, 2, 4)
 
     def __init__(self, parent=None):
@@ -125,8 +126,8 @@ class ReplayPlaybackControls(QFrame):
         self.setAccessibleName("리플레이 재생 도구")
         self.setStyleSheet(f"QFrame#replayPlaybackControls {{background:white;border:1px solid {LINE};border-radius:14px;}}")
         body = QVBoxLayout(self)
-        body.setContentsMargins(10, 8, 10, 8)
-        body.setSpacing(6)
+        body.setContentsMargins(10, 6, 10, 6)
+        body.setSpacing(4)  # 재생 위치 막대를 더해도 떠 있는 도구 높이를 110px 안으로 (11-13)
         context_row = QHBoxLayout()
         context_row.setSpacing(14)
         context = QVBoxLayout()
@@ -197,12 +198,37 @@ class ReplayPlaybackControls(QFrame):
         self.speed_tabs.setCurrentIndex(1)
         self.speed_tabs.currentChanged.connect(lambda index: self.speed_changed.emit(self.SPEEDS[index]))
         row.addWidget(self.speed_tabs)
+        # 재생 위치 막대: 실행/일시정지 아래에서 끌어 원하는 시점으로 옮긴다 (11-13 요청). 끄는 동안 그 시점을 바로 보인다.
+        self.position = QSlider(Qt.Orientation.Horizontal)
+        self.position.setAccessibleName("재생 위치")
+        self.position.setToolTip("끌거나 눌러 재생 시점을 옮깁니다. 옮기면 재생을 멈춥니다.")
+        self.position.setRange(0, 0)
+        self.position.setPageStep(1)
+        self.position.setTracking(True)
+        self.position.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.position.setStyleSheet(
+            "QSlider {min-height:12px;max-height:12px;}"
+            "QSlider::groove:horizontal {background:#e8ebfc;border:0;border-radius:3px;height:6px;}"
+            f"QSlider::sub-page:horizontal {{background:{PRIMARY};border-radius:3px;height:6px;}}"
+            f"QSlider::handle:horizontal {{background:white;border:2px solid {PRIMARY};width:10px;height:10px;"
+            "margin:-2px 0;border-radius:7px;}"
+            "QSlider::groove:horizontal:disabled {background:#f1f2f5;}"
+            "QSlider::sub-page:horizontal:disabled {background:#d5d7da;}"
+            "QSlider::handle:horizontal:disabled {border-color:#d5d7da;}")
+        self.position.valueChanged.connect(self.frame_dragged.emit)
+        self.position.setFixedHeight(12)
+        body.addWidget(self.position)
 
     def set_context(self, day, observed_day, index, total, *, selected_groups=False):
         """프레임 자료만 받아 두 보기에서 같은 재생 문맥을 표시한다."""
         self.date_label.setText(f"재생일 {day:%Y-%m-%d}")
         self.frame_label.setText(f"{index + 1} / {total}")
         self.frame_label.setAccessibleDescription(f"전체 {total}개 중 {index + 1}번째 프레임")
+        self.position.blockSignals(True)  # 재생으로 바뀐 위치는 다시 '옮기기'로 보내지 않는다
+        self.position.setRange(0, max(0, total - 1))
+        self.position.setValue(index)
+        self.position.blockSignals(False)
+        self.position.setAccessibleDescription(f"{day:%Y-%m-%d} · 전체 {total}개 중 {index + 1}번째")
         carried = day != observed_day
         self.observation_label.setText(f"관측 기준 {observed_day:%Y-%m-%d} · 이전 자료" if carried else "실제 저장일과 같은 시점")
         self.observation_label.setToolTip("재생일 이전 마지막 저장 자료를 이어서 표시합니다. 설비별 관측일은 상세에서 확인할 수 있습니다."
@@ -215,6 +241,10 @@ class ReplayPlaybackControls(QFrame):
         self.date_label.setText("재생일 —")
         self.frame_label.setText("0 / 0")
         self.frame_label.setAccessibleDescription("")
+        self.position.blockSignals(True)
+        self.position.setRange(0, 0)
+        self.position.blockSignals(False)
+        self.position.setAccessibleDescription("")
         self.observation_label.setText("")
         self.observation_label.setToolTip("")
         self.scope_label.setText("전체 범위")

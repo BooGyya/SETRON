@@ -126,6 +126,29 @@ def test_play_pause_restart_and_end_use_cached_frames_without_more_reads(own):
     assert 0 <= page.progress.value() <= 1000
 
 
+def test_position_slider_under_play_buttons_drags_to_a_frame_and_follows_playback(own):
+    """11-13 요청: 실행/일시정지 아래 막대를 끌면 그 시점으로 옮기고(재생은 멈춤), 재생하면 막대가 따라간다."""
+    calls = []
+    source = demo_dashboard_source()
+
+    def load(request):
+        calls.append(request)
+        return load_replay(source, request)
+
+    page = replay_page(own, loader=load)
+    controls = page.playback_controls
+    slider = page.position_slider
+    layout = controls.layout()
+    assert layout.indexOf(slider) == layout.count() - 1                    # 재생 버튼 줄 아래
+    assert slider.isEnabled() and (slider.minimum(), slider.maximum(), slider.value()) == (0, 5, 5)
+    assert page.play() and page.index == 0 and slider.value() == 0
+    page.advance()
+    assert slider.value() == 1                                              # 재생하면 막대가 따라간다
+    slider.setValue(3)                                                      # 끌어서 옮기기
+    assert page.index == 3 and not page.timer.isActive() and controls.frame_label.text() == "4 / 6"
+    assert page.play_button.isEnabled() and len(calls) == 1                 # 다시 읽지 않는다
+
+
 def test_real_timer_advances_and_hiding_page_stops_it(own):
     page = replay_page(own)
     page.timer.setInterval(50)
