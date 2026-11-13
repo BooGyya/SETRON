@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, QTimer
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu,
@@ -184,10 +184,11 @@ def warning_icon(color="#856009", size=14):
     painter.setBrush(QColor(color))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawPolygon(QPolygonF([QPointF(s / 2, s * 0.08), QPointF(s * 0.96, s * 0.9), QPointF(s * 0.04, s * 0.9)]))
-    painter.setPen(QColor("white"))
     painter.setBrush(QColor("white"))
-    painter.drawRect(int(s * 0.46), int(s * 0.38), max(2, int(s * 0.08)), int(s * 0.27))
-    painter.drawRect(int(s * 0.46), int(s * 0.72), max(2, int(s * 0.08)), max(2, int(s * 0.08)))
+    center, width = s / 2, s * 0.09
+    left = center - width / 2
+    painter.drawRoundedRect(QRectF(left, s * 0.38, width, s * 0.26), width / 2, width / 2)
+    painter.drawEllipse(QRectF(left, s * 0.71, width, width))
     painter.end()
     pixmap.setDevicePixelRatio(2)
     return QIcon(pixmap)

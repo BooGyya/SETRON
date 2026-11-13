@@ -31,7 +31,7 @@ from setron.ui.chat_report_preview import PdfPreviewDialog
 from setron.ui.components import button, label
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.theme import INK, PRIMARY, SECONDARY, icon
+from setron.ui.theme import INK, PRIMARY, SECONDARY, font, icon, set_widget_font
 
 # 처음 화면의 예시 카드: (분류, 설명, 질문 2개). 자주 하는 질문 칩도 같은 질문을 쓴다.
 STARTERS = (
@@ -59,7 +59,7 @@ QPushButton#aiStarterQuestion:hover {{ background: #edf0fd; border-color: {PRIMA
 QLabel#chatNote {{ background: #fff5d9; color: #8a5a00; border-radius: 6px; padding: 4px 8px; }}
 QToolButton#chatBasisToggle {{ border: none; background: transparent; color: {SECONDARY}; padding: 2px 0; font-weight: 500; }}
 QToolButton#chatBasisToggle:hover {{ color: {INK}; }}
-QLabel#chatBasisLine {{ color: {SECONDARY}; padding: 1px 0 1px 18px; }}
+QLabel#chatBasisLine {{ color: {INK}; padding: 0; }}
 QLabel#chatIssue {{ background: #fdecec; color: #c62828; border-radius: 6px; padding: 4px 8px; }}
 QLabel#chatStale {{ background: #eef0f3; color: {SECONDARY}; border-radius: 6px; padding: 3px 8px; }}
 QTableWidget#chatTable {{ background: white; border: 1px solid #dee0e5; border-radius: 10px; gridline-color: #eef0f3; }}
@@ -236,7 +236,7 @@ class AnswerCard(QWidget):
         frame.setObjectName("aiAnswer")
         body = QVBoxLayout(frame)
         body.setContentsMargins(22, 18, 22, 18)
-        body.setSpacing(12)
+        body.setSpacing(14)
         if self.empty_kind == "unrecognized":
             # 못 알아들은 질문은 빨간 안내 (11/11). 자료와 무관한 질문은 조건 문제가 아니라 '답할 수 없는 질문'.
             banner = ("답할 수 없는 질문 · 설비 SW 버전 자료와 관련 없는 질문이에요" if result.title == OUT_OF_SCOPE_TITLE
@@ -260,7 +260,8 @@ class AnswerCard(QWidget):
         self.stale.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.stale.hide()
         body.addWidget(self.stale)
-        self.summary = _wrap(result.summary, 14, INK)
+        self.summary = _wrap(result.summary, 15, INK, bold=True)
+        self.summary.setContentsMargins(0, 2, 0, 4)
         body.addWidget(self.summary)
         for issue in result.issues:
             body.addWidget(_wrap(f"이해했지만 반영하지 못한 조건 · {issue}", 12, name="chatIssue"))
@@ -285,17 +286,19 @@ class AnswerCard(QWidget):
         elif self.charts:
             body.addWidget(_WrapRow(chart_cards, 360, fields=True))
         if result.cause:
-            title = QHBoxLayout()
-            title.addWidget(label("원인 분석", 13, medium=True))   # 출처 꼬리표 없이 (Word 보고서에는 출처 표시 유지)
-            title.addStretch(1)
-            body.addLayout(title)
-            body.addWidget(_wrap(result.cause, 13, INK))
+            section = QWidget()
+            paragraph = QVBoxLayout(section)
+            paragraph.setContentsMargins(0, 4, 0, 4)
+            paragraph.setSpacing(6)
+            paragraph.addWidget(label("원인 분석", 15, medium=True, color=INK))  # Word 보고서에는 출처 표시 유지
+            paragraph.addWidget(_wrap(result.cause, 15, INK))
+            body.addWidget(section)
         for table in result.tables:
             if result.cause and table.title.startswith("원인 근거"):
                 continue                                   # 원인 문단과 같은 내용이라 표는 생략
-            body.addWidget(label(table.title, 13, medium=True))
+            body.addWidget(label(table.title, 15, medium=True, color=INK))
             if not table.rows:
-                body.addWidget(_wrap("조건에 맞는 설비가 없습니다.", 13, SECONDARY))
+                body.addWidget(_wrap("조건에 맞는 설비가 없습니다.", 15, INK))
                 continue
             widget = table_widget(table)
             self.tables.append(widget)
@@ -347,7 +350,7 @@ class AnswerCard(QWidget):
     def _basis(self, notices) -> tuple[QToolButton | None, QFrame | None]:
         """참고 문장을 '판단 근거 N건' 한 줄로 접어 둔다 (11/11: 노란 상자가 답보다 눈에 띄던 문제).
 
-        누르면 펼쳐져 회색 글씨 목록으로 보인다. 처음에는 접혀 있다.
+        누르면 펼쳐져 본문과 같은 글꼴의 목록으로 보인다. 처음에는 접혀 있다.
         """
         if not notices:
             return None, None
@@ -357,15 +360,16 @@ class AnswerCard(QWidget):
         toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         toggle.setArrowType(Qt.ArrowType.RightArrow)
         toggle.setText(f"판단 근거 {len(notices)}건")
+        set_widget_font(toggle, font(14, medium=True))
         toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         toggle.setStyleSheet(f"QToolButton {{border: none; background: transparent; color: {SECONDARY}; padding: 2px 0;}}"
                              f"QToolButton:hover {{color: {INK};}}")          # 어디에 놓여도 상자 없는 글자 버튼
         holder = QFrame()
         column = QVBoxLayout(holder)
-        column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(2)
+        column.setContentsMargins(18, 2, 0, 4)
+        column.setSpacing(8)
         for notice in notices:
-            column.addWidget(_wrap(notice, 12, name="chatBasisLine"))
+            column.addWidget(_wrap(notice, 14, INK, name="chatBasisLine"))
         holder.hide()
 
         def flip(opened):

@@ -3,9 +3,9 @@
 from dataclasses import replace
 
 from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu, QPushButton, QSizePolicy, QSpacerItem,
+    QApplication, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton, QSizePolicy, QSpacerItem,
     QStyle, QStyledItemDelegate, QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
@@ -21,6 +21,7 @@ from setron.ui.item_distribution import APPLICATION_TONES, ItemDistribution
 from setron.ui.item_analysis import ItemSearchError, answer_items
 from setron.ui.item_answer_card import ItemAnswerCard
 from setron.ui.item_risk_dialog import warning_icon
+from setron.ui.item_risk_list import ItemRuleListDialog
 from setron.ui.item_risk_page import ItemRiskPage
 from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, repeats_item
 from setron.ui.query_panel import _WrapRow
@@ -82,10 +83,40 @@ class _ItemResultHeader(QWidget):
         self.arrow_slot.setFixedWidth(arrow_width)
 
 
+class _RiskCountBadge(StatusBadge):
+    """위험 기준 건수만 표시하고 클릭이나 키보드 동작은 갖지 않는 배지."""
+
+    def __init__(self):
+        super().__init__("", "warning")
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setMinimumHeight(27)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+    def set_tone(self, tone):
+        super().set_tone(tone)
+        self.setStyleSheet(self.styleSheet() + f"padding-left:{28 if tone == 'warning' else 8}px;")
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.tone == "warning":
+            painter = QPainter(self)
+            image = warning_icon(ui_color(TONES["warning"][1]).name()).pixmap(14, 14)
+            painter.drawPixmap(8, (self.height() - 14) // 2, image)
+
+    def mousePressEvent(self, event):
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event):
+        event.accept()
+
+
 class _ItemResultButton(QPushButton):
     """Keep the title and disclosure icon in fixed slots in all interaction states."""
-
-    rule_requested = Signal(int)
 
     def __init__(self):
         """행 위젯은 한 번만 만들어 목록을 다시 그릴 때마다 set_content로 내용만 바꿔 재사용한다."""
@@ -128,11 +159,9 @@ class _ItemResultButton(QPushButton):
         self.jira_label.hide()
         # 부모가 없는 위젯에 setVisible(True)를 하면 빈 최상위 창이 잠깐 뜨므로, 보이기는 레이아웃에 넣은 뒤에 정한다.
         self.version_label.hide()
-        self._badge = button("")
+        self._badge = _RiskCountBadge()
         self._badge_tone = None
         self._set_badge_tone("warning")
-        self._single_rule = None
-        self._badge.clicked.connect(self._badge_clicked)
         # 배지는 페이지 공통 폭의 고정 슬롯에 둔다. 배지가 없는 행도 같은 폭을 비워 두어 Jira 칸이 모든 행에서 같은 x에 온다.
         self.badge_slot = QWidget()
         self.badge_slot.setStyleSheet("background:transparent;")
@@ -154,15 +183,7 @@ class _ItemResultButton(QPushButton):
         if tone == self._badge_tone:
             return
         self._badge_tone = tone
-        background, ink, border = TONES[tone]
-        # 테마는 처음 본 아이콘을 원본으로 기억해 다시 입히므로, 아이콘을 바꿀 때 그 기억도 함께 지운다.
-        self._badge.setProperty("setronOriginalIcon", None)
-        self._badge.setIcon(warning_icon() if tone == "warning" else QIcon())
-        self._badge.setStyleSheet(f"QPushButton {{background:{background};color:{ink};border:1px solid {border};border-radius:4px;padding:2px 8px;min-height:23px;max-height:23px;}}")
-
-    def _badge_clicked(self):
-        if self._single_rule is not None:
-            self.rule_requested.emit(self._single_rule)
+        self._badge.set_tone(tone)
 
     def set_content(self, content, rules, version="", version_tip="", *, display_content=None,
                     show_version=True, version_width=None, jira=None, jira_width=None, disabled_rules=()):
@@ -189,30 +210,19 @@ class _ItemResultButton(QPushButton):
         self.version_label.setFixedWidth(self.version_slot_width)
         self.version_label.setText(metrics.elidedText(version, Qt.TextElideMode.ElideMiddle, self.version_slot_width) if show_version else "")
         self.version_label.setVisible(self.version_slot_width > 0)
-        # 사용 중 기준이 없고 해제된 기준만 있으면 '해제된 기준 N건' 배지로 판정 팝업(다시 사용) 진입을 남긴다.
+        # 배지는 건수만 표시하며 기준 목록은 펼침 영역의 별도 버튼에서 연다.
         # '위험 기준 N건'과 위험 등록 필터는 사용 중 기준만 센다.
         disabled_only = not rules and bool(disabled_rules)
         if disabled_only:
             rules = tuple(disabled_rules)
         self._set_badge_tone("neutral" if disabled_only else "warning")
-        self._single_rule = rules[0].risk_rule_id if len(rules) == 1 else None
-        self._badge.setMenu(None)
         if rules:
-            # 끝의 '›' 문자는 일부 글꼴에서 네모(tofu)로 보여 뺀다. 경고 아이콘과 손가락 커서로 누를 수 있음을 알린다.
             self._badge.setText(f"해제된 기준 {len(rules)}건" if disabled_only else f"위험 기준 {len(rules)}건")
-            if len(rules) > 1:
-                menu = QMenu(self._badge)
-                for rule in rules:
-                    action = menu.addAction(rule.display_name or rule.risk_reason)
-                    action.triggered.connect(lambda checked=False, rid=rule.risk_rule_id: self.rule_requested.emit(rid))
-                self._badge.setMenu(menu)
-            names = "\n".join(rule.display_name or rule.risk_reason for rule in rules)
-            # 부모 행과 배지가 같은 기준명을 각자 툴팁으로 갖고 있으면 배지 위에서 두 번 뜬다.
-            # 행 툴팁은 Item 내용만, 기준명은 배지 툴팁 하나로만 보여 준다.
             self.setAccessibleDescription((f"포함 릴리즈 {version}. " if version else "") + (f"Jira {jira.label}. " if jira else "")
                                           + (f"해제된 위험 기준 {len(rules)}건. " if disabled_only
-                                             else f"등록된 위험 기준 {len(rules)}건. ") + names)
-            self._badge.setToolTip(names)
+                                             else f"등록된 위험 기준 {len(rules)}건. "))
+            self._badge.setAccessibleName(self._badge.text())
+            self._badge.setToolTip(self._badge.text())
         self._badge.setVisible(bool(rules))
         self.rule_badge = self._badge if rules else None
         self.set_badge_slot(self._badge.sizeHint().width() if rules else 0)
@@ -508,6 +518,7 @@ class ItemsPage(QWidget):
         self.visible_jira = {}
         self.revision, self.selected_equipment_id = 0, None
         self.verdict_dialog = None
+        self.rule_list_dialog = None
         # 해제·다시 사용 완료처럼 잠깐 보였다 사라지는 안내. 실패·결과 미확인은 save_feedback으로 남긴다.
         self.toast_timer = QTimer(self)
         self.toast_timer.setSingleShot(True)
@@ -659,8 +670,10 @@ class ItemsPage(QWidget):
         self.hpa_badge = StatusBadge("", APPLICATION_TONES[Application.NOT_TARGET])
         self.summary = _RightWrapRow([*self.summary_badges.values(), self.hpa_badge], 96)
         self.summary.grid.setSpacing(6)
-        # 펼친 Item의 위험 기준 강조 박스(노란 칸)는 두지 않는다. 기준 확인은 목록 행의 '위험 기준 N건' 배지 → 판정 팝업에서 한다.
+        # 건수 배지는 표시만 하고, 펼친 영역에서 목록을 거쳐 기준 상세로 이동한다.
         detail.addWidget(self.inline_box)
+        self.view_rules = button("위험 기준 보기")
+        self.view_rules.clicked.connect(self.open_rule_list)
         self.register_rule = button("위험 기준 등록")
         self.register_rule.clicked.connect(lambda: self.manager.open_add(item_id=self.selected_id, family_id=self.family_id))
         detail.addWidget(self.full_detail)
@@ -732,6 +745,7 @@ class ItemsPage(QWidget):
         application_body.addWidget(self.equipment_empty)
         actions = QHBoxLayout()
         actions.addStretch()
+        actions.addWidget(self.view_rules)
         actions.addWidget(self.register_rule)
         application_body.addLayout(actions)
         body.addWidget(self.list_view)
@@ -753,8 +767,19 @@ class ItemsPage(QWidget):
         self.detail_view.setVisible(mode == "detail")
         self.mode_changed.emit(mode)
 
+    def open_rule_list(self, *_):
+        """현재 펼친 Item의 기준을 목록에서 고른 뒤 상세 화면으로 이동한다."""
+        if self.data is None or self.selected_id is None:
+            return False
+        self.rule_list_dialog = ItemRuleListDialog(self.window(), self.data, self.selected_id,
+                                                  family_id=self.family_id if self.scoped_detail else None)
+        if self.rule_list_dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        rule_id = self.rule_list_dialog.selected_rule_id
+        return self.open_registered_rule(rule_id) if rule_id is not None else False
+
     def open_registered_rule(self, rule_id):
-        """'위험 기준 N건' 배지: 그 Item의 위험 기준 판정 팝업을 연다. Item 상세와 '전체 적용 현황'은 따로 유지한다."""
+        """위험 기준 목록에서 선택한 기준의 상세와 설비별 SW 버전을 연다."""
         rule = next((r for r in self.data.risk_rules if r.risk_rule_id == rule_id), None) if self.data else None
         if rule is None or rule.item_id is None:
             return False
@@ -1100,7 +1125,6 @@ class ItemsPage(QWidget):
         for row, entry in enumerate(self.visible_entries):
             if row == len(self.row_pool):
                 control = _ItemResultButton()
-                control.rule_requested.connect(self.open_registered_rule)
                 control.clicked.connect(lambda checked=False, c=control: self.toggle_result(c.row))
                 self.row_pool.append(control)
                 self.result_rows.insertWidget(self.result_rows.count() - 1, control)
@@ -1222,6 +1246,8 @@ class ItemsPage(QWidget):
         catalog = self.data.catalog()
         releases = catalog.item_versions(item.item_id)
         rules = [r for r in self.data.risk_rules if r.item_id == item.item_id]
+        visible_rules = [r for r in rules if not scoped or r.family_id == self.family_id]
+        self.view_rules.setEnabled(bool(visible_rules))
         register_text = "위험 기준 추가" if any(r.is_enabled and r.family_id == self.family_id for r in rules) else "위험 기준 등록"
         self.register_rule.setText(register_text)
         inclusion = next((f for f in catalog.overview(item, ()).families if f.family_id == self.family_id), None)
