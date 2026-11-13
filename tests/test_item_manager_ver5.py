@@ -269,23 +269,26 @@ def test_changing_criterion_keeps_name_and_category_follows_criterion(app, data)
     assert not hasattr(dialog, "categories")   # 판정 기준과 겹치던 구분 칩은 없다
     item_name = dialog.name.text()
     assert item_name and dialog.values()["item_manager"]["category"] == "환경안전 필수"
-    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
-    version = dialog.start.currentText().split(" · ")[0]
-    assert "순서" not in dialog.start.currentText()   # 순서가 확인된 버전은 이름만 보인다 (11-11)
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("APPLIED"))
+    dialog.version.setCurrentIndex(1)   # 위험 버전만 지정하면 기존 '지정 버전' 방식이다.
+    version = dialog.version.currentText().split(" · ")[0]
+    assert "순서" not in dialog.version.currentText()   # 순서가 확인된 버전은 이름만 보인다 (11-11)
     assert dialog.name.text() == f"{dialog.family.currentText()} {version} 사용 위험"
     assert dialog.values()["item_manager"]["category"] == "결함 버전"
     wait_until(lambda: dialog.preview_valid)
     assert dialog.save_button.isEnabled() and calls[-1]["rule_type"] == "DIRECT_VERSION"
-    # 대상 버전을 바꾸면 제안한 이름도 따라 바뀐다.
-    dialog.start.setCurrentIndex(dialog.start.count() - 1)
-    assert dialog.start.currentText().split(" · ")[0] in dialog.name.text()
-    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DEFECT_ITEM"))
+    # 위험 버전을 바꾸면 제안한 이름도 따라 바뀐다.
+    dialog.version.setCurrentIndex(dialog.version.count() - 1)
+    assert dialog.version.currentText().split(" · ")[0] in dialog.name.text()
+    # 위험 버전 대신 시작 버전을 고르면 기존 '결함 Item 범위' 방식이고, 이름은 Item 내용으로 돌아온다.
+    dialog.version.setCurrentIndex(0)
+    dialog.start.setCurrentIndex(1)
     assert dialog.name.text() == item_name and dialog.values()["item_manager"]["category"] == "결함 버전"
     wait_until(lambda: dialog.preview_valid)
     assert dialog.save_button.isEnabled() and calls[-1]["rule_type"] == "DEFECT_ITEM"
     # 직접 고친 이름은 판정 기준을 바꿔도 그대로 둔다.
     dialog.name.setText("직접 정한 이름")
-    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("NOT_APPLIED"))
     assert dialog.name.text() == "직접 정한 이름"
     dialog.reject()
 
