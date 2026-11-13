@@ -557,5 +557,5 @@ def test_figma_assets_keep_root_dimensions_and_are_packaged(own):
         assert svg_size(f"import-ver5/{name}").width() == size
     field = own(DateField())
     field.open_calendar()
-    assert field.calendar_menu.isVisible()
-    field.calendar_menu.close()
+    assert field.dialog.isVisible()
+    field.dialog.reject()

@@ -53,7 +53,7 @@ ENUMS = {
         "target_scope": {"ALL", "LISTED", "UNKNOWN"},
     },
     "risk_rule": {
-        "rule_type": {"SAFETY_REQUIRED", "DEFECT_ITEM", "DIRECT_VERSION"},
+        "rule_type": {"SAFETY_REQUIRED", "DEFECT_ITEM", "DIRECT_VERSION", "VERSION_BELOW", "VERSION_ABOVE"},
         "mapping_status": {"VERIFIED", "UNRESOLVED"},
     },
 }

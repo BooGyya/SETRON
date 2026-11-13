@@ -4,8 +4,8 @@ from collections import Counter
 from dataclasses import replace
 from datetime import date
 
-from PySide6.QtCore import QDate, QEvent, QSignalBlocker, QSize, QTimer, Qt, Signal
-from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QDate, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, label
 from setron.ui.calendar_widgets import DateEdit
@@ -129,12 +129,6 @@ class QueryPanel(QWidget):
         self.range_button = None
         self._range_enabled = False
         self._applied_range = None
-        self._collapsed = False
-        self._collapse_override = None
-        self._density_window = None
-        self._density_timer = QTimer(self)
-        self._density_timer.setSingleShot(True)
-        self._density_timer.timeout.connect(self._sync_density)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(12)
@@ -236,25 +230,14 @@ class QueryPanel(QWidget):
         self.actions_row = _WrapRow([self.goal_button, self.version_button], 150)
         self.footer = QWidget()
         footer = QHBoxLayout(self.footer)
-        self.footer_layout = footer
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(12)
-        self.compact_summary = label("", 12, color=SECONDARY)
-        self.compact_summary.setAccessibleName("적용된 조회 조건 요약")
-        self.compact_summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        footer.addWidget(self.compact_summary, 1)
         footer.addWidget(self.actions_row, 1)
         self.status = StatusBadge("조회 전", "info")
         self.status.setAccessibleName("조회 적용 상태")
         footer.addWidget(self.status)
         # 기존 버전 선택 표시를 참조하는 연결도 같은 공통 변경 상태를 사용한다.
         self.version_pending = self.status
-        self.collapse_button = button("필터 접기")
-        self.collapse_button.setFixedHeight(38)
-        self.collapse_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.collapse_button.setAccessibleName("조회 필터 접기 또는 펼치기")
-        self.collapse_button.clicked.connect(lambda: self.set_collapsed(not self._collapsed, user=True))
-        footer.addWidget(self.collapse_button)
         self.card.body.addWidget(self.footer)
         self.hint = label("날짜와 필터를 설정한 뒤 조회 버튼을 눌러 적용하세요.",
                           13, color=SECONDARY, wrap=True)
@@ -478,121 +461,14 @@ class QueryPanel(QWidget):
             return None
         query = self.state.apply()
         self._applied_range = self._range_signature()
-        # 좁은 화면에서 펼쳐 편집한 조건은 조회 뒤 다시 요약해 결과 공간을 확보한다.
-        if self._collapse_override is False:
-            self._collapse_override = None
         self._render()
         self.applied.emit(query)
-        self._sync_density()
         return query
 
     def _range_signature(self):
         if self._range_enabled and self.range_button is not None:
             return self.range_button.start, self.range_button.end
         return None
-
-    def _narrow(self):
-        window = self.window()
-        return window is not self and (self.width() < 900 or window.height() <= 720)
-
-    def _sync_density(self):
-        if not hasattr(self, "collapse_button") or not hasattr(self, "applied_summary"):
-            return
-        collapsed = (self._collapse_override if self._collapse_override is not None else
-                     self.state.applied is not None and self._narrow())
-        self.set_collapsed(collapsed)
-
-    def set_collapsed(self, collapsed, *, user=False):
-        """공통 조회 입력을 숨겨도 적용 조건과 미적용 변경 상태는 계속 보여 준다."""
-        collapsed = bool(collapsed)
-        if user:
-            self._collapse_override = collapsed
-        focused = QApplication.focusWidget()
-        hides_focus = (focused is not None and (self.fields_row.isAncestorOf(focused)
-                       or self.actions_row.isAncestorOf(focused))
-                       and not self.query_tools.isAncestorOf(focused))
-        if collapsed and not self._collapsed:
-            if self.filter_popup is not None:
-                self.filter_popup.reject()
-            if self.range_button is not None and self.range_button.dialog is not None:
-                self.range_button.dialog.reject()
-        changed = collapsed != self._collapsed
-        self._collapsed = collapsed
-        if changed:
-            if collapsed:
-                self.fields_row.grid.removeWidget(self.query_tools)
-                self.footer_layout.insertWidget(self.footer_layout.indexOf(self.collapse_button), self.query_tools)
-                self.query_tools.show()
-            else:
-                self.footer_layout.removeWidget(self.query_tools)
-                self.fields_row.reflow(force=True)
-        self.fields_row.setVisible(not collapsed)
-        self.actions_row.setVisible(not collapsed)
-        self.compact_summary.setVisible(collapsed)
-        self.collapse_button.setText("필터 펼치기" if collapsed else "필터 접기")
-        self.collapse_button.setToolTip("날짜·분류·사업장·라인·설비군과 버전 조건을 편집합니다." if collapsed else
-                                       "입력을 접고 적용된 조건 요약을 표시합니다.")
-        if changed and collapsed and hides_focus:
-            self.collapse_button.setFocus()
-        elif changed and not collapsed and user:
-            (self.range_button if self._range_enabled else self.date_edit).setFocus()
-        self._render_compact_summary()
-        if changed:
-            self.updateGeometry()
-
-    def _render_compact_summary(self):
-        if not hasattr(self, "compact_summary") or not hasattr(self, "applied_summary"):
-            return
-        applied = self.state.applied
-        if applied is None:
-            text = "조회 전 · 날짜와 조건을 설정해 주세요."
-        else:
-            selection = applied.selection
-            period = self._applied_range if self._range_enabled else None
-            day = selection.as_of
-            when = (f"{period[0]:%Y-%m-%d} ~ {period[1]:%Y-%m-%d}" if period else
-                    f"기준일 {day:%Y-%m-%d}" if day else "기준일 최신")
-            parts = []
-            options = {"site_key": self.state.catalog.sites, "fab_key": self.state.catalog.fabs,
-                       "line_key": self.state.catalog.lines, "group_key": self.state.catalog.groups}
-            for field, caption in FILTER_CAPTIONS.items():
-                value = getattr(selection, field)
-                if value is not None:
-                    names = {option.key: option.label for option in options[field]}
-                    labels = ["미지정" if key is UNASSIGNED else names.get(key, "변경된 항목")
-                              for key in selection_keys(value)]
-                    parts.append(f"{caption} " + ", ".join(labels))
-            if not parts:
-                parts.append("전체 범위")
-            parts.append(when)
-            if selection.versions is not None:
-                parts.append(version_filter_caption(selection.versions))
-            text = " · ".join(parts)
-        self.compact_summary.setToolTip(self.applied_summary.text() or text)
-        self.compact_summary.setAccessibleDescription(self.applied_summary.text() or text)
-        self.compact_summary.setText(self.compact_summary.fontMetrics().elidedText(
-            text, Qt.TextElideMode.ElideRight, max(0, self.compact_summary.width())))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._sync_density()
-        self._render_compact_summary()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        window = self.window()
-        if window is not self and window is not self._density_window:
-            if self._density_window is not None:
-                self._density_window.removeEventFilter(self)
-            self._density_window = window
-            window.installEventFilter(self)
-        self._sync_density()
-
-    def eventFilter(self, watched, event):
-        if watched is self._density_window and event.type() == QEvent.Type.Resize:
-            # 상단 패널 높이가 같아도 창 높이만 바뀌면 결과 공간을 다시 판단한다.
-            self._density_timer.start(0)
-        return super().eventFilter(watched, event)
 
     def set_catalog(self, catalog: QueryCatalog):
         if self.filter_popup is not None:
@@ -670,4 +546,3 @@ class QueryPanel(QWidget):
             self.status.set_tone("warning")
             self.status.setToolTip(blocked)
         self.status.setAccessibleDescription(self.status.toolTip())
-        self._render_compact_summary()

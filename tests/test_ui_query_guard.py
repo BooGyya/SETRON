@@ -101,7 +101,7 @@ def test_saving_and_unknown_commit_block_query_without_mutating_applied_state(sc
     assert len(case.reads) == 1 and not window.query_request.busy
     assert panel.status.isVisibleTo(window) and "잠김" in panel.status.text()
     assert "저장" in panel.status.toolTip()
-    assert "전체 범위" in panel.compact_summary.text()
+    assert previous.description in panel.applied_summary.text()
 
     # 저장 중 아직 열지 않았던 Replay도 독립 조회 상태를 확정하거나 워커를 시작하면 안 된다.
     replay = window.pages["replay"]

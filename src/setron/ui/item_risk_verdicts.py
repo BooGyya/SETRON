@@ -12,8 +12,9 @@ from setron.features.risk.service import RiskAssessor
 from setron.ui.appearance import ui_color
 from setron.ui.components import StatusBadge, button, label
 from setron.ui.equipment import ReadTableModel, read_table
-from setron.ui.item_original_table import show_item_source
 from setron.ui.item_risk_dialog import FIRST_HINT, PopupDialog, choice, field, warning_icon
+from setron.ui.import_dialogs import ImportConfirmDialog
+from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.theme import SECONDARY, TONES, font, paint_font
 from setron.ui.version_data import family_display_name
 
@@ -23,13 +24,30 @@ UNKNOWN_HINT = "버전·관측 자료가 없어 위험 여부를 판단할 수 �
 CONDITIONS = {
     RuleType.SAFETY_REQUIRED: "대상 PM 중 하나라도 필수 아이템이 미적용이면 위험 후보입니다.",
     RuleType.DIRECT_VERSION: "대상 PM이 지정된 위험 버전을 사용하면 위험 후보입니다.",
+    RuleType.VERSION_BELOW: "대상 PM이 기준 버전보다 낮은 버전을 사용하면 위험 후보입니다.",
+    RuleType.VERSION_ABOVE: "대상 PM이 기준 버전보다 높은 버전을 사용하면 위험 후보입니다.",
     RuleType.DEFECT_ITEM: "지정한 버전 범위의 대상 PM에 결함 아이템이 포함되면 위험 후보입니다.",
 }
 
 
 def category(rule):
     return rule.category or {RuleType.SAFETY_REQUIRED: "환경안전 필수", RuleType.DEFECT_ITEM: "결함 버전",
+                             RuleType.VERSION_BELOW: "버전 미만 위험", RuleType.VERSION_ABOVE: "버전 초과 위험",
                              RuleType.DIRECT_VERSION: "결함 버전"}[rule.rule_type]
+
+
+def rule_condition(data, rule):
+    reference = next((entry.release for entry in data.versions.releases
+                      if entry.release.release_version_id == rule.release_version_id), None)
+    if reference is not None:
+        version = reference.version_raw
+        if rule.rule_type is RuleType.VERSION_BELOW:
+            return f"대상 PM의 버전이 {version} 미만이면 위험 후보입니다."
+        if rule.rule_type is RuleType.VERSION_ABOVE:
+            return f"대상 PM의 버전이 {version} 초과이면 위험 후보입니다."
+        if rule.rule_type is RuleType.DIRECT_VERSION:
+            return f"대상 PM이 {version} 버전을 사용하면 위험 후보입니다."
+    return CONDITIONS[rule.rule_type]
 
 
 def repeats_item(name, content):
@@ -149,11 +167,15 @@ class _VerdictModel(ReadTableModel):
 class ItemRuleVerdictDialog(PopupDialog):
     """Item의 위험 기준 판정 팝업: 기준 선택 → 조건 → 판정별 대수 → 설비 필터 → 설비별 판정 표."""
 
-    def __init__(self, parent, data, item_id, rule_id=None):
+    def __init__(self, parent, data, item_id, rule_id=None, *, manager=None):
         entry = next((e for e in data.versions.items if e.item.item_id == item_id), None)
         super().__init__(parent, entry.item.content if entry else "Item", title_lines=2)
         self.content = entry.item.content if entry else ""
         self.data, self.item_id = data, item_id
+        self.manager = manager
+        self.mutation_request = ReadRequest(self)
+        self.mutation_request.completed.connect(self._record_loaded)
+        self._mutation_target = None
         self.rules = [r for r in data.risk_rules if r.item_id == item_id and (r.is_enabled or r.risk_rule_id == rule_id)]
         self.rule = next((r for r in self.rules if r.risk_rule_id == rule_id), self.rules[0] if self.rules else None)
         self.status_filter = None
@@ -195,10 +217,20 @@ class ItemRuleVerdictDialog(PopupDialog):
         top = QHBoxLayout()
         top.addWidget(self.kind_chip)
         top.addStretch()
+        self.edit_button, self.delete_button = button("기준 수정"), button("기준 삭제")
+        self.edit_button.setToolTip("현재 선택한 위험 기준을 수정합니다.")
+        self.delete_button.setToolTip("현재 선택한 위험 기준 한 건만 삭제합니다.")
+        self.edit_button.clicked.connect(lambda: self._load_rule("edit"))
+        self.delete_button.clicked.connect(lambda: self._load_rule("delete"))
+        top.addWidget(self.edit_button)
+        top.addWidget(self.delete_button)
         condition.addLayout(top)
         condition.addWidget(self.condition_text)
         condition.addWidget(self.scope_text)
         outer.addWidget(self.condition_box)
+        self.mutation_notice = label("", 12, color=SECONDARY, wrap=True)
+        self.mutation_notice.hide()
+        outer.addWidget(self.mutation_notice)
         # 판정별 대수: 누르면 그 판정만 거른다. 한 번 더 누르면 전체로 돌아간다.
         self.tiles = QWidget()
         tiles = QHBoxLayout(self.tiles)
@@ -261,19 +293,8 @@ class ItemRuleVerdictDialog(PopupDialog):
         outer.addWidget(self.notice)
         outer.addStretch(0)
         footer = QHBoxLayout()
-        has_original = any(r.item_id == item_id for r in data.versions.original_rows)
-        self.source_button = button("원본 행 보기" if has_original else "출처 정보 보기")
-        self.source_button.setEnabled(entry is not None)
-        self.source_button.clicked.connect(lambda: show_item_source(self, data, item_id))
         self.close_button = button("닫기", primary=True)
         self.close_button.clicked.connect(self.accept)
-        # 등록 결과를 대시보드 위험 후보 목록과 잇는다. 이동 여부는 닫힌 뒤 화면이 dashboard_ids로 판단한다.
-        self.dashboard_ids = None
-        self.dashboard_button = button("대시보드 위험 후보 보기")
-        self.dashboard_button.setToolTip("이 기준의 위험 후보 중 현재 대시보드 조회 범위에 표시되는 설비를 목록으로 엽니다.")
-        self.dashboard_button.clicked.connect(self._open_dashboard)
-        footer.addWidget(self.source_button)
-        footer.addWidget(self.dashboard_button)
         footer.addStretch()
         footer.addWidget(self.close_button)
         outer.addLayout(footer)
@@ -289,8 +310,13 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.resize(780, max(self.minimumSizeHint().height(), min(700 if has_table else 440, available)))
 
     def _rule_changed(self, *_):
+        self.mutation_request.cancel()
+        self._mutation_target = None
+        self.selector.setEnabled(True)
+        self.mutation_notice.hide()
         self.rule = next((r for r in self.rules if r.risk_rule_id == self.selector.currentData()), self.rule)
         rule, data = self.rule, self.data
+        self._update_mutation_buttons()
         self.status_filter = None
         for tile in self.tile_buttons.values():
             tile.setChecked(False)
@@ -300,7 +326,7 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.verdicts = rule_verdicts(data, rule) if rule else []
         if rule:
             self.kind_chip.setText(category(rule))
-            self.condition_text.setText(CONDITIONS[rule.rule_type])
+            self.condition_text.setText(rule_condition(data, rule))
             names = {p.model_id: p.model_name for p in data.versions.pairs}
             model_ids = rule.target_model_ids or ((rule.group_id,) if rule.group_id is not None else ())
             family = next((family_display_name(p.family_name) for p in data.versions.pairs if p.family_id == rule.family_id), "미확인 계열")
@@ -321,7 +347,6 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.notice.setVisible(bool(message))
         for widget in (self.tiles, self.filters, self.table):
             widget.setVisible(has_rows)
-        self.dashboard_button.setEnabled(any(v[1].status is RiskStatus.RISK for v in self.verdicts))
         self.condition_box.setVisible(rule is not None)
         records = [v[0] for v in self.verdicts]
         models = {p.model_id: p.model_name for p in data.versions.pairs}
@@ -335,9 +360,56 @@ class ItemRuleVerdictDialog(PopupDialog):
                 self.group.addItem(models[model_id], model_id)
         self._site_changed()
 
-    def _open_dashboard(self):
-        self.dashboard_ids = tuple(dict.fromkeys(r.equipment_id for r, res, _ in self.verdicts if res.status is RiskStatus.RISK))
-        self.accept()
+    def _update_mutation_buttons(self):
+        available = self.rule is not None and self.manager is not None and self.manager.gateway is not None
+        self.edit_button.setEnabled(bool(available and self.manager.submit_edit is not None and not self.mutation_request.busy))
+        self.delete_button.setEnabled(bool(available and self.manager.submit_delete is not None and not self.mutation_request.busy))
+
+    def _load_rule(self, action):
+        if self.mutation_request.busy or self.rule is None or self.manager is None or self.manager.gateway is None:
+            return
+        rule_id, gateway = self.rule.risk_rule_id, self.manager.gateway
+        self._mutation_target = action, rule_id
+        self.selector.setEnabled(False)
+        self.mutation_notice.setText("선택한 위험 기준의 현재 저장값을 확인하고 있습니다.")
+        self.mutation_notice.show()
+        self.mutation_request.start(BackgroundRead(lambda: gateway.get("risk_rule", {"risk_rule_id": rule_id})))
+        self._update_mutation_buttons()
+
+    def _record_loaded(self, record, error):
+        target, self._mutation_target = self._mutation_target, None
+        self.selector.setEnabled(True)
+        self._update_mutation_buttons()
+        if target is None or not self.isVisible() or self.rule is None or self.rule.risk_rule_id != target[1]:
+            return
+        if error is not None or record is None:
+            self.mutation_notice.setText("위험 기준을 읽지 못했습니다. 다시 조회한 뒤 시도해 주세요.")
+            return
+        if record.key.get("risk_rule_id") != target[1] or record.current.get("item_id") != self.item_id:
+            self.mutation_notice.setText("위험 기준의 연결이 변경됐습니다. Item 자료를 다시 조회해 주세요.")
+            return
+        self.mutation_notice.hide()
+        if target[0] == "edit":
+            if self.manager.open_edit(self, self.data, record):
+                self.accept()
+            return
+        presentation = (record.current.get("target_reference") or {}).get("item_manager") or {}
+        name = presentation.get("name") or record.current.get("risk_reason") or f"위험 기준 {target[1]}"
+        confirmation = ImportConfirmDialog(
+            f"위험 기준 '{name}'을(를) 삭제할까요?\n이 기준 한 건만 삭제하며, 같은 Item의 다른 기준은 유지됩니다.",
+            self, title="위험 기준 삭제", action_text="삭제")
+        if confirmation.exec() != QDialog.DialogCode.Accepted:
+            return
+        if self.manager.submit_delete(record):
+            self.accept()
+        else:
+            self.mutation_notice.setText("진행 중인 관리 작업을 마친 뒤 다시 시도해 주세요.")
+            self.mutation_notice.show()
+
+    def hideEvent(self, event):
+        self.mutation_request.cancel()
+        self._mutation_target = None
+        super().hideEvent(event)
 
     def _site_changed(self, *_):
         site = self.site.currentData()

@@ -2,32 +2,50 @@
 
 from copy import deepcopy
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtCore import QPointF
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu,
+    QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOptionButton, QStyledItemDelegate, QVBoxLayout, QWidget,
 )
 
 from setron.features.risk.schemas import FindingBasis, RiskStatus
+from setron.ui.appearance import ui_color
 from setron.ui.combo_box import ComboBox
-from setron.ui.components import StatusBadge, button, label
-from setron.ui.item_original_table import show_item_source
+from setron.ui.components import button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.query_panel import _WrapRow
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.theme import PRIMARY, SECONDARY, font, set_widget_font
+from setron.ui.theme import ACCENT_SOFT, INK, LINE, PRIMARY, SECONDARY, SOFT, font, set_widget_font
 from setron.ui.version_data import family_display_name
 
 
-# 구분은 판정 기준에서 정한다. 판정 기준과 따로 고르면 같은 내용을 두 번 고르게 되고, 구분만 바꿔도
-# 판정이 바뀌지 않아 헷갈렸다 (11-11 점검). 목록의 구분 칩은 이 값을 그대로 보여 준다.
-CATEGORY_BY_RULE = {"SAFETY_REQUIRED": "환경안전 필수", "DEFECT_ITEM": "결함 버전", "DIRECT_VERSION": "결함 버전"}
+VERSION_CRITERIA = (
+    ("VERSION_BELOW", "{version} 미만 버전"),
+    ("DIRECT_VERSION", "{version} 동일 버전"),
+    ("VERSION_ABOVE", "{version} 초과 버전"),
+)
 
 
-def choice(name):
-    widget = ComboBox()
+def _paint_dropdown_arrow(widget, painter):
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(ui_color(INK if widget.isEnabled() else SECONDARY), 1.6))
+    center = QPointF(widget.width() - 18, widget.height() / 2)
+    painter.drawPolyline(QPolygonF((center + QPointF(-4, -2), center + QPointF(0, 2), center + QPointF(4, -2))))
+    painter.restore()
+
+
+class _RiskComboBox(ComboBox):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        _paint_dropdown_arrow(self, painter)
+
+
+def choice(name, *, custom_arrow=False):
+    widget = _RiskComboBox() if custom_arrow else ComboBox()
     widget.setAccessibleName(name)
     widget.setProperty("queryField", True)
     widget.setMinimumWidth(0)
@@ -46,6 +64,14 @@ def field(name, control):
     body.addWidget(label(name, 12, medium=True, color=SECONDARY))
     body.addWidget(control)
     return holder
+
+
+class _InputRow(_WrapRow):
+    """조회 아이콘용 우측 정렬 없이 입력 필드가 같은 폭을 나눠 쓴다."""
+
+    def _arrange(self, columns, *, force=False):
+        super()._arrange(columns, force=force)
+        self.grid.setAlignment(self.widgets[-1], Qt.AlignmentFlag(0))
 
 
 class _ClampLabel(QLabel):
@@ -83,6 +109,54 @@ class _ClampLabel(QLabel):
             text = self.full[:low].rstrip() + "…"
         if text != self.text():
             self.setText(text)
+
+
+class _ScopeButton(QPushButton):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("riskModels")
+        self.full_text = "대상 설비군 선택"
+        self.setAccessibleName("대상 설비군 선택")
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(40)
+
+    def set_summary(self, text):
+        self.full_text = text
+        self.setToolTip(text)
+        self.setAccessibleDescription(text)
+        self._elide()
+
+    def _elide(self):
+        self.setText(self.fontMetrics().elidedText(self.full_text, Qt.TextElideMode.ElideRight, max(0, self.width() - 48)))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange and hasattr(self, "full_text"):
+            self._elide()
+
+    def sizeHint(self):
+        size = super().sizeHint()
+        size.setHeight(40)
+        return size
+
+    def minimumSizeHint(self):
+        return QSize(0, 40)
+
+    def paintEvent(self, event):
+        # 메뉴 버튼의 기본 글자 위치 대신 콤보 입력칸과 같은 기준선을 사용한다.
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = ""
+        painter = QPainter(self)
+        self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
+        painter.setPen(ui_color(INK if self.isEnabled() else SECONDARY))
+        painter.drawText(self.rect().adjusted(14, 0, -34, 0),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.text())
+        _paint_dropdown_arrow(self, painter)
 
 
 def warning_icon(color="#856009", size=14):
@@ -151,39 +225,23 @@ class PopupDialog(QDialog):
             self.move(center.x() - self.width() // 2, center.y() - self.height() // 2)
 
 
-def _link_style(widget):
-    """보조 동작은 테두리 없는 텍스트 링크 모양으로 낮춘다."""
-    set_widget_font(widget, font(12, medium=True))
-    widget.setFixedHeight(24)
-    widget.setStyleSheet(f"QPushButton {{border:0;background:transparent;color:{PRIMARY};padding:0 4px;min-height:0;}}"
-                         "QPushButton:hover {background:#edf0fd;border-radius:6px;}")
-
-
 FIRST_HINT = "이 계열에서 이 Item이 처음 포함된 버전을 확정하지 못했습니다. 포함으로 확인된 릴리즈가 없거나, 버전 순서가 확인되지 않았거나, 같은 순서의 버전이 둘 이상이라 가려낼 수 없는 경우입니다."
 
 
-def _stat(caption):
-    """숫자를 크게, 이름을 작게 보여 주는 영향 지표 한 칸."""
-    frame = QFrame()
-    frame.setObjectName("impactStat")
-    frame.setStyleSheet("QFrame#impactStat {background:white;border:1px solid #e5eaf3;border-radius:8px;}")
-    column = QVBoxLayout(frame)
-    column.setContentsMargins(12, 8, 12, 8)
-    column.setSpacing(0)
-    value = label("0", 18, medium=True)
-    column.addWidget(value)
-    column.addWidget(label(caption, 11, color=SECONDARY))
-    return frame, value
-
-
 class ItemRiskDialog(PopupDialog):
-    def __init__(self, parent, data, gateway, context_provider, submit, *, family_id=None, item_id=None):
-        super().__init__(parent, "위험 기준 등록")
+    def __init__(self, parent, data, gateway, context_provider, submit, *, family_id=None, item_id=None, edit_record=None):
+        super().__init__(parent, "위험 기준 수정" if edit_record is not None else "위험 기준 등록")
         self.data, self.gateway, self.context_provider, self.submit = data, gateway, context_provider, submit
+        self.edit_record = edit_record
+        self.original_values = deepcopy(edit_record.current) if edit_record is not None else None
+        self.legacy_rule = bool(self.original_values and self.original_values["rule_type"] not in dict(VERSION_CRITERIA))
         self.preview_values = None
         self.preview_valid = False
         self.suggested_name = ""
         self.submitted = False
+        self.fit_timer = QTimer(self)
+        self.fit_timer.setSingleShot(True)
+        self.fit_timer.timeout.connect(self._fit_height)
         self.preview_timer = QTimer(self)
         self.preview_timer.setSingleShot(True)
         self.preview_timer.setInterval(350)
@@ -191,13 +249,13 @@ class ItemRiskDialog(PopupDialog):
         self.request = ReadRequest(self)
         self.request.completed.connect(self._previewed)
         self.setMinimumSize(420, 320)
-        self.setStyleSheet("QLineEdit,QComboBox {border:1px solid #dee0e5;border-radius:8px;padding:6px 10px;}")
         outer = self.body
         self.scroll = QScrollArea()
         self.scroll.setAccessibleName("위험 아이템 입력 영역")
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         content.setObjectName("itemRiskForm")
         content.setStyleSheet("QWidget#itemRiskForm {background:white;}")
@@ -205,126 +263,83 @@ class ItemRiskDialog(PopupDialog):
         layout.setContentsMargins(0, 0, 8, 0)
         layout.setSpacing(14)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
-        # 핵심 입력(Item 확인 · 메모 · 영향 요약)만 먼저 보이고, 나머지는 기본값으로 채운 채 '상세 설정'에 둔다.
         self.name = QLineEdit()
         self.name.setMaxLength(250)
         self.name.setFixedHeight(40)
         self.name.setAccessibleName("위험 기준명")
-        self.family, self.item = choice("관련 릴리즈 계열"), choice("관련 릴리즈노트 Item")
+        self.family, self.item = choice("관련 릴리즈 계열", custom_arrow=True), choice("관련 릴리즈노트 Item", custom_arrow=True)
         families = {p.family_id: p.family_name for p in data.versions.pairs}
+        if edit_record is not None and family_id not in families:
+            families[family_id] = f"계열 {family_id}"
         for fid, name in sorted(families.items()):
             self.family.addItem(family_display_name(name), fid)
         if family_id in families:
             self.family.setCurrentIndex(self.family.findData(family_id))
         self.item_search = QLineEdit()
+        self.item_search.setFixedHeight(40)
         self.item_search.setPlaceholderText("관련 아이템 검색")
         self.item_search.setClearButtonEnabled(True)
-        # Item 내용은 한 덩어리 제목(2줄 말줄임)으로, 계열·최초 포함 버전·원본 행 유무는 그 아래 작은 칩으로 나눈다.
-        self.item_note = _ClampLabel(2)
-        set_widget_font(self.item_note, font(14))
-        self.item_family_chip, self.item_first_chip, self.item_source_chip = StatusBadge(""), StatusBadge(""), StatusBadge("")
-        self.item_meta = QWidget()
-        meta = QHBoxLayout(self.item_meta)
-        meta.setContentsMargins(0, 0, 0, 0)
-        meta.setSpacing(6)
-        for chip in (self.item_family_chip, self.item_first_chip, self.item_source_chip):
-            meta.addWidget(chip)
-        meta.addStretch()
-        self.source_button = button("원본 행 보기")
-        self.source_button.clicked.connect(lambda: show_item_source(self, data, self.item.currentData()))
-        self.change_item = button("아이템 변경")
-        self.item_fixed = item_id is not None
-        for small in (self.source_button, self.change_item):
-            _link_style(small)
-        self.change_item.setCheckable(True)
-        self.change_item.setChecked(item_id is None)
+        self.item_fixed, self.fixed_item_id = False, None
         self.item_editor = QWidget()
         editor = QVBoxLayout(self.item_editor)
         editor.setContentsMargins(0, 0, 0, 0)
         editor.addWidget(self.item_search)
-        editor.addWidget(_WrapRow([self.family, self.item], 240, fields=True))
-        item_box = QWidget()
-        item_column = QVBoxLayout(item_box)
-        item_column.setContentsMargins(0, 0, 0, 0)
-        item_column.setSpacing(8)
-        item_column.addWidget(self.item_note)
-        item_column.addWidget(self.item_meta)
-        item_actions = QHBoxLayout()
-        item_actions.setSpacing(6)
-        item_actions.addWidget(self.change_item)
-        item_actions.addWidget(self.source_button)
-        item_actions.addStretch()
-        item_column.addLayout(item_actions)
-        layout.addWidget(item_box)
+        editor.addWidget(_InputRow([self.family, self.item], 240, fields=True))
         layout.addWidget(self.item_editor)
-        self.change_item.toggled.connect(self._update_editor)
+        self.advanced = QWidget()
+        advanced = QVBoxLayout(self.advanced)
+        advanced.setContentsMargins(0, 0, 0, 0)
+        advanced.setSpacing(14)
+        advanced.addWidget(field("위험 기준명", self.name))
+        self.criterion = choice("위험 판정 기준", custom_arrow=True)
+        for key, caption in VERSION_CRITERIA:
+            self.criterion.addItem(caption.format(version="기준 버전"), key)
+        self.start = choice("기준 버전", custom_arrow=True)
+        self.legacy_note = label("", 12, color=SECONDARY, wrap=True)
+        self.legacy_note.hide()
+        advanced.addWidget(self.legacy_note)
+        self.version_fields = _InputRow([field("기준 버전", self.start), field("위험 판정 기준", self.criterion)], 220, fields=True)
+        advanced.addWidget(self.version_fields)
+        self.models = _ScopeButton()
+        self.model_menu = QMenu(self.models)
+        self.models.setMenu(self.model_menu)
+        self.model_actions = []
+        self.site, self.line = choice("위험 대상 Site", custom_arrow=True), choice("위험 대상 Line", custom_arrow=True)
+        self.site.addItem("전체", None)
+        for site in sorted({r.site for r in data.records}):
+            self.site.addItem(site, site)
+        self.scope_fields = QWidget()
+        scope_fields = QHBoxLayout(self.scope_fields)
+        scope_fields.setContentsMargins(0, 0, 0, 0)
+        scope_fields.setSpacing(10)
+        for title, control, stretch in (("Site", self.site, 3), ("Line", self.line, 3), ("설비군", self.models, 4)):
+            control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            scope_fields.addWidget(field(title, control), stretch, Qt.AlignmentFlag.AlignBottom)
+        advanced.addWidget(self.scope_fields)
+        layout.addWidget(self.advanced)
         self.memo = QLineEdit()
         self.memo.setMaxLength(4000)
-        self.memo.setPlaceholderText("예) 원본 확인일 · 대상 공정")
+        self.memo.setPlaceholderText("예) 위험 기준 사유")
         self.memo.setFixedHeight(40)
         layout.addWidget(field("메모 (선택)", self.memo))
-        # 범위(계열·Site·Line)는 칩, 결과는 숫자 지표, 자료가 없으면 한 문장 안내로 나눠 보인다.
-        self.preview = label("영향 미리보기로 현재 관측에 미치는 영향을 확인하세요.", 12, color=PRIMARY, wrap=True)
+        self.target_summary = label("위험 적용 대상 0건", 18, medium=True, wrap=True)
+        self.target_summary.setAccessibleName("현재 기준에 해당하는 설비 수")
+        self.target_summary.setToolTip("현재 입력한 기준에 해당하는 전체 설비 수입니다. 기존 위험 후보를 포함하며, 미확인 설비는 포함하지 않습니다.")
+        self.target_summary.hide()
+        self.preview = label("영향 미리보기로 현재 관측에 미치는 영향을 확인하세요.", 12, color=SECONDARY, wrap=True)
         self.preview.setMinimumWidth(0)
-        self.scope_chips = [StatusBadge("") for _ in range(3)]
-        scope_row = QHBoxLayout()
-        scope_row.setSpacing(6)
-        for chip in self.scope_chips:
-            scope_row.addWidget(chip)
-        scope_row.addStretch()
-        self.stats = QWidget()
-        stats_row = QHBoxLayout(self.stats)
-        stats_row.setContentsMargins(0, 0, 0, 0)
-        stats_row.setSpacing(8)
-        self.stat_values = {}
-        for key, caption in (("risk", "위험 후보"), ("unknown", "미확인"), ("new", "새 위험 후보"), ("hpa", "HPA 제외")):
-            frame, value = _stat(caption)
-            self.stat_values[key] = value
-            stats_row.addWidget(frame, 1)
-        self.stats.hide()
         preview_box = QFrame()
         preview_box.setObjectName("impactPreview")
         preview_box.setStyleSheet("QFrame#impactPreview {background:#f4f5f8;border-radius:8px;}")
         preview_column = QVBoxLayout(preview_box)
         preview_column.setContentsMargins(12, 10, 12, 10)
         preview_column.setSpacing(8)
-        preview_column.addLayout(scope_row)
-        preview_column.addWidget(self.stats)
+        preview_column.addWidget(self.target_summary)
         preview_column.addWidget(self.preview)
         layout.addWidget(preview_box)
-        self.advanced_toggle = button("상세 설정 펼치기")
-        self.advanced_toggle.setCheckable(True)
-        self.advanced_toggle.setChecked(False)
-        layout.addWidget(self.advanced_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.advanced = QWidget()
-        advanced = QVBoxLayout(self.advanced)
-        advanced.setContentsMargins(0, 0, 0, 0)
-        advanced.setSpacing(14)
-        advanced.addWidget(field("위험 기준명", self.name))
-        self.criterion = choice("위험 판정 기준")
-        self.criterion.addItem("필수 Item 미적용 시 위험 · 포함 버전 이상 누적 적용", "SAFETY_REQUIRED")
-        self.criterion.addItem("지정 버전 사용 시 위험", "DIRECT_VERSION")
-        self.criterion.addItem("결함 Item의 시작~해제 범위가 위험", "DEFECT_ITEM")
-        self.models = QPushButton("대상 설비군 선택")
-        self.models.setFixedHeight(40)
-        self.model_menu = QMenu(self.models)
-        self.models.setMenu(self.model_menu)
-        self.model_actions = []
-        advanced.addWidget(_WrapRow([field("위험 판정 기준", self.criterion), field("대상 설비군 · 복수 선택", self.models)], 240, fields=True))
-        self.start, self.end = choice("대상·시작 버전"), choice("해제 버전")
-        self.version_fields = _WrapRow([field("대상·시작 버전", self.start), field("해제 버전 (선택)", self.end)], 240, fields=True)
-        advanced.addWidget(self.version_fields)
-        self.site, self.line = choice("위험 대상 Site"), choice("위험 대상 Line")
-        self.site.addItem("전체 Site", None)
-        for site in sorted({r.site for r in data.records}):
-            self.site.addItem(site, site)
-        advanced.addWidget(field("대상 범위", _WrapRow([self.site, self.line], 240, fields=True)))
         self.impact_model = ReadTableModel(("설비 · 위치", "판정 결과", "해당 PM · 버전 및 근거"))
         self.impact_table = read_table(self.impact_model, "영향 미리보기 설비", (105, 108, 198))
-        advanced.addWidget(self.impact_table)
-        layout.addWidget(self.advanced)
-        self.advanced.hide()
-        self.advanced_toggle.toggled.connect(self._toggle_advanced)
+        layout.addWidget(self.impact_table)
         layout.addStretch()
         self.scroll.setWidget(content)
         outer.addWidget(self.scroll, 1)
@@ -348,12 +363,13 @@ class ItemRiskDialog(PopupDialog):
         row.addWidget(self.cancel_button)
         row.addWidget(self.save_button)
         outer.addWidget(self.footer)
+        self._configure_dropdowns()
         self.family.currentIndexChanged.connect(self._family_changed)
         self.item.currentIndexChanged.connect(self._item_changed)
         self.item_search.textChanged.connect(self._filter_items)
         self.site.currentIndexChanged.connect(self._site_changed)
         self.criterion.currentIndexChanged.connect(self._criterion_changed)
-        for control in (self.start, self.end, self.line):
+        for control in (self.start, self.line):
             control.currentIndexChanged.connect(self._invalidate)
         self.start.currentIndexChanged.connect(self._start_changed)
         # 메모는 영향 계산과 무관하므로 입력해도 미리보기를 다시 계산하지 않는다.
@@ -361,16 +377,161 @@ class ItemRiskDialog(PopupDialog):
         self._family_changed()
         if item_id is not None and self.item.findData(item_id) >= 0:
             self.item.setCurrentIndex(self.item.findData(item_id))
-            entry = next(e for e in data.versions.items if e.item.item_id == item_id)
-            self.name.setText(entry.item.content[:250])
-        self.change_item.setChecked(item_id is None or self.item.currentData() != item_id)
+            self.item_fixed, self.fixed_item_id = True, item_id
+        self._update_editor()
         self._site_changed()
         self._criterion_changed()
-        width, height = 600, 560
+        if edit_record is not None:
+            self._restore_edit_record()
+        width = 720
         if screen := self.screen():
             available = screen.availableGeometry()
-            width, height = min(width, available.width() - 32), min(height, available.height() - 32)
-        self.resize(width, height)
+            width = min(width, available.width() - 32)
+        self.resize(width, self.minimumHeight())
+        self._fit_height()
+
+    def _restore_edit_record(self):
+        """현재 DB 행을 채우고 기존 계열·Item 연결과 구형 판정 조건은 유지한다."""
+        row = self.original_values
+        presentation = (row.get("target_reference") or {}).get("item_manager") or {}
+        self.family.setEnabled(False)
+        item_id = row.get("item_id")
+        if item_id is not None and self.item.findData(item_id) < 0:
+            entry = next((e for e in self.data.versions.items if e.item.item_id == item_id), None)
+            self.item.addItem(entry.item.content if entry else f"Item {item_id}", item_id)
+        self.item_fixed, self.fixed_item_id = True, item_id
+        self.item.setCurrentIndex(self.item.findData(item_id))
+        self._update_editor()
+        key = row["rule_type"]
+        if self.legacy_rule:
+            caption = {"SAFETY_REQUIRED": "환경안전 필수", "DEFECT_ITEM": "결함 Item 범위"}.get(key, key)
+            self.criterion.addItem(caption, key)
+            self.version_fields.hide()
+            versions = {e.release.release_version_id: e.release.version_raw for e in self.data.versions.releases}
+            start = versions.get(row.get("start_release_version_id"), "미지정")
+            end = versions.get(row.get("end_release_version_id"), "미지정")
+            self.legacy_note.setText(f"기존 {caption} 조건을 유지합니다. 시작 버전 {start} · 해제 버전 {end}")
+            self.legacy_note.show()
+        self.criterion.setCurrentIndex(self.criterion.findData(key))
+        self.start.setCurrentIndex(self.start.findData(row.get("release_version_id")))
+        self.criterion.setEnabled(not self.legacy_rule)
+        self.start.setEnabled(not self.legacy_rule)
+        site, line = presentation.get("site"), presentation.get("line")
+        if site is not None and self.site.findData(site) < 0:
+            self.site.addItem(site, site)
+        self.site.setCurrentIndex(max(0, self.site.findData(site)))
+        self._site_changed()
+        if line is not None and self.line.findData(line) < 0:
+            self.line.addItem(line, line)
+        self.line.setCurrentIndex(max(0, self.line.findData(line)))
+        selected = presentation.get("model_ids")
+        if selected is None and row.get("group_id") is not None:
+            selected = [row["group_id"]]
+        for mid in selected or ():
+            if not any(a.data() == mid for a in self.model_actions):
+                action = self.model_menu.addAction(f"모델 {mid}")
+                action.setCheckable(True)
+                action.setData(mid)
+                action.toggled.connect(self._models_changed)
+                self.model_actions.append(action)
+        for action in self.model_actions:
+            action.setChecked(selected is None or action.data() in selected)
+        self._models_changed()
+        self._original_scope = (tuple(a.data() for a in self.model_actions if a.isChecked()), site, line)
+        self.name.setText(presentation.get("name") or row["risk_reason"])
+        self.memo.setText(presentation.get("memo") or "")
+        self.suggested_name = ""
+        self.save_button.setText("수정 저장")
+        self._invalidate()
+
+    def _queue_fit(self):
+        if self.isVisible():
+            self.fit_timer.start(0)
+
+    def _fit_height(self):
+        """입력·미리보기 높이만큼 표시하고 화면을 넘는 부분만 내부에서 스크롤한다."""
+        self.layout().activate()
+        self.body.activate()
+        content = self.scroll.widget()
+        content.layout().activate()
+        width = max(1, self.scroll.viewport().width())
+        natural = content.layout().heightForWidth(width)
+        if natural < 0:
+            natural = content.sizeHint().height()
+        natural = max(natural, content.minimumSizeHint().height())
+        overhead = self.height() - self.scroll.viewport().height()
+        bounds = self.screen().availableGeometry().adjusted(16, 16, -16, -16)
+        maximum = min(bounds.height(), self.maximumHeight())
+        wanted = max(self.minimumHeight(), min(natural + overhead, maximum))
+        if wanted != self.height():
+            center = self.frameGeometry().center()
+            self.resize(self.width(), wanted)
+            if self.isVisible():
+                y = max(bounds.top(), min(center.y() - self.height() // 2, bounds.bottom() - self.height() + 1))
+                self.move(self.x(), y)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width() and hasattr(self, "footer"):
+            self._queue_fit()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange) and hasattr(self, "footer"):
+            self._queue_fit()
+
+    def _set_preview(self, text):
+        self.preview.setText(text)
+        self.preview.setVisible(bool(text))
+
+    def _configure_dropdowns(self):
+        """공통 콤보의 위치·키보드 동작을 유지하고 이 팝업의 필드와 목록 모양만 맞춘다."""
+        input_style = (
+            f"QLineEdit {{background:{SOFT};color:{INK};border:1px solid {LINE};border-radius:8px;padding:0 12px;}}"
+            f"QLineEdit:hover {{border-color:{SECONDARY};}}"
+            f"QLineEdit:focus {{background:white;border:2px solid {PRIMARY};}}")
+        for control in (self.name, self.memo, self.item_search):
+            control.setStyleSheet(input_style)
+            set_widget_font(control, font(14))
+        field_style = (
+            f"QComboBox {{background:{SOFT};color:{INK};border:1px solid {LINE};border-radius:8px;padding:0 34px 0 12px;}}"
+            f"QComboBox:hover {{background:white;border-color:{SECONDARY};}}"
+            f"QComboBox:focus, QComboBox:on {{background:{ACCENT_SOFT};border:2px solid {PRIMARY};}}"
+            f"QComboBox:disabled {{background:{SOFT};color:{SECONDARY};border-color:{LINE};}}"
+            "QComboBox::drop-down {subcontrol-origin:padding;subcontrol-position:top right;width:28px;border:0;}"
+            "QComboBox::down-arrow {image:none;width:0;height:0;}")
+        list_style = (
+            f"QAbstractItemView {{background:white;color:{INK};border:1px solid {LINE};border-radius:8px;"
+            f"padding:4px;outline:0;selection-background-color:{ACCENT_SOFT};selection-color:{PRIMARY};}}"
+            "QAbstractItemView::item {min-height:22px;padding:6px 10px 6px 5px;border:0;border-radius:5px;}"
+            f"QAbstractItemView::item:hover {{background:{SOFT};}}"
+            f"QAbstractItemView::item:selected {{background:{ACCENT_SOFT};color:{PRIMARY};}}")
+        for control in (self.family, self.item, self.start, self.criterion, self.site, self.line):
+            control.setStyleSheet(field_style)
+            control.setMaxVisibleItems(8)
+            set_widget_font(control, font(14))
+            view = control.view()
+            view.setItemDelegate(QStyledItemDelegate(view))
+            view.setUniformItemSizes(True)
+            view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            view.setMouseTracking(True)
+            view.setStyleSheet(list_style)
+            set_widget_font(view, font(14))
+        self.models.setStyleSheet(
+            f"QPushButton#riskModels {{background:{SOFT};color:{INK};border:1px solid {LINE};border-radius:8px;"
+            "padding:0 34px 0 12px;text-align:left;min-height:0;}"
+            f"QPushButton#riskModels:hover {{background:white;border-color:{SECONDARY};}}"
+            f"QPushButton#riskModels:focus, QPushButton#riskModels:pressed {{background:{ACCENT_SOFT};border:2px solid {PRIMARY};}}"
+            "QPushButton#riskModels::menu-indicator {image:none;width:0;height:0;}")
+        set_widget_font(self.models, font(14))
+        self.model_menu.setStyleSheet(
+            f"QMenu {{background:white;color:{INK};border:1px solid {LINE};border-radius:8px;padding:4px 0;}}"
+            "QMenu::item {min-height:22px;padding:6px 12px 6px 0;border-radius:5px;}"
+            f"QMenu::item:selected {{background:{ACCENT_SOFT};color:{PRIMARY};}}"
+            "QMenu::indicator {width:14px;height:14px;}")
+        set_widget_font(self.model_menu, font(14))
+        self.model_menu.aboutToShow.connect(lambda: self.model_menu.setMinimumWidth(self.models.width()))
 
     def _family_changed(self, *_):
         fid = self.family.currentData()
@@ -379,15 +540,12 @@ class ItemRiskDialog(PopupDialog):
         item_ids = {r.item_id for r in self.data.versions.version_items if r.release_version_id in ids}
         self.family_item_ids = item_ids
         self._filter_items()
-        for combo in (self.start, self.end):
-            combo.clear()
-        self.end.addItem("해제 버전 없음", None)
+        self.start.clear()
         for release in sorted(releases, key=lambda r: (r.version_order is None, r.version_order or 0, r.release_version_id)):
             # 버전 이름만 보인다. 순서 값은 사용자가 이미 아는 정보라 뺐다 (11-11 점검).
-            # 순서를 모르는 버전만 표시를 남긴다: 결함 범위 판정이 '미확인'이 될 수 있다.
+            # 순서가 미확인인 버전은 미만·초과 기준으로 등록할 수 없음을 함께 표시한다.
             text = release.version_raw if release.version_order is not None else f"{release.version_raw} · 순서 미확인"
-            for combo in (self.start, self.end):
-                combo.addItem(text, release.release_version_id)
+            self.start.addItem(text, release.release_version_id)
         self.model_menu.clear()
         self.model_actions = []
         models = {p.model_id: p.model_name for p in self.data.versions.pairs if p.family_id == fid}
@@ -411,12 +569,18 @@ class ItemRiskDialog(PopupDialog):
             self.item.setCurrentIndex(self.item.findData(previous))
 
     def _suggestion(self):
-        """판정 기준에 맞는 기준명 제안. 지정 버전은 계열·버전으로, 나머지는 고른 Item 내용으로 짓는다."""
-        if self.criterion.currentData() == "DIRECT_VERSION":
-            version = self.start.currentText().split(" · ")[0].strip()
-            return f"{self.family.currentText()} {version} 사용 위험".strip() if version else ""
-        entry = next((e for e in self.data.versions.items if e.item.item_id == self.item.currentData()), None)
-        return entry.item.content[:250] if entry else ""
+        """Item 장문을 반복하지 않고 계열·기준 버전·비교 조건으로 기준명을 제안한다."""
+        version = self._reference_version()
+        if version is None:
+            return ""
+        relation = {"VERSION_BELOW": "미만 사용 위험", "DIRECT_VERSION": "사용 위험", "VERSION_ABOVE": "초과 사용 위험"}
+        suffix = relation.get(self.criterion.currentData())
+        return f"{self.family.currentText()} {version} {suffix}".strip() if suffix else ""
+
+    def _reference_version(self):
+        release = next((entry.release for entry in self.data.versions.releases
+                        if entry.release.release_version_id == self.start.currentData()), None)
+        return release.version_raw if release else None
 
     def _suggest_name(self):
         """사용자가 기준명을 직접 고치지 않았으면 제안으로 채운다. 판정 기준을 바꿔도 기준명을 비우지 않는다."""
@@ -426,81 +590,66 @@ class ItemRiskDialog(PopupDialog):
         self.suggested_name = suggestion
 
     def _start_changed(self, *_):
-        if self.criterion.currentData() == "DIRECT_VERSION":
-            self._suggest_name()
+        version = self._reference_version() or "기준 버전"
+        with QSignalBlocker(self.criterion):
+            for index, (_key, caption) in enumerate(VERSION_CRITERIA):
+                self.criterion.setItemText(index, caption.format(version=version))
+        self.criterion.setToolTip(self.criterion.currentText())
+        self._suggest_name()
 
     def _item_changed(self, *_):
-        entry = next((e for e in self.data.versions.items if e.item.item_id == self.item.currentData()), None)
-        if self.criterion.currentData() != "DIRECT_VERSION":
-            self._suggest_name()
-        overview = self.data.catalog().overview(entry.item, ()) if entry else None
-        first = next((f.first_included for f in overview.families if f.family_id == self.family.currentData()), None) if overview else None
-        has_row = entry and any(row.item_id == entry.item.item_id for row in self.data.versions.original_rows)
-        self.source_button.setText("원본 행 보기" if has_row else "출처 정보 보기")
-        self.source_button.setEnabled(entry is not None)
-        self.item_note.set_full_text(entry.item.content if entry else "선택한 계열에 일치하는 아이템이 없습니다.")
-        self.item_meta.setVisible(entry is not None)
-        if entry:
-            self.item_family_chip.setText(self.family.currentText())
-            self.item_first_chip.setText(f"최초 포함 버전 {first.version_raw if first else '미확인'}")
-            self.item_first_chip.setToolTip("" if first else FIRST_HINT)
-            self.item_source_chip.setText("원본 행 있음" if has_row else "원본 행 미보관")
-            self.item_source_chip.set_tone("success" if has_row else "warning")
-            self.item_source_chip.setToolTip("" if has_row else "원본 파일에서 직접 확인해야 합니다.")
-            for chip in (self.item_family_chip, self.item_first_chip):
-                chip.set_tone("neutral")
+        self._suggest_name()
         self._invalidate()
 
     def _models_changed(self, *_):
-        self.models.setText(" · ".join(a.text() for a in self.model_actions if a.isChecked()) or "대상 설비군 선택")
+        self.models.set_summary(" · ".join(a.text() for a in self.model_actions if a.isChecked()) or "대상 설비군 선택")
         self._invalidate()
 
     def _site_changed(self, *_):
         site = self.site.currentData()
         self.line.clear()
-        self.line.addItem("전체 Line", None)
+        self.line.addItem("전체", None)
         self.line.setEnabled(site is not None)
         for line in sorted({r.line for r in self.data.records if r.site == site and r.line}):
             self.line.addItem(line, line)
         self._invalidate()
 
     def _update_editor(self, *_):
-        direct = self.criterion.currentData() == "DIRECT_VERSION"
-        editing = self.change_item.isChecked()
-        self.change_item.setVisible(not direct and self.item_fixed)
-        self.change_item.setText("선택 닫기" if editing else "아이템 변경")
-        self.item_editor.setVisible(direct or editing)
-        self.item.setVisible(not direct)
-        self.item_search.setVisible(not direct and editing)
+        self.item_editor.setVisible(not self.item_fixed)
+        self.family.setEnabled(not self.item_fixed)
+        self.item.setEnabled(not self.item_fixed)
 
     def _criterion_changed(self, *_):
-        key = self.criterion.currentData()
-        self.version_fields.setVisible(key != "SAFETY_REQUIRED")
-        self.end.setEnabled(key == "DEFECT_ITEM")
-        self.item.setEnabled(key != "DIRECT_VERSION")
-        self.source_button.setVisible(key != "DIRECT_VERSION")
-        self._update_editor()
-        if key == "DIRECT_VERSION":
-            self.item_note.set_full_text(self.family.currentText())
-            self.item_meta.hide()
-            self._suggest_name()
-        else:
-            self._item_changed()
+        self._suggest_name()
         self._invalidate()
 
     def values(self):
         key = self.criterion.currentData()
-        values = dict(rule_type=key, family_id=self.family.currentData(), risk_reason=self.name.text().strip(),
-                      mapping_status="VERIFIED",
-                      item_manager=dict(schema=1, name=self.name.text().strip(), category=CATEGORY_BY_RULE[key],
-                                        memo=self.memo.text().strip(), model_ids=[a.data() for a in self.model_actions if a.isChecked()],
+        original = self.original_values or {}
+        values = {field: original[field] for field in (
+            "group_id", "item_id", "start_release_version_id", "end_release_version_id", "is_enabled", "mapping_status",
+        ) if field in original}
+        presentation = (original.get("target_reference") or {}).get("item_manager") or {}
+        models = [a.data() for a in self.model_actions if a.isChecked()]
+        values.update(rule_type=key, family_id=original.get("family_id", self.family.currentData()),
+                      risk_reason=self.name.text().strip(),
+                      release_version_id=original.get("release_version_id") if self.legacy_rule else self.start.currentData(),
+                      mapping_status=original.get("mapping_status", "VERIFIED"),
+                      item_manager=dict(schema=1, name=self.name.text().strip(),
+                                        category=presentation.get("category", "결함 버전"),
+                                        memo=self.memo.text().strip(), model_ids=models,
                                         site=self.site.currentData(), line=self.line.currentData()))
-        if key == "DIRECT_VERSION":
-            values["release_version_id"] = self.start.currentData()
-        else:
-            values["item_id"] = self.item.currentData()
-            if key == "DEFECT_ITEM":
-                values.update(start_release_version_id=self.start.currentData(), end_release_version_id=self.end.currentData())
+        if original.get("group_id") is not None and tuple(models) != self._original_scope[0]:
+            # 명시적으로 모델 범위를 바꾼 경우 새 목록을 적용한다. 이전 단일 모델과의
+            # 숨은 교집합 때문에 화면에서 고른 모델이 판정에서 빠지지 않게 한다.
+            values["group_id"] = None
+        item_id = self.fixed_item_id if self.item_fixed else self.item.currentData()
+        if item_id is not None:
+            values["item_id"] = item_id
+        # 원래 위치·모델 제한이 없던 구형 기준은 이름만 고칠 때도 새 제한을 만들지 않는다.
+        if self.original_values is not None and not presentation and not self.memo.text().strip() and \
+                (tuple(models), self.site.currentData(), self.line.currentData()) == self._original_scope:
+            values.pop("item_manager")
         return values
 
     @staticmethod
@@ -510,13 +659,10 @@ class ItemRiskDialog(PopupDialog):
             return False
         def core(values):
             values = deepcopy(values)
-            values["item_manager"]["memo"] = ""
+            if "item_manager" in values:
+                values["item_manager"]["memo"] = ""
             return values
         return core(first) == core(second)
-
-    def _toggle_advanced(self, opened):
-        self.advanced.setVisible(opened)
-        self.advanced_toggle.setText("상세 설정 접기" if opened else "상세 설정 펼치기")
 
     def _invalidate(self, *_):
         self.request.cancel()
@@ -525,24 +671,19 @@ class ItemRiskDialog(PopupDialog):
         self.preview_values = None
         self.save_button.setEnabled(False)
         self.preview_button.hide()
-        self.stats.hide()
-        self._update_scope()
-        self.preview.setText("현재 입력값으로 영향을 확인하고 있습니다.")
-        self.next_step.setText("영향을 계산하고 있습니다. 잠시 후 등록할 수 있습니다.")
+        self.target_summary.hide()
+        self._set_preview("현재 입력값으로 영향을 확인하고 있습니다.")
+        self.next_step.setText("영향을 계산하고 있습니다. 잠시 후 저장할 수 있습니다.")
         if self.isVisible():
             self.preview_timer.start()
 
-    def _update_scope(self):
-        for chip, text in zip(self.scope_chips, (self.family.currentText() or "계열 미선택", self.site.currentText() or "전체 Site",
-                                                 self.line.currentText() or "전체 Line")):
-            chip.setText(text)
-            chip.set_tone("info")
-
     def showEvent(self, event):
         super().showEvent(event)
+        self._queue_fit()
         self.preview_timer.start(350)
 
     def hideEvent(self, event):
+        self.fit_timer.stop()
         self.preview_timer.stop()
         self.request.cancel()
         super().hideEvent(event)
@@ -552,7 +693,8 @@ class ItemRiskDialog(PopupDialog):
         self.save_button.setEnabled(ready)
         if self.preview_valid:
             self.next_step.setText("")
-            self.save_button.setToolTip("등록하면 선택한 Item·버전·설비군이 확인된 위험 기준으로 저장되고, 설비별 판정과 대시보드·히트맵 위험 집계에 반영됩니다.")
+            action = "수정하면" if self.edit_record is not None else "등록하면"
+            self.save_button.setToolTip(action + " 선택한 Item·버전·설비군이 위험 기준으로 저장되고, 설비별 판정과 대시보드·히트맵 위험 집계에 반영됩니다.")
 
 
     def preview_impact(self):
@@ -560,53 +702,52 @@ class ItemRiskDialog(PopupDialog):
         if self.request.busy or self.submitted:
             return
         values = deepcopy(self.values())
-        presentation = values["item_manager"]
+        self.target_summary.hide()
+        presentation = values.get("item_manager", {"name": values["risk_reason"],
+                                                   "model_ids": [a.data() for a in self.model_actions if a.isChecked()]})
         problem = ""
         if not presentation["name"]:
             problem = "위험 기준명을 입력하세요."
         elif not presentation["model_ids"]:
             problem = "대상 설비군을 선택하세요."
-        elif values["rule_type"] != "DIRECT_VERSION" and not values.get("item_id"):
-            problem = "관련 아이템을 선택하세요."
-        elif values["rule_type"] == "DIRECT_VERSION" and not values.get("release_version_id"):
-            problem = "대상 버전을 선택하세요."
+        elif not self.legacy_rule and not values.get("release_version_id"):
+            problem = "기준 버전을 선택하세요."
         if problem:
-            self.preview.setText(problem)
+            self._set_preview(problem)
             self.next_step.setText(problem)
+            self._queue_fit()
             return
         context, gateway = self.context_provider(), self.gateway
         self.preview_valid = False
         self.save_button.setEnabled(False)
         self.preview_values = values
-        self.preview.setText("영향 계산 중…")
+        self._set_preview("영향 계산 중…")
         self.preview_button.setEnabled(False)
         self.request.start(BackgroundRead(lambda: gateway.preview_risk_rule(values, context)))
 
     def _previewed(self, result, error):
         self.preview_button.setEnabled(True)
         if error is not None or result is None:
+            self.target_summary.hide()
             self.preview_values = None
-            self.preview.setText("미리보기를 불러오지 못했습니다.")
+            self._set_preview("미리보기를 불러오지 못했습니다.")
             self.preview_button.show()
             self.next_step.setText("연결을 확인한 뒤 다시 계산하세요.")
+            self._queue_fit()
             return
         if not self._same_impact(self.preview_values, self.values()):
             return
         has_base = bool(result.base_date) and not result.problems
-        self.stats.setVisible(has_base)
+        self.target_summary.setVisible(has_base)
         if has_base:
-            self.stat_values["risk"].setText(str(result.count(RiskStatus.RISK)))
-            self.stat_values["unknown"].setText(str(result.count(RiskStatus.UNKNOWN)))
-            self.stat_values["new"].setText(str(result.newly_risky))
-            self.stat_values["hpa"].setText(str(result.hpa_excluded))
+            self.target_summary.setText(f"위험 적용 대상 {result.count(RiskStatus.RISK)}건")
         if result.problems:
-            self.preview.setText(" · ".join(result.problems))
+            self._set_preview(" · ".join(result.problems))
         elif not has_base:
-            self.preview.setText("설비 관측 자료가 없어 영향 설비를 계산할 수 없습니다.")
+            self._set_preview("설비 관측 자료가 없어 영향 설비를 계산할 수 없습니다.")
         else:
-            self.preview.setText(f"관측일 {result.base_date}" + (
-                f" · 대상 {result.target_count}대 · 위험 판정 없음 {result.target_count - len(result.equipment)}대"
-                f" · 기존 위험 후보 {result.already_risky}대" if hasattr(result, "target_count") else ""))
+            unknown = result.count(RiskStatus.UNKNOWN)
+            self._set_preview(f"미확인 {unknown}건 · 판정 자료 확인 필요" if unknown else "")
         rows = []
         for impact in getattr(result, "equipment", ()):
             findings = impact.findings
@@ -621,8 +762,7 @@ class ItemRiskDialog(PopupDialog):
                        for (version, reason), pms in reasons.items()]
             record = impact.record
             location = " · ".join(filter(None, (record.site, record.line)))
-            status = ("판정 불가" if impact.status is RiskStatus.UNKNOWN else
-                      "기존 위험 후보" if impact.before is RiskStatus.RISK else "신규 위험 후보")
+            status = "미확인" if impact.status is RiskStatus.UNKNOWN else "대상"
             rows.append((f"{record.equipment_code}\n{location}", status, "\n".join(details)))
         self.impact_model.set_rows(rows)
         self.impact_table.resizeRowsToContents()
@@ -632,6 +772,7 @@ class ItemRiskDialog(PopupDialog):
         if result.problems:
             self.next_step.setText(result.problems[0])
         self._update_save_state()
+        self._queue_fit()
 
     def save(self):
         if self.submitted or not self.save_button.isEnabled() or not self._same_impact(self.preview_values, self.values()):
@@ -645,6 +786,7 @@ class ItemRiskDialog(PopupDialog):
         return False
 
     def reject(self):
+        self.fit_timer.stop()
         self.preview_timer.stop()
         self.request.cancel()
         super().reject()

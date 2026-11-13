@@ -1,7 +1,7 @@
-"""모든 업무 화면에서 공유하는 연도 → 월 선택 달력. 날짜 확정은 Qt 기본 동작을 유지한다."""
+"""모든 업무 화면에서 공유하는 연도 → 월 달력과 날짜 입력 칸."""
 
-from PySide6.QtCore import QAbstractListModel, QDate, QEvent, QLocale, QModelIndex, QPointF, Qt, Signal
-from PySide6.QtGui import QFont, QMouseEvent, QTextCharFormat
+from PySide6.QtCore import QAbstractListModel, QDate, QEvent, QLocale, QModelIndex, Qt, Signal
+from PySide6.QtGui import QFont, QTextCharFormat
 from PySide6.QtWidgets import (
     QCalendarWidget, QComboBox, QDateEdit, QHBoxLayout, QStyle, QStyleOptionComboBox, QTableView, QToolButton, QWidget,
 )
@@ -87,6 +87,9 @@ class CalendarWidget(QCalendarWidget):
         arrow = (ASSETS / "import-ver5/ba8e3.svg").as_posix()
         self.setStyleSheet(
             f"QCalendarWidget {{background:white;color:{INK};border:1px solid {LINE};border-radius:10px;}}"
+            f"QCalendarWidget QAbstractItemView {{selection-background-color:{ACCENT_SOFT};selection-color:{PRIMARY};}}"
+        )
+        self.header.setStyleSheet(
             "QWidget#calendarHeader {background:transparent;}"
             f"QWidget#calendarHeader QComboBox {{background:{SOFT};color:{INK};border:1px solid {LINE};"
             "border-radius:8px;padding:0 24px 0 8px;}"
@@ -99,7 +102,6 @@ class CalendarWidget(QCalendarWidget):
             f"QWidget#calendarHeader QToolButton:hover, QWidget#calendarHeader QToolButton:focus "
             f"{{background:{ACCENT_SOFT};border-color:{PRIMARY};}}"
             f"QWidget#calendarHeader QToolButton:disabled {{background:transparent;border-color:transparent;color:{SECONDARY};}}"
-            f"QCalendarWidget QAbstractItemView {{selection-background-color:{ACCENT_SOFT};selection-color:{PRIMARY};}}"
         )
         days = self.findChild(QTableView, "qt_calendar_calendarview")
         for view in (days, self.year_combo.view(), self.month_combo.view()):
@@ -129,7 +131,7 @@ class CalendarWidget(QCalendarWidget):
     def minimumSizeHint(self):
         # Qt 기본 크기는 숨긴 네이티브 탐색 막대만 계산한다. 추가한 연/월 헤더 높이도 반영한다.
         size = super().minimumSizeHint()
-        if hasattr(self, "header"):
+        if hasattr(self, "header") and self.header.parentWidget() is self:
             header = self.header.sizeHint()
             size.setWidth(max(size.width(), header.width()))
             size.setHeight(size.height() + header.height())
@@ -137,6 +139,13 @@ class CalendarWidget(QCalendarWidget):
 
     def sizeHint(self):
         return self.minimumSizeHint()
+
+    def take_navigation_header(self):
+        """기간 팝업이 연·월 도구를 날짜 필드 위에 배치할 때 기존 연결을 유지한다."""
+        self.layout().removeWidget(self.header)
+        self.header.setParent(None)
+        self.updateGeometry()
+        return self.header
 
     def _sync_header(self, *_):
         if not hasattr(self, "year_combo"):
@@ -189,7 +198,7 @@ class CalendarWidget(QCalendarWidget):
 
 
 class DateEdit(QDateEdit):
-    """QDateEdit의 입력·검증·확정 동작을 보존하고 공통 달력만 연결한다."""
+    """QDateEdit의 직접 입력은 보존하고 날짜 팝업은 공통 적용·취소 UI를 사용한다."""
 
     calendar_clicked = Signal(QDate)
     calendar_activated = Signal(QDate)
@@ -198,13 +207,14 @@ class DateEdit(QDateEdit):
         super().__init__(parent)
         self.open_on_click = open_on_click
         self._calendar_widget = None
+        self.dialog = None
         self.setCalendarPopup(True)
         self.setDisplayFormat("yyyy-MM-dd")
         if open_on_click:
             self.lineEdit().installEventFilter(self)
 
     def calendarWidget(self):
-        """명시적으로 요청하거나 팝업을 처음 열 때 공용 달력을 만든다."""
+        """명시적인 QDateEdit 달력 API는 팝업과 별도의 네이티브 연결로 유지한다."""
         if self._calendar_widget is None:
             self.setCalendarWidget(CalendarWidget(self))
         return self._calendar_widget
@@ -218,7 +228,35 @@ class DateEdit(QDateEdit):
         calendar.activated.connect(self.calendar_activated.emit)
 
     def is_calendar_visible(self):
-        return self._calendar_widget is not None and self._calendar_widget.isVisible()
+        return (self.dialog is not None and self.dialog.isVisible()
+                or self._calendar_widget is not None and self._calendar_widget.isVisible())
+
+    def open_calendar(self):
+        if not self.isEnabled() or self.isReadOnly() or not self.calendarPopup():
+            return
+        # date_range가 DateEdit를 기반으로 하므로 실제 팝업을 열 때 연결한다.
+        from setron.ui.date_range import DateRangeDialog
+
+        if self.dialog is not None:
+            if self.dialog.isVisible():
+                self.dialog.reject()
+                return
+            self.dialog.deleteLater()
+        day = self.date().toPython()
+        dialog = DateRangeDialog(day, day, minimum=self.minimumDate().toPython(),
+                                 maximum=self.maximumDate().toPython(), single_day=True, parent=self)
+        self.dialog = dialog
+        dialog.accepted.connect(lambda: self._apply_day(dialog))
+        dialog.open_at(self)
+
+    def _apply_day(self, dialog):
+        if dialog is not self.dialog:
+            return
+        day = QDate(dialog.end.year, dialog.end.month, dialog.end.day)
+        if day != self.date():
+            self.setDate(day)
+        else:
+            self.calendar_activated.emit(day)
 
     def _calendar_button_rect(self):
         option = QStyleOptionComboBox()
@@ -228,41 +266,28 @@ class DateEdit(QDateEdit):
 
     def _open_from_click(self, event):
         if (not self.open_on_click or event.button() != Qt.MouseButton.LeftButton or not self.calendarPopup()
-                or self.isReadOnly() or self.is_calendar_visible()):
+                or not self.isEnabled() or self.isReadOnly()):
             return False
-        # 날짜 텍스트를 눌러도 Qt의 기본 달력 버튼과 같은 동작을 사용한다.
-        arrow = self._calendar_button_rect()
-        if arrow.isEmpty():
-            return False
-        calendar = self.calendarWidget()
         self.setFocus(Qt.FocusReason.MouseFocusReason)
-        position = arrow.center()
-        press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(position), QPointF(self.mapToGlobal(position)),
-                            event.button(), event.buttons(), event.modifiers(), event.pointingDevice())
-        super().mousePressEvent(press)
-        return calendar.isVisible()
+        self.open_calendar()
+        return True
 
     def mousePressEvent(self, event):
         if self._open_from_click(event):
             event.accept()
         else:
-            if (event.button() == Qt.MouseButton.LeftButton and self.calendarPopup() and not self.isReadOnly()
+            if (event.button() == Qt.MouseButton.LeftButton and self.calendarPopup() and self.isEnabled() and not self.isReadOnly()
                     and self._calendar_button_rect().contains(event.position().toPoint())):
-                self.calendarWidget()
+                self.open_calendar()
+                event.accept()
+                return
             super().mousePressEvent(event)
 
     def keyPressEvent(self, event):
         if (self.calendarPopup() and not self.isReadOnly() and
                 (event.key() == Qt.Key.Key_F4 or
                  event.key() == Qt.Key.Key_Down and event.modifiers() & Qt.KeyboardModifier.AltModifier)):
-            self.calendarWidget()
-            arrow = self._calendar_button_rect()
-            if not arrow.isEmpty() and not self.is_calendar_visible():
-                position = arrow.center()
-                press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(position),
-                                    QPointF(self.mapToGlobal(position)), Qt.MouseButton.LeftButton,
-                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
-                super().mousePressEvent(press)
+            self.open_calendar()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -271,3 +296,8 @@ class DateEdit(QDateEdit):
         if watched is self.lineEdit() and event.type() == QEvent.Type.MouseButtonPress and self._open_from_click(event):
             return True
         return super().eventFilter(watched, event)
+
+    def hideEvent(self, event):
+        if self.dialog is not None and self.dialog.isVisible():
+            self.dialog.reject()
+        super().hideEvent(event)

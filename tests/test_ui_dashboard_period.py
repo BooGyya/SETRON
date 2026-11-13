@@ -101,12 +101,11 @@ def test_interval_reuses_loaded_points_and_reports_actual_observation_day(window
     series.hovered.emit(series.points()[0], True)
     tooltip = page.chart._active_tooltip[1]
     assert DAY1.isoformat() in tooltip or DAY1.strftime("%Y.%m.%d") in tooltip
-    page.data_toggle.setChecked(True)
-    table = page.data_table
-    assert [table.horizontalHeaderItem(index).text() for index in range(2)] == ["기준일", "마지막 관측일"]
-    assert table.rowCount() == len(expected_days)
-    assert [table.item(row, 0).text() for row in range(table.rowCount())] == [str(day) for day in expected_days]
-    assert all(table.item(row, 1).text() == str(DAY1) for row in range(table.rowCount()))
+    for day, point in zip(expected_days, series.points()):
+        series.hovered.emit(point, True)
+        tooltip = page.chart._active_tooltip[1]
+        assert day.strftime("%Y.%m.%d") in tooltip
+        assert f"마지막 관측일 {DAY1:%Y.%m.%d}" in tooltip
     assert page.snapshot is snapshot
     assert {name: metric.value.text() for name, metric in page.metrics.items()} == metrics
 

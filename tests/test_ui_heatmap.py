@@ -257,6 +257,30 @@ def test_tiles_show_risk_border_and_tooltip_with_matching_filter_checks(window):
     assert all(text.alignment() == Qt.AlignmentFlag.AlignCenter for text in (tile.code_label, tile.version_label))
 
 
+@pytest.mark.parametrize("expanded", [False, True])
+@pytest.mark.parametrize("state", ["normal", "hover", "checked"])
+def test_column_divider_does_not_cover_any_risk_tile_border(window, expanded, state):
+    window.query_panel.apply_draft()
+    page = window.pages["heatmap"]
+    page.view_toggle.setChecked(expanded)
+    card, tile = next((card, tile) for card in page.group_cards for tile in page.tile_occurrences
+                      if card.scroll.widget().isAncestorOf(tile) and tile.data.risk is RiskStatus.RISK
+                      and tile.mapTo(card.scroll.widget(), QPoint()).x() > 0)
+    canvas = card.scroll.widget()
+    tile.setChecked(state == "checked")
+    tile.clearFocus()
+    QTest.mouseMove(tile if state == "hover" else card, QPoint(10, 10))
+    QTest.qWait(20)
+    # 타일만 캡처하면 형제 구분선의 덮어쓰기를 놓치므로 실제 합성된 캔버스를 검사한다.
+    rendered = canvas.grab().toImage()
+    origin = tile.mapTo(canvas, QPoint())
+    edges = (QPoint(0, tile.height() // 2), QPoint(tile.width() - 1, tile.height() // 2),
+             QPoint(tile.width() // 2, 0), QPoint(tile.width() // 2, tile.height() - 1))
+    for edge in edges:
+        pixel = (origin + edge) * rendered.devicePixelRatio()
+        assert rendered.pixelColor(pixel).name() == RISK_LINE
+
+
 @pytest.mark.parametrize("view", [0, 1])
 @pytest.mark.parametrize("layout", [0, 1])
 def test_no_question_mark_decoration_in_any_tile_view(window, view, layout):

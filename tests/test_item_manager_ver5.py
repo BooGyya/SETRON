@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import replace
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -211,13 +212,14 @@ def test_risk_dialog_preview_invalidated_cancel_and_explicit_submit(app, data):
     dialog.name.setText("안전 필수")
     dialog.preview_impact()
     wait_until(lambda: not dialog.request.busy)
-    assert dialog.save_button.isEnabled() and dialog.stat_values["new"].text() == "2" and not dialog.stats.isHidden()
+    assert dialog.save_button.isEnabled() and dialog.target_summary.text() == "위험 적용 대상 2건" and not dialog.target_summary.isHidden()
     # 메모는 영향 계산과 무관하므로 입력해도 등록 버튼이 꺼지지 않고, 메모 입력 뒤 등록 한 번으로 저장된다.
     dialog.memo.setText("변경")
     assert dialog.save_button.isEnabled()
     # 영향에 쓰이는 값(기준명 등)을 바꾸면 미리보기를 다시 계산하기 전까지 등록할 수 없다.
     dialog.name.setText("안전 필수 변경")
     assert not dialog.save_button.isEnabled() and not dialog.save()
+    assert dialog.target_summary.isHidden()
     dialog.preview_impact()
     wait_until(lambda: not dialog.request.busy)
     assert dialog.save_button.isEnabled()
@@ -241,14 +243,14 @@ def test_selected_item_and_preview_appear_without_search_or_preview_click(app, d
     dialog.show()
     wait_until(lambda: dialog.preview_valid)
     assert dialog.item_editor.isHidden() and not dialog.item_search.isVisible()
-    assert data.versions.items[1].item.content in dialog.item_note.toolTip()
+    assert not hasattr(dialog, "item_family_chip") and not hasattr(dialog, "item_meta")
+    assert not hasattr(dialog, "item_note") and not hasattr(dialog, "change_item")
     assert len(calls) == 1 and calls[0]["item_id"] == 2
-    assert "등록하면" in dialog.save_button.toolTip() and dialog.advanced.isHidden()
-    dialog.change_item.click()
-    assert dialog.item_search.isVisible()
+    assert "등록하면" in dialog.save_button.toolTip() and dialog.advanced.isVisible()
+    assert not dialog.family.isEnabled() and not dialog.item.isEnabled()
     dialog.item.setCurrentIndex(dialog.item.findData(1))
     wait_until(lambda: dialog.preview_valid)
-    assert calls[-1]["item_id"] == 1 and dialog.save_button.isEnabled()  # 확인란 없이 계산 완료 즉시 등록 가능
+    assert calls[-1]["item_id"] == 2 and dialog.save_button.isEnabled()  # 고정 Item 문맥은 숨은 선택 상태와 무관하게 유지한다.
     dialog.name.clear()
     wait_until(lambda: dialog.next_step.text() == "위험 기준명을 입력하세요.")
     assert not dialog.save_button.isEnabled()
@@ -268,7 +270,7 @@ def test_changing_criterion_keeps_name_and_category_follows_criterion(app, data)
     dialog.show()
     assert not hasattr(dialog, "categories")   # 판정 기준과 겹치던 구분 칩은 없다
     item_name = dialog.name.text()
-    assert item_name and dialog.values()["item_manager"]["category"] == "환경안전 필수"
+    assert item_name and "미만" in item_name and dialog.values()["item_manager"]["category"] == "결함 버전"
     dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
     version = dialog.start.currentText().split(" · ")[0]
     assert "순서" not in dialog.start.currentText()   # 순서가 확인된 버전은 이름만 보인다 (11-11)
@@ -279,15 +281,170 @@ def test_changing_criterion_keeps_name_and_category_follows_criterion(app, data)
     # 대상 버전을 바꾸면 제안한 이름도 따라 바뀐다.
     dialog.start.setCurrentIndex(dialog.start.count() - 1)
     assert dialog.start.currentText().split(" · ")[0] in dialog.name.text()
-    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DEFECT_ITEM"))
-    assert dialog.name.text() == item_name and dialog.values()["item_manager"]["category"] == "결함 버전"
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("VERSION_ABOVE"))
+    assert "초과" in dialog.name.text() and dialog.values()["item_manager"]["category"] == "결함 버전"
     wait_until(lambda: dialog.preview_valid)
-    assert dialog.save_button.isEnabled() and calls[-1]["rule_type"] == "DEFECT_ITEM"
+    assert dialog.save_button.isEnabled() and calls[-1]["rule_type"] == "VERSION_ABOVE" and calls[-1]["item_id"] == 2
     # 직접 고친 이름은 판정 기준을 바꿔도 그대로 둔다.
     dialog.name.setText("직접 정한 이름")
     dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
     assert dialog.name.text() == "직접 정한 이름"
     dialog.reject()
+
+
+def test_reference_only_dialog_can_preview_without_item_context(app, data):
+    source = replace(data, versions=replace(data.versions, items=(), version_items=()))
+    impact = SimpleNamespace(problems=(), base_date=None, newly_risky=0, hpa_excluded=0,
+                             saveable=True, count=lambda _: 0)
+    calls = []
+    def preview(values, _context):
+        calls.append(values)
+        return impact
+    dialog = ItemRiskDialog(None, source, SimpleNamespace(preview_risk_rule=preview), lambda: None, lambda _: False)
+    try:
+        assert not dialog.item_fixed and not dialog.item_editor.isHidden()
+        assert "item_id" not in dialog.values() and dialog.values()["release_version_id"] is not None
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid)
+        assert dialog.save_button.isEnabled() and "item_id" not in calls[0]
+    finally:
+        dialog.reject()
+
+
+def test_old_relation_preview_cannot_enable_save_after_comparison_changes(app, data):
+    entered, release = Event(), Event()
+    calls = []
+    impact = SimpleNamespace(problems=(), base_date=None, newly_risky=0, hpa_excluded=0,
+                             saveable=True, count=lambda _: 0)
+    def preview(values, _context):
+        calls.append(values)
+        if len(calls) == 1:
+            entered.set()
+            release.wait(3)
+        return impact
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=preview), lambda: None,
+                            lambda _: False, family_id=10, item_id=2)
+    try:
+        dialog.preview_impact()
+        wait_until(entered.is_set)
+        dialog.criterion.setCurrentIndex(dialog.criterion.findData("VERSION_ABOVE"))
+        assert not dialog.preview_valid and not dialog.save_button.isEnabled()
+        release.set()
+        QTest.qWait(40)
+        assert not dialog.preview_valid and not dialog.save_button.isEnabled()
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid)
+        assert calls[-1]["rule_type"] == "VERSION_ABOVE" and calls[-1]["item_id"] == 2
+    finally:
+        release.set()
+        dialog.reject()
+
+
+def _summary_impact(data, risk_ids, unknown_ids):
+    from setron.features.risk.impact import EquipmentImpact, RuleImpact
+    from setron.features.risk.schemas import FindingBasis, MappingStatus, RiskFinding, RiskRule, RuleType
+    rule = RiskRule(0, RuleType.VERSION_BELOW, 10, "비교 기준", release_version_id=4,
+                    mapping_status=MappingStatus.VERIFIED)
+    records = {record.equipment_id: record for record in data.records}
+    equipment = []
+    for equipment_id in (*risk_ids, *unknown_ids):
+        record = records[equipment_id]
+        status = RiskStatus.RISK if equipment_id in risk_ids else RiskStatus.UNKNOWN
+        basis = FindingBasis.VERSION_BELOW if status is RiskStatus.RISK else FindingBasis.VERSION_ORDER_UNKNOWN
+        finding = RiskFinding(rule, status, basis, pm=record.pms[0])
+        before = RiskStatus.RISK if equipment_id in (1, 2) else RiskStatus.NO_RISK
+        equipment.append(EquipmentImpact(record, (finding,), before, status))
+    return RuleImpact(rule, data.base_date, equipment=tuple(equipment), target_count=7, hpa_excluded=5)
+
+
+@pytest.mark.parametrize("risk_ids, unknown_ids", [((1, 2, 4), (3,)), ((), (3,)), ((), ())])
+def test_preview_summary_counts_all_matching_equipment_and_only_shows_needed_unknown_notice(app, data, risk_ids, unknown_ids):
+    impact = _summary_impact(data, risk_ids, unknown_ids)
+    if risk_ids:
+        assert impact.newly_risky == 1 and impact.already_risky == 2
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=lambda *_: impact),
+                            lambda: None, lambda _: False, family_id=10, item_id=2)
+    try:
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid)
+        assert dialog.target_summary.text() == f"위험 적용 대상 {len(risk_ids)}건"
+        assert not dialog.target_summary.isHidden()
+        expected = f"미확인 {len(unknown_ids)}건 · 판정 자료 확인 필요" if unknown_ids else ""
+        assert dialog.preview.text() == expected
+        assert dialog.preview.isHidden() == (not unknown_ids)
+        assert "관측일" not in dialog.preview.text()
+        assert not any(hasattr(dialog, name) for name in ("stats", "stat_values", "scope_chips"))
+        rows = dialog.impact_model.rows
+        assert len(rows) == len(risk_ids) + len(unknown_ids)
+        assert [row[1] for row in rows] == ["대상"] * len(risk_ids) + ["미확인"] * len(unknown_ids)
+        dialog.name.setText("조건 변경")
+        assert dialog.target_summary.isHidden() and dialog.impact_table.isHidden()
+        assert not dialog.preview.isHidden()
+        assert not dialog.save_button.isEnabled()
+    finally:
+        dialog.reject()
+
+
+def test_empty_success_caption_returns_for_pending_error_and_missing_observations(app, data):
+    success = _summary_impact(data, (), ())
+    replies = iter((success, RuntimeError("연결 실패"), replace(success, base_date=None)))
+    def preview(_values, _context):
+        result = next(replies)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=preview), lambda: None,
+                            lambda _: False, family_id=10, item_id=2)
+    try:
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid)
+        assert dialog.preview.text() == "" and dialog.preview.isHidden()
+        dialog.name.setText("다시 확인")
+        assert not dialog.preview.isHidden() and dialog.target_summary.isHidden()
+        dialog.preview_impact()
+        wait_until(lambda: not dialog.request.busy)
+        assert not dialog.preview.isHidden() and "불러오지 못했습니다" in dialog.preview.text()
+        assert dialog.target_summary.isHidden() and not dialog.save_button.isEnabled()
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid)
+        assert not dialog.preview.isHidden() and "설비 관측 자료가 없어" in dialog.preview.text()
+        assert dialog.target_summary.isHidden()
+    finally:
+        dialog.reject()
+
+
+def test_dialog_height_expands_for_details_and_shrinks_after_empty_results(app, data):
+    empty = _summary_impact(data, (), ())
+    detailed = _summary_impact(data, (1, 2, 4), (3,))
+    current = [empty]
+    dialog = ItemRiskDialog(None, data, SimpleNamespace(preview_risk_rule=lambda *_: current[0]),
+                            lambda: None, lambda _: False, family_id=10, item_id=2)
+    try:
+        dialog.setMaximumHeight(700)
+        dialog.resize(460, 320)
+        dialog.show()
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid and not dialog.fit_timer.isActive())
+        short_height = dialog.height()
+        assert dialog.preview.isHidden() and dialog.impact_table.isHidden()
+        assert dialog.scroll.verticalScrollBar().maximum() == 0
+        current[0] = detailed
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid and not dialog.fit_timer.isActive())
+        expanded_height = dialog.height()
+        assert short_height < expanded_height <= 700
+        assert dialog.impact_table.isVisible() and dialog.scroll.verticalScrollBar().maximum() > 0
+        assert dialog.rect().contains(dialog.footer.geometry())
+        current[0] = empty
+        dialog.preview_impact()
+        wait_until(lambda: dialog.preview_valid and not dialog.fit_timer.isActive())
+        assert dialog.height() < expanded_height
+        assert dialog.preview.isHidden() and dialog.impact_table.isHidden()
+        assert dialog.target_summary.text() == "위험 적용 대상 0건" and not dialog.target_summary.isHidden()
+        assert dialog.scroll.verticalScrollBar().maximum() == 0
+        assert dialog.rect().contains(dialog.footer.geometry())
+    finally:
+        dialog.reject()
 
 
 def test_answer_navigation_applies_only_selected_family_and_leaves_global_sources_unchanged(app):
@@ -348,10 +505,10 @@ def test_dialog_without_observations_shows_single_clear_empty_state(app, data):
                             lambda _: True, family_id=10, item_id=2)
     dialog.show()
     wait_until(lambda: dialog.preview_valid)
-    assert dialog.stats.isHidden() and dialog.preview.text() == "설비 관측 자료가 없어 영향 설비를 계산할 수 없습니다."
+    assert dialog.target_summary.isHidden() and dialog.preview.text() == "설비 관측 자료가 없어 영향 설비를 계산할 수 없습니다."
     assert dialog.save_button.isEnabled()
-    assert [c.text() for c in dialog.scope_chips][1:] == ["전체 Site", "전체 Line"]
-    assert dialog.item_first_chip.text().startswith("최초 포함 버전") and "미확인인" not in dialog.item_first_chip.text() and dialog.item_first_chip.toolTip() == ""  # 최초 포함 버전을 알면 설명 툴팁이 없다
+    assert not hasattr(dialog, "scope_chips")
+    assert not hasattr(dialog, "item_first_chip") and not hasattr(dialog, "item_source_chip")
     dialog.close()
 
 
@@ -393,5 +550,5 @@ def test_popups_are_frameless_modal_without_duplicate_texts(app, data):
     texts = [w.text() for w in dialog.findChildren(QLabel)]
     assert "저장 후 설비별 판정과 대시보드·히트맵 위험 집계에 반영됩니다." not in texts and "관련 릴리즈노트 아이템" not in texts
     assert dialog.title.full == "위험 기준 등록" and dialog.close_x.accessibleName() == "닫기"
-    assert dialog.change_item.isVisibleTo(dialog)  # 정해진 Item이 있으면 변경 링크가 보인다
+    assert not hasattr(dialog, "change_item") and dialog.item_editor.isHidden()
     dialog.close()

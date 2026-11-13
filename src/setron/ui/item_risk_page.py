@@ -9,9 +9,11 @@ class ItemRiskPage(QWidget):
     def __init__(self):
         super().__init__()
         self.data, self.gateway, self.context_provider, self.submit = None, None, None, None
+        self.submit_edit, self.submit_delete = None, None
 
-    def configure(self, gateway, context_provider, submit):
+    def configure(self, gateway, context_provider, submit, *, submit_edit=None, submit_delete=None):
         self.gateway, self.context_provider, self.submit = gateway, context_provider, submit
+        self.submit_edit, self.submit_delete = submit_edit, submit_delete
 
     def set_data(self, data):
         self.data = data
@@ -21,4 +23,13 @@ class ItemRiskPage(QWidget):
             return False
         dialog = ItemRiskDialog(self.window(), self.data, self.gateway, self.context_provider, self.submit,
                                 family_id=family_id, item_id=item_id)
+        return bool(dialog.exec())
+
+    def open_edit(self, parent, data, record):
+        if self.gateway is None or self.submit_edit is None:
+            return False
+        dialog = ItemRiskDialog(parent, data, self.gateway, self.context_provider,
+                                lambda values: self.submit_edit(record, values),
+                                family_id=record.current["family_id"], item_id=record.current.get("item_id"),
+                                edit_record=record)
         return bool(dialog.exec())

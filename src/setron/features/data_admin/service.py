@@ -53,7 +53,8 @@ TABLE_LABELS = {
     "release_version": "릴리즈 버전", "item": "Item", "release_version_item": "버전 Item", "risk_rule": "위험 지정",
     "app_setting": "설정", "equipment_group": "설비군", "site": "Site", "status_sheet": "현황표", "line": "라인",
 }
-RULE_LABELS = {"SAFETY_REQUIRED": "필수", "DEFECT_ITEM": "결함", "DIRECT_VERSION": "위험 버전"}
+RULE_LABELS = {"SAFETY_REQUIRED": "필수", "DEFECT_ITEM": "결함", "DIRECT_VERSION": "위험 버전",
+               "VERSION_BELOW": "기준 버전 미만", "VERSION_ABOVE": "기준 버전 초과"}
 
 
 def with_workbook(raw, workbook_name):

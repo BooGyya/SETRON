@@ -471,7 +471,7 @@ class FamilyReplacementService:
             saved = deepcopy(rule["target_reference"])
             proposed = {field: None for field, _ in fields}
             proposed["item_id"] = None
-            required = ({"release_version_id"} if rule["rule_type"] == "DIRECT_VERSION" else
+            required = ({"release_version_id"} if rule["rule_type"] in ("DIRECT_VERSION", "VERSION_BELOW", "VERSION_ABOVE") else
                         {"item_id", "start_release_version_id"} if rule["rule_type"] == "DEFECT_ITEM" else {"item_id"})
             confirm = rule["mapping_status"] != "VERIFIED"
             for field, evidence_key in fields:
@@ -531,9 +531,13 @@ class FamilyReplacementService:
             reason = "위험 대상 또는 원래 알려진 해제 경계를 유일하게 확인할 수 없습니다." if missing else None
             endpoints = [proposed[field] for field in ("start_release_version_id", "end_release_version_id")
                          if proposed[field] is not None]
+            if rule["rule_type"] in ("VERSION_BELOW", "VERSION_ABOVE") and proposed["release_version_id"] is not None:
+                endpoints.append(proposed["release_version_id"])
             if any(final_releases[key]["version_order"] is None
                    or known_orders[final_releases[key]["version_order"]] != 1 for key in endpoints):
-                reason = "시작·해제 버전의 순서가 미확인 또는 중복입니다. 순서를 확인해 주세요."
+                reason = ("기준·시작·해제 버전의 순서가 미확인 또는 중복입니다. 순서를 확인해 주세요."
+                          if rule["rule_type"] in ("VERSION_BELOW", "VERSION_ABOVE") else
+                          "시작·해제 버전의 순서가 미확인 또는 중복입니다. 순서를 확인해 주세요.")
             start, end = proposed["start_release_version_id"], proposed["end_release_version_id"]
             if start is not None and end is not None:
                 start_order, end_order = final_releases[start]["version_order"], final_releases[end]["version_order"]

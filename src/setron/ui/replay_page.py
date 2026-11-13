@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 
 from setron.ui.components import Card, button, label
 from setron.ui.dashboard import DashboardGrid
-from setron.ui.dashboard_charts import series_button_style, series_color
+from setron.ui.dashboard_charts import ScrollableChart, series_button_style, series_color
 from setron.ui.dashboard_data import information_gap_reasons
 from setron.ui.equipment import ignore_width
 from setron.ui.equipment_drawer import EquipmentDrawer
@@ -21,6 +21,7 @@ from setron.ui.replay_data import ReplayData, ReplayRequest, can_replay, group_v
 from setron.ui.replay_widgets import ReplayChart, ReplayHeatmap, ReplayPlaybackControls, ReplayViewControls
 from setron.ui.theme import SECONDARY, font, set_widget_font
 from setron.ui.version_filter_dialog import VersionFilterDialog
+from setron.ui.version_filter import version_group_options
 from setron.ui.view_controls import SegmentedControl, bulk_selection_toggle_button, set_bulk_selection_state
 
 
@@ -42,6 +43,7 @@ class ReplayPage(QWidget):
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.advance)
         self.playback_speed = 1.0
+        self._seeking, self._seek_was_playing = False, False
         self._playback_host = self
         self.legend_buttons, self.legend_tools, self.frames = {}, (), ()  # frames: 지금 재생 간격의 시점들
         self._hidden_groups = set()
@@ -97,6 +99,11 @@ class ReplayPage(QWidget):
         self.pause_button = self.playback_controls.pause_button
         self.restart_button = self.playback_controls.restart_button
         self.speed_tabs = self.playback_controls.speed_tabs
+        self.position_slider = self.playback_controls.position_slider
+        self.position_slider.sliderPressed.connect(self._begin_seek)
+        self.position_slider.sliderMoved.connect(self._preview_seek)
+        self.position_slider.sliderReleased.connect(self._finish_seek)
+        self.position_slider.valueChanged.connect(self._seek_position)
         self.playback_controls.speed_changed.connect(self.set_playback_speed)
         self.speed_buttons = dict(zip(self.playback_controls.SPEEDS, self.speed_tabs.buttons))
         for speed, control in self.speed_buttons.items():
@@ -116,7 +123,8 @@ class ReplayPage(QWidget):
         self.content.body.insertWidget(0, self.view_controls)
         self.chart = ReplayChart()
         self.chart.date_selected.connect(self.select_date)
-        self.content.body.addWidget(self.chart)
+        self.chart_row = ScrollableChart(self.chart)
+        self.content.body.addWidget(self.chart_row)
         self.heatmap = ReplayHeatmap()
         self.heatmap.equipment_selected.connect(self.open_equipment)
         self.heatmap.controls_ready.connect(self._attach_heatmap_controls)
@@ -194,6 +202,7 @@ class ReplayPage(QWidget):
 
     def _show_view(self, index):
         self.chart.setVisible(index == 0)
+        self.chart_row.setVisible(index == 0)
         self.heatmap.setVisible(index == 1)
         if self.heatmap_controls is not None:
             self.heatmap_controls.setVisible(index == 1)
@@ -230,9 +239,10 @@ class ReplayPage(QWidget):
     def _sync_controls(self):
         ready = self.data is not None and not self.dirty and not self.busy
         self.query_panel.card.setEnabled(not self.busy)
-        self.play_button.setEnabled(ready and can_replay(self.frames) and not self.timer.isActive())
+        self.play_button.setEnabled(ready and can_replay(self.frames) and not self.timer.isActive() and not self._seeking)
         self.pause_button.setEnabled(ready and self.timer.isActive())
-        self.restart_button.setEnabled(ready and bool(self.frames))
+        self.restart_button.setEnabled(ready and bool(self.frames) and not self._seeking)
+        self.position_slider.setEnabled(ready and len(self.frames) > 1)
         self.speed_tabs.setEnabled(ready)
         for step, control in self.interval_buttons.items():
             # 간격이 기간보다 길어 시점이 2개 미만이면 그 간격은 고를 수 없다. 저장일마다는 항상 고를 수 있다.
@@ -432,6 +442,7 @@ class ReplayPage(QWidget):
             self.chart.show_data(self.data, visible, current=self.index, frames=self.frames,
                                  grouping=self.grouping_mode,
                                  hidden_series=self._hidden_trends.get(self.grouping_mode, ()))
+            self.chart_row.sync_axis()
             self._update_trend_legend()
 
     def _update_trend_legend(self):
@@ -497,9 +508,8 @@ class ReplayPage(QWidget):
         self.chart.clear()
         self.heatmap.clear()
         self.playback_controls.clear_context()
-        self.achievement.setText("적용률 —")
+        self.achievement.setText("전체 적용률 —")
         self.achievement.setToolTip("")  # 이전 조회의 대수 설명이 남지 않게 한다 (QA R-06).
-        self.progress.setValue(0)
         self.progress.setAccessibleDescription("")
         self.progress.setToolTip("")
 
@@ -517,10 +527,10 @@ class ReplayPage(QWidget):
         self.playback_controls.set_context(frame.day, frame.snapshot.base_date, self.index, len(self.frames),
                                           selected_groups=groups is not None)
         summary, observed_count, carried_count = group_view(self.data, frame, groups)
+        self.playback_controls.set_application_rate(summary.rate if summary is not None else None)
         if summary is None:
-            self.achievement.setText("적용률 —")
+            self.achievement.setText("전체 적용률 —")
             self.achievement.setToolTip("설비군을 하나 이상 골라 주세요.")
-            self.progress.setValue(0)
             self.progress.setAccessibleDescription("설비군 선택 없음")
         else:
             decided = summary.compliant + summary.below
@@ -528,7 +538,7 @@ class ReplayPage(QWidget):
             # 1주·1개월 간격 시점은 그 전 마지막 저장일 자료를 이어 쓴다. 화면이 몇 칸 그대로인 이유를 바로 보이게 한다.
             carried = (f" · {frame.snapshot.base_date:%m-%d} 저장 기준"
                        if frame.at is not None and frame.at != frame.snapshot.base_date else "")
-            self.achievement.setText(f"적용률 {value}")
+            self.achievement.setText(f"전체 적용률 {value}")
             observed = f"이날 저장 {observed_count}대"
             if carried_count:
                 observed += f" · 이전 관측 이어받음 {carried_count}대"
@@ -540,7 +550,6 @@ class ReplayPage(QWidget):
                        f"판단 불가 {summary.undetermined}건은 달성률 분모 제외")
             reasons = information_gap_reasons(summary)
             self.achievement.setToolTip(f"{tooltip}\n정보 부족 사유\n{reasons}" if reasons else tooltip)
-            self.progress.setValue(round(summary.rate * 1000) if summary.rate is not None else 0)
             self.progress.setAccessibleDescription(value)
         self.progress.setToolTip(self.achievement.toolTip())
         if self.view_tabs.currentIndex() == 1:
@@ -558,6 +567,37 @@ class ReplayPage(QWidget):
         self._sync_controls()
         return True
 
+    def _begin_seek(self):
+        self._seeking = True
+        self._seek_was_playing = self.timer.isActive()
+        self.timer.stop()
+        self._sync_controls()
+
+    def _preview_seek(self, index):
+        if self._seeking and 0 <= index < len(self.frames):
+            self.position_slider.setToolTip(f"재생 위치 {self.frames[index].day:%Y-%m-%d} · {index + 1} / {len(self.frames)}")
+
+    def _finish_seek(self):
+        if not self._seeking:
+            return
+        index, resume = self.position_slider.sliderPosition(), self._seek_was_playing
+        self._seeking, self._seek_was_playing = False, False
+        self._seek_position(index, resume=resume)
+
+    def _seek_position(self, index, *, resume=None):
+        # 드래그 중에는 프레임을 계산하지 않고 손잡이를 놓았을 때 한 번만 갱신한다.
+        if self._seeking or self.data is None or self.dirty or self.busy or not 0 <= index < len(self.frames):
+            return False
+        playing = self.timer.isActive() if resume is None else resume
+        if index != self.index and not self.select_date(index):
+            return False
+        if playing and index < len(self.frames) - 1:
+            self.timer.start()
+        elif index == len(self.frames) - 1:
+            self.timer.stop()
+        self._sync_controls()
+        return True
+
     def play(self):
         if self.data is None or self.dirty or self.busy or not can_replay(self.frames):
             return False
@@ -570,6 +610,7 @@ class ReplayPage(QWidget):
 
     def pause(self):
         self.timer.stop()
+        self._seeking, self._seek_was_playing = False, False
         self._sync_controls()
 
     def restart(self):
@@ -612,6 +653,7 @@ class ReplayPage(QWidget):
         epoch = self.epoch
         options = self.data.options if self.data is not None else ()
         dialog = VersionFilterDialog(options, self.state.draft.versions,
+                                     group_options=version_group_options(self.data.source if self.data is not None else self.source, options),
                                      is_current=lambda: self.epoch == epoch, parent=self.window())
         self.version_dialog = dialog
         def done(result):

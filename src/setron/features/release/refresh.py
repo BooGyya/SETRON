@@ -65,8 +65,9 @@ class ReleaseRefreshService:
                         affected, set(invalidated_release_ids))
 
         equipment = {row["equipment_id"]: row for row in repository.rows(tx, "equipment")}
-        snapshots = tuple(repository.load(tx, equipment[row["equipment_id"]], row)
-                          for row in repository.rows(tx, "equipment_snapshot"))
+        # 같은 트랜잭션에서 전체 현황·SW·PM을 한 번씩 읽는다. 단건 load를 반복하면
+        # 위험 기준 하나를 저장할 때도 과거 현황 수의 두 배만큼 DB 왕복이 생긴다.
+        snapshots = repository.load_all(tx, equipment)
         excluded = {gid for gid, group in groups.items() if not group["analysis_enabled"]}
         records = read_equipment_records(snapshots, excluded)
         # 선택 목록에 없던 관측 조합도 미지정으로 알린다. 최신 N을 임의로 고르지 않는다.

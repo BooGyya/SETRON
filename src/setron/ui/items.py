@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.item.schemas import APPLICATION_LABELS, Application, ItemState
-from setron.ui.appearance import ui_color
+from setron.ui.appearance import set_color_style, ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, DisclosureArrow, StatusBadge, button, filter_checkbox, label
 from setron.ui.equipment import ReadTableModel, read_table
@@ -54,8 +54,11 @@ class _ItemResultHeader(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("itemResultHeader")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.setFixedHeight(38)
-        self.setStyleSheet("QWidget#itemResultHeader {background:#f7f9fc;border-left:3px solid transparent;}")
+        set_color_style(self, lambda colors: (
+            f"QWidget#itemResultHeader {{background:{colors['selected']};border-left:3px solid transparent;"
+            f"border-bottom:1px solid {colors['line']};}}"))
         row = QHBoxLayout(self)
         row.setContentsMargins(17, 0, 16, 0)
         row.setSpacing(16)
@@ -461,7 +464,6 @@ class ItemsPage(QWidget):
     selection_invalidated = Signal()
     answer_navigation = Signal(str, object)
     # (표시 제목, 위험 후보 설비 ID 튜플): 등록한 위험 기준의 판정 결과를 대시보드 위험 후보 목록으로 연다.
-    risk_candidates_requested = Signal(str, object)
     page_size = 12
     SEARCH_PLACEHOLDER = "기능명·증상 검색"
 
@@ -733,11 +735,8 @@ class ItemsPage(QWidget):
         rule = next((r for r in self.data.risk_rules if r.risk_rule_id == rule_id), None) if self.data else None
         if rule is None or rule.item_id is None:
             return False
-        self.verdict_dialog = ItemRuleVerdictDialog(self.window(), self.data, rule.item_id, rule_id)
+        self.verdict_dialog = ItemRuleVerdictDialog(self.window(), self.data, rule.item_id, rule_id, manager=self.manager)
         self.verdict_dialog.exec()
-        ids = self.verdict_dialog.dashboard_ids
-        if ids:
-            self.risk_candidates_requested.emit(f"위험 기준 · {self.verdict_dialog.rule.display_name or self.verdict_dialog.rule.risk_reason}", ids)
         return True
 
     def show_notice(self, text, tone="warning"):
@@ -1308,7 +1307,14 @@ class ItemsPage(QWidget):
                                          self.site_filter.currentData(), self._application_filter())
         self.distribution.select_equipment(equipment_id)
         if equipment_id in self.equipment_model.ids:
-            self.equipment_table.setCurrentIndex(self.equipment_model.index(self.equipment_model.ids.index(equipment_id), 0))
+            row = self.equipment_model.ids.index(equipment_id)
+            current = self.equipment_table.currentIndex()
+            if not current.isValid() or current.row() != row:
+                horizontal, vertical = self.equipment_table.horizontalScrollBar(), self.equipment_table.verticalScrollBar()
+                position = horizontal.value(), vertical.value()
+                self.equipment_table.setCurrentIndex(self.equipment_model.index(row, 0))
+                horizontal.setValue(position[0])
+                vertical.setValue(position[1])
         self.equipment_selected.emit(request)
         return True
 

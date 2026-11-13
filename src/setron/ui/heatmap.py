@@ -1040,6 +1040,7 @@ class HeatmapPage(DeferredResultMixin, QWidget):
         grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         tile_height = 0
         boundaries = {}
+        tile_columns = []
 
         def add_children(parent, row, column, inherited_group):
             nonlocal tile_height
@@ -1060,6 +1061,7 @@ class HeatmapPage(DeferredResultMixin, QWidget):
                     add_children(child, row + 1, column, child_group)
                 else:
                     cells = self._tile_column(child, expanded, child_group)
+                    tile_columns.append(cells)
                     grid.addWidget(cells, header_rows, column, 1, 1, Qt.AlignmentFlag.AlignTop)
                     tile_height = max(tile_height, cells.height())
                 column += span
@@ -1074,6 +1076,9 @@ class HeatmapPage(DeferredResultMixin, QWidget):
             y = row * header_height
             divider.setGeometry(column * HEATMAP_CELL_SIZE.width(), y, 1, canvas.height() - y)
             divider.raise_()
+        # 헤더 구분선은 유지하되 타일의 왼쪽 위험 테두리를 덮지 않도록 본문을 위에 둔다.
+        for cells in tile_columns:
+            cells.raise_()
         return canvas
 
     def _tile_column(self, node, expanded, group_name):

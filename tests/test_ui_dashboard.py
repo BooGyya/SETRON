@@ -280,13 +280,14 @@ def test_matrix_distinguishes_site_from_area_and_divides_only_at_site_changes(wi
     window.query_panel.apply_draft()
     content = page.matrix_scroll.widget()
     grid = content.layout()
-    locations = [location.findChildren(QLabel) for location in content.findChildren(QWidget, "dashboardMatrixLocation")]
+    locations = [location.findChildren(QLabel) for location in
+                 page.matrix_scroll.row_header.widget().findChildren(QWidget, "dashboardMatrixLocation")]
     assert [[label.text() for label in location] for location in locations] == [
         ["테스트 A", "P1"], ["테스트 A", "구역 미확인"], ["테스트 B", "P1"], ["전체"],
     ]
     (site, area), (same_site, unknown_area), (other_site, _), (total,) = locations
     assert unknown_area.accessibleName() == "사업장 테스트 A · 원본 구역 미확인"
-    group = grid.itemAtPosition(0, 1).widget()
+    group = page.matrix_scroll.header.widget().layout().itemAtPosition(0, 0).widget()
     assert summarized_ids == [(1, 2, 3, 4), (5,)]
     assert "테스트 A 전체" in site.toolTip() and "설비 4대" in site.toolTip()
     assert same_site.toolTip() == site.toolTip()
@@ -298,7 +299,7 @@ def test_matrix_distinguishes_site_from_area_and_divides_only_at_site_changes(wi
     assert "총 적용률" in group.toolTip() and "TEST" not in group.toolTip()
     assert all(widget.alignment() == Qt.AlignmentFlag.AlignCenter for widget in (site, area, group))
     dividers = content.findChildren(QWidget, "dashboardMatrixSiteDivider")
-    assert len(dividers) == 1 and grid.getItemPosition(grid.indexOf(dividers[0])) == (3, 0, 1, 5)
+    assert len(dividers) == 1 and grid.getItemPosition(grid.indexOf(dividers[0])) == (2, 0, 1, 4)
 
     selected = QSignalSpy(page.drilldown_requested)
     page.matrix_buttons[3, 4].click()
@@ -338,7 +339,7 @@ def test_general_cell_and_risk_badge_emit_distinct_exact_cohorts(window):
         assert not any(fragment in caption for fragment in removed for caption in visible_labels)
 
 
-def test_all_four_views_and_numeric_table_are_driven_by_same_result(window):
+def test_all_four_views_are_driven_by_same_result(window):
     page = window.pages["dashboard"]
     window.query_panel.apply_draft()
     before = page.snapshot
@@ -353,15 +354,18 @@ def test_all_four_views_and_numeric_table_are_driven_by_same_result(window):
     assert "미달 · 1건 (20.0%)<br>설비 1대" in chips["미달"].toolTip()
     assert "확인 필요 · 1건 (20.0%)<br>설비 1대" in chips["확인 필요"].toolTip()
     assert all("TEST-" not in widget.toolTip() for widget in chips.values())
-    page.data_toggle.setChecked(True)
-    assert page.data_table.item(0, 2).text() == "60.0%"  # 구성비는 판단 불가 포함 5건이 분모
     page.tabs.setCurrentIndex(2)
-    assert isinstance(page.chart.chart().series()[0], QBarSeries)
-    assert page.data_table.columnCount() == 6
+    series, = page.chart.chart().series()
+    assert isinstance(series, QBarSeries)
+    _, groups = bar_plot(before)
+    expected = {label: [point.counts.rate * 100 if point.counts.rate is not None else 0 for point in points]
+                for label, points in groups.values()}
+    assert {values.label(): [values.at(index) for index in range(values.count())]
+            for values in series.barSets()} == expected
     assert not any(widget.text() == "설비 대수 · 복수 SW는 설비군별 집계" and widget.isVisibleTo(page)
                    for widget in page.findChildren(QLabel))
     page.tabs.setCurrentIndex(3)
-    assert page.data_table.columnCount() == 7
+    assert {series.name() for series in page.chart.chart().series()} == {"O2", "O3", "Inline O2"}
     assert page.snapshot is before
 
 
@@ -628,8 +632,8 @@ def test_unregistered_sw_is_separate_and_prevents_complete_claim(app, source):
     page = DashboardPage(state, source)
     query = state.apply()
     page.apply_query(query)
-    matrix = page.matrix_scroll.widget().layout()
-    assert "SW 미등록 1대" in matrix.itemAtPosition(0, 0).widget().toolTip()
+    corner = page.matrix_scroll.corner_body.itemAt(0).widget()
+    assert "SW 미등록 1대" in corner.toolTip()
     page.deleteLater()
 
 

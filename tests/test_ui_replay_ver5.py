@@ -8,10 +8,11 @@ import pytest
 from PySide6.QtCore import QDate, QPoint, QPointF, QSignalBlocker, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QLabel, QToolTip
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QStyle, QStyleOptionSlider, QToolTip
 
 from setron.features.version.groups import Slot, VersionGroups
 from setron.ui.app import create_window
+from setron.ui.appearance_data import Appearance
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.features.risk.schemas import RiskStatus
 from setron.features.version.schemas import CompareStatus
@@ -112,8 +113,10 @@ def test_play_pause_restart_and_end_use_cached_frames_without_more_reads(own):
     page = replay_page(own, loader=load)
     data = page.data
     assert page.play() and page.index == 0 and page.timer.isActive()
+    assert page.position_slider.value() == 0
     page.advance()
     assert page.index == 1 and page.pause_button.isEnabled()
+    assert page.position_slider.value() == 1
     page.pause_button.click()
     assert not page.timer.isActive() and page.play_button.isEnabled()
     page.restart_button.click()
@@ -139,6 +142,70 @@ def test_real_timer_advances_and_hiding_page_stops_it(own):
     assert page.index == index
 
 
+@pytest.mark.parametrize("playing", [False, True])
+def test_dragging_playback_position_commits_once_and_keeps_playback_mode(own, monkeypatch, playing):
+    page = replay_page(own)
+    if playing:
+        assert page.play()
+    slider, original = page.position_slider, page.index
+    option = QStyleOptionSlider()
+    slider.initStyleOption(option)
+    handle = slider.style().subControlRect(QStyle.ComplexControl.CC_Slider, option,
+                                          QStyle.SubControl.SC_SliderHandle, slider)
+    rendered, render = [], page._render_frame
+
+    def count_render():
+        rendered.append(page.index)
+        render()
+
+    monkeypatch.setattr(page, "_render_frame", count_render)
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=handle.center())
+    assert not page.timer.isActive()
+    target = QPoint(handle.width() // 2 + (slider.width() - handle.width()) * 3 // 5, handle.center().y())
+    QTest.mouseMove(slider, target)
+    selected = slider.sliderPosition()
+    assert selected != original and 0 < selected < slider.maximum()
+    assert page.index == original and rendered == []
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=target)
+    assert page.index == selected and rendered == [selected]
+    assert page.chart.current == selected
+    assert page.timer.isActive() == playing
+    assert slider.value() == selected
+    assert page.playback_controls.date_label.text() == f"재생일 {page.frame.day}"
+
+
+@pytest.mark.parametrize("view", [0, 1])
+def test_playback_position_keys_follow_frames_and_do_not_reload(own, view):
+    source, calls = demo_dashboard_source(), []
+    page = replay_page(own, loader=lambda request: calls.append(request) or load_replay(source, request))
+    page.view_tabs.setCurrentIndex(view)
+    slider, data = page.position_slider, page.data
+    assert (slider.minimum(), slider.maximum(), slider.value()) == (0, len(page.frames) - 1, page.index)
+    slider.setFocus()
+    QTest.keyClick(slider, Qt.Key.Key_Home)
+    assert page.index == 0 and not page.timer.isActive()
+    QTest.keyClick(slider, Qt.Key.Key_Right)
+    assert page.index == 1
+    if view == 0:
+        assert page.chart.current == 1
+    else:
+        assert page.heatmap.view.snapshot is page.frame.snapshot
+    assert page.play()
+    QTest.keyClick(slider, Qt.Key.Key_Right)
+    assert page.index == 2 and page.timer.isActive()
+    QTest.keyClick(slider, Qt.Key.Key_End)
+    assert page.index == slider.maximum() and not page.timer.isActive()
+    assert page.data is data and len(calls) == 1
+    page.restart()
+    assert slider.value() == 0
+    page.advance()
+    assert slider.value() == page.index
+    page.set_interval("week")
+    assert slider.maximum() == len(page.frames) - 1 and slider.value() == page.index
+    page.invalidate()
+    assert not slider.isEnabled() and (slider.minimum(), slider.maximum(), slider.value()) == (0, 0, 0)
+
+
 def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_button(own):
     """요청 2-2: 설비군 버튼에서 고른 설비군으로 그래프 선·달성률·히트맵을 함께 좁힌다.
 
@@ -161,7 +228,7 @@ def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_butt
     page.view_tabs.setCurrentIndex(1)
     assert page.heatmap.group_cards == [] and page.heatmap.visible_ids == ()
     page.view_tabs.setCurrentIndex(0)
-    assert page.achievement.text() == "적용률 —" and page.progress.value() == 0
+    assert page.achievement.text() == "전체 적용률 —" and page.progress.value() == 0
     assert "하나 이상" in page.achievement.toolTip()
     page.legend_buttons["c3"].click()
     cell = next(g for g in page.frame.snapshot.groups if g.group_keys == ("c3",))
@@ -169,7 +236,7 @@ def test_group_buttons_filter_lines_achievement_and_heatmap_with_one_toggle_butt
     page.view_tabs.setCurrentIndex(1)
     assert len(page.heatmap.group_cards) == 1
     assert set(page.heatmap.visible_ids) == set(cell.equipment_ids)
-    assert page.achievement.text() == f"적용률 {cell.summary.rate:.1%}"
+    assert page.achievement.text() == f"전체 적용률 {cell.summary.rate:.1%}"
     assert (f"등록 SW 목표 달성 {cell.summary.compliant} / "
             f"{cell.summary.compliant + cell.summary.below}건") in page.achievement.toolTip()
     assert "HPA" not in page.achievement.toolTip()
@@ -249,10 +316,10 @@ def test_interval_buttons_rebuild_frames_without_reading_again(own):
     page.advance()
     assert page.index == 1 and page.frame.day == date(2026, 5, 28)
     assert "마지막 저장일 2026-05-21 기준" in page.achievement.toolTip()
-    # 플로팅에서 재생일과 이어받은 관측 기준일을 함께 확인한다.
+    # 플로팅에는 재생일을 표시하고, 이어받은 관측 기준은 기존 적용률 툴팁에서 확인한다.
     assert "05-21 저장 기준" in page.achievement.toolTip()
     assert page.playback_controls.date_label.text() == "재생일 2026-05-28"
-    assert page.playback_controls.observation_label.text() == "관측 기준 2026-05-21 · 이전 자료"
+    assert not hasattr(page.playback_controls, "observation_label")
     assert page.playback_controls.frame_label.text() == f"2 / {len(page.frames)}"
     # 재생 중 간격을 바꾸면 멈추지 않고, 보던 날짜(05-28) 전 가장 가까운 시점부터 이어서 재생한다.
     page.interval_buttons["quarter"].click()
@@ -332,10 +399,12 @@ def test_playback_buttons_share_design_and_float_at_body_bottom(own):
     assert page.content.body.indexOf(controls) == -1
     assert controls.isAncestorOf(page.achievement) and controls.isAncestorOf(page.progress)
     assert controls.date_label.text() == "재생일 2026-10-21" and controls.frame_label.text() == "6 / 6"
-    assert controls.observation_label.text() == "실제 저장일과 같은 시점"
-    assert controls.scope_label.text() == "전체 범위"
+    assert not hasattr(controls, "observation_label")
+    assert controls.scope_label.text() == "" and controls.scope_label.isHidden()
     assert page.content.body.indexOf(page.achievement) == page.content.body.indexOf(page.progress) == -1
     assert page.progress.height() == 4 and y(page.progress) < y(page.play_button)
+    assert y(page.position_slider) > y(page.play_button) + page.play_button.height()
+    assert page.position_slider.isEnabled() and page.position_slider.value() == page.index
     assert page.play_button.styleSheet() == page.pause_button.styleSheet() == page.restart_button.styleSheet()
 
 
@@ -359,26 +428,26 @@ def test_floating_rate_scope_explains_legend_display_and_group_filtering(own):
     page = replay_page(own)
     controls, data = page.playback_controls, page.data
     full = page.achievement.text(), page.progress.value()
-    assert controls.scope_label.text() == "전체 범위"
+    assert controls.scope_label.text() == "" and controls.scope_label.isHidden()
     page.set_all_trends(False)
     assert not page.chart.trends
     assert (page.achievement.text(), page.progress.value()) == full
-    assert controls.scope_label.text() == "전체 범위" and "표시만" in controls.scope_label.toolTip()
+    assert controls.scope_label.text() == "" and "표시만" in controls.scope_label.toolTip()
     page.view_tabs.setCurrentIndex(1)
-    assert page.heatmap.visible_ids and controls.scope_label.text() == "전체 범위"
+    assert page.heatmap.visible_ids and controls.scope_label.isHidden()
     page.set_grouping("group")
     page.set_all_groups(False)
     assert controls.scope_label.text() == "선택 설비군"
-    assert page.achievement.text() == "적용률 —" and page.heatmap.visible_ids == ()
+    assert page.achievement.text() == "전체 적용률 —" and page.heatmap.visible_ids == ()
     assert controls.date_label.text() == f"재생일 {page.frame.day}" and controls.frame_label.text() == "6 / 6"
     page.legend_buttons["c3"].click()
     assert controls.scope_label.text() == "선택 설비군" and page.heatmap.visible_ids
     page.set_all_groups(True)
-    assert controls.scope_label.text() == "전체 범위"
+    assert controls.scope_label.text() == "" and controls.scope_label.isHidden()
     assert (page.achievement.text(), page.progress.value()) == full and page.data is data
     page.invalidate()
     assert controls.date_label.text() == "재생일 —" and controls.frame_label.text() == "0 / 0"
-    assert controls.observation_label.text() == "" and controls.scope_label.toolTip() == ""
+    assert not hasattr(controls, "observation_label") and controls.scope_label.toolTip() == ""
 
 
 def test_playback_overlay_tracks_viewport_and_hides_on_other_pages_and_drawer(own):
@@ -537,11 +606,13 @@ def test_empty_single_date_and_zero_match_are_not_playable_or_fake_zero_percent(
     page.apply_query()
     until(lambda: not page.busy)
     assert page.data.frames == () and not page.play_button.isEnabled() and page.frames == ()
+    assert not page.position_slider.isEnabled() and page.position_slider.maximum() == 0
     assert not page.heatmap.visible_ids and "저장된 관측일이 없습니다" in page.message.text()
     set_period(page, "2026-05-21", "2026-05-21")
     page.apply_query()
     until(lambda: not page.busy)
     assert len(page.frames) == 1 and not page.play_button.isEnabled()
+    assert not page.position_slider.isEnabled() and page.position_slider.maximum() == 0
     page.state.set_draft(replace(page.state.draft, versions=VersionFilter(("not-stored",))))
     page.apply_query()
     until(lambda: not page.busy)
@@ -570,6 +641,7 @@ def test_requery_uses_clicked_conditions_and_does_not_submit_edits_during_load(o
         assert page.achievement.text() == achievement and page.progress.value() == progress
         assert page.message.isHidden()
         assert not page.view_tabs.isEnabled() and not page.play_button.isEnabled()
+        assert not page.position_slider.isEnabled()
         assert not page.chart.isEnabled() and not page.heatmap.isEnabled()
         assert all(not control.isEnabled() for control in legend.values())
         assert not page.select_date(0) and not page.open_equipment(next(iter(tiles)))
@@ -717,19 +789,16 @@ def test_replay_has_no_main_horizontal_overflow_and_header_layout_recovers(own, 
     assert window.scroll.horizontalScrollBar().maximum() == 0
     controls = page.playback_controls
     assert controls.geometry().left() >= 12 and controls.geometry().right() <= window.scroll.viewport().width() - 12
-    assert controls.height() <= 110
-    for widget in (controls.date_label, controls.frame_label, controls.observation_label, controls.scope_label,
+    assert controls.height() <= 140
+    for widget in (controls.date_label, controls.frame_label, page.position_slider,
                    page.play_button, page.pause_button, page.restart_button, page.speed_tabs):
         assert controls.rect().contains(widget.mapTo(controls, widget.rect().topLeft()))
         assert controls.rect().contains(widget.mapTo(controls, widget.rect().bottomRight()))
     assert page.width() <= window.scroll.viewport().width()
     assert page.reset_button.iconSize() == window.query_panel.reset_button.iconSize()
-    if page.query_panel._collapsed:
-        assert page.query_panel.compact_summary.isVisible()
-        assert page.query_panel.collapse_button.text() == "필터 펼치기"
-        page.query_panel.collapse_button.click()
-        QTest.qWait(20)
-        assert not page.query_panel._collapsed and window.scroll.horizontalScrollBar().maximum() == 0
+    assert all(combo.isVisible() for combo in page.query_panel.combos.values())
+    assert not any(control.text() in {"필터 접기", "필터 펼치기"}
+                   for control in page.query_panel.findChildren(QPushButton))
     assert page.query_panel.search_button.isVisible() and page.query_panel.search_button.text() == ""
     assert page.query_panel.search_button.x() > page.reset_button.geometry().right()
     assert page.query_panel.card.property("outlined") is True
@@ -748,14 +817,14 @@ def test_invalidate_stops_timer_closes_old_detail_and_rejects_stale_popup(own):
     assert page.data is None and not page.timer.isActive() and not page.play_button.isEnabled()
 
 
-def test_initial_layout_has_no_expanded_chart_blank_and_buttons_keep_figma_heights(own):
+def test_replay_chart_is_taller_and_buttons_keep_figma_heights(own):
     window = own(create_window())
     window.resize(1600, 960)
     window.navigate("replay")
     page = window.pages["replay"]
     until(lambda: not page.busy)
     QTest.qWait(100)
-    assert page.chart.height() == 300
+    assert 480 <= page.chart.height() <= 520
     assert page.chart.mapTo(window, QPoint()).y() < 750
     assert all(b.height() == 30 for b in page.interval_buttons.values())
     assert all(b.height() == 40 for b in (page.play_button, page.pause_button, page.restart_button))
@@ -764,6 +833,43 @@ def test_initial_layout_has_no_expanded_chart_blank_and_buttons_keep_figma_heigh
     page.legend_buttons["c3"].click()
     QTest.qWait(20)
     assert page.interval_buttons[None].height() == 30
+
+
+def test_dense_replay_scroll_keeps_y_axis_and_frame_interaction_visible(own):
+    window = own(create_window())
+    window.resize(960, 760)
+    window.navigate("replay")
+    page = window.pages["replay"]
+    until(lambda: not page.busy)
+    assert page.set_interval(1)
+    QTest.qWait(60)
+    row, chart = page.chart_row, page.chart.chart()
+    scroll, fixed = row.scroll, row.fixed_axis
+    assert len(page.frames) > 100 and scroll.horizontalScrollBar().maximum() > 0
+    assert 480 <= page.chart.height() <= 520
+    assert window.scroll.horizontalScrollBar().maximum() == 0
+    assert fixed.isVisible() and fixed.axis.titleText() == "목표 N 이상 적용률 (%)"
+    assert not fixed.axis.labelsVisible() and not fixed.axis.isTitleVisible()
+    origin = fixed.mapToGlobal(QPoint())
+    ticks = fixed.tick_positions()
+    assert [label for label, _ in ticks] == ["0%", "25%", "50%", "75%", "100%"]
+    scroll.horizontalScrollBar().setValue(scroll.horizontalScrollBar().maximum())
+    QTest.qWait(20)
+    assert fixed.mapToGlobal(QPoint()) == origin and fixed.tick_positions() == ticks
+    target = next(series for series in chart.series() if series.name().endswith(POINT_SUFFIX)
+                  and len(series.points()) > 1 and series.points()[-1].x() == len(page.frames) - 1)
+    point = target.points()[-2]
+    local = page.chart.mapFromScene(chart.mapToScene(chart.mapToPosition(point, target)))
+    visible = scroll.viewport().mapFromGlobal(page.chart.mapToGlobal(local))
+    assert scroll.viewport().rect().contains(visible)
+    QTest.mouseClick(page.chart.viewport(), Qt.MouseButton.LeftButton, pos=local)
+    assert page.index == round(point.x()) and page.chart.current == page.index
+    assert page.position_slider.value() == page.index
+    target.hovered.emit(point, True)
+    assert page.frames[page.index].day.strftime("%Y.%m.%d") in page.chart._active_tooltip[1]
+    assert page.set_interval(None)
+    QTest.qWait(30)
+    assert scroll.horizontalScrollBar().maximum() == 0 and fixed.isVisible()
 
 
 def test_replay_ticks_do_not_jump_scroll_or_leave_a_detail_from_another_date(own):
@@ -886,7 +992,7 @@ def test_empty_period_clears_previous_achievement_tooltip(own):
     assert page.data.frames == () and page.achievement.toolTip() == ""
     assert page.playback_controls.date_label.text() == "재생일 —"
     assert page.playback_controls.frame_label.text() == "0 / 0"
-    assert page.playback_controls.observation_label.text() == ""
+    assert not hasattr(page.playback_controls, "observation_label")
 
 
 def test_heatmap_reuses_tiles_and_matches_version_heatmap_presentation(own):
@@ -968,3 +1074,73 @@ def test_app_entry_without_any_configured_n_shows_unknown_instead_of_read_failur
     until(lambda: not page.busy)
     assert page.data is not None and page.frame.tiles
     assert "계산 불가" in page.achievement.text() and page.data is not None
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_rate_bar_colors_measured_rates_continuously_and_unknown_stays_neutral(own, monkeypatch, mode):
+    page = replay_page(own)
+    controller = QApplication.instance().appearance_manager
+    previous = controller.appearance
+    try:
+        controller.apply(Appearance(mode=mode))
+        base = replace(page.frame.snapshot.summary, equipment=(), undetermined=0)
+        current = [base]
+        monkeypatch.setattr("setron.ui.replay_page.group_view", lambda *_: (current[0], 0, 0))
+
+        def show_rate(compliant, below):
+            current[0] = replace(base, compliant=compliant, below=below)
+            page._render_frame()
+            image = page.progress.grab().toImage()
+            rate = current[0].rate
+            x = 1 if rate is None or rate == 0 else round(image.width() * rate / 2)
+            color = image.pixelColor(x, image.height() // 2)
+            assert page.progress.value() == (round(rate * 1000) if rate is not None else 0)
+            expected = f"{rate:.1%}" if rate is not None else "계산 불가"
+            assert page.achievement.text() == f"전체 적용률 {expected}"
+            return color
+
+        red, orange, amber, green = [show_rate(value, 1000 - value) for value in (0, 283, 500, 1000)]
+        assert red.red() > red.green() and red.red() > red.blue()
+        assert orange.red() > orange.green() > orange.blue()
+        assert amber.red() > amber.blue() and amber.green() > amber.blue()
+        assert green.green() > green.red() and green.green() > green.blue()
+        assert len({color.name() for color in (red, orange, amber, green)}) == 4
+        before, after = show_rate(490, 510), show_rate(510, 490)
+        assert before != after
+        assert max(abs(a - b) for a, b in zip(before.getRgb()[:3], after.getRgb()[:3])) <= 6
+        neutral = show_rate(0, 0)
+        assert neutral.name() == controller.tokens["heat_unknown"] and neutral != red
+        page.invalidate()
+        assert page.playback_controls.application_rate is None
+        image = page.progress.grab().toImage()
+        assert image.pixelColor(1, image.height() // 2) == neutral
+    finally:
+        controller.apply(previous)
+
+
+def test_rate_bar_recolors_on_frames_groups_and_theme_changes(own):
+    page = replay_page(own)
+    controls = page.playback_controls
+    controller = QApplication.instance().appearance_manager
+    previous = controller.appearance
+    try:
+        controller.apply(Appearance(mode="light"))
+        page.select_date(0)
+        first = controls.application_rate, page.progress.styleSheet()
+        page.select_date(len(page.frames) - 1)
+        assert controls.application_rate != first[0] and page.progress.styleSheet() != first[1]
+        rate, light = controls.application_rate, page.progress.styleSheet()
+        controller.apply(Appearance(mode="dark"))
+        assert controls.application_rate == rate and page.progress.styleSheet() != light
+        page.view_tabs.setCurrentIndex(1)
+        page.set_grouping("group")
+        page.set_all_groups(False)
+        neutral = page.progress.styleSheet()
+        assert controls.application_rate is None and page.progress.value() == 0
+        page.legend_buttons["c3"].click()
+        selected = next(cell for cell in page.frame.snapshot.groups if cell.group_keys == ("c3",))
+        assert controls.application_rate == selected.summary.rate and page.progress.styleSheet() != neutral
+        page.invalidate()
+        assert controls.application_rate is None and page.progress.styleSheet() == neutral
+    finally:
+        controller.apply(previous)

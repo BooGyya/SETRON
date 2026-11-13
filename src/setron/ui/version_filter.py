@@ -15,6 +15,21 @@ def version_options(source):
     return (*sorted(value for value in values if value is not None), *((None,) if None in values else ()))
 
 
+def version_group_options(source, options=None):
+    """현재 읽은 관측에서 설비군별 원문 선택지를 만들며 선택 상태는 바꾸지 않는다."""
+    options = version_options(source) if options is None else tuple(options)
+    by_model = {}
+    for record in source.records:
+        for pm in record.pms:
+            value = pm.version_raw if pm.version_raw and pm.version_raw.strip() else None
+            by_model.setdefault(pm.group_id, set()).add(value)
+    groups = []
+    for group in source.catalog.groups:
+        values = set().union(*(by_model.get(model, ()) for model in source.bindings.get(group.key, ())))
+        groups.append((group.key, group.label, tuple(value for value in options if value in values)))
+    return tuple(groups)
+
+
 def matches_versions(record, selection: VersionFilter | None):
     if selection is None:
         return True

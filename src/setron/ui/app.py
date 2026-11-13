@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox
 
 from setron.ui.main_window import MainWindow
 from setron.ui.dashboard import DashboardPage
-from setron.ui.dashboard_data import DashboardDrilldown, DashboardSource, family_name, model_name
+from setron.ui.dashboard_data import DashboardSource, family_name, model_name
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.database_source import (
     dashboard_source_from_env, data_exporter_from_env, export_files_from_env, sql_exporter_from_env, sql_importer_from_env,
@@ -30,13 +30,13 @@ from setron.ui.target_data import describe_targets, initial_targets, target_pair
 from setron.ui.query_state import QuerySelection, TargetN, single_selection
 from setron.ui.group_dialog import VersionGroupDialog
 from setron.ui.target_dialog import TargetDialog
-from setron.ui.version_filter import version_options
+from setron.ui.version_filter import version_group_options, version_options
 from setron.ui.version_filter_dialog import VersionFilterDialog
 from setron.ui.theme import icon, install_theme
 from setron.ui.version_data import catalog_from_dashboard
 from setron.ui.version_demo import demo_version_catalog
 from setron.ui.version_management import VersionManagementPage
-from setron.ui.item_data import ItemManagerData, item_data_from_source
+from setron.ui.item_data import ItemEquipmentSelection, ItemManagerData, item_data_from_source, selected_application
 from setron.ui.items import ItemsPage
 from setron.ui.ai_data import FreshAnalysisData, facts_from_snapshot
 from setron.ui.ai_page import AIPage
@@ -156,6 +156,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         original, revision = state.draft, state.catalog_revision
         options = version_options(source)
         dialog = VersionFilterDialog(options, original.versions,
+                                     group_options=version_group_options(source, options),
                                      is_current=lambda: (state.catalog_revision == revision and state.draft == original
                                                          and version_options(source) == options), parent=window)
         window.version_filter_dialog = dialog
@@ -336,16 +337,27 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.navigate("import")
     versions.connect("import_requested", import_from_version)
     item_risk_save_pending = False
-    def submit_item_risk(values):
+    def submit_item_risk_operation(operation):
         nonlocal item_risk_save_pending
         if risk_save.busy or risk_save.locked or window.management_saving or window.management_refresh.busy:
             return False
         item_risk_save_pending = True
-        started = risk_save.create_risk_rule(values)
+        started = operation()
         if not started:
             item_risk_save_pending = False
         return started
-    items.ready(lambda page: page.manager.configure(management_gateway, release_refresh_context, submit_item_risk))
+
+    def submit_item_risk(values):
+        return submit_item_risk_operation(lambda: risk_save.create_risk_rule(values))
+
+    def update_item_risk(record, values):
+        return submit_item_risk_operation(lambda: risk_save.update_risk_rule(record, values))
+
+    def delete_item_risk(record):
+        return submit_item_risk_operation(lambda: risk_save.delete_risk_rule(record))
+
+    items.ready(lambda page: page.manager.configure(management_gateway, release_refresh_context, submit_item_risk,
+                                                  submit_edit=update_item_risk, submit_delete=delete_item_risk))
     window.management_gateway = management_gateway
     window.management_refresh = ReadRequest(window)
     catalog_refresh = ReadRequest(window)
@@ -458,42 +470,28 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     items.connect("answer_navigation", navigate_item_answer)
     window.navigate_item_answer = navigate_item_answer
 
-    def show_item_risk_candidates(title, equipment_ids):
-        """아이템 매니저의 위험 기준 판정 결과를 대시보드 위험 후보 목록으로 연다.
-
-        대시보드 위험 후보는 현재 조회 조건과 활성 위험 기준 전체로 판정하므로, 두 결과에 모두 있는 설비만 연다.
-        조회 미적용·범위 밖이면 이동하지 않고 이유를 안내한다(0대로 확정하지 않는다).
-        """
-        snapshot = dashboard.snapshot
-        if snapshot is None or not window.query_state.is_current(snapshot.query):
-            items.show_notice("대시보드 조회 조건을 먼저 적용해 주세요. 적용한 조회 결과의 위험 후보에 등록한 기준이 반영됩니다.")
-            return False
-        wanted = set(equipment_ids)
-        shown = tuple(i for i in snapshot.risky_ids if i in wanted)
-        if not shown:
-            items.show_notice(f"현재 대시보드 조회 범위(기준일 {snapshot.base_date})의 위험 후보에는 이 기준의 위험 후보 설비가 없습니다. "
-                              "Site·설비군·기준일 조건을 확인해 주세요.")
-            return False
-        window.navigate("dashboard")
-        dashboard.drilldown_requested.emit(DashboardDrilldown(snapshot.query, snapshot.base_date, title, shown, True))
-        return True
-
-    items.connect("risk_candidates_requested", show_item_risk_candidates)
-    window.show_item_risk_candidates = show_item_risk_candidates
     drawer = window.equipment_drawer = EquipmentDrawer(window.centralWidget())
     list_drawer = window.equipment_list_drawer = EquipmentListDrawer(window.centralWidget())
+    item_drawer_origin = None
+    drawer_origin_route = None
 
     def close_drawer(*_):
+        nonlocal item_drawer_origin, drawer_origin_route
+        item_drawer_origin = None
+        drawer_origin_route = None
         drawer.close_panel(restore_focus=False)
 
     def close_inactive_drawers(key):
-        if key != "heatmap":
+        if key != drawer_origin_route:
             close_drawer()
         if key != "dashboard":
             list_drawer.close_panel(restore_focus=False)
 
     window.page_changed.connect(close_inactive_drawers)
-    equipment.connect("mode_changed", lambda mode: close_drawer() if mode != "detail" else None)
+    equipment.connect("mode_changed", lambda mode: close_drawer() if mode != "detail" and
+                      isinstance(drawer.request, EquipmentSelection) else None)
+    window.query_applied.connect(close_drawer)
+    window.query_panel.catalog_changed.connect(close_drawer)
     list_action = window.header.actions["equipment_list"]
     list_action.setToolTip("현재 적용 조건의 전체 설비 목록")
     origin_scroll = {}
@@ -503,7 +501,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         action = None
         if window.route == "dashboard" and list_drawer.is_open:
             action = equipment.return_to_list if list_drawer.request is not None else list_drawer.close_panel
-        elif window.route == "heatmap" and drawer.is_open:
+        elif window.route in ("heatmap", "items", "equipment") and drawer.is_open:
             action = drawer.close_panel
         elif window.route == "replay" and replay.drawer.is_open:
             action = replay.drawer.close_panel
@@ -588,13 +586,35 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             list_drawer.show_detail(request, detail, equipment.detail_model.rows)
 
     def open_detail(request):
+        nonlocal drawer_origin_route
         if window.route != "heatmap":
             return
-        if equipment.open_detail(request, origin="heatmap"):
+        if equipment.open_detail(request, origin="heatmap", show_page=False):
             detail = next(d for d in equipment.data.details if d.record.equipment_id == request.equipment_id)
+            drawer_origin_route = "heatmap"
             drawer.open_detail(request, detail, equipment.detail_model.rows,
-                               return_focus=heatmap.tile_buttons.get(request.equipment_id))
+                               return_focus=getattr(heatmap, "selection_control", None) or heatmap.tile_buttons.get(request.equipment_id))
             sync_back()
+
+    def open_list_equipment(request):
+        nonlocal drawer_origin_route
+        if window.route == "dashboard" and list_drawer.is_open:
+            # 범위 목록의 상세도 공통 패널 본문을 쓰고, 패널 안에서 원래 목록으로 돌아간다.
+            if not equipment.open_detail(request, origin="list", show_page=False):
+                return False
+            detail = next(d for d in equipment.data.details if d.record.equipment_id == request.equipment_id)
+            list_drawer.show_detail(request, detail, equipment.detail_model.rows)
+            sync_back()
+            return True
+        if window.route != "equipment" or equipment.mode != "list":
+            return False
+        if not equipment.open_detail(request, origin="list", show_page=False):
+            return False
+        detail = next(d for d in equipment.data.details if d.record.equipment_id == request.equipment_id)
+        drawer_origin_route = "equipment"
+        drawer.open_detail(request, detail, equipment.detail_model.rows, return_focus=equipment.table)
+        sync_back()
+        return True
 
     export_action = window.header.actions["export"]
     if db_exporter is not None or management_gateway is not None or data_exporter is not None:
@@ -811,27 +831,39 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 QTimer.singleShot(0, restore_scroll)
 
     def open_item_equipment(request):
+        nonlocal item_drawer_origin, drawer_origin_route
         if window.route != "items" or not items.is_current_selection(request):
-            return
-        origin_scroll["items"] = window.scroll.verticalScrollBar().value()
-        if equipment.open_item_detail(request, is_current=items.is_current_selection):
-            window.navigate("equipment")
-            window.scroll.verticalScrollBar().setValue(0)
+            return False
+        application = selected_application(request)
+        if application is None:
+            return False
+        item_drawer_origin = request, window.scroll.verticalScrollBar().value()
+        focus = (items.distribution.tiles.get(request.equipment_id)
+                 if items.distribution_view.currentData() == "heatmap" else items.equipment_table)
+        drawer_origin_route = "items"
+        drawer.open_item_detail(request, application, return_focus=focus)
+        sync_back()
+        return True
 
     def invalidate_item_detail():
-        if equipment.loaded and equipment.item_request is not None:
-            equipment.close_item_detail()
-            if window.route == "equipment":
-                if not window.go_back_route("items"):
-                    window.navigate("items", record_history=False)
+        if isinstance(drawer.request, ItemEquipmentSelection):
+            close_drawer()
 
-    def leave_item_detail(*_):
-        if window.route != "equipment" and equipment.loaded and equipment.item_request is not None:
-            equipment.close_item_detail()
+    def restore_item_drawer_origin():
+        nonlocal item_drawer_origin
+        context, item_drawer_origin = item_drawer_origin, None
+        if context is None:
+            return
+        request, position = context
+        def restore_scroll():
+            if window.route == "items" and items.is_current_selection(request):
+                window.scroll.verticalScrollBar().setValue(position)
+        # 패널이 표/타일에 포커스를 돌려준 뒤 바깥 스크롤 위치를 복원한다.
+        QTimer.singleShot(0, restore_scroll)
 
     items.connect("equipment_selected", open_item_equipment)
     items.connect("selection_invalidated", invalidate_item_detail)
-    window.page_changed.connect(leave_item_detail)
+    drawer.closed.connect(restore_item_drawer_origin)
 
     dashboard.drilldown_requested.connect(open_scope)
     heatmap.connect("equipment_selected", open_detail)
@@ -841,6 +873,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     replay.ready(lambda page: page.drawer.closed.connect(sync_back))
     replay.connect("drawer_opened", sync_back)
     equipment.connect("back_requested", go_back)
+    equipment.connect("equipment_selected", open_list_equipment)
     equipment.connect("mode_changed", equipment_mode_changed)
     equipment.connect("mode_changed", sync_mode)
     versions.connect("mode_changed", sync_mode)
@@ -1019,6 +1052,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             window.management_progress.set_operation(None)
 
     def begin_management_save():
+        close_drawer()
         cancel_query()
         window.management_saving = True
         sync_export_page()

@@ -4,11 +4,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from html import escape
+from math import ceil
 
 from PySide6.QtCharts import QBarCategoryAxis, QBarSeries, QBarSet, QCategoryAxis, QChart, QChartView, QLineSeries, QPieSeries, QScatterSeries, QValueAxis
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QFontMetricsF, QPainter, QPen
-from PySide6.QtWidgets import QGraphicsSimpleTextItem, QToolTip
+from PySide6.QtWidgets import QFrame, QGraphicsSimpleTextItem, QHBoxLayout, QScrollArea, QToolTip, QWidget
 
 from setron.features.aggregation.schemas import RateCount, Summary
 from setron.features.version.schemas import CompareStatus
@@ -109,7 +110,139 @@ def composition_cohorts(summary: Summary) -> tuple[tuple[int, ...], ...]:
     return tuple(tuple(ids) for ids in cohorts.values())
 
 
+class FixedChartAxis(QWidget):
+    """차트의 실제 플롯 좌표·글꼴을 따라가며 가로 스크롤 밖에서 Y축을 그린다."""
+
+    def __init__(self, view):
+        super().__init__()
+        self.view, self.axis, self._bound_chart = view, None, None
+        self.setAccessibleName("목표 N 이상 적용률 고정 Y축")
+        self.setAccessibleDescription("0%, 25%, 50%, 75%, 100%")
+        view.installEventFilter(self)
+        self.hide()
+
+    def bind(self, axis):
+        chart = self.view.chart()
+        changed = axis is not self.axis or chart is not self._bound_chart
+        self.axis, self._bound_chart = axis, chart
+        self.setVisible(axis is not None)
+        if axis is not None:
+            axis.setLabelsVisible(False)
+            axis.setTitleVisible(False)
+            axis.setLineVisible(False)
+            if changed:
+                chart.plotAreaChanged.connect(self._sync)
+                for signal in (axis.labelsFontChanged, axis.titleFontChanged, axis.titleTextChanged,
+                               axis.rangeChanged, axis.tickCountChanged):
+                    signal.connect(self._sync)
+        self._sync()
+
+    def _sync(self, *_):
+        if self.axis is not None:
+            metrics = QFontMetricsF(self.axis.labelsFont())
+            label_width = max(metrics.horizontalAdvance(text) for text, _ in self.tick_positions())
+            title_width = QFontMetricsF(self.axis.titleFont()).height() + 10 if self.axis.titleText() else 0
+            self.setFixedWidth(ceil(label_width + title_width + 24))
+        self.update()
+
+    def eventFilter(self, watched, event):
+        if watched is self.view and event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange,
+                                                    QEvent.Type.StyleChange, QEvent.Type.PaletteChange):
+            self._sync()
+        return super().eventFilter(watched, event)
+
+    def tick_positions(self):
+        if self.axis is None:
+            return ()
+        rect = self.view.chart().plotArea()
+        offset = self.mapFromGlobal(self.view.mapToGlobal(QPoint())).y()
+        count = self.axis.tickCount()
+        return tuple((f"{self.axis.min() + index * (self.axis.max() - self.axis.min()) / (count - 1):.0f}%",
+                      QPointF(self.width() - 8, offset + rect.bottom() - rect.height() * index / (count - 1)))
+                     for index in range(count))
+
+    def title_bounds(self):
+        if self.axis is None or not self.axis.titleText():
+            return QRectF()
+        metrics = QFontMetricsF(self.axis.titleFont())
+        center = self.mapFromGlobal(self.view.mapToGlobal(QPoint())).y() + self.view.chart().plotArea().center().y()
+        height = metrics.horizontalAdvance(self.axis.titleText())
+        return QRectF(4, center - height / 2, metrics.height(), height)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), ui_color("white"))
+        if self.axis is None:
+            return
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setFont(self.axis.labelsFont())
+        painter.setPen(ui_color(SECONDARY))
+        metrics = QFontMetricsF(self.axis.labelsFont())
+        positions = self.tick_positions()
+        for text, point in positions:
+            bounds = QRectF(0, point.y() - metrics.height() / 2, point.x(), metrics.height())
+            painter.drawText(bounds, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+        if positions:
+            painter.setPen(QPen(ui_color("#e9eef6")))
+            painter.drawLine(QPointF(self.width() - 1, positions[0][1].y()),
+                             QPointF(self.width() - 1, positions[-1][1].y()))
+        if self.axis.titleText():
+            bounds = self.title_bounds()
+            painter.translate(bounds.center())
+            painter.rotate(-90)
+            painter.setFont(self.axis.titleFont())
+            painter.setPen(ui_color(SECONDARY))
+            painter.drawText(QRectF(-bounds.height() / 2, -bounds.width() / 2, bounds.height(), bounds.width()),
+                             Qt.AlignmentFlag.AlignCenter, self.axis.titleText())
+
+
+class ScrollableChart(QWidget):
+    """Y축은 고정하고 플롯과 X축만 내부에서 가로로 이동하는 차트 컨테이너."""
+
+    def __init__(self, chart):
+        super().__init__()
+        self.chart, self.cartesian = chart, True
+        body = QHBoxLayout(self)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        self.fixed_axis = FixedChartAxis(chart)
+        body.addWidget(self.fixed_axis)
+        self.scroll = QScrollArea()
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setAccessibleName("그래프 가로 스크롤")
+        self.scroll.setWidget(chart)
+        body.addWidget(self.scroll, 1)
+        self._bound_chart = None
+        chart.chart_replaced.connect(self.sync_axis)
+        self.set_cartesian(True)
+
+    def set_cartesian(self, enabled):
+        self.cartesian = enabled
+        self.chart.setMinimumHeight(480 if enabled else 350)
+        self.chart.setMaximumHeight(520 if enabled else 390)
+        extra = self.scroll.horizontalScrollBar().sizeHint().height() if enabled else 0
+        self.scroll.setMinimumHeight(self.chart.minimumHeight() + extra)
+        self.scroll.setMaximumHeight(self.chart.maximumHeight() + extra)
+        self.setMinimumHeight(self.scroll.minimumHeight())
+        self.setMaximumHeight(self.scroll.maximumHeight())
+        self.sync_axis()
+
+    def sync_axis(self, *_):
+        chart = self.chart.chart()
+        if chart is not self._bound_chart:
+            self._bound_chart = chart
+            chart.plotAreaChanged.connect(self.sync_axis)
+        axes = chart.axes(Qt.Orientation.Vertical)
+        axis = axes[0] if self.cartesian and axes and chart.series() else None
+        self.fixed_axis.bind(axis)
+
+
 class DashboardChart(QChartView):
+    chart_replaced = Signal()
+
     def __init__(self):
         super().__init__()
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -119,10 +252,11 @@ class DashboardChart(QChartView):
         self.setBackgroundBrush(QBrush(ui_color("white")))
         self._donut_mode = False
         self._active_tooltip = None
-        self.setAccessibleName("대시보드 차트 · 같은 수치는 수치표 보기에서 확인할 수 있습니다")
+        self.setAccessibleName("대시보드 차트")
 
     def _chart(self):
         self._hide_hover_tooltip()
+        self.setMinimumWidth(0)
         self.setAccessibleDescription("")
         chart = QChart()
         chart.setBackgroundBrush(QBrush(ui_color("white")))
@@ -134,6 +268,7 @@ class DashboardChart(QChartView):
         self.setChart(chart)
         if previous:
             previous.deleteLater()
+        self.chart_replaced.emit()
         return chart
 
     def clear(self):
@@ -166,6 +301,7 @@ class DashboardChart(QChartView):
 
     def composition(self, snapshot):
         chart = self._chart()
+        self.setMinimumWidth(350)
         counts = (snapshot.summary.compliant, snapshot.summary.below, snapshot.summary.undetermined)
         total = sum(counts)
         series = QPieSeries()
@@ -230,10 +366,12 @@ class DashboardChart(QChartView):
         self.setAccessibleDescription("막대 그래프 · " + (" · ".join(descriptions) if descriptions else "표시한 설비군이 없습니다."))
         if not shown:
             return
+        series.setBarWidth(0.8)
         series.setLabelsVisible(False)
         chart.addSeries(series)
         x = QBarCategoryAxis()
         x.append(list(areas))
+        x.setTruncateLabels(False)
         x.setGridLineVisible(False)
         y = QValueAxis()
         y.setRange(0, 100)
@@ -277,6 +415,12 @@ class DashboardChart(QChartView):
 
         chart._setron_place_labels = place_baseline_labels
         chart.plotAreaChanged.connect(place_baseline_labels)
+        # 구역명과 각 설비군의 막대/0% 표시가 읽히는 너비를 확보하고 내부에서 스크롤한다.
+        metrics = QFontMetricsF(x.labelsFont())
+        label_width = max((metrics.horizontalAdvance(area) for area in areas), default=0) + 24
+        bar_width = max(18, max((marker.boundingRect().width() for marker, _ in baseline_labels), default=0) + 8)
+        category_width = max(label_width, len(shown) * bar_width / series.barWidth())
+        self.setMinimumWidth(ceil(len(areas) * category_width + 160))
         place_baseline_labels()
 
     def _trend_hover(self, chart, series, group, segment, position, hovered):
@@ -290,10 +434,8 @@ class DashboardChart(QChartView):
                              source_day=point.source_day)
         self._hover_tooltip(chart, series, text)
 
-    def trend(self, snapshot, visible_groups):
-        chart = self._chart()
-        dates = [point.day for point in snapshot.observations]
-        # 좌표는 모든 관측일의 원래 인덱스를 유지하고 눈금만 화면 폭에 맞춰 줄인다.
+    def date_axis(self, chart, dates):
+        """원래 시점 좌표는 보존하고 읽을 수 있는 날짜 눈금만 배치한다."""
         x = QCategoryAxis()
         x.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
         x.setTruncateLabels(False)
@@ -314,7 +456,11 @@ class DashboardChart(QChartView):
             label_width = measured_widths[key]
             edge = label_width / 2 + 4
             width = max(1, rect.width())
-            count = min(len(dates), max(2, int(max(0, width - 2 * edge) // max(85, label_width + 16)) + 1))
+            # 날짜 인덱스는 정수이므로 반올림된 눈금 사이의 최소 간격도 확보한다.
+            # 단순히 눈금 수만 제한하면 긴 차트에서 2일/3일 간격이 섞이며 라벨이 겹친다.
+            available = max(1, width - 2 * edge)
+            step = max(1, ceil(max(85, label_width + 16) * max(0, len(dates) - 1) / available))
+            count = min(len(dates), max(2, (len(dates) - 1) // step + 1))
             indices = (() if not dates else (0,) if len(dates) == 1 else
                        tuple(round(i * (len(dates) - 1) / (count - 1)) for i in range(count)))
             ratio = min(0.45, edge / width)
@@ -331,10 +477,19 @@ class DashboardChart(QChartView):
             x.setRange(-padding, max(0, len(dates) - 1) + padding)
 
         chart.plotAreaChanged.connect(place_dates)
+        return x, place_dates
+
+    def trend(self, snapshot, visible_groups):
+        chart = self._chart()
+        dates = [point.day for point in snapshot.observations]
+        # 좌표는 모든 관측일의 원래 인덱스를 유지하고 눈금만 차트 폭에 맞춰 줄인다.
+        x, place_dates = self.date_axis(chart, dates)
         y = QValueAxis()
         y.setRange(0, 100)
         y.setTickCount(5)
         y.setLabelFormat("%.0f%%")
+        y.setTitleText("목표 N 이상 적용률 (%)")
+        chart_font(y, "titleFont", font(12))
         for axis, alignment in ((x, Qt.AlignmentFlag.AlignBottom), (y, Qt.AlignmentFlag.AlignLeft)):
             self._axis(axis)
             chart.addAxis(axis, alignment)
@@ -368,6 +523,9 @@ class DashboardChart(QChartView):
                 series.attachAxis(x)
                 series.attachAxis(y)
                 series.hovered.connect(partial(self._trend_hover, chart, series, group, segment))
+        if chart.series():
+            # 날짜별 점 사이 간격을 확보해 긴 기간도 한 화면 안에서 압축하지 않는다.
+            self.setMinimumWidth(160 + max(0, len(dates) - 1) * 32)
         place_dates(chart.plotArea())
         descriptions = []
         for group in snapshot.trends:

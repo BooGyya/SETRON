@@ -134,7 +134,7 @@ class VersionGroupDialog(QDialog):
         self.rows_card.body.addLayout(self.rows)
         self.version_pager = QWidget()
         pager = QHBoxLayout(self.version_pager)
-        pager.setContentsMargins(0, 6, 0, 0)
+        pager.setContentsMargins(0, 6, 0, 4)
         pager.setSpacing(8)
         pager.addStretch()
         self.previous_version_page = button("이전")
@@ -145,7 +145,8 @@ class VersionGroupDialog(QDialog):
         for control, caption in ((self.previous_version_page, "버전 목록 이전 페이지"),
                                  (self.next_version_page, "버전 목록 다음 페이지")):
             control.setAutoDefault(False)
-            control.setFixedHeight(32)
+            control.setMinimumHeight(38)
+            control.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             control.setAccessibleName(caption)
         self.previous_version_page.clicked.connect(lambda: self.set_version_page(self.version_page - 1))
         self.next_version_page.clicked.connect(lambda: self.set_version_page(self.version_page + 1))

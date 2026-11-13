@@ -112,9 +112,7 @@ def test_rows_show_version_item_and_jira_together(app, data):
     # 펼친 Item에는 위험 기준 노란 칸(위험 후보 대수·대시보드 이동 버튼)을 두지 않는다.
     assert not hasattr(page, "rules_box") and not hasattr(page, "rules_dashboard")
     assert not any(b.text() == "대시보드 위험 후보 보기" for b in page.findChildren(QPushButton) if b.isVisibleTo(page))
-    # 판정 팝업에서 요청해도 조회 조건이 적용되지 않았으면 대시보드로 이동하지 않고 이유를 안내한다.
-    assert not window.show_item_risk_candidates("위험 기준 · 필수 기능", (1,))
-    assert window.route == "items" and "조회 조건을 먼저 적용" in page.notice.text()
+    assert not hasattr(window, "show_item_risk_candidates") and window.route == "items"
     window.close()
 
 
@@ -129,7 +127,7 @@ def test_rows_without_original_show_dash_and_preserve_unknown_jira_metadata(app,
     window.close()
 
 
-def test_verdict_dialog_and_registered_filter_open_dashboard_risk_list(app):
+def test_registered_rules_do_not_expose_removed_dashboard_navigation(app):
     from setron.ui.dashboard_demo import demo_dashboard_source
     from setron.ui.item_data import item_data_from_source
     from setron.ui.version_demo import demo_version_catalog
@@ -146,26 +144,21 @@ def test_verdict_dialog_and_registered_filter_open_dashboard_risk_list(app):
     window.navigate("items")
     wait_until(lambda: page.data is not None)
     # 범위 밖 설비만이면 이동하지 않는다(0대로 확정하지 않고 이유 안내).
-    assert not window.show_item_risk_candidates("위험 기준 · 테스트", (-1,))
-    assert window.route == "items" and "위험 후보 설비가 없습니다" in page.notice.text()
-    assert window.show_item_risk_candidates("위험 기준 · 테스트", (risky[0], -1))
-    assert window.route == "dashboard" and window.equipment_list_drawer.is_open
+    assert not hasattr(window, "show_item_risk_candidates")
+    assert window.route == "items" and not window.equipment_list_drawer.is_open
     window.close()
 
 
-def test_verdict_dialog_dashboard_button_emits_rule_candidates(app, data):
+def test_verdict_dialog_close_stays_on_item_without_removed_actions(app, data):
     window = create_window(item_loader=lambda: _jira_data(data))
     window.show()
     window.navigate("items")
     QTest.qWait(30)
     page = window.pages["items"]
-    requested = []
-    page.risk_candidates_requested.connect(lambda title, ids: requested.append((title, ids)))
-    with patch.object(ItemRuleVerdictDialog, "exec", lambda self: self.dashboard_button.click()):
+    with patch.object(ItemRuleVerdictDialog, "exec", lambda self: self.close_button.click()):
         assert page.open_registered_rule(9)
-    expected = tuple(r.equipment_id for r, res, _ in page.verdict_dialog.verdicts if res.status is RiskStatus.RISK)
-    assert page.verdict_dialog.dashboard_button.isEnabled() == bool(expected)
-    assert requested == ([("위험 기준 · 필수 기능", expected)] if expected else [])
+    assert not hasattr(page.verdict_dialog, "dashboard_button") and not hasattr(page.verdict_dialog, "source_button")
+    assert not hasattr(page, "risk_candidates_requested") and window.route == "items"
     window.close()
 
 

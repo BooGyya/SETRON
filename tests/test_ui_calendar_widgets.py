@@ -128,16 +128,17 @@ def test_year_can_be_typed_with_native_combo_keyboard_search(own):
 def test_popup_size_reserves_all_six_weeks_below_custom_header(own):
     field = own(PeriodDateField("2026-05-21"))
     field.open_calendar()
-    calendar = field.calendar_menu.actions()[0].defaultWidget()
+    calendar = field.dialog.calendar
     QTest.qWait(30)
-    assert calendar.height() >= calendar.header.height() + 7 * calendar.fontMetrics().height()
+    assert field.dialog.layout().itemAt(0).widget() is calendar.header
+    assert calendar.height() >= 7 * calendar.fontMetrics().height()
     from PySide6.QtWidgets import QAbstractItemView
     grid = next(view for view in calendar.findChildren(QAbstractItemView)
                 if view not in (calendar.year_combo.view(), calendar.month_combo.view()))
     # 마지막 주 행까지 전체 셀의 하단이 실제 표 뷰포트 안에 있어야 한다.
     last = grid.model().index(grid.model().rowCount() - 1, grid.model().columnCount() - 1)
     assert grid.visualRect(last).bottom() < grid.viewport().height()
-    field.calendar_menu.close()
+    field.dialog.reject()
 
 
 def test_range_limits_years_months_and_navigation_without_changing_selection(own):
@@ -161,26 +162,28 @@ def test_date_fields_reuse_common_calendar_and_only_commit_day_selection(own, fi
     field = own(field_type("2026-10-05"))
     field.setFixedSize(190, 42)
     field.open_calendar()
-    calendar = field.calendar_menu.actions()[0].defaultWidget()
+    calendar = field.dialog.calendar
     assert isinstance(calendar, CalendarWidget)
     calendar.year_combo.setCurrentIndex(2024 - calendar.years.first)
     calendar.month_combo.setCurrentIndex(1)
     assert field.text() == "2026-10-05"
     QTest.keyClick(calendar, Qt.Key.Key_Escape)
     assert field.text() == "2026-10-05"
-    field.calendar_menu.close()
+    field.dialog.reject()
     field.open_calendar()
-    assert field.calendar_menu.actions()[0].defaultWidget() is calendar
+    calendar = field.dialog.calendar
     assert calendar.yearShown() == 2026 and calendar.monthShown() == 10
     calendar.activated.emit(QDate(2024, 2, 29))
-    assert field.text() == "2024-02-29" and not field.calendar_menu.isVisible()
+    assert field.text() == "2026-10-05"
+    field.dialog.apply_button.click()
+    assert field.text() == "2024-02-29" and not field.dialog.isVisible()
     field.selectAll()
     QTest.keyClicks(field, "20261108")
     assert field.text() == "2026-11-08" and field.hasAcceptableInput()
 
 
 @pytest.mark.parametrize("opening", ["arrow", "keyboard", "text"])
-def test_date_edit_builds_shared_calendar_on_first_open_and_forwards_signals(own, opening):
+def test_date_edit_builds_shared_popup_on_first_open_and_confirms_only_on_apply(own, opening):
     edit = own(DateEdit(open_on_click=opening == "text"))
     edit.setDateRange(QDate(2020, 1, 1), QDate(2030, 12, 31))
     edit.setDate(QDate(2026, 10, 5))
@@ -192,10 +195,17 @@ def test_date_edit_builds_shared_calendar_on_first_open_and_forwards_signals(own
         QTest.mouseClick(edit.lineEdit(), Qt.MouseButton.LeftButton)
     else:
         QTest.mouseClick(edit, Qt.MouseButton.LeftButton, pos=edit._calendar_button_rect().center())
-    calendar = edit.calendarWidget()
+    calendar = edit.dialog.calendar
     assert isinstance(calendar, CalendarWidget) and edit.is_calendar_visible()
     assert calendar.minimumDate() == edit.minimumDate() and calendar.maximumDate() == edit.maximumDate()
     chosen = QDate(2026, 10, 21)
+    calendar.clicked.emit(chosen)
+    calendar.activated.emit(chosen)
+    assert edit.date() == QDate(2026, 10, 5) and clicked.count() == activated.count() == 0
+    edit.dialog.apply_button.click()
+    assert edit.date() == chosen and not edit.is_calendar_visible()
+    # 기존 calendarWidget API의 명시적 신호 연결도 계속 동작한다.
+    calendar = edit.calendarWidget()
     calendar.clicked.emit(chosen)
     calendar.activated.emit(chosen)
     assert clicked.count() == activated.count() == 1
@@ -288,7 +298,7 @@ def test_each_screen_date_popup_uses_shared_calendar(own, screen):
             calendar = field.calendarWidget()
         else:
             field.open_calendar()
-            calendar = field.calendar_menu.actions()[0].defaultWidget()
+            calendar = field.dialog.calendar
         assert isinstance(calendar, CalendarWidget)
         assert calendar.year_combo.currentText().endswith("년")
         assert calendar.month_combo.currentText().endswith("월")
@@ -296,7 +306,7 @@ def test_each_screen_date_popup_uses_shared_calendar(own, screen):
             assert calendar.isVisible()
             QTest.keyClick(calendar, Qt.Key.Key_Escape)
         else:
-            field.calendar_menu.close()
+            field.dialog.reject()
 
 
 @pytest.mark.parametrize("width", [1320, 746, 620])

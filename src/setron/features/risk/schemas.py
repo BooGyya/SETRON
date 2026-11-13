@@ -19,6 +19,12 @@ class RuleType(str, Enum):
     SAFETY_REQUIRED = "SAFETY_REQUIRED"  # 환경·안전 필수 Item: 미적용이면 위험
     DEFECT_ITEM = "DEFECT_ITEM"          # 결함 Item: 시작~해제 범위 버전에 포함되면 위험
     DIRECT_VERSION = "DIRECT_VERSION"    # 사용자가 직접 위험으로 지정한 버전
+    VERSION_BELOW = "VERSION_BELOW"      # 선택한 기준 버전보다 낮은 버전을 사용
+    VERSION_ABOVE = "VERSION_ABOVE"      # 선택한 기준 버전보다 높은 버전을 사용
+
+
+VERSION_RULE_TYPES = (RuleType.VERSION_BELOW, RuleType.DIRECT_VERSION, RuleType.VERSION_ABOVE)
+ORDERED_VERSION_RULE_TYPES = (RuleType.VERSION_BELOW, RuleType.VERSION_ABOVE)
 
 
 class RiskKind(str, Enum):
@@ -35,6 +41,8 @@ class RiskKind(str, Enum):
 RULE_KINDS = {
     RuleType.DEFECT_ITEM: RiskKind.APPLIED,
     RuleType.DIRECT_VERSION: RiskKind.APPLIED,
+    RuleType.VERSION_BELOW: RiskKind.APPLIED,
+    RuleType.VERSION_ABOVE: RiskKind.APPLIED,
     RuleType.SAFETY_REQUIRED: RiskKind.NOT_APPLIED,
 }
 RISK_KIND_LABELS = {RiskKind.APPLIED: "적용 위험", RiskKind.NOT_APPLIED: "미적용 위험"}
@@ -102,6 +110,9 @@ class FindingBasis(str, Enum):
     DEFECT_RANGE_UNKNOWN = "DEFECT_RANGE_UNKNOWN"
     DEFECT_ITEM_UNKNOWN = "DEFECT_ITEM_UNKNOWN"
     DIRECT_VERSION = "DIRECT_VERSION"
+    VERSION_BELOW = "VERSION_BELOW"
+    VERSION_ABOVE = "VERSION_ABOVE"
+    VERSION_ORDER_UNKNOWN = "VERSION_ORDER_UNKNOWN"
     VERSION_UNKNOWN = "VERSION_UNKNOWN"
     TARGET_INCOMPLETE = "TARGET_INCOMPLETE"
     MAPPING_UNRESOLVED = "MAPPING_UNRESOLVED"
@@ -115,6 +126,9 @@ BASIS_MESSAGES = {
     FindingBasis.DEFECT_RANGE_UNKNOWN: "결함 위험 범위(시작·해제 버전) 안인지 확인할 수 없습니다.",
     FindingBasis.DEFECT_ITEM_UNKNOWN: "결함 Item의 포함 여부를 확인할 수 없습니다.",
     FindingBasis.DIRECT_VERSION: "위험 버전으로 지정된 버전입니다.",
+    FindingBasis.VERSION_BELOW: "설치 버전이 위험 기준으로 선택한 버전보다 낮습니다.",
+    FindingBasis.VERSION_ABOVE: "설치 버전이 위험 기준으로 선택한 버전보다 높습니다.",
+    FindingBasis.VERSION_ORDER_UNKNOWN: "설치 버전과 기준 버전의 순서가 미확인 또는 중복되어 비교할 수 없습니다.",
     FindingBasis.VERSION_UNKNOWN: "버전이 비어 있거나 릴리즈에 없어 위험 기준을 확인할 수 없습니다.",
     FindingBasis.TARGET_INCOMPLETE: "위험 지정의 대상 Item 또는 버전이 비어 있습니다.",
     FindingBasis.MAPPING_UNRESOLVED: "위험 지정의 대상 연결이 확인되지 않았습니다.",

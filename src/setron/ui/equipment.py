@@ -227,6 +227,7 @@ class EquipmentPage(DeferredResultMixin, QWidget):
     sort = ResultAttribute()
     mode_changed = Signal(str)
     back_requested = Signal(str)
+    equipment_selected = Signal(object)
 
     def __init__(self, state, source):
         super().__init__()
@@ -848,9 +849,10 @@ class EquipmentPage(DeferredResultMixin, QWidget):
         equipment_id = self.model.ids[row]
         detail = next(d for d in self.data.details if d.record.equipment_id == equipment_id)
         request = EquipmentSelection(self.snapshot.query, self.snapshot.base_date, equipment_id, detail.record.base_date)
-        return self.open_detail(request, origin="list")
+        self.equipment_selected.emit(request)
+        return True
 
-    def open_detail(self, request, origin="heatmap"):
+    def open_detail(self, request, origin="heatmap", *, show_page=True):
         if not self._current() or request.query is not self.snapshot.query or request.base_date != self.snapshot.base_date:
             return False
         detail = next((d for d in self.data.details if d.record.equipment_id == request.equipment_id), None)
@@ -885,7 +887,8 @@ class EquipmentPage(DeferredResultMixin, QWidget):
         self._render_sw_cards(tones)
         self._show_detail_extras(detail, rows)
         self.evidence.setText("SW 관측이 없습니다." if not rows and not detail.record.is_hpa else "")
-        self._set_mode("detail")
+        if show_page:
+            self._set_mode("detail")
         return True
 
     def _show_detail_extras(self, detail, rows):

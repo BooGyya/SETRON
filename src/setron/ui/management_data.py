@@ -38,7 +38,8 @@ ENUMS = {
     "item_state": (("APPLIED", "적용"), ("NOT_APPLIED", "미적용"), ("UNKNOWN", "미확인")),
     "target_scope": (("ALL", "계열 전체"), ("LISTED", "지정 모델"), ("UNKNOWN", "미확인")),
     "rule_type": (("SAFETY_REQUIRED", "환경 · 안전 필수 Item"), ("DEFECT_ITEM", "결함 Item"),
-                  ("DIRECT_VERSION", "위험 버전 직접 지정")),
+                  ("DIRECT_VERSION", "위험 버전 직접 지정"), ("VERSION_BELOW", "기준 버전 미만 사용"),
+                  ("VERSION_ABOVE", "기준 버전 초과 사용")),
     "mapping_status": (("VERIFIED", "확인됨"), ("UNRESOLVED", "연결 미확인")),
 }
 OPTIONAL_TEXT = {"line", "structure_type", "geometry_type", "modification_type", "model_name_raw", "version_suffix"}
@@ -121,6 +122,14 @@ class ManagementGateway:
         """위험 기준을 새로 등록하고 재판정한 결과를 돌려준다 (BE-015). 저장 결과 형식은 ``save``와 같다."""
         with self._storage() as storage:
             return ManagementService(storage, context).create_risk_rule(values)
+
+    def update_risk_rule(self, record, values, context=RefreshContext()):
+        with self._storage() as storage:
+            return ManagementService(storage, context).update_risk_rule(record, values)
+
+    def delete_risk_rule(self, record, context=RefreshContext()):
+        with self._storage() as storage:
+            return ManagementService(storage, context).delete_risk_rule(record)
 
     def preview_risk_rule(self, values, context=RefreshContext()):
         """위험 기준을 저장하지 않고 등록했을 때의 영향(릴리즈·설비)을 돌려준다 (BE-015). 값 형식은 ``create_risk_rule``과 같다."""

@@ -79,7 +79,8 @@ def test_verdict_empty_states_show_one_notice_without_filters(app, data, connect
         assert not dialog.notice.isHidden() and dialog.table.isHidden() and dialog.filters.isHidden() and dialog.tiles.isHidden()
         assert dialog.notice_text.text() == ("이 위험 기준이 적용되는 설비가 없습니다." if connected
                                              else "설비 관측 자료가 없어 판정할 설비가 없습니다.")
-        assert not dialog.condition_box.isHidden() and dialog.close_button.isVisible() and dialog.source_button.isVisible()
+        assert not dialog.condition_box.isHidden() and dialog.close_button.isVisible()
+        assert not hasattr(dialog, "source_button") and not hasattr(dialog, "dashboard_button")
     finally:
         _close(dialog)
 

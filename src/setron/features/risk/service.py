@@ -22,11 +22,13 @@ from setron.features.risk.schemas import (
     EquipmentRisk,
     FindingBasis,
     MappingStatus,
+    ORDERED_VERSION_RULE_TYPES,
     RiskFinding,
     RiskRule,
     RiskStatus,
     RiskSummary,
     RuleType,
+    VERSION_RULE_TYPES,
 )
 from setron.features.version.schemas import ReleaseVersion
 from setron.features.version.service import FamilyReleases
@@ -42,16 +44,23 @@ def validate_rule(rule: RiskRule, families: Mapping[int, FamilyReleases]) -> tup
     problems = []
     if rule.rule_type in (RuleType.SAFETY_REQUIRED, RuleType.DEFECT_ITEM) and rule.item_id is None:
         problems.append("대상 Item을 선택해 주세요.")
-    if rule.rule_type is RuleType.DIRECT_VERSION and rule.release_version_id is None:
-        problems.append("위험으로 지정할 버전을 선택해 주세요.")
+    if rule.rule_type in VERSION_RULE_TYPES and rule.release_version_id is None:
+        problems.append("비교할 기준 버전을 선택해 주세요."
+                        if rule.rule_type in ORDERED_VERSION_RULE_TYPES
+                        else "위험으로 지정할 버전을 선택해 주세요.")
     named = {
-        "위험 버전": rule.release_version_id,
+        ("기준 버전" if rule.rule_type in ORDERED_VERSION_RULE_TYPES else "위험 버전"): rule.release_version_id,
         "시작 버전": rule.start_release_version_id,
         "해제 버전": rule.end_release_version_id,
     }
     for name, release_id in named.items():
         if release_id is not None and family.get(release_id) is None:
             problems.append(f"{name}이 같은 계열의 릴리즈에 없습니다. 다른 계열의 버전에는 지정할 수 없습니다.")
+    if rule.rule_type in ORDERED_VERSION_RULE_TYPES:
+        reference = family.get(rule.release_version_id)
+        if reference is not None and (reference.version_order is None
+                                      or reference.version_order in family.sorted.duplicated_orders):
+            problems.append("기준 버전의 순서가 미확인 또는 중복입니다. 순서를 확인해 주세요.")
     start = family.get(rule.start_release_version_id) if rule.start_release_version_id else None
     end = family.get(rule.end_release_version_id) if rule.end_release_version_id else None
     if (
@@ -150,12 +159,9 @@ class RiskAssessor:
         if release is None:
             return found(RiskStatus.UNKNOWN, FindingBasis.VERSION_UNKNOWN)
 
-        if rule.rule_type is RuleType.DIRECT_VERSION:
-            if rule.release_version_id is None:
-                return found(RiskStatus.UNKNOWN, FindingBasis.TARGET_INCOMPLETE, release)
-            if release.release_version_id == rule.release_version_id:
-                return found(RiskStatus.RISK, FindingBasis.DIRECT_VERSION, release)
-            return None
+        if rule.rule_type in VERSION_RULE_TYPES:
+            condition = self._version_condition(rule, release)
+            return found(*condition, release) if condition is not None else None
 
         if rule.item_id is None:
             return found(RiskStatus.UNKNOWN, FindingBasis.TARGET_INCOMPLETE, release)
@@ -181,12 +187,9 @@ class RiskAssessor:
 
         if rule.mapping_status is MappingStatus.UNRESOLVED:
             return found(RiskStatus.UNKNOWN, FindingBasis.MAPPING_UNRESOLVED)
-        if rule.rule_type is RuleType.DIRECT_VERSION:
-            if rule.release_version_id is None:
-                return found(RiskStatus.UNKNOWN, FindingBasis.TARGET_INCOMPLETE)
-            if release.release_version_id == rule.release_version_id:
-                return found(RiskStatus.RISK, FindingBasis.DIRECT_VERSION)
-            return None
+        if rule.rule_type in VERSION_RULE_TYPES:
+            condition = self._version_condition(rule, release)
+            return found(*condition) if condition is not None else None
         if rule.item_id is None:
             return found(RiskStatus.UNKNOWN, FindingBasis.TARGET_INCOMPLETE)
 
@@ -209,6 +212,29 @@ class RiskAssessor:
         return found(RiskStatus.RISK, FindingBasis.DEFECT_IN_RANGE)
 
     # --- 공통 ---------------------------------------------------------------
+
+    def _version_condition(self, rule, release):
+        if rule.release_version_id is None:
+            return RiskStatus.UNKNOWN, FindingBasis.TARGET_INCOMPLETE
+        if rule.rule_type is RuleType.DIRECT_VERSION:
+            return ((RiskStatus.RISK, FindingBasis.DIRECT_VERSION)
+                    if release.release_version_id == rule.release_version_id else None)
+        family = self.families.get(rule.family_id)
+        reference = family.get(rule.release_version_id) if family is not None else None
+        if reference is None:
+            return RiskStatus.UNKNOWN, FindingBasis.TARGET_INCOMPLETE
+        current = family.get(release.release_version_id)
+        if current is None:
+            return RiskStatus.UNKNOWN, FindingBasis.VERSION_UNKNOWN
+        if any(value.version_order is None or value.version_order in family.sorted.duplicated_orders
+               for value in (current, reference)):
+            return RiskStatus.UNKNOWN, FindingBasis.VERSION_ORDER_UNKNOWN
+        # 릴리즈에서 확인된 순서만 비교한다. 기준 버전 자체는 미만·초과 양쪽에서 제외한다.
+        if rule.rule_type is RuleType.VERSION_BELOW and current.version_order < reference.version_order:
+            return RiskStatus.RISK, FindingBasis.VERSION_BELOW
+        if rule.rule_type is RuleType.VERSION_ABOVE and current.version_order > reference.version_order:
+            return RiskStatus.RISK, FindingBasis.VERSION_ABOVE
+        return None
 
     def _release_of(self, pm: PmVersion) -> ReleaseVersion | None:
         family = self.families.get(pm.family_id)

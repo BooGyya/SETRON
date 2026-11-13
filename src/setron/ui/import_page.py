@@ -15,7 +15,7 @@ from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QRe
 from PySide6.QtGui import QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLineEdit, QSizePolicy,
-    QMenu, QScrollArea, QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabBar, QTableView, QVBoxLayout, QWidget,
+    QMenu, QScrollArea, QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView, QVBoxLayout, QWidget,
 )
 
 from setron.features.ai.schemas import ExtractKind
@@ -44,7 +44,7 @@ from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_import_review import choose_release_reviews
 from setron.ui.import_delete import ImportDeletePage
 from setron.features.excel_import.comparison import ComparisonScopeError, compare_import
-from setron.ui.import_widgets import ComparisonCard, PeriodDateField, ImportComparison, ImportSteps, Toast, import_combo_style, picture
+from setron.ui.import_widgets import ComparisonCard, PeriodDateField, ImportComparison, ImportSteps, ImportTabs, Toast, import_combo_style, picture
 from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
 from setron.ui.import_tasks import discover_workbooks, read_workbook
 from setron.ui.sql_import_page import SqlImportPage
@@ -420,14 +420,11 @@ class ImportPage(QWidget):
         self.tab_strip = QWidget()
         tab_row = QHBoxLayout(self.tab_strip)
         tab_row.setContentsMargins(0, 0, 0, 0)
-        self.tabs = QTabBar()
+        self.tabs = ImportTabs()
         self.tabs.addTab("Excel")
         self.tabs.addTab("저장된 데이터 삭제")
         self.tabs.addTab("SQL")
-        self.tabs.setExpanding(False)
         self.tabs.setAccessibleName("데이터 가져오기 화면 선택")
-        self.tabs.setStyleSheet("QTabBar::tab {background:transparent;border:0;border-radius:0;padding:8px 10px;color:#5b6880;}"
-                               "QTabBar::tab:selected {color:#3c5ce9;border-bottom:2px solid #3c5ce9;}")
         tab_row.addWidget(self.tabs)
         tab_row.addStretch()
         outer.addWidget(self.tab_strip)
@@ -489,6 +486,7 @@ class ImportPage(QWidget):
         self.notice = label("", 13, color=SECONDARY, wrap=True)       # 오류·진행 상태만 보인다 (처음 안내 문장 없음)
         self.notice.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.notice.setContentsMargins(4, 0, 4, 0)
+        self.notice.hide()
         body.addWidget(self.notice)
 
         select = _section("1. Excel 통합문서 · 시트 선택")

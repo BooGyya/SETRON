@@ -3,8 +3,9 @@
 from datetime import date
 
 import pytest
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QPoint, QSettings, Qt
 from PySide6.QtTest import QSignalSpy, QTest
+from PySide6.QtWidgets import QLabel
 
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState
@@ -12,6 +13,57 @@ from test_ui_query import app, catalog  # noqa: F401
 
 
 START, END = date(2026, 9, 21), date(2026, 10, 21)
+
+
+@pytest.mark.parametrize("screen", ["dashboard", "replay", "reports", "delete"])
+def test_every_visible_period_picker_uses_the_same_header_first_design(app, tmp_path, screen):
+    from setron.ui.app import create_window
+    from setron.ui.dashboard_demo import demo_dashboard_source
+    from setron.ui.date_range import DateRangeDialog
+    from setron.ui.import_delete import ImportDeletePage
+    from setron.ui.replay_page import ReplayPage
+    from setron.ui.reports_page import ReportsPage
+
+    source = demo_dashboard_source()
+    if screen == "dashboard":
+        host = create_window(source)
+        host.show()
+        host.query_panel.apply_draft()
+        host.pages["dashboard"].tabs.setCurrentIndex(3)
+        control = host.query_panel.range_button
+    elif screen == "replay":
+        host = ReplayPage(source)
+        control = host.query_panel.range_button
+    elif screen == "reports":
+        host = ReportsPage(source, settings=QSettings(str(tmp_path / "reports.ini"), QSettings.Format.IniFormat),
+                           ai_settings=QSettings(str(tmp_path / "ai.ini"), QSettings.Format.IniFormat))
+        control = host.query_panel.range_button
+    else:
+        host = ImportDeletePage()
+        control = host.period_button
+    host.resize(1200, 900)
+    host.show()
+    try:
+        QTest.qWait(30)
+        assert control.isVisibleTo(host)
+        control.click()
+        dialog = control.dialog
+        assert isinstance(dialog, DateRangeDialog) and not dialog.single_day
+        header = dialog.calendar.header
+        assert dialog.layout().itemAt(0).widget() is header
+        header_bottom = header.mapTo(dialog, header.rect().bottomLeft()).y()
+        start_top = dialog.endpoint_buttons["start"].mapTo(dialog, QPoint()).y()
+        end_bottom = dialog.endpoint_buttons["end"].mapTo(dialog, dialog.endpoint_buttons["end"].rect().bottomLeft()).y()
+        assert header_bottom < start_top < end_bottom < dialog.calendar_scroll.mapTo(dialog, QPoint()).y()
+        assert not any(item.text() == "기간 선택" and item.isVisibleTo(dialog) for item in dialog.findChildren(QLabel))
+        assert header.isAncestorOf(dialog.calendar.year_combo) and header.isAncestorOf(dialog.calendar.month_combo)
+        dialog.reject()
+    finally:
+        if control.dialog is not None:
+            control.dialog.reject()
+        host.close()
+        host.deleteLater()
+        app.processEvents()
 
 
 @pytest.fixture

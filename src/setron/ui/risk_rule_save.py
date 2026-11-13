@@ -30,15 +30,25 @@ class RiskRuleSaveController(QObject):
         return self.request.busy
 
     def create_risk_rule(self, values):
+        return self._start("create_risk_rule", values)
+
+    def update_risk_rule(self, record, values):
+        return self._start("update_risk_rule", record, values)
+
+    def delete_risk_rule(self, record):
+        return self._start("delete_risk_rule", record)
+
+    def _start(self, method, *arguments):
         if self.busy or self.locked or self.state == "saving" or self.gateway is None:
             return False
         try:
-            context, values = deepcopy(self.context_provider()), deepcopy(values)
+            operation = getattr(self.gateway, method)
+            context, arguments = deepcopy(self.context_provider()), deepcopy(arguments)
         except Exception:
             return False
         self.state, self.operation_error = "saving", None
         self.save_started.emit()
-        return self.request.start(BackgroundRead(lambda: self.gateway.create_risk_rule(values, context)))
+        return self.request.start(BackgroundRead(lambda: operation(*arguments, context)))
 
     def _completed(self, value, error):
         self.operation_error = error

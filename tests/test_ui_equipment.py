@@ -247,7 +247,7 @@ def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(win
     QTest.keyClick(table, Qt.Key.Key_Return)
     QApplication.processEvents()
     assert window.route == "dashboard" and drawer.is_open and drawer.request.equipment_id == 2
-    assert page.mode == "detail" and page.selected_id == 2
+    assert page.mode == "list" and page.selected_id == 2 and page.detail_card.isHidden()
     assert drawer.panel.isAncestorOf(drawer.info_card)
     assert drawer.risk_card.isVisibleTo(drawer.body_widget)
     assert drawer.list_scroll.isHidden() and not drawer.scroll.isHidden()
@@ -320,10 +320,11 @@ def test_keyboard_row_opens_detail_and_back_keeps_filters_page_and_ids(window):
     page.table.setCurrentIndex(index)
     page.table.setFocus()
     QTest.keyClick(page.table, Qt.Key.Key_Return)
-    assert page.mode == "detail" and page.selected_id == previous[2]
-    assert window.query_panel.isHidden() and window.header.title.text() == "설비 상세"
-    assert page.back_button.mapTo(page.detail_card, QPoint()).y() < page.sw_title.mapTo(page.detail_card, QPoint()).y()
-    page.back_button.click()
+    drawer = window.equipment_drawer
+    assert page.mode == "list" and page.selected_id == previous[2]
+    assert drawer.is_open and drawer.request.equipment_id == previous[2]
+    assert not window.query_panel.isHidden() and window.header.title.text() == "설비 목록"
+    drawer.close_button.click()
     assert page.mode == "list" and not window.query_panel.isHidden()
     assert page.page_index == 1 and page.model.ids == previous and page.sort.currentIndex() == 1
 
@@ -336,7 +337,7 @@ def test_heatmap_direct_detail_and_back_preserve_view_and_selection(window):
     heatmap.tile_buttons[1].click()
     page = window.pages["equipment"]
     drawer = window.equipment_drawer
-    assert window.route == "heatmap" and page.mode == "detail" and page.selected_id == 1
+    assert window.route == "heatmap" and page.mode == "list" and page.selected_id == 1
     assert drawer.isVisible()
     assert page.detail_model.rowCount() == 3
     assert drawer.goal_badge.text() == GoalState.BELOW.value and "위험 후보" in drawer.risk_badge.text()

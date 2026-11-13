@@ -7,9 +7,10 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontMetrics
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPersistentModelIndex, QRect, Qt
+from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
 
 import setron.ui.heatmap_list as heatmap_list
 from setron.ui.heatmap_list import HeatmapListModel, HeatmapTreeView
@@ -70,6 +71,88 @@ def test_large_list_stops_height_measurement_at_limit_and_keeps_last_row_accessi
     app.processEvents()
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole) == 1999
     assert table.viewport().rect().intersects(table.visualRect(last))
+
+
+def test_dense_list_reuses_measured_cell_sizes_after_collapsing_and_expanding(table, app, monkeypatch):
+    table.resize(1200, 800)
+    rows = tuple(Row(index, f"TEST-{index:04}") for index in range(2000))
+    table.set_groups((node(rows),), values)
+    QTest.qWait(30)
+    measured, original = [], heatmap_list.QStyledItemDelegate.sizeHint
+
+    def size_hint(delegate, option, index):
+        measured.append(index)
+        return original(delegate, option, index)
+
+    monkeypatch.setattr(heatmap_list.QStyledItemDelegate, "sizeHint", size_hint)
+    root = table.model().index(0, 0)
+    for _ in range(2):
+        table.setExpanded(root, False)
+        app.processEvents()
+        table.setExpanded(root, True)
+        app.processEvents()
+    # Qt가 다시 방문한 12,000개 셀의 원문과 줄바꿈을 매번 재측정하지 않는다.
+    assert len(measured) < 30
+    table.select_equipment(1999)
+    table.scrollTo(table.model().equipment_index(1999))
+    app.processEvents()
+    assert table.currentIndex().data(Qt.ItemDataRole.UserRole) == 1999
+    assert table.viewport().rect().intersects(table.visualRect(table.currentIndex()))
+
+
+def test_cell_size_cache_refreshes_for_text_width_font_style_and_compact_changes(table, monkeypatch):
+    table.set_groups((node((Row(0, "TEST-0"),)),), values)
+    delegate, index = table.itemDelegate(), table.model().equipment_index(0).siblingAtColumn(3)
+    option = QStyleOptionViewItem()
+    option.initFrom(table)
+    option.widget = table
+    option.features |= QStyleOptionViewItem.ViewItemFeature.WrapText
+    option.rect = QRect(0, 0, 180, 0)
+    measured, original = [], heatmap_list.QStyledItemDelegate.sizeHint
+
+    def size_hint(current, current_option, current_index):
+        measured.append(current_index)
+        return original(current, current_option, current_index)
+
+    monkeypatch.setattr(heatmap_list.QStyledItemDelegate, "sizeHint", size_hint)
+    delegate._clear_sizes()
+    plain = delegate.sizeHint(option, index)
+    assert delegate.sizeHint(option, index) == plain and len(measured) == 1
+    table.model().itemFromIndex(index).setText("version\n" * 8)
+    measured.clear()
+    wrapped = delegate.sizeHint(option, index)
+    assert wrapped.height() > plain.height() and len(measured) == 1
+    assert delegate.sizeHint(option, index) == wrapped and len(measured) == 1
+    option.rect.setWidth(80)
+    measured.clear()
+    delegate.sizeHint(option, index)
+    assert len(measured) == 1
+    larger = QFont(table.font())
+    larger.setPixelSize(larger.pixelSize() + 2)
+    table.setFont(larger)
+    measured.clear()
+    delegate.sizeHint(option, index)
+    assert len(measured) == 1
+    table.setStyleSheet(table.styleSheet() + "QTreeView::item {padding:12px;}")
+    measured.clear()
+    delegate.sizeHint(option, index)
+    assert len(measured) == 1
+    table.compact = True
+    table.setWordWrap(False)
+    measured.clear()
+    delegate.sizeHint(option, index)
+    assert len(measured) == 1
+    previous = QPersistentModelIndex(index)
+    table.set_groups((node((Row(1, "REPLACED"),)),), values)
+    replacement = table.model().equipment_index(1).siblingAtColumn(3)
+    assert replacement.isValid() and not previous.isValid()
+    assert delegate.sizeHint(option, replacement).height() < wrapped.height()
+    monkeypatch.setattr(delegate, "SIZE_CACHE_LIMIT", 8)
+    delegate._clear_sizes()
+    for width in range(100, 120):
+        option.rect.setWidth(width)
+        delegate.sizeHint(option, replacement)
+    assert len(delegate._sizes) == 8
 
 
 def test_width_cache_keeps_longest_last_name_and_remeasures_renames_and_indentation(table, app, monkeypatch):

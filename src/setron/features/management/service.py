@@ -243,6 +243,78 @@ class ManagementService:
             record = self._view(tx, "risk_rule", tx.get("risk_rule", {"risk_rule_id": created["risk_rule_id"]}))
             return ManagementResult((record,), refresh, ages, thresholds, audit["batch_id"])
 
+    def update_risk_rule(self, record, values):
+        """검토한 위험 기준 하나를 수정하며 기존 ID·원본 근거·다른 기준은 보존한다."""
+        record = self._risk_record_request(record)
+        require(isinstance(values, Mapping) and bool(values), "수정할 위험 정보가 필요합니다.")
+        values = deepcopy(dict(values))
+        has_presentation = "item_manager" in values
+        presentation = values.pop("item_manager", None)
+        require(set(values) <= EDITABLE["risk_rule"], "위험 수정에 쓸 수 없는 항목이 있습니다.")
+        require(not has_presentation or isinstance(presentation, Mapping), "위험 기준 표시 정보가 올바르지 않습니다.")
+        context = _context_copy(self.context)
+        with self.storage.transaction() as tx:
+            self._lock(tx)
+            current = self._reviewed_risk_in(tx, record)
+            updated = {**current.current, **values}
+            reference = deepcopy(current.current.get("target_reference") or {})
+            scope_changed = any(updated.get(field) != current.current.get(field) for field in ("family_id", "rule_type"))
+            for field, key in (("item_id", "item"), ("release_version_id", "direct_version"),
+                               ("start_release_version_id", "start_version"), ("end_release_version_id", "end_version")):
+                if scope_changed or updated.get(field) != current.current.get(field):
+                    reference.pop(key, None)
+            reference.update(self._risk_reference(tx, updated))
+            if has_presentation:
+                reference["item_manager"] = {**reference.get("item_manager", {}), **deepcopy(dict(presentation))}
+            changes = {**values, "target_reference": reference}
+            updated["target_reference"] = reference
+            validate_changes_in(tx, "risk_rule", current.current, changes)
+            validate_risk_in(tx, updated, context)
+            tx.update("risk_rule", current.key, changes)
+            journal = {"schema": 1, "management_edit": {
+                "before": [self._before(tx, "risk_rule", current.current)],
+                "changes": [{"table": "risk_rule", "key": current.key, "revision": current.revision, "changes": changes}],
+                "applicability": [],
+            }}
+            return self._risk_mutation_result(tx, context, journal, (current.key,))
+
+    def delete_risk_rule(self, record):
+        """검토 지문이 일치하는 위험 기준 하나만 삭제하고 삭제 전 값을 이력에 보존한다."""
+        record = self._risk_record_request(record)
+        context = _context_copy(self.context)
+        with self.storage.transaction() as tx:
+            self._lock(tx)
+            current = self._reviewed_risk_in(tx, record)
+            journal = {"schema": 1, "management_delete_risk": {
+                "before": self._before(tx, "risk_rule", current.current),
+                "key": current.key, "revision": current.revision,
+            }}
+            tx.repository.delete(tx.session, "risk_rule", current.key)
+            return self._risk_mutation_result(tx, context, journal)
+
+    @staticmethod
+    def _risk_record_request(record):
+        require(isinstance(record, ManagedRecord) and record.table == "risk_rule", "검토한 위험 기준이 필요합니다.")
+        require(isinstance(record.key, dict) and set(record.key) == {"risk_rule_id"}, "위험 기준 식별자가 필요합니다.")
+        identifier(record.key["risk_rule_id"], "risk_rule_id")
+        required_text(record.revision, "revision", 64)
+        return deepcopy(record)
+
+    def _reviewed_risk_in(self, tx, record):
+        current = self._view(tx, "risk_rule", tx.get("risk_rule", record.key))
+        require(current.revision == record.revision, "위험 기준이 검토 후 변경됐습니다. 다시 열어 확인해 주세요.")
+        return current
+
+    def _risk_mutation_result(self, tx, context, journal, keys=()):
+        refresh = ReleaseRefreshService().refresh_in(tx, context=context)
+        thresholds = self._thresholds(tx)
+        ages = tuple((day.base_date, tuple(equipment_age(entry.record, refresh.families, thresholds)
+                                           for entry in day.summary.equipment)) for day in refresh.dates)
+        journal = json.loads(json.dumps(journal, ensure_ascii=False, default=_json_value, allow_nan=False))
+        audit = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": journal})
+        records = tuple(self._view(tx, "risk_rule", tx.get("risk_rule", key)) for key in keys)
+        return ManagementResult(records, refresh, ages, thresholds, audit["batch_id"])
+
     def preview_risk_rule(self, values) -> RuleImpact:
         """위험 정보를 저장하지 않고, 등록했을 때 최신 관측일 설비와 릴리즈에 주는 영향을 계산한다 (BE-015).
 

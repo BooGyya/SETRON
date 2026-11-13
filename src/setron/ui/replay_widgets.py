@@ -2,18 +2,18 @@
 
 from functools import partial
 
-from PySide6.QtCharts import QBarCategoryAxis, QLineSeries, QScatterSeries, QValueAxis
-from PySide6.QtCore import QPointF, QSize, Qt, Signal
+from PySide6.QtCharts import QLineSeries, QScatterSeries, QValueAxis
+from PySide6.QtCore import QPointF, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QProgressBar, QScrollArea, QSizePolicy, QSlider, QVBoxLayout, QWidget
 
-from setron.ui.appearance import ui_color
+from setron.ui.appearance import chart_font, readable_color, set_color_style, ui_color
 from setron.ui.components import button, label
 from setron.ui.dashboard_charts import DashboardChart, series_color, trend_tooltip
 from setron.ui.heatmap import HeatmapPage
 from setron.ui.heatmap_grouping import GROUPING_MODES
 from setron.ui.replay_data import replay_trends
-from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, font, set_widget_font
+from setron.ui.theme import INK, LINE, PRIMARY, SECONDARY, TONES, font, set_widget_font
 from setron.ui.view_controls import SegmentedControl
 
 # 그래프 시리즈 이름. 범례는 숨겨져 있고, 테스트·접근성에서 선의 역할을 구분하는 데 쓴다.
@@ -21,6 +21,19 @@ CURRENT_MARKER = "현재 시점"
 FUTURE_SUFFIX = " · 이후"
 CURRENT_SUFFIX = " · 현재"
 POINT_SUFFIX = " · 시점"  # 실제 시점마다 찍는 점. 누르기·마우스 올리기는 이 점에서 받는다.
+
+
+def rate_progress_color(rate, colors):
+    """적용률에 따라 기존 빨강·황금색·초록 상태색 사이를 연속 보간한다."""
+    if rate is None:
+        return colors["heat_unknown"]
+    stops = [QColor(readable_color(value, colors["surface"], 3)) for value in
+             (TONES["danger"][1], TONES["warning"][2], TONES["success"][2])]
+    position = max(0, min(1, rate)) * 2
+    start, end = stops[:2] if position <= 1 else stops[1:]
+    mix = position if position <= 1 else position - 1
+    return QColor.fromRgbF(*(left * (1 - mix) + right * mix
+                             for left, right in zip(start.getRgbF()[:3], end.getRgbF()[:3]))).name()
 
 
 class ReplayViewControls(QScrollArea):
@@ -141,29 +154,26 @@ class ReplayPlaybackControls(QFrame):
         date_row.addWidget(self.frame_label)
         date_row.addStretch()
         context.addLayout(date_row)
-        self.observation_label = label("", 11, color=SECONDARY)
-        self.observation_label.setAccessibleName("관측 기준일")
-        self.observation_label.setMinimumHeight(self.observation_label.fontMetrics().height())
-        context.addWidget(self.observation_label)
         context_row.addLayout(context, 1)
         rate = QVBoxLayout()
         rate.setSpacing(4)
         rate_row = QHBoxLayout()
         rate_row.setSpacing(10)
-        self.scope_label = label("전체 범위", 11, color=SECONDARY)
+        self.scope_label = label("", 11, color=SECONDARY)
         self.scope_label.setAccessibleName("적용률 집계 범위")
+        self.scope_label.hide()
         rate_row.addWidget(self.scope_label)
-        self.rate_label = label("적용률 —", 12, medium=True)
+        self.rate_label = label("전체 적용률 —", 12, medium=True)
         self.rate_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         rate_row.addWidget(self.rate_label)
         rate.addLayout(rate_row)
         self.progress = QProgressBar()
+        self.application_rate = None
         self.progress.setRange(0, 1000)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
-        self.progress.setAccessibleName("현재 재생일의 등록 SW 적용률")
-        self.progress.setStyleSheet("QProgressBar {background:#e8ebfc;border:0;border-radius:2px;min-height:4px;max-height:4px;}"
-                                   f"QProgressBar::chunk {{background:{PRIMARY};border-radius:2px;}}")
+        self.progress.setAccessibleName("현재 재생일의 등록 SW 전체 적용률")
+        set_color_style(self.progress, self._progress_style)
         self.progress.setFixedHeight(4)
         rate.addWidget(self.progress)
         context_row.addLayout(rate)
@@ -197,38 +207,71 @@ class ReplayPlaybackControls(QFrame):
         self.speed_tabs.setCurrentIndex(1)
         self.speed_tabs.currentChanged.connect(lambda index: self.speed_changed.emit(self.SPEEDS[index]))
         row.addWidget(self.speed_tabs)
+        self.position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setAccessibleName("재생 위치")
+        self.position_slider.setAccessibleDescription("좌우 방향키나 드래그로 재생 시점을 이동합니다.")
+        self.position_slider.setTracking(False)
+        self.position_slider.setRange(0, 0)
+        self.position_slider.setEnabled(False)
+        self.position_slider.setMinimumHeight(22)
+        self.position_slider.setStyleSheet(
+            f"QSlider::groove:horizontal {{height:4px;background:#e8ebfc;border-radius:2px;}}"
+            f"QSlider::sub-page:horizontal {{background:{PRIMARY};border-radius:2px;}}"
+            f"QSlider::handle:horizontal {{background:white;border:2px solid {PRIMARY};width:14px;"
+            "margin:-7px 0;border-radius:9px;}"
+            "QSlider::groove:horizontal:disabled {background:#edf0f5;}"
+            "QSlider::handle:horizontal:disabled {background:#a9b1bf;}")
+        body.addWidget(self.position_slider)
+
+    def _progress_style(self, colors):
+        color = rate_progress_color(self.application_rate, colors)
+        # 0%도 실제 관측값이면 빨간 시작점을 남기고, 계산 불가는 중립색으로 구분한다.
+        return (f"QProgressBar {{background:{colors['heat_unknown']};border:0;border-left:2px solid {color};"
+                "border-radius:2px;min-height:4px;max-height:4px;}"
+                f"QProgressBar::chunk {{background:{color};border:0;border-radius:2px;}}")
+
+    def set_application_rate(self, rate):
+        self.application_rate = rate
+        self.progress.setValue(round(rate * 1000) if rate is not None else 0)
+        set_color_style(self.progress, self._progress_style)
 
     def set_context(self, day, observed_day, index, total, *, selected_groups=False):
         """프레임 자료만 받아 두 보기에서 같은 재생 문맥을 표시한다."""
         self.date_label.setText(f"재생일 {day:%Y-%m-%d}")
         self.frame_label.setText(f"{index + 1} / {total}")
         self.frame_label.setAccessibleDescription(f"전체 {total}개 중 {index + 1}번째 프레임")
-        carried = day != observed_day
-        self.observation_label.setText(f"관측 기준 {observed_day:%Y-%m-%d} · 이전 자료" if carried else "실제 저장일과 같은 시점")
-        self.observation_label.setToolTip("재생일 이전 마지막 저장 자료를 이어서 표시합니다. 설비별 관측일은 상세에서 확인할 수 있습니다."
-                                         if carried else "해당 재생일에 저장된 자료입니다. 설비별 관측일은 상세에서 확인할 수 있습니다.")
-        self.scope_label.setText("선택 설비군" if selected_groups else "전체 범위")
+        self.scope_label.setText("선택 설비군" if selected_groups else "")
+        self.scope_label.setVisible(selected_groups)
         self.scope_label.setToolTip("선택한 설비군의 등록 SW를 집계합니다." if selected_groups else
                                     "조회 조건 전체의 등록 SW를 집계합니다. 사업장·분류·라인·세부라인 범례는 추이 선의 표시만 바꿉니다.")
+        with QSignalBlocker(self.position_slider):
+            self.position_slider.setRange(0, max(0, total - 1))
+            if not self.position_slider.isSliderDown():
+                self.position_slider.setValue(index)
+        self.position_slider.setToolTip(f"재생 위치 {day:%Y-%m-%d} · {index + 1} / {total}")
 
     def clear_context(self):
+        self.set_application_rate(None)
         self.date_label.setText("재생일 —")
         self.frame_label.setText("0 / 0")
         self.frame_label.setAccessibleDescription("")
-        self.observation_label.setText("")
-        self.observation_label.setToolTip("")
-        self.scope_label.setText("전체 범위")
+        self.scope_label.setText("")
+        self.scope_label.hide()
         self.scope_label.setToolTip("")
+        with QSignalBlocker(self.position_slider):
+            self.position_slider.setRange(0, 0)
+            self.position_slider.setValue(0)
+        self.position_slider.setEnabled(False)
+        self.position_slider.setToolTip("")
 
     def fit_width(self, available):
         """본문 폭 안에 고정하고, 내용의 높이만 바뀌면 하단 여백도 따라간다."""
         # 날짜·백분율의 자릿수가 바뀌어도 재생 도구가 매 시점 좌우로 움직이지 않는다.
         date_width = (self.date_label.fontMetrics().horizontalAdvance("재생일 2000-12-31")
                       + self.frame_label.fontMetrics().horizontalAdvance("999 / 999") + 8)
-        observed_width = self.observation_label.fontMetrics().horizontalAdvance("관측 기준 2000-12-31 · 이전 자료")
         rate_width = (self.scope_label.fontMetrics().horizontalAdvance("선택 설비군")
-                      + self.rate_label.fontMetrics().horizontalAdvance("적용률 계산 불가") + 10)
-        preferred = max(self.layout().sizeHint().width(), max(date_width, observed_width) + rate_width + 36)
+                      + self.rate_label.fontMetrics().horizontalAdvance("전체 적용률 계산 불가") + 10)
+        preferred = max(self.layout().sizeHint().width(), date_width + rate_width + 36)
         self.setFixedWidth(min(max(1, available), preferred))
         self.adjustSize()
 
@@ -238,8 +281,8 @@ class ReplayChart(DashboardChart):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumHeight(300)
-        self.setMaximumHeight(300)
+        self.setMinimumHeight(480)
+        self.setMaximumHeight(520)
         self.setAccessibleName("설비군별 목표 적용 추이 · 저장된 관측일의 달성률")
         self.values, self.days = {}, ()
         self.current = None
@@ -314,13 +357,13 @@ class ReplayChart(DashboardChart):
         if not frames:
             return
         days = self.days = tuple(frame.day for frame in frames)
-        x, y = QBarCategoryAxis(), QValueAxis()
-        pattern = "%Y-%m-%d" if days[0].year != days[-1].year else "%m-%d"
-        x.append([d.strftime(pattern) for d in days])
-        x.setGridLineVisible(False)
+        x, place_dates = self.date_axis(chart, days)
+        y = QValueAxis()
         y.setRange(0, 100)
         y.setTickCount(5)
         y.setLabelFormat("%.0f%%")
+        y.setTitleText("목표 N 이상 적용률 (%)")
+        chart_font(y, "titleFont", font(12))
         for axis, alignment in ((x, Qt.AlignmentFlag.AlignBottom), (y, Qt.AlignmentFlag.AlignLeft)):
             self._axis(axis)
             chart.addAxis(axis, alignment)
@@ -386,6 +429,9 @@ class ReplayChart(DashboardChart):
             dot.setBorderColor(ui_color("white"))
             dot.setMarkerSize(12)
             self._current_slots[trend.key] = slot(dot, f"{trend.label}{CURRENT_SUFFIX}", trend)
+        if self.trends:
+            self.setMinimumWidth(160 + max(0, len(frames) - 1) * 32)
+        place_dates(chart.plotArea())
         self._values_description = " · ".join(
             f"{trend.label}: " + ", ".join(f"{day} {'확인 필요' if value is None else f'{value:.1%}'}"
                                      for day, value in zip(days, values))

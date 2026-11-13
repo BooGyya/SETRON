@@ -1,18 +1,20 @@
-"""대시보드의 좁은 화면 가독성, 키보드 수치 조회와 날짜축 데이터 보존 회귀."""
+"""대시보드의 좁은 화면 가독성과 날짜축 데이터 보존 회귀."""
 
 from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
 from PySide6.QtCharts import QCategoryAxis
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QGraphicsSimpleTextItem, QGraphicsTextItem, QLabel
+from PySide6.QtWidgets import QGraphicsSimpleTextItem, QGraphicsTextItem, QLabel, QPushButton, QTableWidget
 
 from setron.ui.dashboard_charts import DashboardChart
+from setron.ui.dashboard import DashboardPage
 from setron.ui.dashboard_data import trend_window
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.appearance_data import Appearance
+from setron.ui.main_window import MainWindow
 from test_ui_dashboard import app, applied, source, window  # noqa: F401
 
 
@@ -111,21 +113,15 @@ def test_pie_labels_fit_inside_hole_and_legend_stays_in_card(window, size):
         assert graph.bottom() < legend.top()
 
 
-def test_numeric_table_is_reachable_by_keyboard_and_matches_each_view(window):
+def test_numeric_table_and_toggle_are_removed_from_all_dashboard_views(window):
     window.query_panel.apply_draft()
     page = window.pages["dashboard"]
-    for mode in (1, 2, 3):
+    for mode in (0, 1, 2, 3):
         page.tabs.setCurrentIndex(mode)
         QTest.qWait(20)
-        assert page.data_toggle.isVisible() and page.data_toggle.isEnabled()
-        page.data_toggle.setFocus()
-        QTest.keyClick(page.data_toggle, Qt.Key.Key_Space)
-        assert page.data_table.isVisible() and page.data_table.rowCount() > 0
-        if mode == 1:
-            assert [page.data_table.item(row, 1).text() for row in range(3)] == ["3", "1", "1"]
-            assert page.data_table.item(0, 2).text() == "60.0%"
-        QTest.keyClick(page.data_toggle, Qt.Key.Key_Space)
-        assert not page.data_table.isVisible()
+        assert not page.findChildren(QTableWidget)
+        assert not any("수치표" in control.text() for control in page.findChildren(QPushButton))
+        assert "수치표" not in page.chart.accessibleName()
 
 
 def test_accessible_chart_description_follows_new_query_and_view(window):
@@ -134,7 +130,9 @@ def test_accessible_chart_description_follows_new_query_and_view(window):
     page.tabs.setCurrentIndex(1)
     assert "N 이상 3건" in page.chart.accessibleDescription()
     notes = [widget.text() for widget in page.composition_legend.findChildren(QLabel)]
-    assert any("판단 가능 4건 기준" in text and "전체 5건 기준" in text for text in notes)
+    assert not any("판단 가능" in text or "판단 불가 포함 전체" in text for text in notes)
+    assert "판단 가능 4건 기준" in page.chart.accessibleDescription()
+    assert "전체 5건 기준" in page.chart.accessibleDescription()
     page.tabs.setCurrentIndex(2)
     window.query_panel.select("site_key", "s2")
     window.query_panel.apply_draft()
@@ -161,3 +159,99 @@ def test_compact_metrics_preserve_one_row_and_restore_wide_density(window):
         assert all(card.height() == 64 if compact else card.height() > 64 for card in cards)
         assert all(card.value.font().pixelSize() == (22 if compact else 30) for card in cards)
         assert window.scroll.widget().width() == window.scroll.viewport().width()
+
+
+@pytest.fixture
+def dense_window(app):
+    source = demo_dashboard_source()
+    result = MainWindow(query_catalog=source.catalog)
+    page = DashboardPage(result.query_state, source)
+    result.register_page("dashboard", page)
+    result.query_applied.connect(page.apply_query)
+    result.query_panel.catalog_changed.connect(page.invalidate)
+    result.show()
+    result.query_panel.apply_draft()
+    QTest.qWait(40)
+    yield result
+    result.close()
+    result.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.parametrize("size", [(1600, 960), (960, 600)])
+@pytest.mark.parametrize("mode", [2, 3])
+def test_dense_graph_scroll_reaches_last_data_without_widening_page(dense_window, size, mode):
+    window = dense_window
+    page = window.pages["dashboard"]
+    window.resize(*size)
+    page.tabs.setCurrentIndex(mode)
+    QTest.qWait(60)
+    scroll = page.chart_row.scroll
+    bar = scroll.horizontalScrollBar()
+    assert bar.isVisible() and bar.maximum() > 0
+    assert scroll.verticalScrollBar().maximum() == 0
+    assert window.scroll.horizontalScrollBar().maximum() == 0
+    assert window.scroll.widget().width() == window.scroll.viewport().width()
+
+    chart = page.chart.chart()
+    if mode == 2:
+        axis, = chart.axes(Qt.Orientation.Horizontal)
+        last = len(axis.categories()) - 1
+        series, = chart.series()
+        assert last >= 7
+        assert all(values.count() == last + 1 for values in series.barSets())
+        position = QPointF(last, series.barSets()[0].at(last))
+    else:
+        last = len(page.trend_snapshot.observations) - 1
+        assert last > 100
+        for group in page.trend_snapshot.trends:
+            actual = sorted((point.x(), point.y()) for series in chart.series()
+                            if series.name() == group.label for point in series.points())
+            assert actual == [(index, point.summary.rate * 100) for index, point in enumerate(group.points)
+                              if point.summary.rate is not None]
+        series = next(series for series in chart.series() if series.points()[-1].x() == last)
+        position = series.points()[-1]
+
+    def last_point_in_viewport():
+        local = page.chart.mapFromScene(chart.mapToScene(chart.mapToPosition(position, series)))
+        return page.chart.mapTo(scroll.viewport(), local)
+
+    bar.setValue(0)
+    assert last_point_in_viewport().x() > scroll.viewport().width()
+    bar.setValue(bar.maximum())
+    QTest.qWait(20)
+    assert scroll.viewport().rect().contains(last_point_in_viewport())
+
+
+def test_graph_scroll_shrinks_for_filtered_sampled_empty_and_pie_views(dense_window):
+    window = dense_window
+    window.resize(1600, 960)
+    page = window.pages["dashboard"]
+    scroll = page.chart_row.scroll
+    bar = scroll.horizontalScrollBar()
+    page.tabs.setCurrentIndex(2)
+    QTest.qWait(40)
+    assert bar.maximum() > 0
+    bar.setValue(bar.maximum())
+
+    window.query_panel.select("site_key", "giheung")
+    window.query_panel.apply_draft()
+    QTest.qWait(40)
+    assert page.chart.chart().series() and bar.maximum() == 0
+
+    page.tabs.setCurrentIndex(3)
+    QTest.qWait(40)
+    assert bar.maximum() > 0
+    page.trend_interval.buttons["month"].click()
+    QTest.qWait(40)
+    assert page.chart.chart().series() and bar.maximum() == 0
+
+    page.toggle_all_button.click()
+    QTest.qWait(40)
+    assert not page.chart.chart().series() and bar.maximum() == 0
+    page.tabs.setCurrentIndex(1)
+    QTest.qWait(40)
+    assert page.chart.chart().series() and bar.maximum() == 0
+    assert page.composition_legend.isVisible()
+    assert 350 <= page.chart.width() <= 560
+    assert window.scroll.horizontalScrollBar().maximum() == 0

@@ -14,12 +14,16 @@ from setron.ui.combo_box import ComboBox
 
 RULE_TYPES = (
     ("DIRECT_VERSION", "위험 버전 직접 지정 (이 버전을 쓰는 설비가 위험)"),
+    ("VERSION_BELOW", "기준 버전 미만 사용 시 위험"),
+    ("VERSION_ABOVE", "기준 버전 초과 사용 시 위험"),
     ("DEFECT_ITEM", "결함 Item (시작 버전부터 위험, 해제 버전부터 제외)"),
     ("SAFETY_REQUIRED", "환경·안전 필수 Item (적용 대상인데 미적용이면 위험)"),
 )
 # 유형별로 보이는 연결 칸 (서비스 검사와 같은 필수 항목)
 FIELDS_BY_TYPE = {
     "DIRECT_VERSION": ("release_version_id",),
+    "VERSION_BELOW": ("release_version_id",),
+    "VERSION_ABOVE": ("release_version_id",),
     "DEFECT_ITEM": ("item_id", "start_release_version_id", "end_release_version_id"),
     "SAFETY_REQUIRED": ("item_id",),
 }
@@ -96,6 +100,8 @@ class RiskRuleDialog(QDialog):
                 combo.addItem(text, key)
         visible = FIELDS_BY_TYPE[self.rule_type.currentData()]
         for name, (caption, combo) in self.rows.items():
+            caption.setText("기준 버전" if name == "release_version_id" and
+                            self.rule_type.currentData() in ("VERSION_BELOW", "VERSION_ABOVE") else self.labels[name])
             caption.setVisible(name in visible)
             combo.setVisible(name in visible)
         self._refresh_ok()

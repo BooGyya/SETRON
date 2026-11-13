@@ -3,17 +3,41 @@
 from PySide6.QtCore import QDate, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QTextCharFormat, QTextLayout
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLineEdit, QMenu,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QWidgetAction, QHeaderView, QSizePolicy,
-    QStyle, QStyleOptionFrame, QToolButton,
+    QDialog, QFrame, QHBoxLayout, QLineEdit,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QSizePolicy,
+    QStyle, QStyleOptionFrame, QTabBar, QToolButton,
 )
 
 from setron.features.excel_import.schemas import ImportComparison
+from setron.ui.appearance import set_color_style, ui_color
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
-from setron.ui.calendar_widgets import CalendarWidget
 from setron.ui.query_panel import _WrapRow
-from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, TONES, icon, svg_size
+from setron.ui.theme import ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, icon, svg_size
+
+
+class ImportTabs(QTabBar):
+    """회색 기준선과 선택 밑줄을 같은 좌표에 그리는 가져오기 전용 탭."""
+
+    def __init__(self):
+        super().__init__()
+        self.setExpanding(False)
+        self.setDrawBase(False)
+        set_color_style(self, lambda colors: (
+            "QTabBar {background:transparent;border:0;}"
+            f"QTabBar::tab {{background:transparent;border:0;border-radius:0;margin:0;"
+            f"padding:8px 10px;color:{colors['muted']};}}"
+            f"QTabBar::tab:selected, QTabBar::tab:hover {{color:{colors['accent']};}}"))
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        baseline = QRectF(0, self.height() - 2, self.width(), 2)
+        painter.fillRect(baseline, ui_color(LINE))
+        if self.currentIndex() >= 0:
+            selected = self.tabRect(self.currentIndex())
+            painter.fillRect(QRectF(selected.left(), baseline.top(), selected.width(), baseline.height()),
+                             ui_color(PRIMARY))
 
 
 def import_combo_style():
@@ -39,6 +63,7 @@ class DateField(QLineEdit):
         super().__init__(text, parent)
         # 입력·붙여넣기·삭제·되돌리기는 Qt가 처리하고 숫자 8칸과 구분자만 허용한다.
         self.setInputMask("0000-00-00;_")
+        self.dialog = None
         self.calendar_action = self.addAction(icon("import-ver5/fdb91.svg"), QLineEdit.ActionPosition.TrailingPosition)
         self.calendar_action.setToolTip("달력에서 날짜 선택")
         self.calendar_action.setText("달력에서 날짜 선택")
@@ -55,23 +80,32 @@ class DateField(QLineEdit):
     def open_calendar(self):
         if self.isReadOnly() or not self.isEnabled():
             return
-        if not hasattr(self, "calendar_menu"):
-            menu = QMenu(self)
-            calendar = CalendarWidget(menu)
-            calendar.setGridVisible(True)
-            action = QWidgetAction(menu)
-            action.setDefaultWidget(calendar)
-            menu.addAction(action)
-            choose = lambda day: (self.setText(day.toString("yyyy-MM-dd")), menu.close())
-            calendar.clicked.connect(choose)
-            calendar.activated.connect(choose)
-            self.calendar_menu = menu
-        menu = self.calendar_menu
-        calendar = menu.actions()[0].defaultWidget()
+        from setron.ui.date_range import DateRangeDialog
+
+        if self.dialog is not None:
+            if self.dialog.isVisible():
+                self.dialog.reject()
+                return
+            self.dialog.deleteLater()
         current = QDate.fromString(self.text(), "yyyy-MM-dd")
-        calendar.setSelectedDate(current if current.isValid() else QDate.currentDate())
-        calendar.showSelectedDate()
-        menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+        day = (current if current.isValid() else QDate.currentDate()).toPython()
+        dialog = DateRangeDialog(day, day, single_day=True, parent=self)
+        self.dialog = dialog
+        dialog.accepted.connect(lambda: self.setText(dialog.end.isoformat()) if dialog is self.dialog else None)
+        dialog.open_at(self)
+
+    def keyPressEvent(self, event):
+        if (event.key() == Qt.Key.Key_F4 or
+                event.key() == Qt.Key.Key_Down and event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            self.open_calendar()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def hideEvent(self, event):
+        if self.dialog is not None and self.dialog.isVisible():
+            self.dialog.reject()
+        super().hideEvent(event)
 
 
 class PeriodDateField(DateField):

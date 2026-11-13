@@ -1,13 +1,14 @@
-"""조회 초안 안내와 좁은 화면의 공통 필터 왕복 동작을 검증한다."""
+"""조회 초안 안내와 좁은 화면에서도 펼쳐진 공통 필터를 검증한다."""
 
 from datetime import date, timedelta
 
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QPushButton
 
 from setron.ui.app import create_window
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QuerySelection, QueryState, VersionFilter, preview_catalog
-from test_ui_import_ver5 import own, until  # noqa: F401
+from test_ui_import_ver5 import own  # noqa: F401
 
 
 def test_changed_site_is_visible_as_pending_without_replacing_displayed_data(own):
@@ -27,29 +28,25 @@ def test_changed_site_is_visible_as_pending_without_replacing_displayed_data(own
     assert not panel.status.isVisibleTo(window)
 
 
-def test_compact_filter_keeps_same_query_buttons_and_applied_scope_until_search(own):
+def test_filter_stays_expanded_and_keeps_applied_scope_until_search_on_small_window(own):
     window = own(create_window())
     window.resize(960, 600)
     panel = window.query_panel
     QTest.qWait(40)
-    expanded_height = panel.height()
     search, reset = panel.search_button, panel.reset_button
     panel.apply_draft()
-    until(lambda: panel._collapsed and panel.height() < expanded_height)
-    assert panel.fields_row.isHidden() and panel.actions_row.isHidden()
-    assert panel.compact_summary.isVisibleTo(window) and "전체 범위" in panel.compact_summary.text()
+    QTest.qWait(30)
+    assert panel.fields_row.isVisibleTo(window) and panel.actions_row.isVisibleTo(window)
+    assert not any(control.text() in ("필터 접기", "필터 펼치기") for control in panel.findChildren(QPushButton))
     assert search is panel.search_button and reset is panel.reset_button
     assert search.isVisibleTo(window) and reset.isVisibleTo(window)
     panel.select("site_key", "giheung")
-    assert panel.status.isVisibleTo(window) and "전체 범위" in panel.compact_summary.text()
+    assert panel.status.isVisibleTo(window) and window.query_state.applied.selection.site_key is None
     search.click()
-    until(lambda: "기흥" in panel.compact_summary.text())
-    panel.collapse_button.click()
-    assert not panel._collapsed and panel.fields_row.isVisibleTo(window)
+    assert window.query_state.applied.selection.site_key == "giheung"
+    assert panel.fields_row.isVisibleTo(window) and panel.actions_row.isVisibleTo(window)
     assert panel.query_tools.parentWidget() is panel.fields_row
     assert window.scroll.horizontalScrollBar().maximum() == 0
-    panel.collapse_button.click()
-    assert panel._collapsed and search.isVisibleTo(window)
     reset.click()
     assert window.query_state.draft.site_key is None
     assert window.query_state.applied.selection.site_key == "giheung"
@@ -86,28 +83,23 @@ def test_new_trend_view_does_not_claim_pending_until_user_changes_range(own):
     panel.range_button.range_changed.emit(start + timedelta(days=1), end)
     assert not state.has_pending_changes and panel.status.isVisible()
     panel.apply_draft()
-    panel.set_collapsed(True)
     panel.disable_date_range()
-    assert " ~ " not in panel.compact_summary.text()
-    assert end.isoformat() in panel.compact_summary.text()
+    assert panel._range_signature() is None
+    assert panel.date_edit.isVisible() and panel.date_edit.date().toPython() == end
     panel.set_version_filter(VersionFilter(("v1",)))
     assert panel.version_pending is panel.status and panel.status.isVisible()
 
 
-def test_height_only_resize_updates_auto_compact_without_overriding_manual_expansion(own):
+def test_resizing_width_or_height_never_hides_common_filter_fields(own):
     window = own(create_window())
     window.resize(1600, 960)
     panel = window.query_panel
     panel.apply_draft()
-    until(lambda: not panel._collapsed)
-    window.resize(1600, 600)
-    until(lambda: panel._collapsed)
-    window.resize(1600, 960)
-    until(lambda: not panel._collapsed)
-    window.resize(1600, 600)
-    until(lambda: panel._collapsed)
-    panel.collapse_button.click()
-    assert not panel._collapsed
-    window.resize(1600, 580)
-    QTest.qWait(30)
-    assert not panel._collapsed
+    for size in ((1600, 600), (1600, 960), (960, 600), (1600, 580)):
+        window.resize(*size)
+        QTest.qWait(30)
+        assert panel.fields_row.isVisibleTo(window) and panel.actions_row.isVisibleTo(window)
+        assert all(control.isVisibleTo(window) for control in panel.combos.values())
+        assert panel.query_tools.parentWidget() is panel.fields_row
+        assert panel.search_button.isVisibleTo(window) and panel.reset_button.isVisibleTo(window)
+        assert window.scroll.horizontalScrollBar().maximum() == 0

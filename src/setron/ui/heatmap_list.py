@@ -3,7 +3,7 @@
 from collections import OrderedDict
 from math import floor
 
-from PySide6.QtCore import QEvent, QModelIndex, QSignalBlocker, Qt
+from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QSignalBlocker, QSize, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QApplication, QHeaderView, QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QTreeView
 
@@ -177,6 +177,26 @@ class HeatmapListModel(QStandardItemModel):
 
 
 class _HeatmapTreeDelegate(QStyledItemDelegate):
+    SIZE_CACHE_LIMIT = 32768
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._sizes, self._size_context = OrderedDict(), None
+        parent.installEventFilter(self)
+        model = parent.model()
+        for signal in (model.dataChanged, model.modelReset, model.layoutChanged, model.rowsInserted,
+                       model.rowsRemoved, model.columnsInserted, model.columnsRemoved):
+            signal.connect(self._clear_sizes)
+
+    def _clear_sizes(self, *_):
+        self._sizes.clear()
+
+    def eventFilter(self, watched, event):
+        if watched is self.parent() and event.type() in (QEvent.Type.StyleChange, QEvent.Type.FontChange,
+                                                       QEvent.Type.ApplicationFontChange):
+            self._clear_sizes()
+        return super().eventFilter(watched, event)
+
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
         if index.column() == 0:
@@ -184,9 +204,22 @@ class _HeatmapTreeDelegate(QStyledItemDelegate):
             option.textElideMode = Qt.TextElideMode.ElideRight
 
     def sizeHint(self, option, index):
+        view = self.parent()
+        context = view.compact, view.wordWrap(), view.font().key()
+        if context != self._size_context:
+            self._clear_sizes()
+            self._size_context = context
+        key = QPersistentModelIndex(index), option.rect.width()
+        cached = self._sizes.get(key)
+        if cached is not None:
+            self._sizes.move_to_end(key)
+            return QSize(cached)
         size = super().sizeHint(option, index)
-        minimum = 32 if index.data(HeatmapListModel.GROUP_ROLE) else 34 if self.parent().compact else 46
+        minimum = 32 if index.data(HeatmapListModel.GROUP_ROLE) else 34 if view.compact else 46
         size.setHeight(max(minimum, size.height()))
+        self._sizes[key] = QSize(size)
+        if len(self._sizes) > self.SIZE_CACHE_LIMIT:
+            self._sizes.popitem(last=False)
         return size
 
 
@@ -199,6 +232,12 @@ class HeatmapTreeView(QTreeView):
         self._collapsed_keys = set()
         self._expansion_depth = -1
         self._fitting_height = False
+        self._mouse_press_active = False
+        self._pressed_group = QPersistentModelIndex()
+        self._geometry_pending = False
+        self._geometry_timer = QTimer(self)
+        self._geometry_timer.setSingleShot(True)
+        self._geometry_timer.timeout.connect(self._update_geometry)
         self._resizing_columns = False
         self._row_heights, self._last_compact = {}, self.compact
         self._height_capped = False
@@ -207,7 +246,7 @@ class HeatmapTreeView(QTreeView):
         self._measured_widths, self._name_width = {}, 220
         self.setModel(model)
         self.setAccessibleName(name)
-        self.setAccessibleDescription("분류를 펼치거나 접고 설비를 선택합니다. 좌우 방향키로 분류를 탐색합니다.")
+        self.setAccessibleDescription("분류 이름이나 화살표를 눌러 펼치거나 접고 설비를 선택합니다. 좌우 방향키로 분류를 탐색합니다.")
         self.setMinimumWidth(0)
         self.setMinimumHeight(260)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -215,7 +254,7 @@ class HeatmapTreeView(QTreeView):
         self.setItemDelegate(_HeatmapTreeDelegate(self))
         self.setRootIsDecorated(True)
         self.setItemsExpandable(True)
-        self.setExpandsOnDoubleClick(True)
+        self.setExpandsOnDoubleClick(False)
         self.setIndentation(22)
         self.setUniformRowHeights(False)
         self.setAllColumnsShowFocus(True)
@@ -249,6 +288,8 @@ class HeatmapTreeView(QTreeView):
         self.addAction(self.copy_name_action)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
         self.selectionModel().currentChanged.connect(self._sync_copy_action)
+        model.modelAboutToBeReset.connect(self._cancel_mouse_press)
+        model.rowsAboutToBeRemoved.connect(self._cancel_mouse_press)
 
     def _sync_copy_action(self, current, previous=None):
         self.copy_name_action.setEnabled(current.isValid() and current.data(Qt.ItemDataRole.UserRole) is not None)
@@ -341,6 +382,59 @@ class HeatmapTreeView(QTreeView):
                 self._collapsed_keys.discard(key)
             else:
                 self._collapsed_keys.add(key)
+        # Qt가 트리의 펼침 상태를 변경하는 중에는 레이아웃을 다시 실행하지 않는다.
+        self._schedule_geometry()
+
+    def mousePressEvent(self, event):
+        index = self.indexAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._mouse_press_active = True
+            name_pressed = (index.isValid() and index.column() == 0 and index.data(HeatmapListModel.GROUP_ROLE)
+                            and self.model().hasChildren(index) and self.visualRect(index).contains(event.position().toPoint()))
+            self._pressed_group = QPersistentModelIndex(index) if name_pressed else QPersistentModelIndex()
+        try:
+            super().mousePressEvent(event)
+        except Exception:
+            self._cancel_mouse_press()
+            raise
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().mouseReleaseEvent(event)
+        group = self._pressed_group
+        released = self.indexAt(event.position().toPoint())
+        toggle = (self._mouse_press_active and group.isValid() and released == group
+                  and self.visualRect(released).contains(event.position().toPoint()))
+        try:
+            super().mouseReleaseEvent(event)
+        finally:
+            self._cancel_mouse_press()
+        if toggle and group.isValid():
+            # 이름 클릭은 같은 분류에서 버튼을 놓았을 때 완료한다. 화살표는 Qt가 처리한다.
+            index = QModelIndex(group)
+            self.setExpanded(index, not self.isExpanded(index))
+
+    def _cancel_mouse_press(self, *_):
+        if not hasattr(self, "_geometry_timer"):
+            return
+        self._mouse_press_active = False
+        self._pressed_group = QPersistentModelIndex()
+        if self._geometry_pending:
+            self._schedule_geometry()
+
+    def _schedule_geometry(self):
+        self._geometry_pending = True
+        if self._mouse_press_active:
+            return
+        if not self._geometry_timer.isActive():
+            self._geometry_timer.start(0)
+
+    def _update_geometry(self):
+        if self._mouse_press_active:
+            # 물리 클릭의 누름/놓음 사이에 높이를 바꾸면 바깥 스크롤이 클릭 대상을 옮긴다.
+            return
+        self._geometry_pending = False
+        self.resize_columns()
         self.fit_height()
 
     def _apply_expansion_depth(self, depth):
@@ -364,6 +458,7 @@ class HeatmapTreeView(QTreeView):
         self.fit_height()
 
     def set_groups(self, nodes, row_factory):
+        self._cancel_mouse_press()
         current = self.currentIndex()
         equipment_id = current.data(Qt.ItemDataRole.UserRole)
         preferred_key = current.data(HeatmapListModel.KEY_ROLE)
@@ -476,6 +571,9 @@ class HeatmapTreeView(QTreeView):
 
     def resize_columns(self):
         model = self.model()
+        if self._mouse_press_active:
+            self._schedule_geometry()
+            return False
         if self._resizing_columns or model is None or model._rebuilding:
             return False
         changed = False
@@ -500,11 +598,13 @@ class HeatmapTreeView(QTreeView):
                    for column in range(self.model().columnCount(index.parent())) if not self.isColumnHidden(column))
 
     def fit_height(self):
+        if self._mouse_press_active:
+            self._schedule_geometry()
+            return
         if self._fitting_height or self.model() is None or self.model()._rebuilding:
             return
         self._fitting_height = True
         try:
-            self.executeDelayedItemsLayout()
             height, model = self.header().height() + 2 * self.frameWidth() + 4, self.model()
             self._row_heights = {}
 
@@ -534,12 +634,17 @@ class HeatmapTreeView(QTreeView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if event.size().width() != event.oldSize().width():
-            self.resize_columns()
-            self.fit_height()
+            self._schedule_geometry()
 
     def viewportEvent(self, event):
+        if event.type() in (QEvent.Type.UngrabMouse, QEvent.Type.Hide, QEvent.Type.WindowDeactivate):
+            self._cancel_mouse_press()
         result = super().viewportEvent(event)
         if event.type() == QEvent.Type.Resize:
-            self.resize_columns()
-            self.fit_height()
+            self._schedule_geometry()
         return result
+
+    def changeEvent(self, event):
+        if event.type() in (QEvent.Type.WindowDeactivate, QEvent.Type.EnabledChange):
+            self._cancel_mouse_press()
+        super().changeEvent(event)

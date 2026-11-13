@@ -229,7 +229,8 @@ class ImportProgressDialog(ImportDialog):
         self.message = self.add_message("")
         self.progress = ImportBusyBar()
         self.body.addWidget(self.progress)
-        self.hint = label("완료되면 자동으로 닫힙니다.", 12, color=SECONDARY, wrap=True)
+        self.hint = label("", 12, color=SECONDARY, wrap=True)
+        self.hint.hide()
         self.body.addWidget(self.hint)
         self.operation = None
 
@@ -264,7 +265,6 @@ class ImportProgressDialog(ImportDialog):
         self.setWindowTitle(title)
         self.message.setText(text)
         self.message.scroll_area.setFixedHeight(max(38, min(90, self.message.heightForWidth(self.dialog_width - 104) + 8)))
-        self.hint.setText("완료되면 자동으로 닫힙니다. 잠시만 기다려 주세요.")
         self.progress.setRange(0, 0)
         if not visible:
             self.hide()
