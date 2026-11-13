@@ -59,7 +59,8 @@ def test_export_keeps_legacy_item_jira_from_import_and_seed_with_existing_filter
                 assert book.sheetnames == ["설비현황표", "릴리즈노트"]
                 row = records(book["릴리즈노트"])[0]
                 assert row["내용"] == "현재 저장된 개선 내용"
-                assert row["Jira 코드"] == "ETOJ-101, ETOJ-102, ABC-77"
+                # JIRA 열이 있으면 비고 열의 코드는 합치지 않는다 (11-12 멘토 답변 · 가져오기 규칙과 같음, 11-13)
+                assert row["Jira 코드"] == "ETOJ-101, ETOJ-102"
     assert records(build_management_workbook(storage, batch_ids=(batch_id,), production_area="FOUNDRY")["릴리즈노트"]) == []
     assert {table: all_rows(storage, table) for table in before} == before
 
@@ -95,7 +96,7 @@ def test_unlinked_legacy_item_can_export_jira_from_merged_source_batches(legacy_
             {"batch_id": other["batch_id"], "sheet": "추가", "cells": ["B2"]}]}})
     rows = records(build_management_workbook(storage, batch_ids=(other["batch_id"],))["릴리즈노트"])
     assert len(rows) == 1 and not rows[0]["버전(원문)"]
-    assert rows[0]["Jira 코드"] == "ETOJ-101, ETOJ-102, ABC-77, ETOJ-103"
+    assert rows[0]["Jira 코드"] == "ETOJ-101, ETOJ-102, ETOJ-103"
 
 
 def test_legacy_jira_cell_is_literal_text_even_when_it_starts_with_formula_prefix(legacy_storage, tmp_path):
@@ -106,7 +107,7 @@ def test_legacy_jira_cell_is_literal_text_even_when_it_starts_with_formula_prefi
     with closing(load_workbook(path)) as book:
         sheet = book["릴리즈노트"]
         column = [cell.value for cell in sheet[1]].index("Jira 코드") + 1
-        assert sheet.cell(2, column).value == "=1+1, ABC-77"
+        assert sheet.cell(2, column).value == "=1+1"
         assert sheet.cell(2, column).data_type == "s"
 
 
