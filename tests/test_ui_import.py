@@ -435,11 +435,12 @@ def test_release_note_flow_saves_items_without_equipment_fields(page, saver):
     extracted(page, book=RELEASE_BOOK, sheet="Release")
     assert page.row_model.headings[2:] == (
         "SW 버전 원문", "출시일", "Item 번호", "변경 내용", "Jira 코드", "대상 모델",
-        "설비군", "모델명", "SW 계열", "UI 구분", "구조 구분", "개조 정보", "개조 적용 표식",
+        "설비군", "모델명", "SW 계열", "UI 구분", "Inline/Cluster", "개조 정보", "개조 적용 표식",
         "Memory/Foundry", "확인된 순서", "접미사", "Item 매핑",
     )
     assert "설비 호기" not in page.row_model.headings and "기준일" not in page.row_model.headings
-    physical_fields = {"base_date", "site", "line", "equipment_code", "pm_name", "engine_version", "epd_version"}
+    physical_fields = {"base_date", "site", "line", "equipment_code", "pm_name", "process_name",
+                       "engine_version", "epd_version"}
     assert physical_fields.isdisjoint(page.draft.fields)
     assert page.save_button.isEnabled()
     page.save()

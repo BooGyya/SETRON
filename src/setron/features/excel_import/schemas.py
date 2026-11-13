@@ -31,7 +31,7 @@ FIELD_LABELS = {
     "pm_name": "PM", "family_name": "SW 계열", "version_raw": "SW 버전 원문",
     "release_date": "출시일", "item_no": "Item 번호", "content": "변경 내용", "jira_code": "Jira 코드",
     "target_models": "대상 모델",
-    "ui_type": "UI 구분", "structure_type": "구조 구분", "geometry_type": "형상",
+    "ui_type": "UI 구분", "structure_type": "Inline/Cluster", "geometry_type": "형상", "process_name": "공정",
     "modification_type": "개조 정보", "modification_mark": "개조 적용 표식",
     "engine_version": "Engine 버전", "epd_version": "EPD 버전",
     "version_order": "확인된 순서", "version_suffix": "접미사", "item_mapping_status": "Item 매핑",
