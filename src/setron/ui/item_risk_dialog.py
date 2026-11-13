@@ -22,9 +22,9 @@ from setron.ui.version_data import family_display_name
 
 
 VERSION_CRITERIA = (
-    ("VERSION_BELOW", "{version} 미만 버전"),
-    ("DIRECT_VERSION", "{version} 동일 버전"),
-    ("VERSION_ABOVE", "{version} 초과 버전"),
+    ("VERSION_BELOW", "버전 미만"),
+    ("DIRECT_VERSION", "버전 일치"),
+    ("VERSION_ABOVE", "버전 초과"),
 )
 
 

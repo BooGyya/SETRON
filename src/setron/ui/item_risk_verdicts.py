@@ -16,21 +16,21 @@ from setron.features.risk.item_scope import targets
 from setron.features.risk.schemas import RiskStatus, RuleType
 from setron.features.risk.service import RiskAssessor
 from setron.ui.appearance import ui_color
-from setron.ui.components import StatusBadge, button, label
+from setron.ui.components import button, label
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.item_risk_dialog import PopupDialog, choice, field, warning_icon
 from setron.ui.import_dialogs import ImportConfirmDialog
 from setron.ui.read_worker import BackgroundRead, ReadRequest
-from setron.ui.theme import SECONDARY, TONES, paint_font
+from setron.ui.theme import INK, LINE, SECONDARY, TONES, paint_font
 
 STATUS_CAPTIONS = {RiskStatus.RISK: "위험 후보", RiskStatus.UNKNOWN: "미확인", RiskStatus.NO_RISK: "위험 없음"}
 STATUS_TONES = {RiskStatus.RISK: "danger", RiskStatus.UNKNOWN: "warning", RiskStatus.NO_RISK: "success"}
 UNKNOWN_HINT = "버전·관측 자료가 없어 위험 여부를 판단할 수 없음"
-IMPACT_UNKNOWN_HINT = "설비 관측 자료가 없거나 판정을 계산할 수 없어 대수를 세지 못했습니다. 저장은 그대로 할 수 있습니다."
+IMPACT_UNKNOWN_HINT = "관측 자료가 부족해 적용 대상 수를 확인할 수 없습니다."
 DISABLED_CAPTION = "해제됨"
 CONDITIONS = {
     RuleType.SAFETY_REQUIRED: "대상 PM에 필수 Item이 적용되지 않으면 위험 후보로 판정합니다.",
-    RuleType.DIRECT_VERSION: "버전 동일",
+    RuleType.DIRECT_VERSION: "버전 일치",
     RuleType.VERSION_BELOW: "버전 미만",
     RuleType.VERSION_ABOVE: "버전 초과",
     RuleType.DEFECT_ITEM: "시작 버전부터 해제 버전 전까지 결함 Item이 포함된 SW를 사용하면 위험 후보로 판정합니다.",
@@ -59,10 +59,10 @@ def rule_reference(data, rule):
     return releases.get(rule.release_version_id, "미확인")
 
 
-def resize_rule_dialog(dialog, *, has_table=True):
+def resize_rule_dialog(dialog):
     """기준 목록과 상세 창에 같은 크기와 화면 여백을 적용한다."""
     screen = dialog.screen() or QGuiApplication.primaryScreen()
-    width, height = 780, 700 if has_table else 440
+    width, height = 780, 700
     if screen is not None:
         available = screen.availableGeometry()
         width = min(width, available.width() - 32)
@@ -79,14 +79,14 @@ def software_versions(record, rule):
     return " / ".join(versions) or "버전 미입력"
 
 
-def _action_tone(widget, tone):
-    background, ink, border = TONES[tone]
+def _action_style(widget, *, danger=False):
+    ink = TONES["danger"][1] if danger else INK
     widget.setStyleSheet(
-        f"QPushButton {{background:{background};color:{ink};border:1px solid {border};"
+        f"QPushButton {{background:white;color:{ink};border:1px solid {LINE};"
         "border-radius:10px;padding:8px 18px;}"
-        f"QPushButton:hover {{border-color:{ink};}}"
-        f"QPushButton:pressed {{background:{border};}}"
-        f"QPushButton:focus {{border:2px solid {ink};padding:7px 17px;}}"
+        "QPushButton:hover {background:#f1f3f6;border-color:#aab2bf;}"
+        "QPushButton:pressed {background:#e7ebf0;}"
+        "QPushButton:focus {border:2px solid #8b95a8;padding:7px 17px;}"
         "QPushButton:disabled {background:#f9fafb;color:#8b95a8;border-color:#e9eef6;}")
 
 
@@ -115,12 +115,7 @@ def rule_verdicts(data, rule):
 
 
 def toggle_impact(data, rule):
-    """기준을 해제(또는 다시 사용)하면 위험 후보에서 빠지는(더해지는) 설비 수. 계산할 수 없으면 None.
-
-    등록 영향 미리보기(preview_rule_impact)를 그대로 쓴다. 이 기준을 뺀 나머지 기준을 '기존', 이 기준을
-    켠 상태를 '초안'으로 두면, 초안 때문에 새로 위험 후보가 되는 설비가 곧 해제 시 빠지는 설비다.
-    다른 기준으로도 위험 후보인 설비는 세지 않는다. 관측 자료가 없거나 계산에 실패하면 0대로 쓰지 않는다.
-    """
+    """현재 기준에 해당하는 전체 설비 수. 다른 기준과 겹치는 대상도 포함하고 확인 불가는 None이다."""
     if data is None or rule is None or not data.observations_connected or not data.records:
         return None
     try:
@@ -130,17 +125,14 @@ def toggle_impact(data, rule):
                                      data.records, base_date=data.base_date)
     except Exception:  # noqa: BLE001 - 확인 창은 계산 실패를 '확인 불가'로만 알린다
         return None
-    return None if impact.problems else impact.newly_risky
+    return None if impact.problems else impact.count(RiskStatus.RISK)
 
 
 def toggle_message(enabled, count):
-    """확인 창의 영향 문구. ``enabled``는 바꾼 뒤 상태(True=다시 사용)다."""
-    verb = "다시 사용하면" if enabled else "해제하면"
+    """상태 변경 방향과 관계없이 선택한 기준의 적용 대상 수를 표시한다."""
     if count is None:
-        return f"{verb} 바뀌는 위험 후보 수: 확인 불가"
-    if count == 0:
-        return f"{verb} 위험 후보 설비 수는 바뀌지 않습니다 (0대)."
-    return f"{verb} 위험 후보 {count}대가 {'추가됩니다' if enabled else '빠집니다'}."
+        return "적용 대상 확인 불가"
+    return f"적용 대상 {count}건"
 
 
 class RuleToggleConfirmDialog(PopupDialog):
@@ -148,24 +140,29 @@ class RuleToggleConfirmDialog(PopupDialog):
 
     def __init__(self, parent, rule, enabled, count):
         name = rule.display_name or rule.risk_reason
-        super().__init__(parent, "위험 기준을 다시 사용할까요?" if enabled else "위험 기준을 해제할까요?")
+        super().__init__(parent, "위험 기준을 다시 사용할까요?" if enabled else "위험 기준을 해제할까요?",
+                         show_close=False)
         self.setWindowTitle("위험 기준 다시 사용 확인" if enabled else "위험 기준 해제 확인")
         self.count = count
-        self.rule_label = label(name, 13, color=SECONDARY, wrap=True)
+        self.rule_label = label(" ".join(name.split()), 14, medium=True, color=INK, wrap=True)
         self.message = label(toggle_message(enabled, count), 14, medium=True, wrap=True)
-        if count is None:
-            self.message.setStyleSheet(f"color:{TONES['warning'][1]};")
-        self.unknown = label(IMPACT_UNKNOWN_HINT, 12, color=SECONDARY, wrap=True)
+        self.unknown = label(IMPACT_UNKNOWN_HINT, 13, color=SECONDARY, wrap=True)
         self.unknown.setVisible(count is None)
-        hint = ("다시 사용하면 대시보드 위험 후보·히트맵·아이템 목록 배지에 다시 반영됩니다." if enabled else
-                "기준은 지우지 않고 '해제됨'으로 남습니다. 위험 기준 상세에서 언제든 다시 사용할 수 있습니다.")
-        self.hint = label(hint, 12, color=SECONDARY, wrap=True)
-        for widget in (self.rule_label, self.message, self.unknown, self.hint):
+        hint = ("다시 사용하면 대시보드와 히트맵의 위험 판정에 반영됩니다." if enabled else
+                "해제한 기준은 삭제되지 않습니다. 상세 화면에서 언제든 다시 사용할 수 있습니다.")
+        self.hint = label(hint, 14, color=INK, wrap=True)
+        for widget in (self.rule_label, self.hint, self.unknown):
             self.body.addWidget(widget)
         row = QHBoxLayout()
+        row.setContentsMargins(0, 8, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(self.message, alignment=Qt.AlignmentFlag.AlignVCenter)
         row.addStretch()
         self.cancel_button = button("취소")
-        self.confirm_button = button("다시 사용" if enabled else "해제", primary=True)
+        self.confirm_button = button("다시 사용" if enabled else "해제")
+        for action in (self.cancel_button, self.confirm_button):
+            _action_style(action)
+            action.setMinimumHeight(40)
         self.cancel_button.setDefault(True)
         self.confirm_button.setAutoDefault(False)
         self.cancel_button.clicked.connect(self.reject)
@@ -261,30 +258,19 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.rule_name = label("", 13, medium=True, wrap=True)
         self.reference_text = label("", 13, wrap=True)
         self.condition_text = label("", 13, wrap=True)
-        self.state_chip = StatusBadge(DISABLED_CAPTION)
-        self.state_chip.setToolTip("해제한 기준은 위험 후보 판정에 쓰지 않습니다. '다시 사용'으로 되돌릴 수 있습니다.")
         self.toggle_button = button("해제")
         self.toggle_button.clicked.connect(self._toggle_clicked)
-        name_row = QHBoxLayout()
-        name_row.setContentsMargins(0, 0, 0, 0)
-        name_row.addWidget(self.rule_name, 1)
-        name_row.addWidget(self.state_chip)
-        for row, (caption, value) in enumerate((("위험 기준명", name_row), ("기준 버전", self.reference_text),
+        for row, (caption, value) in enumerate((("위험 기준명", self.rule_name), ("기준 버전", self.reference_text),
                                                ("판정 기준", self.condition_text))):
             condition.addWidget(label(caption, 12, medium=True, color=SECONDARY), row, 0,
                                 Qt.AlignmentFlag.AlignTop)
-            if isinstance(value, QHBoxLayout):
-                condition.addLayout(value, row, 1)
-            else:
-                value.setMinimumWidth(0)
-                condition.addWidget(value, row, 1)
+            value.setMinimumWidth(0)
+            condition.addWidget(value, row, 1)
         self.edit_button, self.delete_button = button("수정"), button("삭제")
         self.edit_button.setToolTip("현재 선택한 위험 기준을 수정합니다.")
         self.delete_button.setToolTip("현재 선택한 위험 기준 한 건만 삭제합니다.")
         self.edit_button.clicked.connect(lambda: self._load_rule("edit"))
         self.delete_button.clicked.connect(lambda: self._load_rule("delete"))
-        _action_tone(self.edit_button, "info")
-        _action_tone(self.delete_button, "danger")
         outer.addWidget(self.condition_box)
         self.mutation_notice = label("", 12, color=SECONDARY, wrap=True)
         self.mutation_notice.hide()
@@ -314,17 +300,17 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.table.setStyleSheet(self.table.styleSheet().replace("text-align:left", "text-align:center"))
         self.table.setItemDelegateForColumn(2, _VerdictDelegate(self.table))
         outer.addWidget(self.table, 1)
-        # 자료가 없으면 표와 필터 대신 안내 한 블록만 둔다. 조건 박스(실선·회색 배경)와 달리 점선 테두리·가운데 정렬로 구분한다.
+        # 판정 자료가 없거나 해제된 경우에는 테두리 없이 간결한 안내만 표시한다.
         self.notice = QFrame()
         self.notice.setObjectName("verdictNotice")
-        self.notice.setStyleSheet("QFrame#verdictNotice {background:white;border:1px dashed #c9d1e0;border-radius:8px;}")
+        self.notice.setStyleSheet("QFrame#verdictNotice {background:transparent;border:0;}")
         notice = QVBoxLayout(self.notice)
         notice.setContentsMargins(16, 22, 16, 22)
         notice.setSpacing(6)
         self.notice_icon = QLabel()
         self.notice_icon.setPixmap(warning_icon("#b8c1d3", 22).pixmap(22, 22))
         self.notice_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.notice_text = label("", 13, color=SECONDARY, wrap=True)
+        self.notice_text = label("", 14, color=INK, wrap=True)
         self.notice_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
         notice.addWidget(self.notice_icon)
         notice.addWidget(self.notice_text)
@@ -332,10 +318,11 @@ class ItemRuleVerdictDialog(PopupDialog):
         outer.addStretch(0)
         footer = QHBoxLayout()
         footer.setSpacing(8)
-        self.close_button = button("닫기", primary=True)
+        self.close_button = button("닫기")
         self.close_button.clicked.connect(self.accept)
         footer.addStretch()
         for action in (self.toggle_button, self.edit_button, self.delete_button, self.close_button):
+            _action_style(action, danger=action is self.delete_button)
             action.setMinimumWidth(84)
             action.setMinimumHeight(40)
             action.setAutoDefault(False)
@@ -346,8 +333,7 @@ class ItemRuleVerdictDialog(PopupDialog):
             combo.currentIndexChanged.connect(self._render)
         self.site.currentIndexChanged.connect(self._site_changed)
         self._rule_changed()
-        has_table = not self.table.isHidden()
-        resize_rule_dialog(self, has_table=has_table)
+        resize_rule_dialog(self)
 
     def _rule_changed(self, *_):
         self.mutation_request.cancel()
@@ -361,9 +347,7 @@ class ItemRuleVerdictDialog(PopupDialog):
         self.rule_name.setText(" ".join(name.split()))
         self.verdicts = rule_verdicts(data, rule) if rule else []
         if rule:
-            self.state_chip.setVisible(not rule.is_enabled)
             self.toggle_button.setText("해제" if rule.is_enabled else "다시 사용")
-            _action_tone(self.toggle_button, "warning" if rule.is_enabled else "success")
             self.toggle_button.setAccessibleName(("위험 기준 해제 · " if rule.is_enabled else "위험 기준 다시 사용 · ") + name)
             self.toggle_button.setEnabled(self.toggle_allowed)
             self.toggle_button.setToolTip("" if self.toggle_allowed else "DB에 연결된 경우에만 기준을 해제·다시 사용할 수 있습니다.")
@@ -373,7 +357,7 @@ class ItemRuleVerdictDialog(PopupDialog):
         if rule is None:
             message = "이 Item에 등록된 위험 기준이 없습니다."
         elif not rule.is_enabled:
-            message = "해제된 위험 기준이라 판정하지 않습니다. '다시 사용'을 누르면 위험 후보 판정에 다시 반영됩니다."
+            message = "해제된 기준은 위험 판정에 반영되지 않습니다.\n다시 적용하려면 하단의 ‘다시 사용’을 눌러 주세요."
         elif not data.observations_connected:
             message = "설비 관측 자료가 없어 판정할 설비가 없습니다."
         elif not has_rows:

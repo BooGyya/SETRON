@@ -13,7 +13,7 @@ from setron.ui.theme import SECONDARY
 
 _CRITERIA = {
     RuleType.VERSION_BELOW: "버전 미만",
-    RuleType.DIRECT_VERSION: "버전 동일",
+    RuleType.DIRECT_VERSION: "버전 일치",
     RuleType.VERSION_ABOVE: "버전 초과",
     RuleType.SAFETY_REQUIRED: "필수 Item 미적용",
     RuleType.DEFECT_ITEM: "범위 내 사용",
@@ -32,7 +32,7 @@ class ItemRuleListDialog(PopupDialog):
              if rule.item_id == item_id and (family_id is None or rule.family_id == family_id)),
             key=lambda rule: (not rule.is_enabled, rule.risk_rule_id)))
         active = sum(rule.is_enabled for rule in self.rules)
-        self.count = label(f"등록된 위험 기준 {len(self.rules)}건 · 사용 중 {active}건",
+        self.count = label(f"등록된 위험 기준 {len(self.rules)}건 · 적용됨 {active}건",
                            13, color=SECONDARY, wrap=True)
         self.count.setAccessibleName("등록된 위험 기준 수")
         self.body.addWidget(self.count)
@@ -54,7 +54,7 @@ class ItemRuleListDialog(PopupDialog):
         for index, rule in enumerate(self.rules):
             name = rule.display_name or rule.risk_reason
             rows.append((" ".join(name.split()), rule_reference(data, rule), _CRITERIA[rule.rule_type],
-                         "사용 중" if rule.is_enabled else "해제됨"))
+                         "적용됨" if rule.is_enabled else "해제됨"))
             tooltips[index, 0] = name
             tones[index, 3] = "success" if rule.is_enabled else "neutral"
         self.model.set_rows(rows, tuple(rule.risk_rule_id for rule in self.rules),
@@ -75,7 +75,7 @@ class ItemRuleListDialog(PopupDialog):
         self.close_button.clicked.connect(self.reject)
         footer.addWidget(self.close_button)
         self.body.addLayout(footer)
-        resize_rule_dialog(self, has_table=bool(self.rules))
+        resize_rule_dialog(self)
         if self.rules:
             self.table.selectRow(0)
             self.table.setFocus()
