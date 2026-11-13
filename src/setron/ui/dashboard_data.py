@@ -9,6 +9,7 @@ from typing import Callable, Mapping
 
 from setron.features.aggregation.schemas import EquipmentRecord, Summary
 from setron.features.aggregation.service import Targets, summarize
+from setron.features.production_area import production_area_text
 from setron.features.risk.schemas import RiskStatus
 from setron.features.targets.groups import with_saved_groups
 from setron.features.version.groups import VersionGroups
@@ -234,10 +235,10 @@ def family_name(source, family_id) -> str:
     """화면 표시용 계열 이름. DB 공급자는 이름을 갖고, 이름이 없는 합성 자료는 번호를 그대로 쓴다."""
     names = getattr(source, "family_names", None) or {}
     if family_id in names:
-        return names[family_id]
+        return production_area_text(names[family_id])
     for pair in getattr(getattr(source, "version_catalog", None), "pairs", ()):
         if pair.family_id == family_id:
-            return pair.family_name
+            return production_area_text(pair.family_name)
     return str(family_id)
 
 

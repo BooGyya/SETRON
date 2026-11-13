@@ -3,15 +3,49 @@
 from PySide6.QtCharts import QBarCategoryAxis, QBarSet, QChart, QChartView, QLineSeries, QPieSeries, QStackedBarSeries, QValueAxis
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from setron.ui.appearance import readable_ink
 from setron.ui.chat_export import chart_png
+from setron.ui.components import button
 from setron.ui.import_dialogs import ImportBusyBar, ImportDialog
 from setron.ui.theme import INK, PRIMARY
 from setron.ui.report_figures import paper_font
 
 COLORS = ("#3c5ce9", "#293b66", "#9ca3af")
+
+
+class ReportNoticeDialog(ImportDialog):
+    def __init__(self, text, parent=None, *, title="보고서 생성 안내"):
+        super().__init__(title, parent)
+        self.message = self.add_message(text)
+        self.confirm_button = self.add_action("확인", self.accept, primary=True, default=True)
+        self.finish_layout()
+
+
+class ReportFormatDialog(ImportDialog):
+    def __init__(self, parent=None):
+        super().__init__("보고서 형식 선택", parent)
+        self.selected_format = None
+        self.add_message("미리보기로 확인할 보고서 형식을 선택해 주세요.")
+        choices = QHBoxLayout()
+        choices.setSpacing(12)
+        self.format_buttons = {}
+        for key, title in (("docx", "Word (.docx)"), ("pdf", "PDF (.pdf)")):
+            control = button(title)
+            control.setMinimumHeight(48)
+            control.setAutoDefault(False)
+            control.clicked.connect(lambda checked=False, format_=key: self.choose(format_))
+            choices.addWidget(control, 1)
+            self.format_buttons[key] = control
+        self.body.addLayout(choices)
+        self.cancel_button = self.add_action("취소", self.reject, default=True)
+        self.finish_layout()
+
+    def choose(self, format_):
+        if self.selected_format is None and format_ in self.format_buttons:
+            self.selected_format = format_
+            self.accept()
 
 
 class GenerationDialog(ImportDialog):

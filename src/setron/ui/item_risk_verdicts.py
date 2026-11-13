@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from setron.features.risk.impact import preview_rule_impact
 from setron.features.risk.item_scope import targets
-from setron.features.risk.schemas import RiskStatus, RuleType
+from setron.features.risk.schemas import RiskStatus, RuleType, criterion_label
 from setron.features.risk.service import RiskAssessor
 from setron.ui.appearance import ui_color
 from setron.ui.components import StatusBadge, button, label
@@ -36,8 +36,7 @@ CONDITIONS = {
 
 
 def category(rule):
-    return rule.category or {RuleType.SAFETY_REQUIRED: "환경안전 필수", RuleType.DEFECT_ITEM: "결함 버전",
-                             RuleType.DIRECT_VERSION: "결함 버전"}[rule.rule_type]
+    return criterion_label(rule.rule_type)  # 판정 기준 이름 2종(사용 시 위험 / 미적용 시 위험)으로 보인다.
 
 
 def repeats_item(name, content):

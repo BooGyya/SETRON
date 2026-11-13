@@ -185,7 +185,7 @@ _GROUP_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:M-)?([OC][0-9])(?![0-9])")
 _VERSION = re.compile(r"(?<![\w.])[vV]\d[0-9A-Za-z._\-+]*")   # 영문·숫자·기호만 ('v3.52_20을'의 조사를 붙여 읽지 않게)
 _NAME_LIKE = re.compile(r"(?<![A-Za-z0-9가-힣])[A-Za-z][A-Za-z0-9\-+]{1,9}(?![A-Za-z0-9가-힣])")
 _NAME_STOP = {"ai", "sw", "pm", "ui", "n", "vs", "ok", "excel", "hpa", "fab", "id", "db", "sql", "api", "kpi", "or", "and",
-              "m", "v", "x", "top", "n+1", "n-1", "n-2", "pc", "hw", "fw", "epd", "qa", "mes"}
+              "m", "v", "x", "top", "n+1", "n-1", "n-2", "pc", "hw", "fw", "epd", "qa", "mes", "memory", "foundry"}
 _VERSION_SPAN = re.compile(r"(?<![\w.])[vV]\d+[._][0-9A-Za-z._\-+]*")    # 점·밑줄이 있어야 버전 (V1 라인과 구분)
 _DATE = re.compile(r"(20\d\d)[-./](\d{1,2})[-./](\d{1,2})")
 _MONTH = re.compile(r"(?<!\d)(1[0-2]|[1-9])\s*월")
@@ -245,7 +245,8 @@ def detect_verdict(question: str) -> Verdict | None:
 
 def detect_areas(question: str) -> tuple[str, ...]:
     text = _norm(question)
-    return tuple(area for area, word in (("MEMORY", "메모리"), ("FOUNDRY", "파운드리")) if word in text)
+    return tuple(area for area, korean, english in (("MEMORY", "메모리", "memory"), ("FOUNDRY", "파운드리", "foundry"))
+                 if korean in text or re.search(r"(?<![a-z])" + english + r"(?![a-z])", text))
 
 
 def detect_group_by(question: str) -> GroupBy | None:

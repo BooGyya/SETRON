@@ -32,7 +32,7 @@ CATEGORIES = ("POLY", "OXIDE", "KCTC")
 SITES_KEY = "registered_sites.v1"
 LINES_KEY = "registered_lines.v1"
 INDEPENDENT_KEY = "independent_groups.v1"
-FABS = {"MEMORY": "메모리", "FOUNDRY": "파운드리"}
+FABS = {"MEMORY": "Memory", "FOUNDRY": "Foundry"}
 # 직접 만든 현황표의 열 (시연 현황표와 같은 순서)
 MANUAL_HEADERS = {"A": ("No", None), "B": ("Line", "line"), "C": ("설비군", "model_name"),
                   "D": ("설비호기", "equipment_code"), "E": ("Version", "version_raw")}
@@ -268,7 +268,8 @@ class GroupRow:
     parent_id: int | None
     parent_name: str | None
     equipment_count: int
-    independent: bool = False  # 개조형이지만 독립 설비군으로 보기 (DFB 등)
+    independent: bool = False  # 개조형이지만 독립 설비군으로 보기 (DFB 등) — 11-12부터 화면에서 정하지 않는다
+    builtin: bool = False      # 기본 설비군(멘토 확정 모델명): 코드가 이름으로 알아보므로 이름은 바꿀 수 없다 (11-12)
 
 
 @dataclass(frozen=True)
@@ -903,7 +904,7 @@ class DataAdminService:
         site = (site or "").strip()
         require(bool(site), "Site를 골라 주세요.")
         require(isinstance(base_date, date), "기준일을 YYYY-MM-DD로 적어 주세요.")
-        require(production_area is None or production_area in FABS, "메모리 또는 파운드리를 골라 주세요.")
+        require(production_area is None or production_area in FABS, "Memory 또는 Foundry를 골라 주세요.")
         require(all(not (s.base_date == base_date and s.site == site) for s in self.status_sheets()),
                 f"{site} · {base_date} 현황표가 이미 있습니다. 그 현황표에 행을 추가해 주세요.")
         sheet = f"{site} {base_date.isoformat()} (직접 입력)"
@@ -1152,9 +1153,11 @@ class DataAdminService:
             rows.append(EquipmentRow(e["equipment_id"], _text(e["equipment_code"]), ids,
                                      ", ".join(names.get(i, "?") for i in ids) or "미지정", _text(s.get("model_name")),
                                      _text(s.get("site")), _text(s.get("line")), s.get("base_date"), counts[e["equipment_id"]]))
+        from setron.features.reference_data import MODEL_CATEGORIES
+
         group_rows = tuple(GroupRow(g["group_id"], names[g["group_id"]], _text(g["category"]), g.get("parent_group_id"),
                                     names.get(g.get("parent_group_id")), per_group[g["group_id"]],
-                                    g["group_id"] in independent) for g in groups)
+                                    g["group_id"] in independent, names[g["group_id"]] in MODEL_CATEGORIES) for g in groups)
         return group_rows, tuple(sorted(rows, key=lambda r: r.code))
 
     def create_group(self, name, category, parent_id=None) -> GroupRow:
@@ -1171,8 +1174,7 @@ class DataAdminService:
             same = next((g for g in groups if _text(g["group_name"]).casefold() == name.casefold()), None)
             if same is not None and same.get("parent_group_id"):
                 parent_name = next((_text(g["group_name"]) for g in groups if g["group_id"] == same["parent_group_id"]), "상위 설비군")
-                require(False, f"'{_text(same['group_name'])}'은(는) 이미 '{parent_name}'의 개조형으로 등록돼 있습니다. "
-                               "설비군 목록에서 고른 뒤 [독립 설비군으로 보기]를 눌러 주세요.")
+                require(False, f"'{_text(same['group_name'])}'은(는) 이미 '{parent_name}'의 개조형으로 등록돼 있습니다.")
             require(same is None, "이미 있는 설비군 이름입니다.")
             parent = None
             if parent_id is not None:
@@ -1191,6 +1193,63 @@ class DataAdminService:
             tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": journal})
         return GroupRow(created["group_id"], name, category, parent_id,
                         _text(parent["group_name"]) if parent else None, 0)
+
+    def update_groups(self, changes) -> int:
+        """설비 탭 표에서 고친 설비군 이름 · 대분류를 한 트랜잭션으로 저장한다 (11-12). 바꾼 항목 수를 돌려준다.
+
+        param
+        - changes: [(group_id, 새 이름 또는 None, 새 대분류 또는 None)].
+
+        규칙
+        - 이름: 사용자가 추가한 설비군만 바꾼다. 기본 설비군(M-C3 · M-C4 DFB 등)은 번역표 · 대시보드 분류 · 내보내기가
+          이름으로 알아보므로 막는다. 쓰이고 있어도 바꾸며, 그 설비군 설비 현황의 모델명과 같은 이름의 SW 계열도 맞춘다.
+        - 대분류: 기본형만 고치고 그 개조형도 같은 대분류로 따라간다 (개조형은 상위 설비군과 같은 분류여야 한다).
+        """
+        from setron.features.reference_data import MODEL_CATEGORIES
+
+        count = 0
+        with self.storage.transaction() as tx:
+            groups = {g["group_id"]: g for g in self.rows.rows(tx, "equipment_group")}
+            names = {gid: _text(g["group_name"]) for gid, g in groups.items()}
+            for group_id, name, category in changes:
+                group = groups.get(group_id)
+                require(group is not None, "없는 설비군입니다. 다시 읽어 주세요.")
+                old = names[group_id]
+                name = (name or "").strip() if name is not None else None
+                if name is not None and name != old:
+                    require(bool(name) and len(name) <= 50, "설비군 이름을 50자 이내로 입력해 주세요.")
+                    require(old not in MODEL_CATEGORIES, f"'{old}'은(는) 기본 설비군이라 이름을 바꿀 수 없습니다. "
+                                                         "다른 이름이 필요하면 새 설비군을 추가해 주세요.")
+                    require(all(n.casefold() != name.casefold() for gid, n in names.items() if gid != group_id),
+                            f"'{name}'은(는) 이미 있는 설비군 이름입니다.")
+                    tx.update("equipment_group", {"group_id": group_id}, {"group_name": name})
+                    for family in self.rows.rows(tx, "version_family", group_id=group_id):
+                        if _text(family["family_name"]) == old:  # 함께 만든 기본 계열 이름도 맞춘다
+                            tx.update("version_family", {"family_id": family["family_id"]}, {"family_name": name[:50]})
+                    renamed = 0
+                    for snapshot in self.rows.rows(tx, "equipment_snapshot", group_id=group_id):
+                        if _text(snapshot.get("model_name")) == old:  # 모델명은 설비군을 따라간다 (현황표 규칙과 같음)
+                            tx.update("equipment_snapshot", {"snapshot_id": snapshot["snapshot_id"]}, {"model_name": name})
+                            renamed += 1
+                    names[group_id] = name
+                    tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
+                        "kind": "rename", "table": "equipment_group", "label": name, "before": old, "after": name,
+                        "count": renamed}}})
+                    count += 1
+                if category is not None and category != _text(group["category"]):
+                    require(category in CATEGORIES, "대분류는 POLY · OXIDE · KCTC 중 하나여야 합니다.")
+                    require(group.get("parent_group_id") is None,
+                            f"'{names[group_id]}'은(는) 개조형이라 대분류가 상위 설비군을 따라갑니다.")
+                    before = _text(group["category"])
+                    for gid, other in groups.items():
+                        if gid == group_id or other.get("parent_group_id") == group_id:
+                            tx.update("equipment_group", {"group_id": gid}, {"category": category})
+                            other["category"] = category
+                    tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
+                        "kind": "category", "table": "equipment_group", "label": names[group_id], "before": before,
+                        "after": category}}})
+                    count += 1
+        return count
 
     def _group_usage(self, tx, group_id):
         """설비군이 쓰이는 곳 (안내 문장 목록). 비어 있으면 이름을 바꾸거나 지워도 된다."""
@@ -1286,29 +1345,33 @@ class DataAdminService:
         return
         - 이름을 바꾼 설비 현황 수.
         """
+        with self.storage.transaction() as tx:
+            count = self._rename_site_in(tx, old, new)
+        self._apply_lines()
+        return count
+
+    def _rename_site_in(self, tx, old, new):
         new = (new or "").strip()
         require(bool(new) and len(new) <= 50, "Site 이름을 50자 이내로 입력해 주세요.")
-        with self.storage.transaction() as tx:
-            known = self._known_sites(tx)
-            require(old.casefold() in known, "없는 Site입니다. 다시 읽어 주세요.")
-            require(new.casefold() == old.casefold() or new.casefold() not in known, "이미 있는 Site입니다.")
-            count = 0
-            for snapshot in self.rows.rows(tx, "equipment_snapshot"):
-                if _text(snapshot.get("site")) == old:
-                    tx.update("equipment_snapshot", {"snapshot_id": snapshot["snapshot_id"]}, {"site": new})
-                    count += 1
-            sites = [new if s == old else s for s in registered_sites(tx)]
-            _save_setting(tx, SITES_KEY, {"sites": sites})
-            lines = [{**entry, "site": new} if entry["site"] == old else entry for entry in registered_lines(tx)]
-            _save_setting(tx, LINES_KEY, {"lines": lines})
-            for batch in self.rows.rows(tx, "import_batch", source_type="MANUAL"):  # 직접 만든 빈 현황표의 Site
-                raw = _raw(batch.get("raw_data"))
-                meta = raw.get(SHEET_KEY)
-                if isinstance(meta, dict) and meta.get("site") == old:
-                    tx.update("import_batch", {"batch_id": batch["batch_id"]}, {"raw_data": {**raw, SHEET_KEY: {**meta, "site": new}}})
-            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
-                "kind": "rename", "table": "site", "label": new, "before": old, "after": new, "count": count}}})
-        self._apply_lines()
+        known = self._known_sites(tx)
+        require(old.casefold() in known, f"'{old}'은(는) 없는 Site입니다. 다시 읽어 주세요.")
+        require(new.casefold() == old.casefold() or new.casefold() not in known, f"'{new}'은(는) 이미 있는 Site입니다.")
+        count = 0
+        for snapshot in self.rows.rows(tx, "equipment_snapshot"):
+            if _text(snapshot.get("site")) == old:
+                tx.update("equipment_snapshot", {"snapshot_id": snapshot["snapshot_id"]}, {"site": new})
+                count += 1
+        sites = [new if s == old else s for s in registered_sites(tx)]
+        _save_setting(tx, SITES_KEY, {"sites": sites})
+        lines = [{**entry, "site": new} if entry["site"] == old else entry for entry in registered_lines(tx)]
+        _save_setting(tx, LINES_KEY, {"lines": lines})
+        for batch in self.rows.rows(tx, "import_batch", source_type="MANUAL"):  # 직접 만든 빈 현황표의 Site
+            raw = _raw(batch.get("raw_data"))
+            meta = raw.get(SHEET_KEY)
+            if isinstance(meta, dict) and meta.get("site") == old:
+                tx.update("import_batch", {"batch_id": batch["batch_id"]}, {"raw_data": {**raw, SHEET_KEY: {**meta, "site": new}}})
+        tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
+            "kind": "rename", "table": "site", "label": new, "before": old, "after": new, "count": count}}})
         return count
 
     def delete_site(self, name) -> str:
@@ -1358,7 +1421,7 @@ class DataAdminService:
         """Site의 메모리/파운드리 아래에 라인을 등록한다. 같은 Site에 같은 라인(대소문자 무시)이 있으면 거부한다."""
         line = (line or "").strip()
         require(bool(line) and len(line) <= 50, "라인 이름을 50자 이내로 입력해 주세요.")
-        require(fab in FABS, "메모리 또는 파운드리를 골라 주세요.")
+        require(fab in FABS, "Memory 또는 Foundry를 골라 주세요.")
         with self.storage.transaction() as tx:
             require(site.casefold() in self._known_sites(tx), "없는 Site입니다. Site를 먼저 추가해 주세요.")
             existing = {(e["site"], e["line"].casefold()) for e in registered_lines(tx)} | {
@@ -1378,7 +1441,7 @@ class DataAdminService:
         return
         - 생산 영역을 바꾼 설비 현황 수.
         """
-        require(fab in FABS, "메모리 또는 파운드리를 골라 주세요.")
+        require(fab in FABS, "Memory 또는 Foundry를 골라 주세요.")
         with self.storage.transaction() as tx:
             entries = [e for e in registered_lines(tx) if not (e["site"] == site and e["line"] == line)]
             before = next((e["fab"] for e in registered_lines(tx) if e["site"] == site and e["line"] == line), None)
@@ -1398,22 +1461,111 @@ class DataAdminService:
 
     def rename_line(self, site, old, new) -> int:
         """라인 이름을 바꾼다. 그 Site · 라인의 모든 설비 현황과 등록값을 함께 바꾼다. 바꾼 설비 현황 수를 돌려준다."""
+        with self.storage.transaction() as tx:
+            count = self._rename_line_in(tx, site, old, new)
+        self._apply_lines()
+        return count
+
+    def apply_locations(self, ops) -> dict:
+        """위치 탭 표에서 모은 변경을 순서대로 한 트랜잭션으로 저장한다 (11-12). 종류별 바꾼 설비 현황 수를 돌려준다.
+
+        param
+        - ops: 화면에서 한 순서 그대로의 변경 목록.
+          {"kind": "site", "old", "new"} Site 이름 변경 ·
+          {"kind": "line", "site", "old", "new"} 라인 이름 변경 (이미 있는 라인 이름이면 그 라인에 합친다) ·
+          {"kind": "move", "site", "to", "equipment": [[설비 ID, 지금 라인], ...]} 고른 설비를 같은 Site의 다른 라인으로 옮긴다.
+        """
+        counts = Counter()
+        with self.storage.transaction() as tx:
+            for op in ops:
+                kind = op.get("kind")
+                if kind == "site":
+                    counts["site"] += self._rename_site_in(tx, op["old"], op["new"])
+                elif kind == "line":
+                    counts["line"] += self._rename_line_in(tx, op["site"], op["old"], op["new"], merge=True)
+                elif kind == "move":
+                    counts["move"] += self._move_in(tx, op["site"], op["equipment"], op["to"])
+                else:
+                    require(False, "알 수 없는 위치 변경입니다. 다시 읽어 주세요.")
+        self._apply_lines()
+        return dict(counts)
+
+    def _site_lines(self, tx, site):
+        """그 Site의 라인 이름 (등록 + 관측) → 원래 표기."""
+        found = {e["line"].casefold(): e["line"] for e in registered_lines(tx) if e["site"] == site}
+        for s in self.rows.rows(tx, "equipment_snapshot"):
+            if _text(s.get("site")) == site and s.get("line"):
+                found.setdefault(_text(s["line"]).casefold(), _text(s["line"]))
+        return found
+
+    def _line_fab(self, tx, site, line):
+        """라인의 메모리/파운드리: 등록값 → 그 라인 설비 현황에서 가장 많은 값 → 모름(None)."""
+        fab = next((e["fab"] for e in registered_lines(tx) if e["site"] == site and e["line"] == line), None)
+        if fab:
+            return fab
+        seen = Counter(s.get("production_area") for s in self.rows.rows(tx, "equipment_snapshot")
+                       if _text(s.get("site")) == site and _text(s.get("line")) == line and s.get("production_area"))
+        return seen.most_common(1)[0][0] if seen else None
+
+    def _rename_line_in(self, tx, site, old, new, *, merge=False):
+        """라인 이름 변경. ``merge``면 같은 Site에 이미 있는 라인 이름으로 바꿀 때 그 라인에 합친다
+        (설비 현황의 라인 · 메모리/파운드리를 대상 라인 것으로, 옛 라인 등록값은 지움)."""
         new = (new or "").strip()
         require(bool(new) and len(new) <= 50, "라인 이름을 50자 이내로 입력해 주세요.")
-        with self.storage.transaction() as tx:
-            existing = {e["line"].casefold() for e in registered_lines(tx) if e["site"] == site} | {
-                _text(s.get("line")).casefold() for s in self.rows.rows(tx, "equipment_snapshot") if _text(s.get("site")) == site}
-            require(new.casefold() == old.casefold() or new.casefold() not in existing, f"{site}에 이미 있는 라인입니다.")
-            count = 0
-            for snapshot in self.rows.rows(tx, "equipment_snapshot"):
-                if _text(snapshot.get("site")) == site and _text(snapshot.get("line")) == old:
-                    tx.update("equipment_snapshot", {"snapshot_id": snapshot["snapshot_id"]}, {"line": new})
-                    count += 1
-            lines = [{**e, "line": new} if e["site"] == site and e["line"] == old else e for e in registered_lines(tx)]
-            _save_setting(tx, LINES_KEY, {"lines": lines})
-            tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
-                "kind": "rename", "table": "line", "label": f"{site} · {new}", "before": old, "after": new, "count": count}}})
-        self._apply_lines()
+        existing = self._site_lines(tx, site)
+        require(old.casefold() in existing, f"{site} · {old}은(는) 없는 라인입니다. 다시 읽어 주세요.")
+        into = existing.get(new.casefold()) if new.casefold() != old.casefold() else None
+        require(merge or into is None, f"{site}에 이미 있는 라인입니다.")
+        if into is not None:
+            new = into  # 대상 라인의 원래 표기를 쓴다
+        fab = self._line_fab(tx, site, into) if into is not None else None
+        count = 0
+        for snapshot in self.rows.rows(tx, "equipment_snapshot"):
+            if _text(snapshot.get("site")) == site and _text(snapshot.get("line")) == old:
+                values = {"line": new}
+                if fab and snapshot.get("production_area") != fab:
+                    values["production_area"] = fab
+                tx.update("equipment_snapshot", {"snapshot_id": snapshot["snapshot_id"]}, values)
+                count += 1
+        entries = registered_lines(tx)
+        if into is None:
+            lines = [{**e, "line": new} if e["site"] == site and e["line"] == old else e for e in entries]
+        else:
+            mine = next((e for e in entries if e["site"] == site and e["line"] == old), None)
+            lines = [e for e in entries if not (e["site"] == site and e["line"] == old)]
+            if mine is not None and not any(e["site"] == site and e["line"] == into for e in lines):
+                lines.append({"site": site, "line": into, "fab": fab or mine["fab"]})
+        _save_setting(tx, LINES_KEY, {"lines": lines})
+        tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
+            "kind": "merge" if into is not None else "rename", "table": "line", "label": f"{site} · {new}",
+            "before": old, "after": new, "count": count}}})
+        return count
+
+    def _move_in(self, tx, site, equipment, to):
+        """고른 설비의 설비 현황(모든 기준일 중 지금 라인에 있던 것)을 같은 Site의 다른 라인으로 옮긴다."""
+        existing = self._site_lines(tx, site)
+        to = existing.get((to or "").strip().casefold())
+        require(to is not None, f"{site}에 없는 라인으로는 옮길 수 없습니다. 위치 탭에서 라인을 먼저 추가해 주세요.")
+        lines = {int(eid): _text(line) for eid, line in equipment}
+        require(bool(lines), "옮길 설비를 골라 주세요.")
+        fab = self._line_fab(tx, site, to)
+        codes = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")
+                 if e["equipment_id"] in lines}
+        count, moved = 0, set()
+        for snapshot in self.rows.rows(tx, "equipment_snapshot"):
+            eid = snapshot["equipment_id"]
+            if eid in lines and _text(snapshot.get("site")) == site and _text(snapshot.get("line")) == lines[eid] != to:
+                values = {"line": to}
+                if fab and snapshot.get("production_area") != fab:
+                    values["production_area"] = fab
+                tx.update("equipment_snapshot", {"snapshot_id": snapshot["snapshot_id"]}, values)
+                count += 1
+                moved.add(eid)
+        names = sorted(codes.get(eid, str(eid)) for eid in moved)
+        tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
+            "kind": "move", "table": "line", "label": f"{site} · {to} ← " + ", ".join(names[:5])
+            + (f" 외 {len(names) - 5}대" if len(names) > 5 else ""),
+            "before": ", ".join(sorted({lines[eid] for eid in moved})), "after": to, "count": count}}})
         return count
 
     def delete_line(self, site, line) -> str:
@@ -1581,7 +1733,8 @@ class DataAdminService:
             registry = raw.get("management_registry")
             if isinstance(registry, dict):
                 kind = {"create": "등록", "delete": "삭제"}.get(registry.get("kind"), "수정")
-                field = {"rename": "이름", "fab": "메모리/파운드리", "independent": "독립 설비군 보기"}.get(
+                field = {"rename": "이름", "fab": "Memory/Foundry", "independent": "독립 설비군 보기", "category": "대분류",
+                         "merge": "라인 합치기", "move": "설비 라인 옮기기"}.get(
                     registry.get("kind"), TABLE_LABELS.get(registry.get("table"), ""))
                 after = _text(registry.get("after")) + (f" (설비 현황 {registry['count']}건)" if registry.get("count") else "")
                 result.append(HistoryEntry(batch["batch_id"], at, kind, _text(registry.get("table")), {},

@@ -96,7 +96,7 @@ def header_key(text) -> str:
 def header_kind(header) -> str | None:
     """'jira'(Jira 열) · 'remark'(비고 열) · None."""
     key = header_key(header)
-    if "jira" in key or key in JIRA_HEADERS:
+    if "jira" in key or "지라" in key or key in JIRA_HEADERS:          # JIRA · JIRA ID · 지라 · Issue(O2)
         return "jira"
     if key in REMARK_HEADERS:
         return "remark"

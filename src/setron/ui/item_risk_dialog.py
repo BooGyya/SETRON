@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from setron.features.risk.schemas import FindingBasis, RiskStatus
+from setron.features.risk.schemas import CRITERION_LABELS, FindingBasis, RiskKind, RiskStatus
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import StatusBadge, button, label
 from setron.ui.item_original_table import show_item_source
@@ -24,6 +24,27 @@ from setron.ui.version_data import family_display_name
 # 구분은 판정 기준에서 정한다. 판정 기준과 따로 고르면 같은 내용을 두 번 고르게 되고, 구분만 바꿔도
 # 판정이 바뀌지 않아 헷갈렸다 (11-11 점검). 목록의 구분 칩은 이 값을 그대로 보여 준다.
 CATEGORY_BY_RULE = {"SAFETY_REQUIRED": "환경안전 필수", "DEFECT_ITEM": "결함 버전", "DIRECT_VERSION": "결함 버전"}
+APPLIED, NOT_APPLIED = RiskKind.APPLIED.value, RiskKind.NOT_APPLIED.value
+
+
+def applied_rule(version, start, end, order=lambda _: None):
+    """'Item 사용 시 위험' 입력을 기존 저장 방식으로 바꾼다. (rule_type, 저장 필드, 문제) 를 돌려준다.
+
+    - 위험 버전만 지정: DIRECT_VERSION (그 버전을 쓰면 위험).
+    - 시작 버전(+ 선택 해제 버전) 지정: DEFECT_ITEM (선택한 Item이 [시작, 해제) 범위의 버전에 들어 있으면 위험).
+    - 그 밖의 조합은 어느 방식인지 모호하므로 저장하지 않고 이유를 돌려준다. ``order``는 버전 ID → 순서 값이다.
+    """
+    if version is not None and (start is not None or end is not None):
+        return None, {}, "위험 버전과 시작·해제 버전은 함께 지정할 수 없습니다. 한쪽만 고르세요."
+    if version is not None:
+        return "DIRECT_VERSION", {"release_version_id": version}, ""
+    if start is None:
+        return None, {}, ("해제 버전은 시작 버전과 함께 지정하세요." if end is not None
+                          else "위험 버전 또는 시작 버전을 선택하세요.")
+    first, last = order(start), order(end) if end is not None else None
+    if end is not None and (end == start or first is not None and last is not None and first >= last):
+        return None, {}, "해제 버전은 시작 버전보다 뒤의 버전이어야 합니다."
+    return "DEFECT_ITEM", {"start_release_version_id": start, "end_release_version_id": end}, ""
 
 
 def choice(name):
@@ -302,17 +323,30 @@ class ItemRiskDialog(PopupDialog):
         advanced.setSpacing(14)
         advanced.addWidget(field("위험 기준명", self.name))
         self.criterion = choice("위험 판정 기준")
-        self.criterion.addItem("필수 Item 미적용 시 위험 · 포함 버전 이상 누적 적용", "SAFETY_REQUIRED")
-        self.criterion.addItem("지정 버전 사용 시 위험", "DIRECT_VERSION")
-        self.criterion.addItem("결함 Item의 시작~해제 범위가 위험", "DEFECT_ITEM")
+        # 판정 기준은 두 가지다 (미적용 위험 / 적용 위험). '사용 시 위험'은 입력한 버전에 따라 기존 방식으로 저장한다.
+        self.criterion.addItem(CRITERION_LABELS[RiskKind.NOT_APPLIED], NOT_APPLIED)
+        self.criterion.addItem(CRITERION_LABELS[RiskKind.APPLIED], APPLIED)
+        self.criterion.setItemData(0, "필수 Item이 포함된 버전 이상(누적 적용)을 쓰지 않으면 위험", Qt.ItemDataRole.ToolTipRole)
+        self.criterion.setItemData(1, "위험 버전이나 결함 Item이 든 시작~해제 범위의 버전을 쓰면 위험", Qt.ItemDataRole.ToolTipRole)
         self.models = QPushButton("대상 설비군 선택")
         self.models.setFixedHeight(40)
         self.model_menu = QMenu(self.models)
         self.models.setMenu(self.model_menu)
         self.model_actions = []
         advanced.addWidget(_WrapRow([field("위험 판정 기준", self.criterion), field("대상 설비군 · 복수 선택", self.models)], 240, fields=True))
-        self.start, self.end = choice("대상·시작 버전"), choice("해제 버전")
-        self.version_fields = _WrapRow([field("대상·시작 버전", self.start), field("해제 버전 (선택)", self.end)], 240, fields=True)
+        self.criterion_hint = label("", 12, color=SECONDARY, wrap=True)
+        self.criterion_hint.setAccessibleName("판정 방식 안내")
+        self.criterion_hint.setMinimumWidth(0)
+        advanced.addWidget(self.criterion_hint)
+        # 위험 버전 하나만 고르면 그 버전 사용이 위험, 시작(~해제) 버전을 고르면 그 범위에 든 Item 사용이 위험이다.
+        self.version, self.start, self.end = choice("위험 버전"), choice("시작 버전"), choice("해제 버전")
+        self.version_fields = QWidget()
+        versions = QVBoxLayout(self.version_fields)
+        versions.setContentsMargins(0, 0, 0, 0)
+        versions.setSpacing(14)
+        versions.addWidget(field("위험 버전 (선택 · 이 버전을 쓰면 위험)", self.version))
+        versions.addWidget(_WrapRow([field("시작 버전 (선택 · 포함)", self.start), field("해제 버전 (선택 · 제외)", self.end)],
+                                    240, fields=True))
         advanced.addWidget(self.version_fields)
         self.site, self.line = choice("위험 대상 Site"), choice("위험 대상 Line")
         self.site.addItem("전체 Site", None)
@@ -353,9 +387,9 @@ class ItemRiskDialog(PopupDialog):
         self.item_search.textChanged.connect(self._filter_items)
         self.site.currentIndexChanged.connect(self._site_changed)
         self.criterion.currentIndexChanged.connect(self._criterion_changed)
-        for control in (self.start, self.end, self.line):
-            control.currentIndexChanged.connect(self._invalidate)
-        self.start.currentIndexChanged.connect(self._start_changed)
+        for control in (self.version, self.start, self.end):
+            control.currentIndexChanged.connect(self._versions_changed)
+        self.line.currentIndexChanged.connect(self._invalidate)
         # 메모는 영향 계산과 무관하므로 입력해도 미리보기를 다시 계산하지 않는다.
         self.name.textChanged.connect(self._invalidate)
         self._family_changed()
@@ -379,15 +413,20 @@ class ItemRiskDialog(PopupDialog):
         item_ids = {r.item_id for r in self.data.versions.version_items if r.release_version_id in ids}
         self.family_item_ids = item_ids
         self._filter_items()
-        for combo in (self.start, self.end):
+        self.version_orders = {r.release_version_id: r.version_order for r in releases}
+        for combo, empty in ((self.version, "지정 안 함"), (self.start, "지정 안 함"), (self.end, "해제 버전 없음")):
+            combo.blockSignals(True)
             combo.clear()
-        self.end.addItem("해제 버전 없음", None)
+            combo.addItem(empty, None)
         for release in sorted(releases, key=lambda r: (r.version_order is None, r.version_order or 0, r.release_version_id)):
             # 버전 이름만 보인다. 순서 값은 사용자가 이미 아는 정보라 뺐다 (11-11 점검).
             # 순서를 모르는 버전만 표시를 남긴다: 결함 범위 판정이 '미확인'이 될 수 있다.
             text = release.version_raw if release.version_order is not None else f"{release.version_raw} · 순서 미확인"
-            for combo in (self.start, self.end):
+            for combo in (self.version, self.start, self.end):
                 combo.addItem(text, release.release_version_id)
+        for combo in (self.version, self.start, self.end):
+            combo.blockSignals(False)
+            combo.setToolTip(combo.currentText())
         self.model_menu.clear()
         self.model_actions = []
         models = {p.model_id: p.model_name for p in self.data.versions.pairs if p.family_id == fid}
@@ -399,7 +438,7 @@ class ItemRiskDialog(PopupDialog):
             action.toggled.connect(self._models_changed)
             self.model_actions.append(action)
         self._models_changed()
-        self._invalidate()
+        self._versions_changed()
 
     def _filter_items(self, *_):
         previous = self.item.currentData()
@@ -410,10 +449,17 @@ class ItemRiskDialog(PopupDialog):
         if self.item.findData(previous) >= 0:
             self.item.setCurrentIndex(self.item.findData(previous))
 
+    def _rule(self):
+        """현재 입력의 저장 방식. (rule_type, 저장 필드, 문제). 미적용 위험은 늘 SAFETY_REQUIRED다."""
+        if self.criterion.currentData() == NOT_APPLIED:
+            return "SAFETY_REQUIRED", {}, ""
+        return applied_rule(self.version.currentData(), self.start.currentData(), self.end.currentData(),
+                            lambda vid: self.version_orders.get(vid))
+
     def _suggestion(self):
-        """판정 기준에 맞는 기준명 제안. 지정 버전은 계열·버전으로, 나머지는 고른 Item 내용으로 짓는다."""
-        if self.criterion.currentData() == "DIRECT_VERSION":
-            version = self.start.currentText().split(" · ")[0].strip()
+        """판정 기준에 맞는 기준명 제안. 위험 버전만 지정하면 계열·버전으로, 나머지는 고른 Item 내용으로 짓는다."""
+        if self._rule()[0] == "DIRECT_VERSION":
+            version = self.version.currentText().split(" · ")[0].strip()
             return f"{self.family.currentText()} {version} 사용 위험".strip() if version else ""
         entry = next((e for e in self.data.versions.items if e.item.item_id == self.item.currentData()), None)
         return entry.item.content[:250] if entry else ""
@@ -425,13 +471,25 @@ class ItemRiskDialog(PopupDialog):
             self.name.setText(suggestion)
         self.suggested_name = suggestion
 
-    def _start_changed(self, *_):
-        if self.criterion.currentData() == "DIRECT_VERSION":
-            self._suggest_name()
+    def _versions_changed(self, *_):
+        rule_type, fields, problem = self._rule()
+        if self.criterion.currentData() == NOT_APPLIED:
+            hint = "필수 Item이 포함된 버전 이상(누적 적용)을 쓰지 않는 설비가 위험 후보입니다."
+        elif problem:
+            hint = problem
+        elif rule_type == "DIRECT_VERSION":
+            hint = "위험 버전만 지정했습니다. 선택한 Item과 관계없이 이 버전을 쓰는 설비가 위험 후보입니다."
+        else:
+            end = self.end.currentText().split(" · ")[0] if fields["end_release_version_id"] is not None else ""
+            span = f"{self.start.currentText().split(' · ')[0]}부터" + (f" {end} 전까지의 버전" if end else "의 버전(해제 버전 없음)")
+            hint = f"{span} 중 선택한 Item이 든 버전을 쓰는 설비가 위험 후보입니다."
+        self.criterion_hint.setText(hint)
+        self._suggest_name()
+        self._invalidate()
 
     def _item_changed(self, *_):
         entry = next((e for e in self.data.versions.items if e.item.item_id == self.item.currentData()), None)
-        if self.criterion.currentData() != "DIRECT_VERSION":
+        if self._rule()[0] != "DIRECT_VERSION":
             self._suggest_name()
         overview = self.data.catalog().overview(entry.item, ()) if entry else None
         first = next((f.first_included for f in overview.families if f.family_id == self.family.currentData()), None) if overview else None
@@ -465,42 +523,31 @@ class ItemRiskDialog(PopupDialog):
         self._invalidate()
 
     def _update_editor(self, *_):
-        direct = self.criterion.currentData() == "DIRECT_VERSION"
         editing = self.change_item.isChecked()
-        self.change_item.setVisible(not direct and self.item_fixed)
+        self.change_item.setVisible(self.item_fixed)
         self.change_item.setText("선택 닫기" if editing else "아이템 변경")
-        self.item_editor.setVisible(direct or editing)
-        self.item.setVisible(not direct)
-        self.item_search.setVisible(not direct and editing)
+        self.item_editor.setVisible(editing)
+        self.item_search.setVisible(editing)
 
     def _criterion_changed(self, *_):
-        key = self.criterion.currentData()
-        self.version_fields.setVisible(key != "SAFETY_REQUIRED")
-        self.end.setEnabled(key == "DEFECT_ITEM")
-        self.item.setEnabled(key != "DIRECT_VERSION")
-        self.source_button.setVisible(key != "DIRECT_VERSION")
+        self.version_fields.setVisible(self.criterion.currentData() == APPLIED)
         self._update_editor()
-        if key == "DIRECT_VERSION":
-            self.item_note.set_full_text(self.family.currentText())
-            self.item_meta.hide()
-            self._suggest_name()
-        else:
-            self._item_changed()
-        self._invalidate()
+        self._item_changed()
+        self._versions_changed()
 
     def values(self):
-        key = self.criterion.currentData()
-        values = dict(rule_type=key, family_id=self.family.currentData(), risk_reason=self.name.text().strip(),
+        """저장·미리보기 값. 판정 기준 두 가지를 입력에 따라 기존 rule_type 세 가지 중 하나로 바꾼다.
+        모호한 조합이면 rule_type이 None이고 미리보기·등록을 하지 않는다."""
+        rule_type, fields, _ = self._rule()
+        values = dict(rule_type=rule_type, family_id=self.family.currentData(), risk_reason=self.name.text().strip(),
                       mapping_status="VERIFIED",
-                      item_manager=dict(schema=1, name=self.name.text().strip(), category=CATEGORY_BY_RULE[key],
+                      item_manager=dict(schema=1, name=self.name.text().strip(),
+                                        category=CATEGORY_BY_RULE.get(rule_type, CATEGORY_BY_RULE["DEFECT_ITEM"]),
                                         memo=self.memo.text().strip(), model_ids=[a.data() for a in self.model_actions if a.isChecked()],
                                         site=self.site.currentData(), line=self.line.currentData()))
-        if key == "DIRECT_VERSION":
-            values["release_version_id"] = self.start.currentData()
-        else:
+        values.update(fields)
+        if rule_type in ("SAFETY_REQUIRED", "DEFECT_ITEM"):
             values["item_id"] = self.item.currentData()
-            if key == "DEFECT_ITEM":
-                values.update(start_release_version_id=self.start.currentData(), end_release_version_id=self.end.currentData())
         return values
 
     @staticmethod
@@ -566,6 +613,8 @@ class ItemRiskDialog(PopupDialog):
             problem = "위험 기준명을 입력하세요."
         elif not presentation["model_ids"]:
             problem = "대상 설비군을 선택하세요."
+        elif values["rule_type"] is None:
+            problem = self._rule()[2]
         elif values["rule_type"] != "DIRECT_VERSION" and not values.get("item_id"):
             problem = "관련 아이템을 선택하세요."
         elif values["rule_type"] == "DIRECT_VERSION" and not values.get("release_version_id"):

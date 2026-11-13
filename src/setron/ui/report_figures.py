@@ -52,7 +52,8 @@ def heatmap_images(panel):
 
 def _heatmap_page(panel, columns, page, pages):
     rows = max((len(cells) for _, cells in columns), default=0)
-    height = 212 + 58 * rows
+    header_height = max(45, max((len(line.splitlines()) for line, _ in columns), default=1) * 27 + 12)
+    height = 167 + header_height + 58 * rows
     image = QImage(FIGURE_WIDTH, height, QImage.Format.Format_ARGB32)
     image.fill(QColor("white"))
     painter = QPainter(image)
@@ -61,7 +62,7 @@ def _heatmap_page(panel, columns, page, pages):
     painter.setFont(paper_font(25, True))
     suffix = f" · {page}/{pages}" if pages > 1 else ""
     painter.drawText(QRectF(20, 5, 1160, 43), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                     f"{panel.area} · {panel.site} · {panel.group}{suffix}")
+                     (panel.heading or f"{panel.area} · {panel.site} · {panel.group}") + suffix)
     painter.setFont(paper_font(19))
     for i, (tier, fill) in enumerate(TIER_COLORS.items()):
         x = 20 + i * 200
@@ -81,11 +82,11 @@ def _heatmap_page(panel, columns, page, pages):
     for index, (line, cells) in enumerate(columns):
         x, y = left + index * col_width, top + 49
         painter.setPen(QPen(QColor("#566173"), 2))
-        painter.drawRect(QRectF(x, y, col_width, 45))
-        painter.setFont(paper_font(23, True))
-        painter.drawText(QRectF(x + 4, y, col_width - 8, 45), Qt.AlignmentFlag.AlignCenter, line)
+        painter.drawRect(QRectF(x, y, col_width, header_height))
+        painter.setFont(paper_font(21 if "\n" in line else 23, True))
+        painter.drawText(QRectF(x + 4, y, col_width - 8, header_height), Qt.AlignmentFlag.AlignCenter, line)
         for r, cell in enumerate(cells):
-            rect = QRectF(x + 1, y + 45 + r * 58 + 1, col_width - 2, 56)
+            rect = QRectF(x + 1, y + header_height + r * 58 + 1, col_width - 2, 56)
             painter.fillRect(rect, QColor(TIER_COLORS[cell.tier]))
             risk = cell.risk is RiskStatus.RISK
             painter.setPen(QPen(QColor("#C53B53" if risk else "#7C8795"), 4 if risk else 1))

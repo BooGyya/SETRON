@@ -3,15 +3,15 @@
 from PySide6.QtCore import QDate, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QTextCharFormat, QTextLayout
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLineEdit, QMenu,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QWidgetAction, QHeaderView, QSizePolicy,
+    QDialog, QFrame, QHBoxLayout, QLineEdit,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QSizePolicy,
     QStyle, QStyleOptionFrame, QToolButton,
 )
 
 from setron.features.excel_import.schemas import ImportComparison
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
-from setron.ui.calendar_widgets import CalendarWidget
+from setron.ui.date_range import DateRangeDialog
 from setron.ui.query_panel import _WrapRow
 from setron.ui.theme import ASSETS, INK, PRIMARY, SECONDARY, TONES, icon, svg_size
 
@@ -33,10 +33,11 @@ def picture(name):
 
 
 class DateField(QLineEdit):
-    """숫자 8자리 입력과 달력 선택. 구분자를 자동 표시하며 공란을 오늘로 확정하지 않는다."""
+    """숫자 8자리 입력과 공통 날짜 팝업. 적용할 때만 값을 채우며 공란을 보존한다."""
 
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
+        self.dialog = None
         # 입력·붙여넣기·삭제·되돌리기는 Qt가 처리하고 숫자 8칸과 구분자만 허용한다.
         self.setInputMask("0000-00-00;_")
         self.calendar_action = self.addAction(icon("import-ver5/fdb91.svg"), QLineEdit.ActionPosition.TrailingPosition)
@@ -55,23 +56,34 @@ class DateField(QLineEdit):
     def open_calendar(self):
         if self.isReadOnly() or not self.isEnabled():
             return
-        if not hasattr(self, "calendar_menu"):
-            menu = QMenu(self)
-            calendar = CalendarWidget(menu)
-            calendar.setGridVisible(True)
-            action = QWidgetAction(menu)
-            action.setDefaultWidget(calendar)
-            menu.addAction(action)
-            choose = lambda day: (self.setText(day.toString("yyyy-MM-dd")), menu.close())
-            calendar.clicked.connect(choose)
-            calendar.activated.connect(choose)
-            self.calendar_menu = menu
-        menu = self.calendar_menu
-        calendar = menu.actions()[0].defaultWidget()
+        if self.dialog is not None:
+            if self.dialog.isVisible():
+                self.dialog.reject()
+                return
+            self.dialog.deleteLater()
         current = QDate.fromString(self.text(), "yyyy-MM-dd")
-        calendar.setSelectedDate(current if current.isValid() else QDate.currentDate())
-        calendar.showSelectedDate()
-        menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+        day = (current if current.isValid() else QDate.currentDate()).toPython()
+        dialog = DateRangeDialog(day, day, single_day=True, parent=self)
+        self.dialog = dialog
+        dialog.accepted.connect(lambda: self._apply_day(dialog))
+        dialog.open_at(self)
+
+    def _apply_day(self, dialog):
+        if dialog is self.dialog and self.isEnabled() and not self.isReadOnly():
+            self.setText(dialog.end.isoformat())
+
+    def keyPressEvent(self, event):
+        if (event.key() == Qt.Key.Key_F4 or
+                event.key() == Qt.Key.Key_Down and event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            self.open_calendar()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def hideEvent(self, event):
+        if self.dialog is not None and self.dialog.isVisible():
+            self.dialog.reject()
+        super().hideEvent(event)
 
 
 class PeriodDateField(DateField):

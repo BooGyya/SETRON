@@ -112,12 +112,10 @@ class EquipmentDrawer(SideDrawer):
         self.title.setText("설비 정보")
         self._build_info(detail)
         whole = detail.whole
-        # 위험 후보는 어떤 기준 때문인지(적용 위험 / 미적용 위험)를 바로 아래에 둔다. 근거가 없으면 '미연결'로 둔다.
-        # 미확인은 판정기가 남긴 근거가 있을 때만 보인다(기준 미등록 등으로 근거가 없으면 상단 배지로 충분).
+        self.risk_reasons = None
         if not detail.record.is_hpa and (whole.risk is RiskStatus.RISK
                                          or (whole.risk is RiskStatus.UNKNOWN and whole.findings)):
             self.risk_reasons = RiskReasonCard(whole.risk, whole.findings)
-            self.body.addWidget(self.risk_reasons)
         observations = observed_software(detail, rows)
         model_counts = Counter(observation.model for observation in observations)
         for observation in observations:
@@ -132,6 +130,10 @@ class EquipmentDrawer(SideDrawer):
             ignore_width(empty)
             self.body.addWidget(empty)
         self._build_risk(detail)
+        # 결과(위험버전 카드) 바로 아래에 근거(위험 판정 이유)를 둔다. 위험 후보는 근거가 없으면 '미연결'로 둔다.
+        # 미확인은 판정기가 남긴 근거가 있을 때만 보인다(기준 미등록 등으로 근거가 없으면 상단 배지로 충분).
+        if self.risk_reasons is not None:
+            self.body.addWidget(self.risk_reasons)
         self.show_panel()
         self.scroll.verticalScrollBar().setValue(0)
 
@@ -149,7 +151,9 @@ class EquipmentDrawer(SideDrawer):
         body.setSpacing(8)
         self.risk_title = label("위험버전", 16, medium=True, wrap=True)
         self.risk_status_badge = StatusBadge(whole.risk_label, tone)
-        reason = ("HPA는 위험 분석에서 제외됩니다." if excluded else whole.risk_detail or {
+        # 판정 이유 카드가 근거를 보여주면 여기서는 결과 한 줄만 둔다(같은 문장을 두 번 보이지 않는다).
+        detail_text = "" if self.risk_reasons is not None else whole.risk_detail
+        reason = ("HPA는 위험 분석에서 제외됩니다." if excluded else detail_text or {
             RiskStatus.RISK: "위험 후보로 판정되었습니다. 상세 근거를 확인해 주세요.",
             RiskStatus.NO_RISK: "현재 등록된 규칙에서는 위험 후보로 판정되지 않았습니다.",
             RiskStatus.UNKNOWN: "위험 여부를 판정할 자료가 부족합니다.",
