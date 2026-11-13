@@ -60,7 +60,7 @@ def test_fragmentation_index_is_computed_within_a_family_and_group(model, label)
 def test_unknown_baseline_version_lists_every_family_of_the_model():
     result = ask("C3의 V1.2.1.4를 기준 버전으로 봤을 때 최신화율은?")
     assert result.request.conditions.lines == ()                       # 'V1.2.1.4'의 V1은 V1 라인이 아니다
-    assert result.summary.startswith("C3 구UI · C3 통합UI · C3 통합UI (파운드리)에 'V1.2.1.4' 버전은 등록돼 있지 않아")
+    assert result.summary.startswith("C3 구UI · C3 통합UI · C3 통합UI (Foundry)에 'V1.2.1.4' 버전은 등록돼 있지 않아")
     assert "C3 구UI: v1.1.1.6D_2" in result.summary and "C3 통합UI: v3.53_1" in result.summary
 
 

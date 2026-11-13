@@ -1,8 +1,8 @@
 """데이터 관리 화면(11-10 개편, 11-11 2·3·6차 수정) 프론트 검증. DB 대신 가짜 게이트웨이를 쓴다.
 
-11-11 6차: 현황표는 DB에 들어간 값을 가져오기 3단계 항목(호기 · Line · 설비군 · 모델명 · 메모리/파운드리 · SW 버전)으로
+11-11 6차: 현황표는 DB에 들어간 값을 가져오기 3단계 항목(호기 · Line · 설비군 · 모델명 · Memory/Foundry · SW 버전)으로
 보이고, 고친 뒤 [저장]으로 한꺼번에 저장한다(설비군 변경은 regroup). [원본 보기]는 두지 않는다(11-11 요청).
-설비군 · 위치를 표에서 고쳐 [저장]하는 흐름(11-12), Site · 라인 등록과 메모리/파운드리 변경도 확인한다.
+설비군 · 위치를 표에서 고쳐 [저장]하는 흐름(11-12), Site · 라인 등록과 Memory/Foundry 변경도 확인한다.
 """
 
 from datetime import date, datetime
@@ -155,9 +155,9 @@ def test_sheet_shows_db_values_in_import_columns_sorted_by_line_group_code(own):
     assert "화성 · 기준일 2026-11-01" in sheet.source.text() and "마스터.xlsx" in sheet.source.text()
     assert sheet.sheet_combo.currentText() == "2026-11-01 · 화성 · 3대 · 마스터.xlsx"  # Site · 날짜를 두 번 쓰지 않는다
     assert [sheet.table.horizontalHeaderItem(c).text() for c in range(8)] == [
-        "설비 호기", "Line", "대분류", "설비군", "모델명", "메모리/파운드리", "SW 버전", "PM"]
+        "설비 호기", "Line", "대분류", "설비군", "모델명", "Memory/Foundry", "SW 버전", "PM"]
     assert codes(sheet) == ["EC1", "EC2", "EC4"]  # Line → 설비군 → 호기 (DB 순서와 다름)
-    assert [cell(sheet, 0, c).text() for c in range(7)] == ["EC1", "13L", "POLY", "M-C4", "M-C4", "메모리", "v1.2"]
+    assert [cell(sheet, 0, c).text() for c in range(7)] == ["EC1", "13L", "POLY", "M-C4", "M-C4", "Memory", "v1.2"]
     editable_flag = module.Qt.ItemFlag.ItemIsEditable
     assert not cell(sheet, 0, 2).flags() & editable_flag and not cell(sheet, 0, 4).flags() & editable_flag  # 대분류 · 모델명 자동
     assert "원본 D4 · EC1" in cell(sheet, 0, 0).toolTip() and "원본 셀 없음" in cell(sheet, 0, 1).toolTip()
@@ -183,7 +183,7 @@ def test_edits_regroup_adds_and_deletes_wait_for_save_then_go_together(own, monk
     page.saved.connect(saved.append)
     cell(sheet, 0, 6).setText("v1.2a")      # EC1 SW 버전
     cell(sheet, 0, 1).setText("19L")        # EC1 Line
-    cell(sheet, 0, 5).setText("파운드리")    # EC1 메모리/파운드리
+    cell(sheet, 0, 5).setText("Foundry")    # EC1 Memory/Foundry
     cell(sheet, 0, 3).setText("M-O2")       # EC1 설비군 → regroup
     assert cell(sheet, 0, 6).background().color() == module.SAVING and "v1.2 → v1.2a" in cell(sheet, 0, 6).toolTip()
     sheet.table.selectRow(1)                # EC2 삭제 표시
@@ -191,7 +191,7 @@ def test_edits_regroup_adds_and_deletes_wait_for_save_then_go_together(own, monk
     assert cell(sheet, 1, 0).background().color() == module.DELETE_ROW and "삭제 예정" in cell(sheet, 1, 0).toolTip()
     assert sheet.add_row()                  # 새 행
     new = sheet.table.rowCount() - 1
-    for column, value in ((0, "EC9"), (1, "19L"), (3, "M-C4"), (5, "파운드리"), (6, "v2.0")):  # 같은 새 라인 19L은 같은 메모리/파운드리
+    for column, value in ((0, "EC9"), (1, "19L"), (3, "M-C4"), (5, "Foundry"), (6, "v2.0")):  # 같은 새 라인 19L은 같은 Memory/Foundry
         cell(sheet, new, column).setText(value)
     assert cell(sheet, new, 2).text() == "POLY" and cell(sheet, new, 4).text() == "M-C4"  # 대분류 · 모델명은 설비군에서
     assert sheet.notice.y() < sheet.table.y()                  # 안내 줄은 표 위(버튼 아래)에 있다
@@ -302,8 +302,8 @@ def test_new_row_needs_required_cells_and_unknown_group_is_registered_on_save(ow
     assert not cell(sheet, 3, 2).flags() & editable          # 설비군을 적기 전에는 대분류를 고를 수 없다
     cell(sheet, 3, 3).setText("C8")
     cell(sheet, 3, 6).setText("v2.0")
-    assert not sheet.save() and "메모리/파운드리" in sheet.last_note   # 메모리/파운드리도 필수 (비우면 임의로 정하지 않는다)
-    cell(sheet, 3, 5).setText("메모리")
+    assert not sheet.save() and "Memory/Foundry" in sheet.last_note   # Memory/Foundry도 필수 (비우면 임의로 정하지 않는다)
+    cell(sheet, 3, 5).setText("Memory")
     assert cell(sheet, 3, 2).flags() & editable and cell(sheet, 3, 2).background().color() == module.NEW_ROW
     assert not sheet.save() and "대분류" in sheet.last_note   # 새 설비군은 대분류를 골라야 한다
     cell(sheet, 3, 2).setText("OXIDE")
@@ -347,7 +347,7 @@ def test_line_of_another_site_is_warned_before_save(own, monkeypatch):
                           if method == "sheet_rows" else original(method, *a, **k))(gateway.data_admin)
     page, sheet = sheet_page(own, gateway)
     sheet.add_row()
-    for column, value in ((0, "CC4H101"), (1, "C4H"), (3, "M-C4"), (5, "메모리"), (6, "v1.0")):
+    for column, value in ((0, "CC4H101"), (1, "C4H"), (3, "M-C4"), (5, "Memory"), (6, "v1.0")):
         cell(sheet, 3, column).setText(value)
     assert sheet.other_site_lines() == {"C4H": ("China",)}
     asked = answer(monkeypatch, QMessageBox.StandardButton.No)
@@ -392,7 +392,7 @@ def test_create_sheet_dialog_checks_the_date(own):
     dialog.site.setCurrentIndex(0)
     dialog.base_date.setDate(QDate(2026, 11, 12))
     dialog._accept()
-    assert "메모리/파운드리" in dialog.error.text() and dialog.result() != QDialog.DialogCode.Accepted   # 필수
+    assert "Memory/Foundry" in dialog.error.text() and dialog.result() != QDialog.DialogCode.Accepted   # 필수
     dialog.areas.buttons()[1].setChecked(True)
     dialog._accept()
     assert dialog.values() == ("China", date(2026, 11, 12), "FOUNDRY")
@@ -454,18 +454,18 @@ def test_unregistered_line_is_registered_with_the_row_area_or_save_is_blocked(ow
     answer(monkeypatch)
     gateway = FakeGateway()
     page, sheet = sheet_page(own, gateway)
-    cell(sheet, 0, 1).setText("NEW1")         # EC1(메모리)을 처음 보는 라인으로 → 묻지 않고 메모리로 등록
+    cell(sheet, 0, 1).setText("NEW1")         # EC1(Memory)을 처음 보는 라인으로 → 묻지 않고 Memory로 등록
     assert sheet.unregistered_lines() == ["NEW1"] and "NEW1" in sheet._line_choices()   # 적은 라인은 목록에도 보인다
     assert sheet.save()
     settle(page)
     assert gateway.done["add_line"] == [(("화성", "NEW1", "MEMORY"), {})]
-    sheet.add_row()                            # 새 행: 메모리/파운드리를 비우면 새 라인이라 저장을 막는다
+    sheet.add_row()                            # 새 행: Memory/Foundry를 비우면 새 라인이라 저장을 막는다
     new = sheet.table.rowCount() - 1
     for column, value in ((0, "EC9"), (1, "NEW2"), (3, "M-C4")):
         cell(sheet, new, column).setText(value)
-    assert cell(sheet, new, 5).background().color() == module.NEW_ROW   # 메모리/파운드리 필수 (모르는 라인이라 비어 있음)
-    assert not sheet.save() and "메모리/파운드리" in sheet.last_note and sheet.pending
-    cell(sheet, new, 5).setText("파운드리")
+    assert cell(sheet, new, 5).background().color() == module.NEW_ROW   # Memory/Foundry 필수 (모르는 라인이라 비어 있음)
+    assert not sheet.save() and "Memory/Foundry" in sheet.last_note and sheet.pending
+    cell(sheet, new, 5).setText("Foundry")
     assert sheet.save()
     settle(page)
     assert gateway.done["add_line"][-1] == (("화성", "NEW2", "FOUNDRY"), {})
@@ -482,14 +482,14 @@ def test_new_row_gets_sheet_area_and_latest_version_of_the_group(own, monkeypatc
     page, sheet = sheet_page(own, gateway)
     sheet.add_row()
     new = sheet.table.rowCount() - 1
-    assert cell(sheet, new, 5).text() == "파운드리"                   # 빈 현황표에서 고른 메모리/파운드리
-    cell(sheet, new, 1).setText("13L")                               # 메모리/파운드리를 아는 라인 → 그 값으로 보이게 채움
-    assert cell(sheet, new, 5).text() == "메모리" and "라인의 메모리/파운드리로 자동" in cell(sheet, new, 5).toolTip()
+    assert cell(sheet, new, 5).text() == "Foundry"                   # 빈 현황표에서 고른 Memory/Foundry
+    cell(sheet, new, 1).setText("13L")                               # Memory/Foundry를 아는 라인 → 그 값으로 보이게 채움
+    assert cell(sheet, new, 5).text() == "Memory" and "라인의 Memory/Foundry로 자동" in cell(sheet, new, 5).toolTip()
     cell(sheet, new, 1).setText("99L")                               # 모르는 라인 → 현황표 기본값
-    assert cell(sheet, new, 5).text() == "파운드리"
+    assert cell(sheet, new, 5).text() == "Foundry"
     cell(sheet, new, 3).setText("M-C4")
     assert cell(sheet, new, 6).text() == "v1.4F" and "최신 버전으로 자동" in cell(sheet, new, 6).toolTip()
-    cell(sheet, new, 5).setText("메모리")                             # 메모리로 바꾸면 메모리 계열 최신으로
+    cell(sheet, new, 5).setText("Memory")                             # Memory로 바꾸면 Memory 계열 최신으로
     assert cell(sheet, new, 6).text() == "v1.4"
     cell(sheet, new, 6).setText("v1.2")                              # 직접 적은 버전은
     cell(sheet, new, 3).setText("M-O2")                              # 설비군을 바꿔도 그대로
@@ -600,10 +600,10 @@ def test_location_tree_groups_lines_by_memory_foundry_and_edits_them(own, monkey
     assert [(tree.topLevelItem(i).text(0), tree.topLevelItem(i).text(1)) for i in range(tree.topLevelItemCount())] == [
         ("기흥", "등록 · 설비 없음"), ("평택", "1대"), ("화성", "2대")]
     pyeongtaek = tree.topLevelItem(1)
-    assert [pyeongtaek.child(i).text(0) for i in range(pyeongtaek.childCount())] == ["메모리", "파운드리"]
+    assert [pyeongtaek.child(i).text(0) for i in range(pyeongtaek.childCount())] == ["Memory", "Foundry"]
     assert (pyeongtaek.child(1).child(0).text(0), pyeongtaek.child(1).child(0).text(1)) == ("S3", "등록")
-    tree.setCurrentItem(pyeongtaek.child(0).child(0))   # 평택 · 메모리 · P1
-    assert panel.fab_button.text() == "파운드리로 변경" and panel.equipment_table.rowCount() == 1
+    tree.setCurrentItem(pyeongtaek.child(0).child(0))   # 평택 · Memory · P1
+    assert panel.fab_button.text() == "Foundry로 변경" and panel.equipment_table.rowCount() == 1
     assert panel.change_fab()
     settle(page)
     assert "설비 1대" in asked[-1] and gateway.done["set_line_fab"] == [(("평택", "P1", "FOUNDRY"), {})]
@@ -638,7 +638,7 @@ def test_location_tree_groups_lines_by_memory_foundry_and_edits_them(own, monkey
         {"kind": "move", "site": "평택", "to": "S3", "equipment": [[7, "P1"]]},
         {"kind": "line", "site": "평택", "old": "P1", "new": "P1A"}],), {})] and not panel.ops
 
-    tree.setCurrentItem(tree.topLevelItem(1).child(1).child(0))  # 평택 · 파운드리 · S3
+    tree.setCurrentItem(tree.topLevelItem(1).child(1).child(0))  # 평택 · Foundry · S3
     assert panel.delete()
     settle(page)
     assert gateway.done["delete_line"] == [(("평택", "S3"), {})]
@@ -658,10 +658,10 @@ def test_location_tree_groups_lines_by_memory_foundry_and_edits_them(own, monkey
     settle(page)
     assert gateway.done["add_line"] == [(("평택", "P4", "MEMORY"), {})]
     hwaseong = tree.topLevelItem(2)
-    assert hwaseong.child(2).text(0) == "메모리/파운드리 모름" and hwaseong.child(2).isExpanded()
+    assert hwaseong.child(2).text(0) == "Memory/Foundry 모름" and hwaseong.child(2).isExpanded()
     tree.setCurrentItem(hwaseong.child(2).child(0))           # 화성 · 모름 · 19L → 어느 쪽인지 고른다
-    assert panel.fab_button.text() == "메모리/파운드리 지정"
-    monkeypatch.setattr(module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("파운드리", True)))
+    assert panel.fab_button.text() == "Memory/Foundry 지정"
+    monkeypatch.setattr(module.QInputDialog, "getItem", staticmethod(lambda *a, **k: ("Foundry", True)))
     assert panel.change_fab()
     settle(page)
     assert gateway.done["set_line_fab"][-1] == (("화성", "19L", "FOUNDRY"), {})
@@ -926,9 +926,9 @@ def test_new_row_without_area_does_not_fill_version_or_save(own, monkeypatch):
     new = sheet.table.rowCount() - 1
     for column, value in ((0, "EC9"), (1, "99L"), (3, "M-C4")):
         cell(sheet, new, column).setText(value)
-    assert cell(sheet, new, 5).text() == "" and cell(sheet, new, 6).text() == ""   # 메모리를 가정해 버전을 채우지 않는다
-    assert not sheet.save() and "메모리/파운드리" in sheet.last_note and "apply_rows" not in gateway.done
-    cell(sheet, new, 5).setText("메모리")
+    assert cell(sheet, new, 5).text() == "" and cell(sheet, new, 6).text() == ""   # Memory를 가정해 버전을 채우지 않는다
+    assert not sheet.save() and "Memory/Foundry" in sheet.last_note and "apply_rows" not in gateway.done
+    cell(sheet, new, 5).setText("Memory")
     assert cell(sheet, new, 6).text() == "v1.4"                       # 정해진 뒤에 최신 버전을 채운다
 
 

@@ -328,7 +328,7 @@ def test_lines_are_registered_under_memory_or_foundry_and_judge_new_imports(stor
     assert next(r for r in service.lines() if r.site == "QA라인") == module_line("QA라인", "QL1", "FOUNDRY", 0, True)
     assert default_area("QA라인", "QL1") == "FOUNDRY"  # 가져오기 판정에 바로 쓰인다
     for args, message in ((("QA라인", "ql1", "MEMORY"), "이미 있는"), (("없는Site", "X1", "MEMORY"), "없는 Site"),
-                          (("QA라인", "X2", "HPA"), "메모리 또는 파운드리")):
+                          (("QA라인", "X2", "HPA"), "Memory 또는 Foundry")):
         with pytest.raises(StorageValidationError, match=message):
             service.add_line(*args)
     assert service.rename_line("QA라인", "QL1", "QL2") == 0
@@ -433,7 +433,7 @@ def test_new_row_on_a_registered_foundry_line_gets_the_foundry_family(storage):
 def test_empty_sheet_keeps_its_area_and_rows_know_the_latest_group_version(storage):
     service = DataAdminService(storage)
     service.add_site("QA기본영역")
-    with pytest.raises(StorageValidationError, match="메모리 또는 파운드리"):
+    with pytest.raises(StorageValidationError, match="Memory 또는 Foundry"):
         service.create_sheet("QA기본영역", date(2026, 11, 7), "HPA")
     batch = service.create_sheet("QA기본영역", date(2026, 11, 7), "FOUNDRY")
     service.add_line("QA기본영역", "QB1", "MEMORY")

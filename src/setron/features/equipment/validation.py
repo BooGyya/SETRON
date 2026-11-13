@@ -36,7 +36,7 @@ def prepare_snapshot(value: SnapshotInput) -> SnapshotInput:
         identifier(value.group_id, "group_id")
     require(value.production_area is None or (
         isinstance(value.production_area, str) and value.production_area in {"MEMORY", "FOUNDRY"}
-    ), "production_area: MEMORY/FOUNDRY 또는 미확인(None)이어야 합니다.")
+    ), "production_area: Memory/Foundry 또는 미확인(None)이어야 합니다.")
     for field, limit in (("line", 50), ("structure_type", 50), ("geometry_type", 50), ("modification_type", 100)):
         text = getattr(value, field)
         require(text is None or isinstance(text, str) and len(text) <= limit, f"{field}: 문자열 또는 None이 필요합니다.")
