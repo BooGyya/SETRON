@@ -4,7 +4,6 @@ from copy import deepcopy
 from dataclasses import replace
 from threading import Event
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool, Qt
@@ -131,16 +130,16 @@ def test_query_candidates_and_rule_drilldown(app, data):
     assert page.answer.item_ids == (1, 2) and page.equipment_model.ids == (2,)
     assert page.result_buttons[1].rule_badge.text() == "위험 기준 1건"
     assert page.result_buttons[2].rule_badge is None
-    # 배지 툴팁은 기준명 하나만, 부모 행 툴팁에는 기준명을 겹쳐 넣지 않는다(툴팁 중복 방지).
-    # 행 툴팁은 전체 제목 + 릴리즈 정보 하나(기준명은 배지 툴팁에만 둔다).
+    # 배지는 건수만 안내하고, 기준 이름과 상세 선택은 펼친 영역의 목록에서 확인한다.
     assert page.result_buttons[1].toolTip().startswith("Alarm <원문> & 보존\n") and "v99" in page.result_buttons[1].toolTip()
-    assert page.result_buttons[1].rule_badge.toolTip() == "필수 기능"
-    # 배지는 상세를 열지 않고 그 Item의 위험 기준 판정 팝업을 연다.
+    assert page.result_buttons[1].rule_badge.toolTip() == "위험 기준 1건"
+    assert "필수 기능" not in page.result_buttons[1].toolTip()
     page.back_to_list()
-    with patch.object(ItemRuleVerdictDialog, "exec", lambda self: 0):
-        page.result_buttons[1].rule_badge.click()
-    assert page.mode == "list" and page.verdict_dialog.item_id == 1 and page.verdict_dialog.rule.risk_rule_id == 9
-    page.verdict_dialog.deleteLater()
+    badge = page.result_buttons[1].rule_badge
+    assert badge.focusPolicy() == Qt.FocusPolicy.NoFocus
+    QTest.mouseClick(badge, Qt.MouseButton.LeftButton)
+    assert page.mode == "list" and page.detail_view.isHidden()
+    assert page.verdict_dialog is None and page.rule_list_dialog is None
     page.result_buttons[1].click()
     assert page.selected_id == 1 and page.application_details.isVisible()
     assert "필수 기능" in page.content_rules.text() and "위험 규칙" not in page.title.text()
@@ -376,7 +375,12 @@ def test_preview_summary_counts_all_matching_equipment_and_only_shows_needed_unk
         assert not any(hasattr(dialog, name) for name in ("stats", "stat_values", "scope_chips"))
         rows = dialog.impact_model.rows
         assert len(rows) == len(risk_ids) + len(unknown_ids)
-        assert [row[1] for row in rows] == ["대상"] * len(risk_ids) + ["미확인"] * len(unknown_ids)
+        assert dialog.impact_model.headings == ("설비", "위치", "SW 버전")
+        records = {record.equipment_id: record for record in data.records}
+        assert rows == tuple((records[eid].equipment_code, "Site A", records[eid].pms[0].version_raw)
+                             for eid in (*risk_ids, *unknown_ids))
+        assert all(dialog.impact_model.index(row, column).data(Qt.ItemDataRole.TextAlignmentRole)
+                   == Qt.AlignmentFlag.AlignCenter for row in range(len(rows)) for column in range(3))
         dialog.name.setText("조건 변경")
         assert dialog.target_summary.isHidden() and dialog.impact_table.isHidden()
         assert not dialog.preview.isHidden()

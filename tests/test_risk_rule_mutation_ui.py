@@ -6,12 +6,13 @@ from threading import Event, get_ident
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QThreadPool, Qt
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QDialog, QLabel
 
 from setron.features.management import ManagedRecord, ManagementResult
 from setron.features.release.refresh_schemas import RefreshContext
+from setron.features.risk.impact import preview_rule_impact
 from setron.features.risk.item_scope import scope_fields
 from setron.features.risk.schemas import MappingStatus, RiskRule, RuleType
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseSaveError
@@ -316,8 +317,88 @@ def test_mutations_refresh_item_badges_expanded_context_and_current_dashboard(ap
         assert ids == ({9, 10} if operation == "update" else {9})
         assert page.result_buttons[1].rule_badge.text() == ("위험 기준 2건" if operation == "update" else "위험 기준 1건")
         if operation == "update":
-            assert "저장 후 기준명" in page.result_buttons[1].rule_badge.toolTip()
+            assert next(rule for rule in page.data.risk_rules if rule.risk_rule_id == 10).display_name == "저장 후 기준명"
+            assert page.result_buttons[1].rule_badge.toolTip() == "위험 기준 2건"
     finally:
         window.close()
         window.deleteLater()
         app.processEvents()
+
+
+@pytest.mark.parametrize("kind, description, count", [
+    (RuleType.VERSION_BELOW, "버전 미만", 2),
+    (RuleType.DIRECT_VERSION, "버전 일치", 2),
+    (RuleType.VERSION_ABOVE, "버전 초과", 1),
+])
+def test_rule_detail_shows_simple_condition_count_raw_versions_and_footer(app, data, kind, description, count):
+    first = data.records[0]
+    mixed = replace(first, pms=(*first.pms, replace(data.records[1].pms[0], pm_name="PM2"),
+                                replace(first.pms[0], pm_name="다른 계열 PM", family_id=999, version_raw="표시하면 안 됨")))
+    rule = RiskRule(30, kind, 10, "이름이 긴 위험 기준", item_id=1, release_version_id=2,
+                    mapping_status=MappingStatus.VERIFIED)
+    dialog = ItemRuleVerdictDialog(None, replace(data, records=(mixed, *data.records[1:]), risk_rules=(rule,)), 1, 30)
+    try:
+        dialog.show()
+        app.processEvents()
+        assert dialog.close_x is None
+        assert not any(hasattr(dialog, name) for name in ("kind_chip", "state_chip", "tiles", "tile_values", "status_filter", "scope_text"))
+        assert dialog.rule_name.text() == "이름이 긴 위험 기준"
+        assert dialog.reference_text.text() == "v2" and dialog.condition_text.text() == description
+        assert dialog.target_count.text() == f"위험 적용 대상 {count}건"
+        assert set(dialog.model.ids) == {1, 2, 3, 4, 5}  # HPA 제외, 미확인/위험 없음은 표에서 유지
+        assert dialog.model.headings == ("설비", "위치", "판정", "SW 버전")
+        versions = {row[0]: row[3] for row in dialog.model.rows}
+        assert versions["EQ-1"] == "v99 / v2" and versions["EQ-3"] == "v1000"
+        assert all("PM" not in text and "표시하면 안 됨" not in text for text in versions.values())
+        for row in range(dialog.model.rowCount()):
+            for column in range(dialog.model.columnCount()):
+                assert dialog.model.index(row, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+        assert dialog.table.horizontalHeader().defaultAlignment() == Qt.AlignmentFlag.AlignCenter
+        controls = [dialog.toggle_button, dialog.edit_button, dialog.delete_button, dialog.close_button]
+        assert [control.text() for control in controls] == ["해제", "수정", "삭제", "닫기"]
+        positions = [control.mapTo(dialog, QPoint()) for control in controls]
+        assert len({point.y() for point in positions}) == 1
+        assert [point.x() for point in positions] == sorted(point.x() for point in positions)
+        for control in controls:
+            assert control.width() >= 84
+            assert control.height() >= max(36, control.fontMetrics().height() + 12)
+            assert dialog.rect().contains(control.rect().translated(control.mapTo(dialog, QPoint())))
+        assert positions[0].y() > dialog.table.mapTo(dialog, QPoint()).y()
+        dialog.group.setCurrentIndex(dialog.group.findData(2))
+        assert dialog.model.ids == (4,)
+        assert dialog.target_count.text() == f"위험 적용 대상 {int(kind is RuleType.VERSION_BELOW)}건"
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+
+
+def test_editor_preview_has_three_centered_raw_version_columns_and_only_registration_has_x(app, data, gateway):
+    original = gateway.rows[10]
+    reference = deepcopy(original.current["target_reference"])
+    reference["item_manager"]["model_ids"] = [1]
+    row = replace(original, current={**original.current, "release_version_id": 4, "target_reference": reference})
+    observed = replace(data.records[0], pms=(*data.records[0].pms, replace(data.records[1].pms[0], pm_name="PM2")))
+    rule = RiskRule(10, RuleType.VERSION_BELOW, 10, row.current["risk_reason"], item_id=1,
+                    release_version_id=4, mapping_status=MappingStatus.VERIFIED, target_model_ids=(1,))
+    catalog = data.catalog()
+    impact = preview_rule_impact(rule, catalog.families, catalog, (), (observed,), base_date=data.base_date)
+    gateway.preview_risk_rule = lambda values, context: impact
+    edit = ItemRiskDialog(None, data, gateway, RefreshContext, lambda _: False,
+                         family_id=10, item_id=1, edit_record=row)
+    registration = ItemRiskDialog(None, data, gateway, RefreshContext, lambda _: False, family_id=10, item_id=1)
+    try:
+        assert edit.close_x is None and registration.close_x is not None
+        edit.show()
+        wait_for(app, lambda: edit.preview_valid)
+        assert edit.impact_model.headings == ("설비", "위치", "SW 버전")
+        assert edit.impact_model.rows == (("EQ-1", "Site A", "v99 / v2"),)
+        for column in range(3):
+            assert edit.impact_model.index(0, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+        assert edit.impact_table.horizontalHeader().defaultAlignment() == Qt.AlignmentFlag.AlignCenter
+        assert edit.target_summary.text() == "위험 적용 대상 1건"
+        assert not any(label.text() == "×" for label in edit.findChildren(QLabel))
+    finally:
+        edit.reject()
+        registration.reject()
+        edit.deleteLater()
+        registration.deleteLater()

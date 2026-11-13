@@ -9,8 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QThreadPool, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QDialog, QMainWindow
+from shiboken6 import isValid
 
 from setron.features.management import ManagementService
 from setron.features.risk.schemas import MappingStatus, RiskRule, RiskStatus, RuleType
@@ -26,7 +28,30 @@ from test_item_jira_risk_link import _jira_data, wait_until
 from test_management_service import observe
 from test_release_revision import all_rows, release, revision_storage  # noqa: F401
 from test_risk_rule_create import direct_rule
-from test_ui_items import app, data  # noqa: F401
+from test_ui_items import app as _shared_app, data  # noqa: F401
+
+
+@pytest.fixture(scope="module")
+def app(_shared_app):
+    """이 모듈에서 만든 팝업·창만 워커 완료 후 정리해 Qt 종료 순서를 보장한다."""
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _shared_app.processEvents()
+    existing = {id(window) for window in _shared_app.topLevelWidgets() if isValid(window)}
+    yield _shared_app
+    assert QThreadPool.globalInstance().waitForDone(10000), "위험 기준 테스트 워커가 종료되지 않았습니다."
+    _shared_app.processEvents()
+    windows = [window for window in _shared_app.topLevelWidgets()
+               if isValid(window) and id(window) not in existing and window.parentWidget() is None
+               and isinstance(window, (QDialog, QMainWindow))]
+    for window in windows:
+        if isValid(window):
+            window.close()
+    assert QThreadPool.globalInstance().waitForDone(10000), "위험 기준 창 정리 중인 워커가 남았습니다."
+    for window in windows:
+        if isValid(window):
+            window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _shared_app.processEvents()
 
 
 def _saved_rule(storage):
@@ -95,15 +120,16 @@ def test_toggle_impact_reuses_preview_and_marks_unknown(data):  # noqa: F811
     assert expected and toggle_impact(risky, rule) == expected
     # 해제된 기준도 '켰을 때' 기준으로 다시 사용 영향을 센다.
     assert toggle_impact(replace(risky, risk_rules=(replace(rule, is_enabled=False),)), rule) == expected
-    # 다른 기준으로도 위험 후보인 설비는 빠지지 않으므로 세지 않는다.
+    # 다른 기준과 겹쳐도 현재 기준에 해당하는 전체 위험 설비 수에는 포함한다.
     twin = replace(rule, risk_rule_id=10)
-    assert toggle_impact(replace(risky, risk_rules=(rule, twin)), rule) == 0
-    # 관측 자료가 없으면 0대로 쓰지 않고 '확인 불가'로 표기한다.
+    assert toggle_impact(replace(risky, risk_rules=(rule, twin)), rule) == expected
+    # 관측 자료가 없으면 0건으로 쓰지 않고 '확인 불가'로 표기한다.
     blind = replace(risky, records=(), observations_connected=False, base_date=None)
     assert toggle_impact(blind, rule) is None
-    assert "확인 불가" in toggle_message(False, None) and "0대" not in toggle_message(False, None)
-    assert toggle_message(False, 2) == "해제하면 위험 후보 2대가 빠집니다."
-    assert toggle_message(True, 2) == "다시 사용하면 위험 후보 2대가 추가됩니다."
+    assert "확인 불가" in toggle_message(False, None) and "0건" not in toggle_message(False, None)
+    assert toggle_message(False, 2) == "적용 대상 2건"
+    assert toggle_message(True, 2) == "적용 대상 2건"
+    assert toggle_message(False, 0) == "적용 대상 0건"
     with patch("setron.ui.item_risk_verdicts.preview_rule_impact", side_effect=RuntimeError):
         assert toggle_impact(risky, rule) is None
 
@@ -111,8 +137,8 @@ def test_toggle_impact_reuses_preview_and_marks_unknown(data):  # noqa: F811
 def test_confirm_cancel_close_and_double_click_do_not_request(app, data):  # noqa: F811
     risky = _jira_data(data)
     dialog = ItemRuleVerdictDialog(None, risky, 1, 9, toggle_allowed=True)
-    assert dialog.toggle_button.text() == "기준 해제" and dialog.toggle_button.isEnabled()
-    assert dialog.state_chip.isHidden()
+    assert dialog.toggle_button.text() == "해제" and dialog.toggle_button.isEnabled()
+    assert not hasattr(dialog, "state_chip")
     shown = []
 
     def reject(self):
@@ -121,7 +147,7 @@ def test_confirm_cancel_close_and_double_click_do_not_request(app, data):  # noq
 
     with patch.object(RuleToggleConfirmDialog, "exec", reject):
         assert not dialog._toggle_clicked()
-    assert dialog.toggle_request is None and shown == ["해제하면 위험 후보 1대가 빠집니다."]
+    assert dialog.toggle_request is None and shown == ["적용 대상 1건"]
     assert dialog.confirm_dialog.confirm_button.text() == "해제" and dialog.confirm_dialog.cancel_button.text() == "취소"
     with patch.object(RuleToggleConfirmDialog, "exec", lambda self: QDialog.DialogCode.Accepted):
         assert dialog._toggle_clicked()
@@ -130,6 +156,32 @@ def test_confirm_cancel_close_and_double_click_do_not_request(app, data):  # noq
     # 저장 경로가 없으면(시연 자료) 버튼을 막고 요청을 만들지 않는다.
     readonly = ItemRuleVerdictDialog(None, risky, 1, 9)
     assert not readonly.toggle_button.isEnabled() and not readonly._toggle_clicked()
+
+
+@pytest.mark.parametrize("enabled, count, text", [(False, 3, "적용 대상 3건"), (True, 3, "적용 대상 3건"),
+                                                  (False, None, "적용 대상 확인 불가")])
+def test_toggle_confirmation_has_no_header_x_and_target_count_left_of_footer_actions(app, data, enabled, count, text):
+    rule = _jira_data(data).risk_rules[0]
+    dialog = RuleToggleConfirmDialog(None, rule, enabled, count)
+    try:
+        dialog.show()
+        app.processEvents()
+        assert dialog.close_x is None and dialog.message.text() == text
+        message = dialog.message.mapTo(dialog, dialog.message.rect().center())
+        cancel = dialog.cancel_button.mapTo(dialog, dialog.cancel_button.rect().center())
+        confirm = dialog.confirm_button.mapTo(dialog, dialog.confirm_button.rect().center())
+        assert message.x() < cancel.x() < confirm.x()
+        assert abs(message.y() - cancel.y()) <= 1 and abs(cancel.y() - confirm.y()) <= 1
+        assert dialog.hint.mapTo(dialog, QPoint()).y() < dialog.message.mapTo(dialog, QPoint()).y()
+        assert dialog.rule_label.font().pixelSize() >= 14 and dialog.hint.font().pixelSize() >= 14
+        for control in (dialog.cancel_button, dialog.confirm_button):
+            assert control.height() >= max(36, control.fontMetrics().height() + 12)
+            assert dialog.rect().contains(control.rect().translated(control.mapTo(dialog, QPoint())))
+        assert dialog.confirm_button.text() == ("다시 사용" if enabled else "해제")
+        assert dialog.unknown.isVisible() is (count is None)
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
 
 
 def test_disabled_rule_keeps_reenable_entry(app, data):  # noqa: F811
@@ -142,12 +194,13 @@ def test_disabled_rule_keeps_reenable_entry(app, data):  # noqa: F811
     QTest.qWait(30)
     page = window.pages["items"]
     badge = page.result_buttons[1].rule_badge
-    assert badge is not None and badge.text() == "해제된 기준 1건" and badge.icon().isNull()
+    assert badge is not None and badge.text() == "해제된 기준 1건"
+    assert badge.focusPolicy() == Qt.FocusPolicy.NoFocus
     page.registered_only.setChecked(True)  # 위험 등록 필터는 사용 중 기준만 센다
     assert not page.result_buttons
     page.registered_only.setChecked(False)
     dialog = ItemRuleVerdictDialog(None, disabled, 1, 9, toggle_allowed=True)
-    assert not dialog.state_chip.isHidden() and dialog.state_chip.text() == "해제됨"
+    assert not hasattr(dialog, "state_chip")
     assert dialog.toggle_button.text() == "다시 사용" and "다시 사용" in dialog.notice_text.text()
     assert dialog.table.isHidden() and not hasattr(dialog, "dashboard_button")
     with patch.object(RuleToggleConfirmDialog, "exec", lambda self: QDialog.DialogCode.Accepted):

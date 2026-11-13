@@ -4,8 +4,10 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QTimer, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from setron.features.item.schemas import ItemState, TargetScope
 from setron.features.release.schemas import ItemInput, ItemLinkInput
@@ -15,6 +17,7 @@ from setron.ui.app import create_window
 from setron.ui.item_original import (
     JIRA_EMPTY, JIRA_FOUND, JIRA_NO_COLUMN, JIRA_NO_ORIGINAL, OriginalItemRow, item_jira,
 )
+from setron.ui.item_risk_list import ItemRuleListDialog
 from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, rule_verdicts
 from setron.ui.read_worker import BackgroundRead
 
@@ -160,6 +163,81 @@ def test_verdict_dialog_close_stays_on_item_without_removed_actions(app, data):
     assert not hasattr(page.verdict_dialog, "dashboard_button") and not hasattr(page.verdict_dialog, "source_button")
     assert not hasattr(page, "risk_candidates_requested") and window.route == "items"
     window.close()
+
+
+@pytest.mark.parametrize("several", [False, True])
+def test_expanded_item_button_opens_list_before_exact_selected_rule_detail(app, data, several):
+    value = _jira_data(data)
+    selected = 9
+    if several:
+        extra = RiskRule(10, RuleType.DIRECT_VERSION, 10, "두 번째 기준", item_id=1,
+                         release_version_id=2, mapping_status=MappingStatus.VERIFIED)
+        foreign = replace(extra, risk_rule_id=77, family_id=20)
+        value = replace(value, risk_rules=(*value.risk_rules, extra, foreign))
+        selected = 10
+    window = create_window(item_loader=lambda: value)
+    window.resize(1500, 960)
+    window.show()
+    window.navigate("items")
+    QTest.qWait(20)
+    page = window.pages["items"]
+    page.result_buttons[1].click()
+    assert page.view_rules.isVisible() and page.view_rules.isEnabled()
+    assert page.view_rules.text() == "위험 기준 보기"
+    view_position = page.view_rules.mapToGlobal(QPoint())
+    register_position = page.register_rule.mapToGlobal(QPoint())
+    assert view_position.x() + page.view_rules.width() < register_position.x()
+    assert view_position.y() == register_position.y()
+    original_query = window.query_state.applied
+    entered, errors = [], []
+    list_exec, detail_exec = ItemRuleListDialog.exec, ItemRuleVerdictDialog.exec
+    watchdog = QTimer(window)
+    watchdog.setSingleShot(True)
+
+    def timeout():
+        errors.append("위험 기준 선택 또는 상세 닫기가 완료되지 않았습니다.")
+        active = QApplication.activeModalWidget()
+        if active is not None:
+            active.reject()
+
+    watchdog.timeout.connect(timeout)
+
+    def choose(dialog):
+        try:
+            assert dialog.isVisible() and dialog.selected_rule_id is None
+            assert entered == [("list", 1, 10, (9, 10) if several else (9,))]
+            index = dialog.model.index(dialog.model.ids.index(selected), 0)
+            QTest.mouseClick(dialog.table.viewport(), Qt.MouseButton.LeftButton,
+                             pos=dialog.table.visualRect(index).center())
+        except Exception as error:
+            errors.append(repr(error))
+            dialog.reject()
+
+    def show_list(dialog):
+        entered.append(("list", dialog.item_id, dialog.family_id, dialog.model.ids))
+        QTimer.singleShot(0, lambda: choose(dialog))
+        return list_exec(dialog)
+
+    def show_detail(dialog):
+        entered.append(("detail", dialog.item_id, dialog.rule.risk_rule_id))
+        QTimer.singleShot(0, dialog.close_button.click)
+        return detail_exec(dialog)
+
+    try:
+        watchdog.start(4000)
+        with patch.object(ItemRuleListDialog, "exec", show_list), patch.object(ItemRuleVerdictDialog, "exec", show_detail):
+            page.view_rules.click()
+        assert not errors
+        assert entered == [("list", 1, 10, (9, 10) if several else (9,)), ("detail", 1, selected)]
+        assert page.rule_list_dialog.selected_rule_id == selected
+        assert page.verdict_dialog.rule.risk_rule_id == selected
+        assert page.mode == "detail" and page.selected_id == 1 and window.route == "items"
+        assert window.query_state.applied is original_query
+    finally:
+        watchdog.stop()
+        window.close()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def test_registered_risk_save_refreshes_items_and_dashboard(app, data):

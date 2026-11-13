@@ -114,11 +114,11 @@ def test_site_model_and_line_share_one_row_without_form_overflow(dialog, size, f
         theme.apply(previous)
 
 
-def test_reference_version_updates_all_three_strict_relation_labels_and_keeps_item_context(dialog):
+def test_reference_changes_keep_short_relation_labels_and_item_context(dialog):
     assert [dialog.criterion.itemData(index) for index in range(dialog.criterion.count())] == [
         "VERSION_BELOW", "DIRECT_VERSION", "VERSION_ABOVE"]
     dialog.start.setCurrentIndex(dialog.start.findData(2))
-    assert [dialog.criterion.itemText(index) for index in range(3)] == ["v2 미만 버전", "v2 동일 버전", "v2 초과 버전"]
+    assert [dialog.criterion.itemText(index) for index in range(3)] == ["버전 미만", "버전 일치", "버전 초과"]
     assert dialog.memo.placeholderText() == "예) 위험 기준 사유"
     for key in ("VERSION_BELOW", "DIRECT_VERSION", "VERSION_ABOVE"):
         dialog.criterion.setCurrentIndex(dialog.criterion.findData(key))

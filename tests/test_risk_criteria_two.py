@@ -11,7 +11,7 @@ from setron.features.release.schemas import ItemInput, ItemLinkInput
 from setron.features.release.service import ReleaseService
 from setron.features.risk.schemas import MappingStatus, RiskRule, RiskStatus, RuleType, criterion_label
 from setron.ui.item_risk_dialog import ItemRiskDialog, applied_rule
-from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, category, rule_verdicts
+from setron.ui.item_risk_verdicts import ItemRuleVerdictDialog, rule_verdicts
 
 from test_ui_items import app, data
 from test_release_revision import revision_storage, all_rows
@@ -42,7 +42,7 @@ def test_criterion_dropdown_has_three_strict_version_relations(app, data):
     dialog = _dialog(data, [])
     try:
         assert [dialog.criterion.itemText(i) for i in range(dialog.criterion.count())] == [
-            "v99 미만 버전", "v99 동일 버전", "v99 초과 버전"]
+            "버전 미만", "버전 일치", "버전 초과"]
         assert not dialog.version_fields.isHidden()
         assert dialog.values()["rule_type"] == "VERSION_BELOW" and dialog.values()["item_id"] == 1
         assert not hasattr(dialog, "version") and not hasattr(dialog, "end")
@@ -144,7 +144,13 @@ def test_existing_rules_show_two_names_and_keep_verdicts(app, data):
     for rule in (direct, defect, safety):
         dialog = ItemRuleVerdictDialog(None, replace(data, risk_rules=(rule,)), 1, rule.risk_rule_id)
         try:
-            assert dialog.kind_chip.text() == category(rule)
+            assert not hasattr(dialog, "kind_chip")
+            assert dialog.rule_name.text() == rule.risk_reason
+            assert dialog.reference_text.text() == {
+                RuleType.DIRECT_VERSION: "v2", RuleType.DEFECT_ITEM: "시작 v99 · 해제 v3",
+                RuleType.SAFETY_REQUIRED: "별도 기준 버전 없음",
+            }[rule.rule_type]
+            assert dialog.condition_text.text()
         finally:
             _close(dialog)
     # 구형 호출의 범위 대응도 유지하며 새 등록 화면에서 구형 조건을 생성하지 않는다.

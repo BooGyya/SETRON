@@ -7,7 +7,7 @@ import threading
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QSettings, Qt
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QImage, QPalette
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QLabel, QStyleOptionViewItem
@@ -15,6 +15,9 @@ from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QLabel, QStyle
 from setron.features.chat.report import ChatReport, ReportPart
 from setron.features.chat.schemas import BarChart, Table
 from setron.features.export.schemas import ExportResult, ExportStatus
+from setron.ui.ai_page import _UserBubble
+from setron.ui.appearance import manager
+from setron.ui.appearance_data import Appearance
 from setron.ui.chat_components import SavedFileToast, VerdictDelegate
 from setron.ui.chat_export import ExcelExportDialog, ReportDialog, chart_png
 from setron.ui.chat_page import AnswerCard, ChatPage, PendingCard, bar_chart
@@ -90,6 +93,42 @@ def test_answer_exposes_contract_conditions_cause_charts_and_notices(ui):
         for index, tone in enumerate(table.tones):
             if tone in VerdictDelegate.COLORS:
                 assert widget.item(index, widget.columnCount() - 1).data(Qt.ItemDataRole.UserRole) == tone
+
+
+@pytest.mark.parametrize("mode,font_size", [("light", "normal"), ("dark", "large")])
+def test_answer_typography_follows_question_and_keeps_selectable_literal_text(ui, mode, font_size):
+    answer = replace(sample(), summary="<b>요약</b> & 원문 그대로",
+                     cause="<a href='file:///example'>원인 설명</a>\n다음 문단도 그대로 표시합니다.",
+                     notices=("<b>첫 번째 근거</b>", "두 번째 근거 & 확인 사항"), charts=(), tables=())
+    question = ui(_UserBubble())
+    question.show_question("<b>원인 분석해줘</b>")
+    card = ui(AnswerCard(answer, lambda _: None))
+    card.resize(620, 500)
+    theme, previous = manager(), manager().appearance
+    try:
+        theme.apply(Appearance(mode=mode, font_size=font_size))
+        card.basis_toggle.click()
+        QTest.qWait(20)
+        labels = card.findChildren(QLabel)
+        cause = next(widget for widget in labels if widget.text() == answer.cause)
+        heading = next(widget for widget in labels if widget.text() == "원인 분석" and widget.objectName() != "aiTag")
+        basis = card.basis_body.findChildren(QLabel)
+        assert card.summary.text() == answer.summary and [widget.text() for widget in basis] == list(answer.notices)
+        assert question.text.text() == "<b>원인 분석해줘</b>" and card.basis_body.isVisibleTo(card)
+        for widget in (card.summary, cause, heading):
+            assert widget.font().family() == question.text.font().family()
+            assert widget.font().pixelSize() == question.text.font().pixelSize()
+        assert card.summary.font().weight() == question.text.font().weight()
+        assert heading.font().weight() > cause.font().weight()
+        for widget in (question.text, card.summary, cause, *basis):
+            assert widget.textFormat() == Qt.TextFormat.PlainText
+            assert widget.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse
+        for widget in (card.summary, cause, *basis):
+            assert widget.palette().color(QPalette.ColorRole.WindowText).name() == theme.tokens["ink"]
+        assert all(widget.font().family() == cause.font().family()
+                   and 0 < widget.font().pixelSize() < cause.font().pixelSize() for widget in basis)
+    finally:
+        theme.apply(previous)
 
 
 def test_real_empty_and_unrecognized_are_distinct_and_navigation_is_explicit(ui):
