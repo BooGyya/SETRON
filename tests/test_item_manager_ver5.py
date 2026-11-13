@@ -287,7 +287,7 @@ def test_changing_criterion_keeps_name_and_category_follows_criterion(app, data)
     assert dialog.save_button.isEnabled() and calls[-1]["rule_type"] == "VERSION_ABOVE" and calls[-1]["item_id"] == 2
     # 직접 고친 이름은 판정 기준을 바꿔도 그대로 둔다.
     dialog.name.setText("직접 정한 이름")
-    dialog.criterion.setCurrentIndex(dialog.criterion.findData("DIRECT_VERSION"))
+    dialog.criterion.setCurrentIndex(dialog.criterion.findData("VERSION_BELOW"))
     assert dialog.name.text() == "직접 정한 이름"
     dialog.reject()
 

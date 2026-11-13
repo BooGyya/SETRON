@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from setron.features.ai.schemas import ExtractKind
+from setron.features.production_area import production_area_label, production_area_value
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.excel_import.reference import ReferenceData
 from setron.features.excel_import.candidates import apply_model_candidates, candidate_notes, model_candidate_rows
@@ -583,16 +584,16 @@ class ImportPage(QWidget):
         self.common_site_combo.setStyleSheet(import_combo_style())
         self.common_area = ComboBox()
         self.common_area.setStyleSheet(import_combo_style())
-        for text, value in (("메모리/파운드리 · 라인 기준 자동", ""), ("MEMORY", "MEMORY"), ("FOUNDRY", "FOUNDRY")):
+        for text, value in (("Memory/Foundry · 라인 기준 자동", ""), ("Memory", "MEMORY"), ("Foundry", "FOUNDRY")):
             self.common_area.addItem(text, value)
-        for widget, name in ((self.common_date, "공통 기준일"), (self.common_site_combo, "공통 사업장"), (self.common_area, "공통 메모리/파운드리")):
+        for widget, name in ((self.common_date, "공통 기준일"), (self.common_site_combo, "공통 사업장"), (self.common_area, "공통 Memory/Foundry")):
             widget.setAccessibleName(name)
             widget.setProperty("queryField", True)
             widget.setFixedHeight(38)
         self.common_apply_button = button("모든 행에 적용")
         self.common_overwrite = QCheckBox("이미 있는 값도 덮어쓰기")
         common_layout.addWidget(_WrapRow([_field("기준일", self.common_date), _field("Site", self.common_site_combo),
-                                          _field("메모리/파운드리", self.common_area), QWidget()], 230, fields=True))
+                                          _field("Memory/Foundry", self.common_area), QWidget()], 230, fields=True))
         common_layout.addWidget(_WrapRow([self.common_apply_button, self.common_overwrite], 220))
         self.common_box = common   # 3단계 카드의 ‘검토 항목’ 바로 위에 번역표 후보 적용과 함께 둔다.
         self.release_context = QFrame()
@@ -992,10 +993,15 @@ class ImportPage(QWidget):
                 ids.append(row.row_id)
                 for column, name in enumerate(draft.fields, start=2):
                     value = row.value(name) or ""
+                    if name == "production_area":
+                        value = production_area_label(value)
                     lines = []
                     if name in row.edits:
                         backgrounds[line, column] = EDITED_BACKGROUND
-                        lines.append(f"원래 값 {row.original.get(name) or '빈 값'} → 새 값 {value or '빈 값'}")
+                        original = row.original.get(name)
+                        if name == "production_area":
+                            original = production_area_label(original)
+                        lines.append(f"원래 값 {original or '빈 값'} → 새 값 {value or '빈 값'}")
                     messages = error_messages.get((row.row_id, name))
                     if messages:
                         colors[line, column] = DANGER_INK
@@ -1107,6 +1113,8 @@ class ImportPage(QWidget):
     @staticmethod
     def _cell(row, name):
         value = row.value(name)
+        if name == "production_area":
+            return production_area_label(value, unknown="(빈 값)")
         return value if value is not None else "(빈 값)"
 
     def _render_save(self):
@@ -1665,7 +1673,7 @@ class ImportPage(QWidget):
         return True
 
     def apply_common(self):
-        """시트 공통 정보(기준일·사업장·메모리/파운드리)를 설비 현황 초안의 모든 행에 적용한다.
+        """시트 공통 정보(기준일·사업장·Memory/Foundry)를 설비 현황 초안의 모든 행에 적용한다.
 
         빈 행만 채우고, ‘덮어쓰기’를 켜면 기존 값도 바꾼다. 원본 추출값은 수정값과 따로 보존된다.
 
@@ -1678,7 +1686,7 @@ class ImportPage(QWidget):
                   "production_area": self.common_area.currentData() or ""}
         values = {name: text for name, text in values.items() if text}
         if not values:
-            self._set_status("공통 정보 없음", "warning", "기준일·사업장·메모리/파운드리 중 하나 이상을 입력해 주세요.")
+            self._set_status("공통 정보 없음", "warning", "기준일·사업장·Memory/Foundry 중 하나 이상을 입력해 주세요.")
             return False
         if "base_date" in values:
             try:
@@ -1737,6 +1745,8 @@ class ImportPage(QWidget):
             row = self.draft.row(row_id)
         except LookupError:
             return False
+        if field == "production_area":
+            text = production_area_value(text)
         if text == (row.value(field) or "") and not (confirm_blank and not text and field not in row.edits):
             return False
         self.draft = edit_value(self.draft, row_id, field, text)

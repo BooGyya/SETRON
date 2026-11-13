@@ -8,11 +8,12 @@ import pytest
 from PySide6.QtCore import QDate, QPoint, QPointF, Qt
 from PySide6.QtGui import QPalette, QWheelEvent
 from PySide6.QtTest import QSignalSpy, QTest
-from PySide6.QtWidgets import QApplication, QLineEdit, QTableView
+from PySide6.QtWidgets import QApplication, QLineEdit, QTableView, QVBoxLayout, QWidget
 
 from setron.ui.appearance import manager
 from setron.ui.appearance_data import Appearance
 from setron.ui.calendar_widgets import CalendarWidget, DateEdit
+from setron.ui.date_range import DatePickerEdit, DateRangeDialog
 from setron.ui.dashboard_demo import demo_dashboard_source
 from setron.ui.import_delete import ImportDeletePage
 from setron.ui.import_demo import DemoExcel
@@ -158,28 +159,93 @@ def test_range_limits_years_months_and_navigation_without_changing_selection(own
 
 
 @pytest.mark.parametrize("field_type", [DateField, PeriodDateField])
-def test_date_fields_reuse_common_calendar_and_only_commit_day_selection(own, field_type):
+def test_date_fields_use_dashboard_popup_and_only_commit_on_apply(own, field_type):
     field = own(field_type("2026-10-05"))
     field.setFixedSize(190, 42)
     field.open_calendar()
-    calendar = field.dialog.calendar
+    dialog = field.dialog
+    calendar = dialog.calendar
+    assert isinstance(dialog, DateRangeDialog) and dialog.single_day
     assert isinstance(calendar, CalendarWidget)
     calendar.year_combo.setCurrentIndex(2024 - calendar.years.first)
     calendar.month_combo.setCurrentIndex(1)
     assert field.text() == "2026-10-05"
     QTest.keyClick(calendar, Qt.Key.Key_Escape)
-    assert field.text() == "2026-10-05"
-    field.dialog.reject()
+    assert field.text() == "2026-10-05" and not dialog.isVisible()
     field.open_calendar()
-    calendar = field.dialog.calendar
+    dialog, calendar = field.dialog, field.dialog.calendar
     assert calendar.yearShown() == 2026 and calendar.monthShown() == 10
     calendar.activated.emit(QDate(2024, 2, 29))
-    assert field.text() == "2026-10-05"
-    field.dialog.apply_button.click()
-    assert field.text() == "2024-02-29" and not field.dialog.isVisible()
+    assert field.text() == "2026-10-05" and dialog.isVisible()
+    dialog.apply_button.click()
+    assert field.text() == "2024-02-29" and not dialog.isVisible()
     field.selectAll()
     QTest.keyClicks(field, "20261108")
     assert field.text() == "2026-11-08" and field.hasAcceptableInput()
+
+
+@pytest.mark.parametrize("initial", ["", "2026-10-05", "2026-02-30"])
+@pytest.mark.parametrize("dismiss", ["cancel", "escape", "outside"])
+def test_date_field_dismiss_preserves_blank_invalid_or_existing_input(own, initial, dismiss):
+    page = QWidget()
+    page.resize(700, 600)
+    layout = QVBoxLayout(page)
+    field = DateField()
+    field.setFixedHeight(38)
+    layout.addWidget(field)
+    layout.addStretch()
+    own(page)
+    field.setText(initial)
+    changed = QSignalSpy(field.textChanged)
+    field.open_calendar()
+    dialog = field.dialog
+    dialog.calendar.clicked.emit(QDate(2024, 2, 29))
+    assert field.text() == initial and changed.count() == 0
+    if dismiss == "cancel":
+        dialog.cancel_button.click()
+    elif dismiss == "escape":
+        QTest.keyClick(dialog.calendar_view, Qt.Key.Key_Escape)
+    else:
+        QTest.mouseClick(page, Qt.MouseButton.LeftButton, pos=QPoint(page.width() - 2, page.height() - 2))
+    assert not dialog.isVisible()
+    assert field.text() == initial and changed.count() == 0
+    field.open_calendar()
+    expected = QDate.fromString(initial, "yyyy-MM-dd")
+    assert field.dialog.calendar.selectedDate() == (expected if expected.isValid() else QDate.currentDate())
+    field.dialog.calendar.clicked.emit(QDate(2024, 2, 29))
+    field.dialog.apply_button.click()
+    assert field.text() == "2024-02-29" and changed.count() == 1
+
+
+@pytest.mark.parametrize("field_type", [DateField, DatePickerEdit])
+@pytest.mark.parametrize("key,modifiers", [(Qt.Key.Key_F4, Qt.KeyboardModifier.NoModifier),
+                                          (Qt.Key.Key_Down, Qt.KeyboardModifier.AltModifier)])
+def test_single_date_popup_keyboard_and_disabled_fields(own, field_type, key, modifiers):
+    field = own(field_type())
+    QTest.keyClick(field, key, modifiers)
+    assert isinstance(field.dialog, DateRangeDialog) and field.dialog.isVisible()
+    field.hide()
+    assert not field.dialog.isVisible()
+    field.show()
+    field.setReadOnly(True)
+    QTest.keyClick(field, key, modifiers)
+    assert not field.dialog.isVisible()
+    field.setReadOnly(False)
+    field.setDisabled(True)
+    field.open_calendar()
+    assert not field.dialog.isVisible()
+
+
+def test_dashboard_popup_same_day_confirmation_does_not_build_a_native_popup(own):
+    field = own(DatePickerEdit())
+    field.setDate(QDate(2024, 2, 29))
+    changed, activated = QSignalSpy(field.dateChanged), QSignalSpy(field.calendar_activated)
+    field.open_calendar()
+    assert field.is_calendar_visible()
+    field.dialog.apply_button.click()
+    assert not field.is_calendar_visible()
+    assert changed.count() == 0 and activated.count() == 1
+    assert field._calendar_widget is None
 
 
 @pytest.mark.parametrize("opening", ["arrow", "keyboard", "text"])
@@ -240,8 +306,12 @@ def test_common_query_and_management_release_date_use_same_calendar(own):
     assert isinstance(panel.date_edit, DateEdit)
     assert isinstance(panel.date_edit.calendarWidget(), CalendarWidget)
     editor = own(ValueEditor("release_version", "released_at", date(2024, 2, 29), {}))
-    assert isinstance(editor.editor, DateEdit)
-    assert isinstance(editor.editor.calendarWidget(), CalendarWidget)
+    assert isinstance(editor.editor, DatePickerEdit)
+    editor.editor.open_calendar()
+    dialog = editor.editor.dialog
+    dialog.calendar.clicked.emit(QDate(2025, 1, 2))
+    assert editor.value() == date(2024, 2, 29)
+    dialog.cancel_button.click()
     assert editor.value() == date(2024, 2, 29)
     assert editor.editor.minimumDate() == QDate(1000, 1, 1)
     editor.empty.setChecked(True)
@@ -275,9 +345,9 @@ def test_clicking_the_query_date_text_opens_calendar_until_day_confirmation(own)
 
 @pytest.mark.parametrize("screen", ["replay", "import", "delete"])
 def test_each_screen_date_popup_uses_shared_calendar(own, screen):
-    if screen == "replay":
-        page = own(ReplayPage(demo_dashboard_source()))
-        field = page.query_panel.range_button
+    if screen in {"replay", "delete"}:
+        page = own(ReplayPage(demo_dashboard_source()) if screen == "replay" else ImportDeletePage())
+        field = page.query_panel.range_button if screen == "replay" else page.period_button
         field.click()
         calendar = field.dialog.calendar
         assert isinstance(calendar, CalendarWidget)
@@ -286,27 +356,17 @@ def test_each_screen_date_popup_uses_shared_calendar(own, screen):
         assert calendar.isVisible()
         field.dialog.reject()
         return
-    elif screen == "import":
-        page = own(ImportPage(excel=DemoExcel()))
-        fields = (page.common_date,)
-    else:
-        page = own(ImportDeletePage())
-        fields = (page.start, page.end)
+    page = own(ImportPage(excel=DemoExcel()))
+    fields = (page.common_date,)
     for field in fields:
-        if screen == "replay":
-            QTest.mouseClick(field.lineEdit(), Qt.MouseButton.LeftButton)
-            calendar = field.calendarWidget()
-        else:
-            field.open_calendar()
-            calendar = field.dialog.calendar
+        field.open_calendar()
+        calendar = field.dialog.calendar
+        assert isinstance(field.dialog, DateRangeDialog) and field.dialog.single_day
         assert isinstance(calendar, CalendarWidget)
         assert calendar.year_combo.currentText().endswith("년")
         assert calendar.month_combo.currentText().endswith("월")
-        if screen == "replay":
-            assert calendar.isVisible()
-            QTest.keyClick(calendar, Qt.Key.Key_Escape)
-        else:
-            field.dialog.reject()
+        assert calendar.isVisible()
+        field.dialog.reject()
 
 
 @pytest.mark.parametrize("width", [1320, 746, 620])
@@ -339,3 +399,16 @@ def test_no_screen_constructs_an_unshared_native_calendar():
         assert not any((isinstance(node.func, ast.Name) and node.func.id in raw)
                        or (isinstance(node.func, ast.Attribute) and node.func.attr in raw)
                        for node in calls), path.name
+
+
+def test_no_business_screen_bypasses_the_dashboard_date_popup():
+    root = Path(__file__).resolve().parents[1] / "src/setron/ui"
+    for path in root.glob("*.py"):
+        if path.name in {"calendar_widgets.py", "date_range.py"}:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+        assert not any(node.func.id == "CalendarWidget" for node in calls), path.name
+        # QueryPanel의 숨긴 시작일/종료일은 기존 조회 API 호환용이며 화면에는 DateRangeButton만 표시한다.
+        if path.name != "query_panel.py":
+            assert not any(node.func.id == "DateEdit" for node in calls), path.name

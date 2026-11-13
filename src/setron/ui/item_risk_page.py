@@ -10,10 +10,12 @@ class ItemRiskPage(QWidget):
         super().__init__()
         self.data, self.gateway, self.context_provider, self.submit = None, None, None, None
         self.submit_edit, self.submit_delete = None, None
+        self.toggle = None
 
-    def configure(self, gateway, context_provider, submit, *, submit_edit=None, submit_delete=None):
+    def configure(self, gateway, context_provider, submit, toggle=None, *, submit_edit=None, submit_delete=None):
         self.gateway, self.context_provider, self.submit = gateway, context_provider, submit
         self.submit_edit, self.submit_delete = submit_edit, submit_delete
+        self.toggle = toggle
 
     def set_data(self, data):
         self.data = data

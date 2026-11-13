@@ -17,7 +17,7 @@ from setron.features.targets.schemas import CandidateConfirmation
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseConnectionError, DatabaseSaveError
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, StatusBadge, button, label
-from setron.ui.calendar_widgets import DateEdit
+from setron.ui.date_range import DatePickerEdit
 from setron.ui.equipment import ReadTableModel, read_table
 from setron.ui.management_data import (
     ENUMS, FIELD_NAMES, KINDS, OPTIONAL_IDS, OPTIONAL_TEXT, display_value,
@@ -102,7 +102,7 @@ class ValueEditor(QWidget):
             self.empty.setChecked(current is None)
             layout.addWidget(self.empty)
             if field == "released_at":
-                self.kind, self.editor = "date", DateEdit()
+                self.kind, self.editor = "date", DatePickerEdit()
                 self.editor.setDateRange(QDate(1000, 1, 1), QDate(9999, 12, 31))
                 self.editor.setCalendarPopup(True)
                 self.editor.setDisplayFormat("yyyy-MM-dd")

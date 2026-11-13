@@ -57,13 +57,13 @@ def picture(name):
 
 
 class DateField(QLineEdit):
-    """숫자 8자리 입력과 달력 선택. 구분자를 자동 표시하며 공란을 오늘로 확정하지 않는다."""
+    """숫자 8자리 입력과 공통 날짜 팝업. 적용할 때만 값을 채우며 공란을 보존한다."""
 
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
+        self.dialog = None
         # 입력·붙여넣기·삭제·되돌리기는 Qt가 처리하고 숫자 8칸과 구분자만 허용한다.
         self.setInputMask("0000-00-00;_")
-        self.dialog = None
         self.calendar_action = self.addAction(icon("import-ver5/fdb91.svg"), QLineEdit.ActionPosition.TrailingPosition)
         self.calendar_action.setToolTip("달력에서 날짜 선택")
         self.calendar_action.setText("달력에서 날짜 선택")
@@ -91,8 +91,12 @@ class DateField(QLineEdit):
         day = (current if current.isValid() else QDate.currentDate()).toPython()
         dialog = DateRangeDialog(day, day, single_day=True, parent=self)
         self.dialog = dialog
-        dialog.accepted.connect(lambda: self.setText(dialog.end.isoformat()) if dialog is self.dialog else None)
+        dialog.accepted.connect(lambda: self._apply_day(dialog))
         dialog.open_at(self)
+
+    def _apply_day(self, dialog):
+        if dialog is self.dialog and self.isEnabled() and not self.isReadOnly():
+            self.setText(dialog.end.isoformat())
 
     def keyPressEvent(self, event):
         if (event.key() == Qt.Key.Key_F4 or

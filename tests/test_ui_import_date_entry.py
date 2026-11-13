@@ -93,7 +93,6 @@ def test_keyboard_selection_paste_undo_and_calendar_keep_native_behavior(own):
         assert field.text() == "2026-11-08"
         field.dialog.apply_button.click()
         assert field.text() == "2026-09-21"
-        field.dialog.reject()
         field.setReadOnly(True)
         QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=QPoint(70, 20))
         QTest.keyClicks(field, "20241108")
@@ -133,4 +132,3 @@ def test_import_common_date_hides_block_cursor_and_keeps_selection_and_calendar(
     assert field.text() == "2026-11-08"
     field.dialog.apply_button.click()
     assert field.text() == "2026-10-05"
-    field.dialog.reject()

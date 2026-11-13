@@ -38,6 +38,10 @@ class RiskRuleSaveController(QObject):
     def delete_risk_rule(self, record):
         return self._start("delete_risk_rule", record)
 
+    def set_risk_rule_enabled(self, risk_rule_id, enabled):
+        """해제·다시 사용도 동일한 저장 상태와 완료·실패 신호를 사용한다."""
+        return self._start("set_risk_rule_enabled", risk_rule_id, enabled)
+
     def _start(self, method, *arguments):
         if self.busy or self.locked or self.state == "saving" or self.gateway is None:
             return False

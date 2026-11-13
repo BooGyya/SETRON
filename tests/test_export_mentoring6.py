@@ -89,7 +89,7 @@ def test_all_export_preserves_lines_classifications_dfb_hpa_and_empty_versions(s
         rows = {row["설비 호기"]: row for row in records(book["설비현황표"])}
         for line, area, _, _, model, version in specs:
             row = rows["TEST-" + line]
-            assert (row["라인"], row["생산 영역"], row["모델명(원문)"], row["SW 버전(원문)"]) == (line, area, model, version)
+            assert (row["라인"], row["생산 영역"], row["모델명(원문)"], row["SW 버전(원문)"]) == (line, {None: None, "MEMORY": "Memory", "FOUNDRY": "Foundry"}[area], model, version)
         assert rows["TEST-P4H"]["설비군"] == "DFB"
         assert rows["TEST-P4D"]["설비군"] == "C4"
         assert rows["HPA-NO-SW"]["설비군"] == "HPA" and rows["HPA-NO-SW"]["SW 버전(원문)"] is None
@@ -107,9 +107,9 @@ def test_selected_scope_does_not_mix_other_equipment_or_relabel_linked_items_as_
     codes = {row["equipment_code"] for row in all_rows(storage, "equipment") if row["equipment_id"] in expected}
     actual = records(book["설비현황표"])
     assert {row["설비 호기"] for row in actual} == codes
-    assert all(row["생산 영역"] == scope for row in actual)
+    assert all(row["생산 영역"] == {"MEMORY": "Memory", "FOUNDRY": "Foundry"}[scope] for row in actual)
     if scope == "FOUNDRY":
-        assert all(row["생산 영역"] == "FOUNDRY" for row in records(book["릴리즈노트"]))
+        assert all(row["생산 영역"] == "Foundry" for row in records(book["릴리즈노트"]))
         assert not any(row["내용"] == "원본 안전 개선" for row in records(book["릴리즈노트"]))
 
 

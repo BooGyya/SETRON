@@ -28,6 +28,21 @@ VERSION_CRITERIA = (
 )
 
 
+def applied_rule(version, start, end, order=lambda _: None):
+    """기존 사용 위험 입력을 저장 방식으로 대응한다. 구형 호출의 범위 검증도 유지한다."""
+    if version is not None and (start is not None or end is not None):
+        return None, {}, "위험 버전과 시작·해제 버전은 함께 지정할 수 없습니다. 한쪽만 고르세요."
+    if version is not None:
+        return "DIRECT_VERSION", {"release_version_id": version}, ""
+    if start is None:
+        return None, {}, ("해제 버전은 시작 버전과 함께 지정하세요." if end is not None
+                          else "위험 버전 또는 시작 버전을 선택하세요.")
+    first, last = order(start), order(end) if end is not None else None
+    if end is not None and (end == start or first is not None and last is not None and first >= last):
+        return None, {}, "해제 버전은 시작 버전보다 뒤의 버전이어야 합니다."
+    return "DEFECT_ITEM", {"start_release_version_id": start, "end_release_version_id": end}, ""
+
+
 def _paint_dropdown_arrow(widget, painter):
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)

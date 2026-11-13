@@ -1,6 +1,7 @@
 """B-1 읽기 계약. 원본 출처를 업무 객체와 묶으며 DB·Qt·저장은 사용하지 않는다."""
 
 from dataclasses import dataclass
+from setron.features.production_area import production_area_text
 
 from setron.features.aggregation.schemas import PmVersion
 from setron.features.item.schemas import (
@@ -20,8 +21,8 @@ class ModelFamily:
 
 
 def family_display_name(name: str) -> str:
-    """화면에 보여 줄 SW 계열 이름. DB의 원본 이름은 바꾸지 않고 '파운드리'만 'Foundry'로 표시한다."""
-    return name.replace("파운드리", "Foundry")
+    """DB의 원본 이름을 유지하고 생산 분류 표기만 Memory/Foundry로 보여 준다."""
+    return production_area_text(name)
 
 
 @dataclass(frozen=True)

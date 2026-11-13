@@ -50,6 +50,14 @@ RISK_KIND_DESCRIPTIONS = {
     RiskKind.APPLIED: "결함 Item·위험 버전을 사용 중",
     RiskKind.NOT_APPLIED: "필수 Item이 적용되지 않음",
 }
+# 위험 기준 등록·판정 화면에서 고르는 판정 기준 이름. 저장 값(RuleType)은 그대로 두고 분류(RiskKind)로 두 가지만 보인다.
+# '사용 시 위험'은 입력에 따라 DIRECT_VERSION(위험 버전만) 또는 DEFECT_ITEM(시작~해제 범위)으로 저장한다.
+CRITERION_LABELS = {RiskKind.APPLIED: "Item 사용 시 위험", RiskKind.NOT_APPLIED: "필수 Item 미적용 시 위험"}
+
+
+def criterion_label(rule_type) -> str:
+    """저장된 판정 방식(기존 3종)을 화면의 판정 기준 이름(2종)으로 바꾼다."""
+    return CRITERION_LABELS[RULE_KINDS[RuleType(rule_type)]]
 
 
 class MappingStatus(str, Enum):

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.management import ManagementService
+from setron.features.production_area import production_area_text
 from setron.features.release.refresh_schemas import RefreshContext
 from setron.features.storage.service import StorageService
 from setron.infrastructure.database import Database, DatabaseConfig
@@ -131,6 +132,11 @@ class ManagementGateway:
         with self._storage() as storage:
             return ManagementService(storage, context).delete_risk_rule(record)
 
+    def set_risk_rule_enabled(self, risk_rule_id, enabled, context=RefreshContext()):
+        """위험 기준을 해제하거나 다시 사용하고 재판정한 결과를 돌려준다. 저장 결과 형식은 ``save``와 같다."""
+        with self._storage() as storage:
+            return ManagementService(storage, context).set_risk_rule_enabled(risk_rule_id, enabled)
+
     def preview_risk_rule(self, values, context=RefreshContext()):
         """위험 기준을 저장하지 않고 등록했을 때의 영향(릴리즈·설비)을 돌려준다 (BE-015). 값 형식은 ``create_risk_rule``과 같다."""
         with self._storage() as storage:
@@ -203,13 +209,13 @@ def reference_options(field, references, *, family_id=None):
                      for row in references.get("equipment_group", ()))
     if field == "family_id":
         ui_names = {"LEGACY": "구UI", "INTEGRATED": "통합UI", "SMART": "스마트UI", None: "UI 구분 없음"}
-        return tuple((row["family_id"], f"{row['family_name']} · {ui_names.get(row.get('ui_type'), 'UI 확인 필요')}")
+        return tuple((row["family_id"], f"{production_area_text(row['family_name'])} · {ui_names.get(row.get('ui_type'), 'UI 확인 필요')}")
                      for row in references.get("version_family", ()))
     if field == "item_id":
         return tuple((row["item_id"], item_title(row, references))
                      for row in references.get("item", ()))
     if field.endswith("release_version_id"):
-        families = {row["family_id"]: row["family_name"] for row in references.get("version_family", ())}
+        families = {row["family_id"]: production_area_text(row["family_name"]) for row in references.get("version_family", ())}
         return tuple((row["release_version_id"], f"{families.get(row['family_id'], '계열 미확인')} · {row['version_raw']}")
                      for row in references.get("release_version", ()) if family_id is None or row["family_id"] == family_id)
     return ()
@@ -218,7 +224,7 @@ def reference_options(field, references, *, family_id=None):
 def item_title(row, references):
     """반복되는 Item 번호는 연결 릴리즈와 원본 위치로 구분한다."""
     releases = {value["release_version_id"]: value for value in references.get("release_version", ())}
-    families = {value["family_id"]: value["family_name"] for value in references.get("version_family", ())}
+    families = {value["family_id"]: production_area_text(value["family_name"]) for value in references.get("version_family", ())}
     linked = []
     for link in references.get("release_version_item", ()):
         release = releases.get(link["release_version_id"])

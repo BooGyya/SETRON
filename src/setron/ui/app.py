@@ -337,26 +337,32 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         window.navigate("import")
     versions.connect("import_requested", import_from_version)
     item_risk_save_pending = False
-    def submit_item_risk_operation(operation):
-        nonlocal item_risk_save_pending
+    item_risk_action = None
+    def submit_item_risk_operation(action, operation):
+        nonlocal item_risk_save_pending, item_risk_action
         if risk_save.busy or risk_save.locked or window.management_saving or window.management_refresh.busy:
             return False
-        item_risk_save_pending = True
+        item_risk_save_pending, item_risk_action = True, action
         started = operation()
         if not started:
-            item_risk_save_pending = False
+            item_risk_save_pending, item_risk_action = False, None
         return started
 
     def submit_item_risk(values):
-        return submit_item_risk_operation(lambda: risk_save.create_risk_rule(values))
+        return submit_item_risk_operation("create", lambda: risk_save.create_risk_rule(values))
 
     def update_item_risk(record, values):
-        return submit_item_risk_operation(lambda: risk_save.update_risk_rule(record, values))
+        return submit_item_risk_operation("update", lambda: risk_save.update_risk_rule(record, values))
 
     def delete_item_risk(record):
-        return submit_item_risk_operation(lambda: risk_save.delete_risk_rule(record))
+        return submit_item_risk_operation("delete", lambda: risk_save.delete_risk_rule(record))
+
+    def toggle_item_risk(rule_id, enabled):
+        return submit_item_risk_operation("enable" if enabled else "disable",
+                                          lambda: risk_save.set_risk_rule_enabled(rule_id, enabled))
 
     items.ready(lambda page: page.manager.configure(management_gateway, release_refresh_context, submit_item_risk,
+                                                  toggle_item_risk if management_gateway is not None else None,
                                                   submit_edit=update_item_risk, submit_delete=delete_item_risk))
     window.management_gateway = management_gateway
     window.management_refresh = ReadRequest(window)
@@ -1149,7 +1155,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         replay.if_loaded(lambda page: page.setEnabled(True))
         replay.if_loaded(lambda page: page.invalidate())
         versions.if_loaded(lambda page: page.refresh_after_save())
-        if preserve_detail and result:
+        if preserve_detail and result and item_risk_action == "create":
             items.if_loaded(lambda page: setattr(page, "last_saved_rule_id",
                 next((r.key["risk_rule_id"] for r in result.records if r.table == "risk_rule"), None)))
         items.if_loaded(lambda page: page.refresh_after_save(preserve_detail=preserve_detail))
@@ -1196,12 +1202,24 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     versions.connect("save_uncertain", uncertain_management_save)
     versions.connect("sql_requested", lambda: export_sql())
     versions.ready(lambda page: page.history_panel.sql_button.setEnabled(db_exporter is not None))
+    toggle_notices = {
+        "disable": {"success": "기준을 해제했습니다.",
+                    "danger": "기준 해제 실패 · 기존 상태 유지 · DB 연결을 확인하고 위험 기준 상세에서 다시 시도해 주세요.",
+                    "warning": "기준 해제 결과 미확인 · 다시 누르지 말고 데이터 관리와 DB 기록을 확인해 주세요."},
+        "enable": {"success": "기준을 다시 사용합니다.",
+                   "danger": "기준 다시 사용 실패 · 기존 상태 유지 · DB 연결을 확인하고 위험 기준 상세에서 다시 시도해 주세요.",
+                   "warning": "기준 다시 사용 결과 미확인 · 다시 누르지 말고 데이터 관리와 DB 기록을 확인해 주세요."},
+    }
     def item_save_notice(text, tone):
-        nonlocal item_risk_save_pending
+        nonlocal item_risk_save_pending, item_risk_action
         if item_risk_save_pending:
-            if tone != "success":  # 성공 칩·안내는 띄우지 않고, 실패·결과 미확인만 알린다.
+            toggle = toggle_notices.get(item_risk_action)
+            if toggle is not None:
+                # 해제·다시 사용 완료는 몇 초 뒤 사라지는 안내로, 실패·결과 미확인은 남는 안내로 알린다.
+                (items.show_toast if tone == "success" else lambda t: items.show_save_feedback(t, tone))(toggle[tone])
+            elif tone != "success":  # 등록은 성공 칩·안내를 띄우지 않고, 실패·결과 미확인만 알린다.
                 items.show_save_feedback(text, tone)
-            item_risk_save_pending = False
+            item_risk_save_pending, item_risk_action = False, None
     risk_save.save_failed.connect(lambda: item_save_notice("저장 실패 · 기존 자료 유지 · DB 연결과 입력값을 확인해 주세요.", "danger"))
     risk_save.save_uncertain.connect(lambda: item_save_notice("저장 결과 미확인 · 중복 등록하지 말고 데이터 관리와 DB 기록을 확인해 주세요.", "warning"))
     risk_save.request.completed.connect(lambda *_: ai.refresh())
