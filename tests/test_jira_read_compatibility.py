@@ -25,7 +25,7 @@ from test_release_revision import all_rows, revision_storage  # noqa: F401
     ("code", None, "ETOJ-801; ETOJ-802", ("ETOJ-801", "ETOJ-802")),
     ("dual", "ETOJ-701", None, ()),
     ("dual", "ETOJ-701", "ETOJ-801", ("ETOJ-801",)),
-    ("none", None, None, ("ETOJ-101", "ETOJ-102", "ABC-77")),
+    ("none", None, None, ("ETOJ-101", "ETOJ-102")),
 ])
 def test_physical_jira_columns_and_explicit_null_have_the_same_ui_search_and_export_meaning(
         revision_storage, layout, key_value, code_value, expected):
@@ -59,6 +59,8 @@ def test_physical_jira_columns_and_explicit_null_have_the_same_ui_search_and_exp
     assert jira.status == (JIRA_FOUND if expected else JIRA_EMPTY)
     for code in expected:
         assert [found.item.item_id for found in data.search(code.lower())] == [item_id]
+    # 원본 보완도 가져오기와 같은 열 규칙을 쓴다. JIRA 열이 있으면 비고 코드는 합치지 않는다.
+    assert data.search("ABC-77") == ()
     if stored:
         assert data.search("ETOJ-101") == ()  # 확정 NULL/수정값을 보관 원본으로 되살리지 않는다.
 
