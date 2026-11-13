@@ -666,9 +666,9 @@ class ItemsPage(QWidget):
         inline.setSpacing(12)
         inline.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
-        self.summary_badges = {state: StatusBadge("", APPLICATION_TONES[state]) for state in APPLICATION_LABELS}
-        self.hpa_badge = StatusBadge("", APPLICATION_TONES[Application.NOT_TARGET])
-        self.summary = _RightWrapRow([*self.summary_badges.values(), self.hpa_badge], 96)
+        self.summary_badges = {state: StatusBadge("", APPLICATION_TONES[state])
+                               for state in (Application.APPLIED, Application.NOT_APPLIED, Application.UNKNOWN)}
+        self.summary = _RightWrapRow(list(self.summary_badges.values()), 96)
         self.summary.grid.setSpacing(6)
         # 건수 배지는 표시만 하고, 펼친 영역에서 목록을 거쳐 기준 상세로 이동한다.
         detail.addWidget(self.inline_box)
@@ -1272,9 +1272,9 @@ class ItemsPage(QWidget):
         self.item_facts.clear()
         self.item_facts.hide()
         if summary:
-            for state, count in summary.counts().items():
-                self.summary_badges[state].setText(f"{APPLICATION_LABELS[state]} {count}대")
-            self.hpa_badge.setText(f"HPA 제외 {summary.hpa_excluded}대")
+            counts = summary.counts()
+            for state, badge in self.summary_badges.items():
+                badge.setText(f"{APPLICATION_LABELS[state]} {counts[state]}대")
             self.summary.minimum_width = max(badge.sizeHint().width() for badge in self.summary.widgets)
         self.summary.setVisible(summary is not None)
         self.filter_row.setVisible(summary is not None)

@@ -156,7 +156,7 @@ def test_detail_keyboard_four_states_and_return(window):
     assert {row[4] for row in page.equipment_model.rows} == {"미적용"}
     page.state_filter.setCurrentIndex(0)
     assert {row[4] for row in page.equipment_model.rows} == {"적용", "미적용", "미확인", "대상 외"}
-    assert "HPA 제외 1대" in chips(page)
+    assert chips(page) == ["적용 1대", "미적용 1대", "미확인 2대"]
     assert page.summary.isVisible() and page.application_details.isVisible()
     page.state_filter.setCurrentIndex(page.state_filter.findData(Application.UNKNOWN))
     assert len(page.equipment_model.rows) == 2
