@@ -46,11 +46,12 @@ def test_date_field_paste_edit_and_calendar_remain_native(own):
         assert field.text() != "2026-01-02"
         field.clear()
         field.open_calendar()
-        calendar = field.calendar_menu.actions()[0].defaultWidget()
+        calendar = field.dialog.calendar
         from PySide6.QtCore import QDate
         calendar.clicked.emit(QDate(2026, 8, 21))
+        assert field.text() == ""
+        field.dialog.apply_button.click()
         assert field.text() == "2026-08-21"
-        field.calendar_menu.close()
     finally:
         clipboard.setText(original)
 
@@ -122,7 +123,11 @@ def test_quick_date_buttons_use_catalog_ranges_and_manual_edit_changes_selection
     page.select_all.click()
     assert page.quick_buttons[-1].isChecked() and page.plan().start == date(2026, 8, 21)
     page.quick_buttons[-1].click()
-    assert page.start.hasFocus()
+    dialog = page.period_button.dialog
+    assert dialog.isVisible() and not dialog.single_day
+    assert dialog.start == date(2026, 8, 21) and dialog.end == date(2026, 10, 21)
+    dialog.cancel_button.click()
+    assert page.start.text() == "2026-08-21" and page.end.text() == "2026-10-21"
 
 
 def test_impact_groups_and_backup_tip_match_source_data_without_inventing_counts(own):

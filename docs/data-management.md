@@ -4,6 +4,8 @@
 
 ## 탭 구성 (고정)
 
+화면의 생산 분류·선택 목록·안내·계열 표시 이름은 `Memory`와 `Foundry`로 통일한다. 편집 후 저장·필터에는 기존 코드 `MEMORY`와 `FOUNDRY`를 사용하며, 한글 입력과 DB 원본은 보존한다.
+
 | 탭 | 하위 | 하는 일 | 쓰는 기능 |
 |---|---|---|---|
 | 설비현황 | 현황표 | DB 값을 가져오기 3단계 항목으로 보인다. 칸 수정 · 설비군 변경 · 행 추가 · 행 삭제를 모아 [저장]으로 한꺼번에, [되돌리기] | `DataAdminService.status_sheets / sheet_rows / apply_rows / undo_rows` + 관리 저장 `gateway.save` |

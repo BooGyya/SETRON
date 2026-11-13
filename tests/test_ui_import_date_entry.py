@@ -19,23 +19,19 @@ def _import_page(own):
     return page
 
 
-@pytest.mark.parametrize("name", ["start", "end", "common_date"])
 @pytest.mark.parametrize("initial", ["", "2026-10-05"])
 @pytest.mark.parametrize("click_x", [30, 100, 145])
-def test_any_text_click_starts_typing_from_first_digit_without_clearing_date(own, name, initial, click_x):
-    page = _import_page(own) if name == "common_date" else own(ImportDeletePage())
+def test_any_text_click_starts_typing_from_first_digit_without_clearing_date(own, initial, click_x):
+    page = _import_page(own)
     page.resize(1100, 1200)
-    field = getattr(page, name)
+    field = page.common_date
     field.setText(initial)
     QTest.qWait(10)
     QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=QPoint(click_x, field.height() // 2))
-    if name == "common_date":
-        # 가져오기 기준일은 칸 어디를 눌러도 달력이 열린다 (11-10 2차 6-2). 닫으면 키보드 입력은 그대로다.
-        assert field.calendar_menu.isVisible()
-        field.calendar_menu.close()
-        field.setFocus()
-    else:
-        assert not hasattr(field, "calendar_menu")   # 다른 날짜 칸은 달력 그림을 눌러야 열린다.
+    # 삭제 시작일·종료일은 숨긴 호환용 입력이다. 화면의 기준일과 기간 버튼을 검증한다.
+    assert field.dialog.isVisible()
+    field.dialog.reject()
+    field.setFocus()
     assert field.hasFocus() and field.cursorPosition() == 0
     assert field.text() == initial  # 클릭만으로 이미 입력된 날짜를 버리지 않는다.
     QTest.keyClicks(field, "20261108")
@@ -85,11 +81,12 @@ def test_keyboard_selection_paste_undo_and_calendar_keep_native_behavior(own):
         assert field.cursorPosition() == 1  # 키보드로 원하는 자리로 이동하는 동작은 강제 초기화하지 않는다.
         calendar_button = field.findChild(QToolButton)
         QTest.mouseClick(calendar_button, Qt.MouseButton.LeftButton)
-        assert field.calendar_menu.isVisible()
-        calendar = field.calendar_menu.actions()[0].defaultWidget()
+        assert field.dialog.isVisible()
+        calendar = field.dialog.calendar
         calendar.clicked.emit(QDate(2026, 9, 21))
+        assert field.text() == "2026-11-08"
+        field.dialog.apply_button.click()
         assert field.text() == "2026-09-21"
-        field.calendar_menu.close()
         field.setReadOnly(True)
         QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=QPoint(70, 20))
         QTest.keyClicks(field, "20241108")
@@ -112,7 +109,7 @@ def test_import_common_date_hides_block_cursor_and_keeps_selection_and_calendar(
     field.setText("2026-11-08")
     QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=QPoint(80, field.height() // 2))
     QTest.qWait(20)
-    field.calendar_menu.close()
+    field.dialog.reject()
     field.setFocus()
     assert field.hasFocus() and field.cursorPosition() == 0
     first = field.grab().toImage()
@@ -124,7 +121,8 @@ def test_import_common_date_hides_block_cursor_and_keeps_selection_and_calendar(
     assert field.grab().toImage() != first
     field.deselect()
     field.open_calendar()
-    calendar = field.calendar_menu.actions()[0].defaultWidget()
+    calendar = field.dialog.calendar
     calendar.clicked.emit(QDate(2026, 10, 5))
+    assert field.text() == "2026-11-08"
+    field.dialog.apply_button.click()
     assert field.text() == "2026-10-05"
-    field.calendar_menu.close()

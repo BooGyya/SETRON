@@ -1,7 +1,7 @@
 """데이터 관리 (11-10 개편, 11-11 2·3차 수정): 설비현황 · 릴리즈노트 · 변경 이력 세 탭.
 
 - 설비현황
-  - 현황표: DB에 들어간 값을 가져오기 3단계와 같은 항목(호기 · Line · 설비군 · 모델명 · 메모리/파운드리 · SW 버전)으로
+  - 현황표: DB에 들어간 값을 가져오기 3단계와 같은 항목(호기 · Line · 설비군 · 모델명 · Memory/Foundry · SW 버전)으로
     보인다 (11-11 6차). 칸을 고친 뒤 [저장]으로 한꺼번에 저장하고, 행을 추가·삭제하며, [되돌리기]로 바로 앞 단계를
     되돌린다.
   - 설비: 설비군 추가 · 위치: Site 추가 뒤 빈 현황표 만들기 · 가져온 엑셀 삭제: 데이터 가져오기에서 옮겨 온 삭제 화면.
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from setron.features.management.schemas import RecordEdit
+from setron.features.production_area import PRODUCTION_AREA_LABELS, production_area_text, production_area_value
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.theme import font, set_widget_font
@@ -262,12 +263,12 @@ class _Panel(QWidget):
 
 # --- 설비현황 › 현황표 ---------------------------------------------------------------------
 # 대분류(POLY · OXIDE · KCTC)는 설비군의 값이라 설비군에서 자동으로 보이고, 모델명은 설비군을 따라간다 (11-12).
-# 대시보드의 '분류' 필터(메모리/파운드리)와 헷갈리지 않게 '대분류'라고 부른다.
+# 대시보드의 '분류' 필터(Memory/Foundry)와 헷갈리지 않게 '대분류'라고 부른다.
 SHEET_COLUMNS = (("equipment_code", "설비 호기"), ("line", "Line"), ("category", "대분류"), ("group", "설비군"),
-                 ("model_name", "모델명"), ("production_area", "메모리/파운드리"), ("version_raw", "SW 버전"), ("pm", "PM"))
+                 ("model_name", "모델명"), ("production_area", "Memory/Foundry"), ("version_raw", "SW 버전"), ("pm", "PM"))
 COLUMN = {field: index for index, (field, _) in enumerate(SHEET_COLUMNS)}
-AREA_LABELS = {"MEMORY": "메모리", "FOUNDRY": "파운드리", None: ""}
-REQUIRED_NEW = ("equipment_code", "group", "production_area", "version_raw")  # 메모리/파운드리도 필수 (11-12: 비우면 임의로 정해졌다)
+AREA_LABELS = {**PRODUCTION_AREA_LABELS, None: ""}
+REQUIRED_NEW = ("equipment_code", "group", "production_area", "version_raw")  # Memory/Foundry도 필수 (11-12: 비우면 임의로 정해졌다)
 CATEGORY_CHOICES = ("POLY", "OXIDE", "KCTC")
 
 
@@ -366,12 +367,12 @@ class _DateDelegate(_KeepColorsDelegate):
 # [?] 가이드: (제목, 언제, 설명, 버튼 동작, 버튼 글자)
 GUIDE_STEPS = (
     ("빈 현황표 만들기", "그 Site · 기준일 현황표가 없을 때", "현황표 탭 > [＋ 빈 현황표]에서 Site · 기준일을 고릅니다. 새 Site면 이름을 "
-     "적으면 함께 등록합니다. 메모리/파운드리를 꼭 고릅니다(새 행 · 새 라인의 기본값). 설비의 Site · 기준일은 행을 넣은 "
+     "적으면 함께 등록합니다. Memory/Foundry를 꼭 고릅니다(새 행 · 새 라인의 기본값). 설비의 Site · 기준일은 행을 넣은 "
      "현황표가 정하므로, 꼭 그 Site의 현황표에 넣습니다.",
      "create", "빈 현황표 만들기"),
     ("행 추가 · 값 입력", "", "그 현황표를 고른 뒤 [＋ 행 추가]를 누르면 표 맨 아래에 새 줄(＋)이 생깁니다. 칸을 두 번 눌러 입력합니다. "
      "분홍 칸은 아직 비어 있는 필수 칸입니다.", "add", "행 추가"),
-    ("저장 · 확인", "", "[저장]을 누르면 한꺼번에 DB에 들어가고 변경 이력에 남습니다. 처음 보는 라인은 그 줄의 메모리/파운드리로, 처음 보는 "
+    ("저장 · 확인", "", "[저장]을 누르면 한꺼번에 DB에 들어가고 변경 이력에 남습니다. 처음 보는 라인은 그 줄의 Memory/Foundry로, 처음 보는 "
      "설비군은 대분류를 확인한 뒤 함께 등록합니다. 잘못 넣었으면 되돌리기 아이콘(Ctrl+Z)으로 마지막 저장을 되돌립니다.",
      "location", "위치 탭에서 확인"),
 )
@@ -383,7 +384,7 @@ GUIDE_FIELDS = ("<table cellspacing='0' cellpadding='4' style='border-collapse:c
                               ("대분류", "자동", "설비군에서 정해짐 · 새 설비군이면 POLY · OXIDE · KCTC 중 고름"),
                               ("설비군", "필수", "목록에서 고름 (없으면 저장 때 등록)"),
                               ("모델명", "자동", "설비군과 같음"),
-                              ("메모리/파운드리", "필수", "라인을 고르면 그 라인 값 · 모르는 라인은 직접 고름"),
+                              ("Memory/Foundry", "필수", "라인을 고르면 그 라인 값 · 모르는 라인은 직접 고름"),
                               ("SW 버전", "필수", "설비군을 고르면 최신 버전이 자동으로 채워짐 · 실제 버전으로 고침")))
                 + "</table>")
 GUIDE_NOTE = ("위치 탭에서는 Site · 라인 이름을 표에서 바로 고치고(같은 라인 이름이면 합치기) 설비를 다른 라인으로 옮깁니다. "
@@ -468,7 +469,7 @@ class SheetPanel(_Panel):
             self.table, lambda: [g[1] for g in self.data.groups] if self.data else (), editable=True))
         self.table.setItemDelegateForColumn(COLUMN["model_name"], _ChoiceDelegate(
             self.table, lambda: [self._group_name(r.group_id) for r in self._selected_rows_data()][:1]))
-        self.table.setItemDelegateForColumn(COLUMN["production_area"], _ChoiceDelegate(self.table, lambda: ("메모리", "파운드리", "")))
+        self.table.setItemDelegateForColumn(COLUMN["production_area"], _ChoiceDelegate(self.table, lambda: ("Memory", "Foundry", "")))
         self.table.itemChanged.connect(self._cell_changed)
         self.table.itemSelectionChanged.connect(self._sync)
         self.table.horizontalHeader().sectionClicked.connect(self._header_clicked)
@@ -698,7 +699,7 @@ class SheetPanel(_Panel):
                 item.setToolTip(f"새 행 · {SHEET_COLUMNS[c][1]}" + (" (필수)" if needed else "") + " · 저장 전"
                                 + (" · 새 설비군이라 POLY · OXIDE · KCTC 중에서 고릅니다" if field == "category" else "")
                                 + (" · 새 라인이면 이 값으로 라인을 등록합니다" if field == "production_area" else "")
-                                + (" · 라인의 메모리/파운드리로 자동 채움" if field == "production_area" and value
+                                + (" · 라인의 Memory/Foundry로 자동 채움" if field == "production_area" and value
                                    and values.get("area_auto") and values.get("line") else "")
                                 + (" · 설비군의 최신 버전으로 자동 채움 (실제 버전이 다르면 고칩니다)"
                                    if field == "version_raw" and values.get("version_auto") and value else ""))
@@ -767,7 +768,9 @@ class SheetPanel(_Panel):
         kind, entry = self.view[r]
         field, value = SHEET_COLUMNS[c][0], item.text().strip()
         if kind == "new":
-            stored = {"메모리": "MEMORY", "파운드리": "FOUNDRY"}.get(value, "") if field == "production_area" else value
+            stored = production_area_value(value) if field == "production_area" else value
+            if field == "production_area" and stored not in PRODUCTION_AREA_LABELS:
+                stored = ""
             values = entry["values"]
             if stored != values.get(field, ""):
                 before = self._state()
@@ -775,7 +778,7 @@ class SheetPanel(_Panel):
                 if field == "version_raw":
                     values["version_auto"] = False  # 직접 적은 버전은 설비군을 바꿔도 덮어쓰지 않는다
                 elif field == "production_area":
-                    values["area_auto"] = False     # 직접 고른 메모리/파운드리는 라인을 바꿔도 덮어쓰지 않는다
+                    values["area_auto"] = False     # 직접 고른 Memory/Foundry는 라인을 바꿔도 덮어쓰지 않는다
                 elif field == "line":
                     self._fill_area(values)
                 if field in ("group", "production_area", "line"):
@@ -812,7 +815,8 @@ class SheetPanel(_Panel):
                 return
             value = name
         elif field == "production_area":
-            value = {"메모리": "MEMORY", "파운드리": "FOUNDRY"}.get(value)
+            value = production_area_value(value)
+            value = value if value in PRODUCTION_AREA_LABELS else None
         elif field in ("equipment_code", "version_raw") and not value:
             self.say(f"{SHEET_COLUMNS[c][1]}은(는) 비울 수 없습니다.", error=True)
             self._paint(r, c)
@@ -826,7 +830,7 @@ class SheetPanel(_Panel):
         self._repaint_all()  # 같은 설비의 다른 SW 줄도 같은 값을 보인다
 
     def _fill_area(self, values):
-        """새 행 메모리/파운드리를 고른 라인의 값으로 채운다 (그 라인을 알 때만, 직접 고른 값은 그대로)."""
+        """새 행 Memory/Foundry를 고른 라인의 값으로 채운다 (그 라인을 알 때만, 직접 고른 값은 그대로)."""
         if not values.get("area_auto", True) and values.get("production_area"):
             return
         known = (getattr(self.data, "line_areas", {}) or {}).get((values.get("line") or "").strip())
@@ -836,8 +840,8 @@ class SheetPanel(_Panel):
             values["production_area"] = self.data.default_area or ""  # 모르는 라인이면 현황표 기본값(없으면 빈칸 → 필수)
 
     def _fill_version(self, values):
-        """새 행 SW 버전을 설비군 · 메모리/파운드리 계열의 최신 릴리즈 버전으로 채운다 (11-12).
-        메모리/파운드리가 정해지기 전에는 채우지 않고, 직접 적은 버전은 그대로 둔다."""
+        """새 행 SW 버전을 설비군 · Memory/Foundry 계열의 최신 릴리즈 버전으로 채운다 (11-12).
+        Memory/Foundry가 정해지기 전에는 채우지 않고, 직접 적은 버전은 그대로 둔다."""
         if not values.get("version_auto", True) and values.get("version_raw"):
             return
         known = self._known_group(values.get("group"))
@@ -923,7 +927,7 @@ class SheetPanel(_Panel):
             return False
         incomplete = [n for n in self.new_rows if not all(n["values"].get(f) for f in REQUIRED_NEW)]
         if incomplete:
-            self.say(f"새 행 {len(incomplete)}개의 필수 칸(설비 호기 · 설비군 · 메모리/파운드리 · SW 버전)을 채운 뒤 저장해 주세요.",
+            self.say(f"새 행 {len(incomplete)}개의 필수 칸(설비 호기 · 설비군 · Memory/Foundry · SW 버전)을 채운 뒤 저장해 주세요.",
                      error=True)
             return False
         if not self._other_site_lines_ok():
@@ -970,7 +974,7 @@ class SheetPanel(_Panel):
         site, registers = self.data.site, [(line, fab) for line, fab in new_lines.items() if fab]
 
         def work():
-            for line, fab in registers:  # 새 라인을 먼저 등록해야 새 행의 메모리/파운드리가 그 값으로 정해진다
+            for line, fab in registers:  # 새 라인을 먼저 등록해야 새 행의 Memory/Foundry가 그 값으로 정해진다
                 gateway.data_admin("add_line", site, line, fab)
             for name, category in creates:
                 gateway.data_admin("create_group", name, category, None)
@@ -1021,10 +1025,10 @@ class SheetPanel(_Panel):
                 if v.casefold() not in own and v.casefold() not in elsewhere]
 
     def _new_line_areas(self):
-        """처음 보는 라인마다 그 줄의 메모리/파운드리로 새 라인을 등록한다 (11-12: 묻는 창 대신).
+        """처음 보는 라인마다 그 줄의 Memory/Foundry로 새 라인을 등록한다 (11-12: 묻는 창 대신).
 
         return
-        - {라인: MEMORY · FOUNDRY}. 메모리/파운드리를 모르거나 줄마다 다르면 안내하고 None.
+        - {라인: MEMORY · FOUNDRY}. Memory/Foundry를 모르거나 줄마다 다르면 안내하고 None.
         """
         result = {}
         for line in self.unregistered_lines():
@@ -1035,7 +1039,7 @@ class SheetPanel(_Panel):
                     areas.add(self.edits.get(("area", sid), row.production_area))
             areas -= {None, ""}
             if len(areas) != 1:
-                self.say(f"새 라인 '{line}'의 메모리/파운드리를 그 줄의 메모리/파운드리 칸에서 "
+                self.say(f"새 라인 '{line}'의 Memory/Foundry를 그 줄의 Memory/Foundry 칸에서 "
                          + ("하나로 맞춰 주세요." if areas else "골라 주세요 (저장할 때 새 라인으로 함께 등록합니다)."), error=True)
                 return None
             result[line] = next(iter(areas))
@@ -1346,7 +1350,7 @@ class CreateSheetDialog(QDialog):
         self.base_date.setAccessibleName("기준일")
         self.error = label("", 12, color=DANGER, wrap=True)
         area_row, self.areas = QHBoxLayout(), QButtonGroup(self)
-        for key, text in (("MEMORY", "메모리"), ("FOUNDRY", "파운드리")):  # 필수: 새 행 · 새 라인의 기본값 (11-12)
+        for key, text in (("MEMORY", "Memory"), ("FOUNDRY", "Foundry")):  # 필수: 새 행 · 새 라인의 기본값 (11-12)
             choice = QRadioButton(text)
             choice.setProperty("area", key)
             self.areas.addButton(choice)
@@ -1354,8 +1358,8 @@ class CreateSheetDialog(QDialog):
         area_row.addStretch()
         form.addRow("Site", self.site)
         form.addRow("기준일", self.base_date)
-        form.addRow("메모리/파운드리", area_row)
-        form.addRow(label("목록에 없는 Site 이름을 적으면 새 Site로 함께 등록합니다. 메모리/파운드리는 이 현황표의 새 행과 처음 보는 "
+        form.addRow("Memory/Foundry", area_row)
+        form.addRow(label("목록에 없는 Site 이름을 적으면 새 Site로 함께 등록합니다. Memory/Foundry는 이 현황표의 새 행과 처음 보는 "
                           "라인에 기본으로 쓰입니다(줄마다 바꿀 수 있음). 같은 Site · 기준일 현황표가 있으면 만들지 않습니다.",
                           12, color=SECONDARY, wrap=True))
         form.addRow(self.error)
@@ -1373,7 +1377,7 @@ class CreateSheetDialog(QDialog):
             self.error.setText("Site를 고르거나 새 이름을 적어 주세요.")
             return
         if self.areas.checkedButton() is None:
-            self.error.setText("메모리/파운드리를 골라 주세요.")
+            self.error.setText("Memory/Foundry를 골라 주세요.")
             return
         self.accept()
 
@@ -1738,7 +1742,7 @@ class EquipmentPanel(_Panel):
 
 
 class AddLineDialog(QDialog):
-    """라인 추가: Site · 메모리/파운드리 · 라인 이름."""
+    """라인 추가: Site · Memory/Foundry · 라인 이름."""
 
     def __init__(self, parent, sites, site=None, fab=None):
         super().__init__(parent)
@@ -1748,13 +1752,13 @@ class AddLineDialog(QDialog):
         for value in sites:
             self.site.addItem(value, value)
         self.site.setCurrentIndex(max(0, self.site.findData(site)))
-        for key, text in (("MEMORY", "메모리"), ("FOUNDRY", "파운드리")):
+        for key, text in (("MEMORY", "Memory"), ("FOUNDRY", "Foundry")):
             self.fab.addItem(text, key)
         self.fab.setCurrentIndex(max(0, self.fab.findData(fab)))
         self.name.setPlaceholderText("P4H")
         self.error = label("", 12, color=DANGER, wrap=True)
         form.addRow("Site", self.site)
-        form.addRow("메모리/파운드리", self.fab)
+        form.addRow("Memory/Foundry", self.fab)
         form.addRow("라인 이름", self.name)
         form.addRow(self.error)
         actions = QHBoxLayout()
@@ -1777,15 +1781,15 @@ class AddLineDialog(QDialog):
 
 
 # --- 설비현황 › 위치 ------------------------------------------------------------------------
-FAB_LABELS = {"MEMORY": "메모리", "FOUNDRY": "파운드리", None: "메모리/파운드리 모름"}
+FAB_LABELS = {**PRODUCTION_AREA_LABELS, None: "Memory/Foundry 모름"}
 
 
 class LocationPanel(_Panel):
-    """Site → 메모리/파운드리 → 라인 트리 (11-11 6차) · 오른쪽: 고른 위치의 설비.
+    """Site → Memory/Foundry → 라인 트리 (11-11 6차) · 오른쪽: 고른 위치의 설비.
 
     11-12: 표에서 바로 고친다. 트리의 Site · 라인 이름을 두 번 눌러 바꾸고(같은 Site에 있는 라인 이름을 적으면 그 라인에
     합친다), 오른쪽 설비 표의 Line 칸에서 다른 라인을 고르면 그 설비를 옮긴다(여러 줄을 고르고 한 칸을 바꾸면 고른 설비
-    모두). 바꾼 것은 [저장]으로 한꺼번에 반영하고, 모든 기준일의 설비 현황이 함께 바뀐다. 추가 · 삭제 · 메모리/파운드리
+    모두). 바꾼 것은 [저장]으로 한꺼번에 반영하고, 모든 기준일의 설비 현황이 함께 바뀐다. 추가 · 삭제 · Memory/Foundry
     변경은 바로 저장한다.
     """
 
@@ -1812,7 +1816,7 @@ class LocationPanel(_Panel):
         head.addWidget(self.add_line_button)
         left.body.addLayout(head)
         actions = QHBoxLayout()
-        self.fab_button, self.delete_button = button("메모리/파운드리 변경"), button("삭제")
+        self.fab_button, self.delete_button = button("Memory/Foundry 변경"), button("삭제")
         self.fab_button.clicked.connect(self.change_fab)
         self.delete_button.clicked.connect(self.delete)
         self.undo_button, self.redo_button = _history_buttons(self, "저장 전 이름 변경 · 합치기 · 설비 옮기기")
@@ -1829,7 +1833,7 @@ class LocationPanel(_Panel):
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
         self.tree.setHeaderHidden(True)
-        self.tree.setAccessibleName("위치 트리 (Site → 메모리/파운드리 → 라인)")
+        self.tree.setAccessibleName("위치 트리 (Site → Memory/Foundry → 라인)")
         self.tree.setMinimumHeight(360)
         self.tree.setStyleSheet("QTreeWidget {font-size:14px;} QTreeWidget::item {min-height:30px;}")
         self.tree.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
@@ -2050,7 +2054,7 @@ class LocationPanel(_Panel):
             count = next((r.equipment_count for r in line_rows if r.site == site and r.line == old), 0)
             if QMessageBox.question(self, "라인 합치기",
                                     f"{site}에 '{target.line}' 라인이 이미 있습니다.\n'{old}'의 설비 {count}대를 '{target.line}'에 "
-                                    "합칠까요? 모든 기준일의 설비 현황이 옮겨지고, 메모리/파운드리는 "
+                                    "합칠까요? 모든 기준일의 설비 현황이 옮겨지고, Memory/Foundry는 "
                                     f"'{target.line}' 것을 따릅니다. [저장] 전에는 되돌릴 수 있습니다.") \
                     != QMessageBox.StandardButton.Yes:
                 self._render_tree()
@@ -2107,7 +2111,7 @@ class LocationPanel(_Panel):
         self.ops, self.redo_ops = [], []
         self.reload()
 
-    # 추가 · 지우기 · 메모리/파운드리 (바로 저장) ------------------------------------------------------
+    # 추가 · 지우기 · Memory/Foundry (바로 저장) ------------------------------------------------------
     def add_site(self):
         if self.page.gateway is None or self.page.saving or self.ops:
             return False
@@ -2163,21 +2167,21 @@ class LocationPanel(_Panel):
             return False
         site, line, fab = data[1], data[2], data[3]
         if fab is None:  # 모르는 라인은 어느 쪽인지 고른다
-            choice, ok = QInputDialog.getItem(self, "메모리/파운드리 지정", f"{site} · {line}은(는) 어느 쪽 라인인가요?",
-                                              ["메모리", "파운드리"], 0, False)
+            choice, ok = QInputDialog.getItem(self, "Memory/Foundry 지정", f"{site} · {line}은(는) 어느 쪽 라인인가요?",
+                                              ["Memory", "Foundry"], 0, False)
             if not ok:
                 return False
-            target = "FOUNDRY" if choice == "파운드리" else "MEMORY"
+            target = "FOUNDRY" if choice == "Foundry" else "MEMORY"
         else:
             target = "FOUNDRY" if fab == "MEMORY" else "MEMORY"
         count = next((r.equipment_count for r in self.line_rows if r.site == site and r.line == line), 0)
-        if QMessageBox.question(self, "메모리/파운드리 변경",
+        if QMessageBox.question(self, "Memory/Foundry 변경",
                                 f"{site} · {line}을(를) {FAB_LABELS[target]} 라인으로 바꿀까요?\n그 라인 설비 {count}대의 생산 영역도 "
-                                f"{FAB_LABELS[target]}(으)로 바뀝니다. 설비 SW 계열(파운드리용 릴리즈 노트)은 바뀌지 않으니, 필요하면 "
+                                f"{FAB_LABELS[target]}(으)로 바뀝니다. 설비 SW 계열(Foundry용 릴리즈 노트)은 바뀌지 않으니, 필요하면 "
                                 "그 현황표를 다시 가져와 주세요.") != QMessageBox.StandardButton.Yes:
             return False
         return self.page.change(lambda: self.page.gateway.data_admin("set_line_fab", site, line, target), self,
-                                message="메모리/파운드리를 바꾸고 있습니다…",
+                                message="Memory/Foundry를 바꾸고 있습니다…",
                                 done=lambda _: self._changed("", ("line", site, line, target)))
 
     def delete(self):
@@ -2204,15 +2208,15 @@ class LocationPanel(_Panel):
         busy = self.page.saving
         data = self.selection()
         pending = bool(self.ops)
-        # 저장 전 변경이 있으면 바로 저장하는 추가 · 삭제 · 메모리/파운드리 변경은 막는다 (먼저 저장하거나 되돌린다)
+        # 저장 전 변경이 있으면 바로 저장하는 추가 · 삭제 · Memory/Foundry 변경은 막는다 (먼저 저장하거나 되돌린다)
         self.add_site_button.setEnabled(not busy and not pending)
         self.add_line_button.setEnabled(not busy and not pending and bool(self.site_names()))
         self.delete_button.setEnabled(not busy and not pending and data is not None and data[0] in ("site", "line"))
         self.fab_button.setEnabled(not busy and not pending and data is not None and data[0] == "line")
         if data is not None and data[0] == "line":
-            self.fab_button.setText({"MEMORY": "파운드리로 변경", "FOUNDRY": "메모리로 변경"}.get(data[3], "메모리/파운드리 지정"))
+            self.fab_button.setText({"MEMORY": "Foundry로 변경", "FOUNDRY": "Memory로 변경"}.get(data[3], "Memory/Foundry 지정"))
         else:
-            self.fab_button.setText("메모리/파운드리 변경")
+            self.fab_button.setText("Memory/Foundry 변경")
         self.save_button.setEnabled(pending and not busy)
         self.save_button.setText(f"저장 ({len(self.ops)})" if pending else "저장")
         self.undo_button.setEnabled(pending and not busy)
@@ -2353,7 +2357,7 @@ class ReleasePanel(_Panel):
         self.tree.blockSignals(True)
         self.tree.clear()
         for family in self.families:
-            node = QTreeWidgetItem([f"{family.name}  {family.version_count}"])
+            node = QTreeWidgetItem([f"{production_area_text(family.name)}  {family.version_count}"])
             node.setData(0, Qt.ItemDataRole.UserRole, (family.family_id, None))
             for gid, name in family.variants:
                 child = QTreeWidgetItem([f"↳ {name}  (개조)"])
@@ -2423,7 +2427,7 @@ class ReleasePanel(_Panel):
         note, self.saved_note = self.saved_note, ""
         family = next((f for f in self.families if f.family_id == self.family_id), None)
         variant = next((n for g, n in (family.variants if family else ()) if g == self.variant), None)
-        self.family_title.setText((family.name if family else "계열") + (f" · {variant}" if variant else ""))
+        self.family_title.setText((production_area_text(family.name) if family else "계열") + (f" · {variant}" if variant else ""))
         versions = len({r.release_version_id for r in self.rows})
         self.family_info.setText(f"버전 {versions} · Item {sum(r.item_id is not None for r in self.rows)}"
                                  + (f" · {variant} 적용 Item 굵게" if variant else ""))

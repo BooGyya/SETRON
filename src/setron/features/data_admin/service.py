@@ -32,7 +32,7 @@ CATEGORIES = ("POLY", "OXIDE", "KCTC")
 SITES_KEY = "registered_sites.v1"
 LINES_KEY = "registered_lines.v1"
 INDEPENDENT_KEY = "independent_groups.v1"
-FABS = {"MEMORY": "메모리", "FOUNDRY": "파운드리"}
+FABS = {"MEMORY": "Memory", "FOUNDRY": "Foundry"}
 # 직접 만든 현황표의 열 (시연 현황표와 같은 순서)
 MANUAL_HEADERS = {"A": ("No", None), "B": ("Line", "line"), "C": ("설비군", "model_name"),
                   "D": ("설비호기", "equipment_code"), "E": ("Version", "version_raw")}
@@ -904,7 +904,7 @@ class DataAdminService:
         site = (site or "").strip()
         require(bool(site), "Site를 골라 주세요.")
         require(isinstance(base_date, date), "기준일을 YYYY-MM-DD로 적어 주세요.")
-        require(production_area is None or production_area in FABS, "메모리 또는 파운드리를 골라 주세요.")
+        require(production_area is None or production_area in FABS, "Memory 또는 Foundry를 골라 주세요.")
         require(all(not (s.base_date == base_date and s.site == site) for s in self.status_sheets()),
                 f"{site} · {base_date} 현황표가 이미 있습니다. 그 현황표에 행을 추가해 주세요.")
         sheet = f"{site} {base_date.isoformat()} (직접 입력)"
@@ -1421,7 +1421,7 @@ class DataAdminService:
         """Site의 메모리/파운드리 아래에 라인을 등록한다. 같은 Site에 같은 라인(대소문자 무시)이 있으면 거부한다."""
         line = (line or "").strip()
         require(bool(line) and len(line) <= 50, "라인 이름을 50자 이내로 입력해 주세요.")
-        require(fab in FABS, "메모리 또는 파운드리를 골라 주세요.")
+        require(fab in FABS, "Memory 또는 Foundry를 골라 주세요.")
         with self.storage.transaction() as tx:
             require(site.casefold() in self._known_sites(tx), "없는 Site입니다. Site를 먼저 추가해 주세요.")
             existing = {(e["site"], e["line"].casefold()) for e in registered_lines(tx)} | {
@@ -1441,7 +1441,7 @@ class DataAdminService:
         return
         - 생산 영역을 바꾼 설비 현황 수.
         """
-        require(fab in FABS, "메모리 또는 파운드리를 골라 주세요.")
+        require(fab in FABS, "Memory 또는 Foundry를 골라 주세요.")
         with self.storage.transaction() as tx:
             entries = [e for e in registered_lines(tx) if not (e["site"] == site and e["line"] == line)]
             before = next((e["fab"] for e in registered_lines(tx) if e["site"] == site and e["line"] == line), None)
@@ -1733,7 +1733,7 @@ class DataAdminService:
             registry = raw.get("management_registry")
             if isinstance(registry, dict):
                 kind = {"create": "등록", "delete": "삭제"}.get(registry.get("kind"), "수정")
-                field = {"rename": "이름", "fab": "메모리/파운드리", "independent": "독립 설비군 보기", "category": "대분류",
+                field = {"rename": "이름", "fab": "Memory/Foundry", "independent": "독립 설비군 보기", "category": "대분류",
                          "merge": "라인 합치기", "move": "설비 라인 옮기기"}.get(
                     registry.get("kind"), TABLE_LABELS.get(registry.get("table"), ""))
                 after = _text(registry.get("after")) + (f" (설비 현황 {registry['count']}건)" if registry.get("count") else "")
