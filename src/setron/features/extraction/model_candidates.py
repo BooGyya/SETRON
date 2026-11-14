@@ -91,6 +91,29 @@ _FAMILY_WORDS = {name.casefold() for base in set(_FAMILY_OF.values()) | {"C3 구
 _MODEL_TOKENS = sorted(set(_reference.MODEL_CATEGORIES), key=len, reverse=True)
 
 
+_KCTC_STRUCTURE = (("Inline", re.compile(r"inline|인라인", re.I)), ("Cluster", re.compile(r"cluster|클러스터", re.I)))
+_KCTC_GAS = (("Ox", re.compile(r"(?<![a-z])ox(?:ide)?(?![a-z])", re.I)), ("O2", re.compile(r"(?<![a-z0-9])o2(?![0-9])", re.I)))
+
+
+def _kctc_candidate(raw_model: str) -> ModelCandidate | None:
+    """KCTC 4개 설비군 표기 변형 (11/13 멘토: 'Inline Ox (CIP)' · 'Ox(Inline)' · '5각 Cluster O2' 같은 데이터도 있다).
+
+    Inline/Cluster 낱말과 Ox/O2 낱말이 각각 하나씩이면 순서 · 괄호 · 띄어쓰기와 상관없이 그 설비군으로 본다.
+    'CIP'가 있으면 개조 CIP. 둘 중 하나라도 없거나 둘 다 여럿이면 고르지 않는다.
+    """
+    structures = [name for name, pattern in _KCTC_STRUCTURE if pattern.search(raw_model)]
+    gases = [name for name, pattern in _KCTC_GAS if pattern.search(raw_model)]
+    if len(structures) != 1 or len(gases) != 1:
+        return None
+    base = _INDEX.get(_key(f"{structures[0]} {gases[0]}"))
+    if base is None:
+        return None
+    modification = "CIP" if re.search(r"(?<![a-z])cip(?![a-z])", raw_model, re.I) else base.modification_type
+    note = f"KCTC 표기 '{raw_model.strip()[:40]}'을(를) {base.model_name}" + (" (개조 CIP)" if modification else "") + "로 둠"
+    return ModelCandidate(raw_model, base.model_name, base.group_name, base.family_name, base.ui_type,
+                          base.structure_type, modification, note)
+
+
 def find_candidate(raw_model: str | None) -> ModelCandidate | None:
     """원문 모델 표기(공백·대소문자 무시)에 맞는 후보. 없으면 None.
 
@@ -102,6 +125,9 @@ def find_candidate(raw_model: str | None) -> ModelCandidate | None:
     exact = _INDEX.get(_key(raw_model))
     if exact is not None:
         return exact
+    kctc = _kctc_candidate(raw_model)
+    if kctc is not None:
+        return kctc
     found = []
     text = raw_model
     for name in _MODEL_TOKENS:

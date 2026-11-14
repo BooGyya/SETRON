@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 
 FIELDS = {ExtractKind.EQUIPMENT_STATUS: EQUIPMENT_STATUS_FIELDS, ExtractKind.RELEASE_NOTE: RELEASE_NOTE_FIELDS}
 
+# 검토 표에서 숨기는 항목: 앱이 설비군 표기에서 정하는 Inline/Cluster (11/13 멘토: 설비 자체를 Inline/Cluster × Ox/O2
+# 4가지로 나누면 된다). 값은 그대로 계산 · 저장하고 화면에만 보이지 않는다.
+HIDDEN_REVIEW_FIELDS = frozenset({"structure_type"})
+
 FIELD_LABELS = {
     "base_date": "기준일", "site": "Site", "line": "Line(원본)", "group_name": "설비군",
     "model_name": "모델명", "production_area": "Memory/Foundry", "equipment_code": "설비 호기",

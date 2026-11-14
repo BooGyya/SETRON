@@ -117,12 +117,12 @@ def normalize(values, kind, row_number, sources):
     model_structure = MODEL_STRUCTURES.get(model)
     if model_structure:
         if structure and structure != model_structure:
-            issue("structure_type", "모델과 Inline/Cluster 구조 표기가 상충합니다.")
+            issue("model_name", "모델과 Inline/Cluster 표기가 상충합니다. KCTC 설비는 모델명을 Inline Ox · Inline O2 · Cluster Ox · Cluster O2 중 하나로 골라 주세요.")
             structure = None
         else:
             structure = result["structure_type"] = model_structure
     if category == "KCTC" and structure not in {"INLINE", "CLUSTER"}:
-        issue("structure_type", "KCTC Inline·Cluster 구분을 확인하세요.")
+        issue("model_name", "KCTC 설비는 모델명을 Inline Ox · Inline O2 · Cluster Ox · Cluster O2 중 하나로 골라 주세요.")
         structure = None
 
     for field in ("base_date", "release_date"):

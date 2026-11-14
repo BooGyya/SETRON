@@ -25,7 +25,7 @@ DUMP_COLUMNS: dict[str, tuple[str, ...]] = {
              "jira_code"),
     "equipment_snapshot": (
         "snapshot_id", "equipment_id", "base_date", "site", "line", "model_name", "group_id", "production_area",
-        "structure_type", "geometry_type", "modification_type", "batch_id", "source_reference",
+        "structure_type", "geometry_type", "modification_type", "batch_id", "source_reference", "process_name",
     ),
     "equipment_version": (
         "equipment_version_id", "snapshot_id", "family_id", "version_raw", "release_version_id", "batch_id",
@@ -47,6 +47,8 @@ LEGACY_ITEM_COLUMNS = DUMP_COLUMNS["item"][:-1]
 LEGACY_KEY_ITEM_COLUMNS = (*LEGACY_ITEM_COLUMNS[:3], "jira_key", *LEGACY_ITEM_COLUMNS[3:])
 LEGACY_RENAMED_CODE_ITEM_COLUMNS = (*LEGACY_ITEM_COLUMNS[:3], "jira_code", *LEGACY_ITEM_COLUMNS[3:])
 DUAL_ITEM_COLUMNS = (*LEGACY_KEY_ITEM_COLUMNS, "jira_code")
+# 설비 현황 공정 칸(11/13)이 생기기 전 구조. 예전 내보내기와 칸을 아직 못 더한 DB를 그대로 읽는다.
+LEGACY_SNAPSHOT_COLUMNS = DUMP_COLUMNS["equipment_snapshot"][:-1]
 
 
 def allowed_columns(table: str) -> tuple[tuple[str, ...], ...]:
@@ -54,6 +56,8 @@ def allowed_columns(table: str) -> tuple[tuple[str, ...], ...]:
     if table == "item":
         return (DUMP_COLUMNS[table], LEGACY_ITEM_COLUMNS, LEGACY_KEY_ITEM_COLUMNS,
                 LEGACY_RENAMED_CODE_ITEM_COLUMNS, DUAL_ITEM_COLUMNS)
+    if table == "equipment_snapshot":
+        return (DUMP_COLUMNS[table], LEGACY_SNAPSHOT_COLUMNS)
     return (DUMP_COLUMNS[table],)
 
 
@@ -86,8 +90,10 @@ def project_row(table: str, row: dict, columns) -> dict:
     columns = tuple(columns)
     if not supported_columns(table, columns):
         raise DumpFormatError(f"{table}의 열 순서가 올바르지 않습니다.")
-    required = set(LEGACY_ITEM_COLUMNS if table == "item" else columns)
-    allowed = required | {"jira_code", "jira_key"} if table == "item" else required
+    required = set(LEGACY_ITEM_COLUMNS if table == "item"
+                   else LEGACY_SNAPSHOT_COLUMNS if table == "equipment_snapshot" else columns)
+    allowed = (required | {"jira_code", "jira_key"} if table == "item"
+               else required | {"process_name"} if table == "equipment_snapshot" else required)
     if required - row.keys() or row.keys() - allowed:
         raise DumpFormatError(f"{table}의 필드가 지원하는 전체 구조와 다릅니다.")
     values = {column: row[column] for column in columns if column in required}
@@ -99,6 +105,12 @@ def project_row(table: str, row: dict, columns) -> dict:
             values["jira_key"] = jira
         if jira is not None and not {"jira_code", "jira_key"} & set(columns):
             raise DumpFormatError("item의 Jira 값을 이전 구조에 손실 없이 저장할 수 없습니다.")
+    if table == "equipment_snapshot":
+        process = row.get("process_name")
+        if "process_name" in columns:
+            values["process_name"] = process
+        elif process is not None:
+            raise DumpFormatError("equipment_snapshot의 공정 값을 이전 구조에 손실 없이 저장할 수 없습니다.")
     return {column: values[column] for column in columns}
 
 
