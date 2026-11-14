@@ -61,7 +61,7 @@ MODEL_CATEGORIES = dict(_REFERENCE_CATEGORIES)
 MODEL_ALIASES = {"M5": "M-O5"}
 
 SNAPSHOT_FIELDS = ("base_date", "site", "line", "model_name", "equipment_code", "production_area",
-                   "structure_type", "geometry_type", "modification_type", "group_name")
+                   "structure_type", "geometry_type", "modification_type", "group_name", "process_name")
 SNAPSHOT_METADATA_FIELDS = ("line", "production_area", "structure_type", "geometry_type", "modification_type")
 SOFTWARE_FIELDS = ("family_name", "version_raw", "ui_type")
 PM_FIELDS = ("pm_name", "model_name")
@@ -498,6 +498,10 @@ class DatabaseImportSaver:
             values = {row.values.get(name) for row in rows} - {None}
             _require(len(values) <= 1, f"{code}: 같은 날짜 현황의 {name} 값이 상충합니다.")
             metadata[name] = next(iter(values), None)
+        # 공정(11/13 멘토): 설비 하나에 하나이고 복합공정도 한 칸에 적는다. PM 줄마다 다르면 막지 않고 잇는다.
+        processes = list(dict.fromkeys(str(row.values["process_name"]).strip() for row in rows
+                                       if str(row.values.get("process_name") or "").strip()))
+        metadata["process_name"] = " / ".join(processes)[:100] if processes else None
         models: dict[str, dict] = {}
         software: dict[tuple[int, str], dict[str, Any]] = {}
         for row in rows:

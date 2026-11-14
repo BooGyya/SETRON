@@ -23,7 +23,9 @@ from setron.features.production_area import production_area_label, production_ar
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.excel_import.reference import ReferenceData
 from setron.features.excel_import.candidates import apply_model_candidates, candidate_notes, model_candidate_rows
-from setron.features.excel_import.schemas import FIELD_LABELS, ISSUE_LABELS, KIND_LABELS, Issue, IssueLevel, SaveReceipt
+from setron.features.excel_import.schemas import (
+    FIELD_LABELS, HIDDEN_REVIEW_FIELDS, ISSUE_LABELS, KIND_LABELS, Issue, IssueLevel, SaveReceipt,
+)
 from setron.features.excel_import.service import (
     build_save_request, cell_text, describe_save_error, draft_from_review, edit_value, parse_date,
     MemoryImportSaver, has_errors, parse_address, revert_row, set_excluded, validate,
@@ -960,6 +962,8 @@ class ImportPage(QWidget):
                 for index, width in enumerate(widths):
                     self.row_table.setColumnWidth(index, width)
                 self.row_table.base_widths = widths
+                for index, name in enumerate(draft.fields, start=2):   # Inline/Cluster 등 앱이 정하는 값은 숨김
+                    self.row_table.setColumnHidden(index, name in HIDDEN_REVIEW_FIELDS)
             error_messages = {}
             for issue in self.issues:
                 if issue.level is IssueLevel.ERROR and issue.field:

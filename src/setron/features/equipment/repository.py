@@ -105,7 +105,7 @@ class EquipmentRepository:
             )}) for pm in pms_by_version[version["equipment_version_id"]]),
         ) for version in versions)
         return StoredSnapshot(
-            **{field.name: snapshot[field.name] for field in fields(SnapshotInput)
+            **{field.name: snapshot.get(field.name) for field in fields(SnapshotInput)
                if field.name not in {"equipment_code", "software"}},
             equipment_code=equipment["equipment_code"], equipment_id=equipment["equipment_id"],
             snapshot_id=snapshot["snapshot_id"], software=software,

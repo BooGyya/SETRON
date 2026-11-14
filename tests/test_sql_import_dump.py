@@ -10,6 +10,7 @@ import pytest
 
 from setron.features.db_export.service import _header, _write_rows
 from setron.features.db_import.dump import (
+    LEGACY_SNAPSHOT_COLUMNS,
     DUMP_COLUMNS, DUAL_ITEM_COLUMNS, LEGACY_ITEM_COLUMNS, LEGACY_KEY_ITEM_COLUMNS,
     DumpFormatError, allowed_columns, project_row, read_dump,
 )
@@ -27,6 +28,8 @@ def _export(rows, *, legacy_item=False, item_columns=None):
             columns = item_columns or (LEGACY_ITEM_COLUMNS if legacy_item else DUMP_COLUMNS[table])
             if not legacy_item and item_columns is None:
                 table_rows = [(*row, None) if len(row) == len(LEGACY_ITEM_COLUMNS) else row for row in table_rows]
+        elif table == "equipment_snapshot":                   # 공정 칸(11/13) 전 13열 행은 공정 없이 새 구조로 쓴다
+            table_rows = [(*row, None) if len(row) == len(LEGACY_SNAPSHOT_COLUMNS) else row for row in table_rows]
         fields = ",\n".join(f"  `{column}` text COMMENT '원문; 보존'" for column in columns)
         file.write(f"\n-- 테이블 {table} · {len(table_rows)}행\nCREATE TABLE `{table}` (\n{fields}\n"
                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n")

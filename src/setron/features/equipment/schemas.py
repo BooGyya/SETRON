@@ -74,6 +74,7 @@ class SnapshotInput:
     geometry_type: str | None = None
     modification_type: str | None = None
     source_reference: dict | None = None
+    process_name: str | None = None          # 공정 원문(11/13 멘토: 복합공정은 AAAA/BBBB · AAAA & BBBB)
 
     @property
     def production_area_label(self) -> str:

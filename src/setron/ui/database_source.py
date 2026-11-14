@@ -567,6 +567,9 @@ def dashboard_source_from_env(environ=None) -> tuple[DatabaseDashboardSource | N
         # 업그레이드가 DDL 후 저장소 reflection을 갱신한다. 기존 Jira 값과 NULL은 보존한다.
         from setron.features.item.jira_upgrade import upgrade as upgrade_jira
         upgrade_jira(storage, database.engine)
+        # 설비 현황 공정 칸(11/13): 이미 만든 DB에 칸이 없으면 더한다. 실패해도 계속.
+        from setron.features.equipment.process_upgrade import ensure_process_column
+        ensure_process_column(database.engine)
         return DatabaseDashboardSource(lambda catalog=None, *, publish_lines=True:
                                        load_dashboard_source(storage, catalog, publish_lines=publish_lines)), None
     except (DatabaseError, StorageValidationError) as error:

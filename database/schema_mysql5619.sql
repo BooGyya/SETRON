@@ -197,6 +197,7 @@ CREATE TABLE equipment_snapshot (
     modification_type VARCHAR(100) NULL COMMENT 'CIP 등 개조 유형; 없으면 NULL',
     batch_id INT UNSIGNED NOT NULL COMMENT '이 현황 정보의 입력 작업 ID',
     source_reference LONGTEXT NULL COMMENT '필드별 원본 시트명·셀 주소',
+    process_name VARCHAR(100) NULL COMMENT '공정 원문(복합공정 AAAA/BBBB 포함); 없으면 NULL',
     PRIMARY KEY (snapshot_id),
     UNIQUE KEY uq_equipment_snapshot_date (equipment_id, base_date),
     KEY ix_equipment_snapshot_date_site_line (base_date, site, line),

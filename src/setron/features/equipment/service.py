@@ -124,7 +124,8 @@ class EquipmentService:
         self._check_hpa_history(tx, equipment, value.base_date, group_ids)
         snapshot = tx.insert("equipment_snapshot", {
             **{field.name: getattr(value, field.name) for field in fields(SnapshotInput)
-               if field.name not in {"equipment_code", "software"}},
+               if field.name not in {"equipment_code", "software"}
+               and not (field.name == "process_name" and getattr(value, field.name) is None)},
             "equipment_id": equipment["equipment_id"],
         })
         for software in value.software:
@@ -371,6 +372,8 @@ class EquipmentService:
             batch = tx.get("import_batch", {"batch_id": value.batch_id})
             self._check_sources(tx, batch, changes["source_reference"])
         changes["group_id"] = representative if has_pm else value.group_id
+        if changes.get("process_name") is None:          # 공정(11/13)이 없으면 바꾸지 않는다 — 칸이 없는 DB에도 그대로
+            changes.pop("process_name", None)
         snapshot = tx.update("equipment_snapshot", {"snapshot_id": snapshot_id}, changes)
         return self.repository.load(tx, equipment, snapshot)
 
