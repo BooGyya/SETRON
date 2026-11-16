@@ -325,13 +325,19 @@ def edit_value(draft: ImportDraft, row_id: int, name: str, text: str | None) -> 
     """
     if name not in draft.fields:
         raise ValueError(f"이 가져오기에서 쓰지 않는 항목입니다: {name}")
-    row = draft.row(row_id)
+    from .review_locations import refresh_hpa_coverage
+
+    return refresh_hpa_coverage(_replace_row(draft, edited_row(draft, draft.row(row_id), name, text)))
+
+
+def edited_row(draft: ImportDraft, row: ReviewRow, name: str, text: str | None) -> ReviewRow:
+    """한 칸의 수정값을 기록한 새 검토 행. :func:`edit_value` · 여러 칸 한 번에 바꾸기가 같은 규칙을 쓴다."""
     value = None if text is None or not text.strip() else text
     edits = dict(row.edits)
     original = row.normalized.get(name, row.original.get(name))
     # 자동 정리된 None과 사용자가 직접 비운 결과는 값이 같아도 검토 상태가 다르다.
     cleared_extraction_error = value is None and row.normalized.get(name) is None and any(
-        issue.row_id == row_id and issue.field == name and issue.blocks_save
+        issue.row_id == row.row_id and issue.field == name and issue.blocks_save
         for issue in draft.extraction_issues
     )
     same_as_original = value == original or (value is None and (original is None or not original.strip()))
@@ -339,9 +345,7 @@ def edit_value(draft: ImportDraft, row_id: int, name: str, text: str | None) -> 
         edits.pop(name, None)
     else:
         edits[name] = value
-    from .review_locations import refresh_hpa_coverage
-
-    return refresh_hpa_coverage(_replace_row(draft, replace(row, edits=edits)))
+    return replace(row, edits=edits)
 
 
 def revert_row(draft: ImportDraft, row_id: int) -> ImportDraft:
