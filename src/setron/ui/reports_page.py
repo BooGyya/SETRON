@@ -1,4 +1,4 @@
-"""기간과 유형을 선택하고 Word·PDF 보고서를 내려받는 화면."""
+"""기간과 유형을 선택하고 Word·PDF 보고서와 히트맵 Excel을 내려받는 화면."""
 
 import json
 from copy import deepcopy
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QDate, QSettings, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QCheckBox, QFrame, QHBoxLayout, QStyledItemDelegate, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QStyledItemDelegate, QVBoxLayout, QWidget
 
 from setron.ui.chat_report_library import ChatReportLibrary
 from setron.ui.chat_report_preview import PdfPreviewDialog
@@ -21,7 +21,10 @@ from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.heatmap_grouping import GROUPING_MODES
 from setron.ui.report_data import COMMON_CONTENTS, REPORT_TYPES, ReportRequest, generate_report, unavailable_report_contents
 from setron.ui.report_export import pdf_document, save_generated_report
+from setron.ui.report_heatmap_export import has_report_heatmaps, save_report_heatmaps
 from setron.ui.report_widgets import GenerationDialog, ReportFormatDialog, ReportNoticeDialog, report_pictures
+from setron.ui.import_dialogs import confirm_numbered_save
+from setron.ui.management_integration import reserve_numbered_export, write_reserved_export
 from setron.ui.theme import ASSETS, LINE, SECONDARY, font, set_widget_font
 from setron.ui.version_management_widgets import actions, card, combo, note, table
 
@@ -78,11 +81,15 @@ class ReportsPage(QWidget):
         self.generation_dialog = self.preview_dialog = None
         self.preparing_dialog = None
         self.format_dialog = self.alert_dialog = None
+        self._choosing_excel = False
+        self._excel_report = None
         self._item_load_error = ""
         self.request = ReadRequest(self)
         self.request.completed.connect(self._generated)
         self.item_request = ReadRequest(self)
         self.item_request.completed.connect(self._items_loaded)
+        self.excel_request = ReadRequest(self)
+        self.excel_request.completed.connect(self._excel_saved)
         self.settings = settings if settings is not None else QSettings("SETRON", "Reports")
         self.ai_library = ChatReportLibrary(settings=ai_settings)
         self.ai_library.setParent(self)
@@ -235,7 +242,8 @@ class ReportsPage(QWidget):
 
     @property
     def saving(self):
-        return self.preview_dialog is not None or self.preparing_dialog is not None or self.format_dialog is not None
+        return (self.preview_dialog is not None or self.preparing_dialog is not None or self.format_dialog is not None
+                or self._choosing_excel or self.excel_request.busy)
 
     @property
     def kind(self):
@@ -455,7 +463,7 @@ class ReportsPage(QWidget):
         if dialog is not None:
             dialog.accept()
             dialog.deleteLater()
-        self.generate_button.setEnabled(True)
+        self.generate_button.setEnabled(not self._choosing_excel and not self.excel_request.busy)
 
     def _generated(self, result, error):
         self._close_generation()
@@ -478,7 +486,7 @@ class ReportsPage(QWidget):
         self._show_formats()
 
     def _show_formats(self):
-        dialog = self.format_dialog = ReportFormatDialog(self.window())
+        dialog = self.format_dialog = ReportFormatDialog(self.window(), heatmaps=has_report_heatmaps(self.result))
         result = self.result
 
         def finished(_):
@@ -486,12 +494,17 @@ class ReportsPage(QWidget):
             format_ = dialog.selected_format
             dialog.deleteLater()
             if format_:
-                QTimer.singleShot(0, self, lambda: self.open_preview(format_) if self.result is result else None)
+                action = self.export_heatmaps if format_ == "xlsx" else lambda: self.open_preview(format_)
+                QTimer.singleShot(0, self, lambda: action() if self.result is result else None)
 
         dialog.finished.connect(finished)
         dialog.open()
 
     def open_preview(self, format_):
+        if format_ == "xlsx":
+            return self.export_heatmaps()
+        if format_ not in {"docx", "pdf"}:
+            return None
         if self.result is None or self.request.busy or self.saving or self.alert_dialog is not None:
             return None
         if self.pictures is None:
@@ -536,6 +549,63 @@ class ReportsPage(QWidget):
         dialog.open()
         return dialog
 
+    def export_heatmaps(self):
+        """생성 당시 히트맵을 편집 가능한 Excel로 저장한다. 위젯은 워커에서 접근하지 않는다."""
+        if self.result is None or self.request.busy or self.saving or self.alert_dialog is not None:
+            return False
+        report = self.result
+        if not has_report_heatmaps(report):
+            self._alert("Excel로 내보낼 히트맵이 없습니다. 히트맵을 선택한 뒤 다시 생성해 주세요.")
+            return False
+        self._choosing_excel = True
+        self.generate_button.setEnabled(False)
+        try:
+            path, _ = QFileDialog.getSaveFileName(
+                self, "히트맵 Excel 저장", f"{report.request.filename}_히트맵.xlsx", "Excel (*.xlsx)",
+                options=QFileDialog.Option.DontConfirmOverwrite)
+            if not path:
+                return False
+            if self.result is not report or self.state.catalog != self.source.catalog:
+                self._notice("조회 선택지가 변경되었습니다. 보고서를 다시 생성한 뒤 저장해 주세요.")
+                return False
+            destination = reserve_numbered_export(
+                path, ".xlsx", confirm_duplicate=lambda requested: confirm_numbered_save(self, requested))
+            if not isinstance(destination, Path):
+                if destination is not None:
+                    self._notice(destination.message)
+                return False
+            if self.result is not report or self.state.catalog != self.source.catalog:
+                destination.unlink(missing_ok=True)
+                self._notice("조회 선택지가 변경되었습니다. 보고서를 다시 생성한 뒤 저장해 주세요.")
+                return False
+            self._excel_report = report
+
+            def write():
+                return write_reserved_export(lambda output: save_report_heatmaps(report, output), destination)
+
+            started = self.excel_request.start(BackgroundRead(write))
+            if not started:
+                self._excel_report = None
+                destination.unlink(missing_ok=True)
+                return False
+            self._notice("히트맵을 Excel로 저장하고 있습니다…")
+            return True
+        finally:
+            self._choosing_excel = False
+            self.generate_button.setEnabled(not self.excel_request.busy)
+
+    def _excel_saved(self, result, error):
+        report, self._excel_report = self._excel_report, None
+        self.generate_button.setEnabled(True)
+        if error is not None or result is None:
+            self._notice("히트맵 Excel을 저장하지 못했습니다. " + (str(error) if error is not None else "다시 시도해 주세요."))
+            return
+        if not result.saved:
+            self._notice(result.message)
+            return
+        self._saved(result.path, report)
+        self._notice(f"히트맵을 Excel로 저장했습니다. {result.path}")
+
     def _saved(self, path, report):
         entry = {"path": str(path), "created": report.created.strftime("%Y-%m-%d %H:%M:%S"),
                  "kind": report.title, "scope": report.scope}
@@ -555,7 +625,7 @@ class ReportsPage(QWidget):
             values = json.loads(self.settings.value("files", "[]"))
             return [entry for entry in values if isinstance(entry, dict) and isinstance(entry.get("path"), str)
                     and isinstance(entry.get("created"), str)
-                    and Path(entry["path"]).suffix.lower() in {".docx", ".pdf"}] if isinstance(values, list) else []
+                    and Path(entry["path"]).suffix.lower() in {".docx", ".pdf", ".xlsx"}] if isinstance(values, list) else []
         except (ValueError, TypeError):
             return []
 

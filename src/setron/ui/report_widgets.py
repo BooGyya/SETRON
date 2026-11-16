@@ -24,14 +24,18 @@ class ReportNoticeDialog(ImportDialog):
 
 
 class ReportFormatDialog(ImportDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, heatmaps=False):
         super().__init__("보고서 형식 선택", parent)
         self.selected_format = None
-        self.add_message("미리보기로 확인할 보고서 형식을 선택해 주세요.")
+        self.add_message("보고서 형식을 선택해 주세요. Word·PDF는 미리보기를 먼저 표시합니다." if heatmaps
+                         else "미리보기로 확인할 보고서 형식을 선택해 주세요.")
         choices = QHBoxLayout()
         choices.setSpacing(12)
         self.format_buttons = {}
-        for key, title in (("docx", "Word (.docx)"), ("pdf", "PDF (.pdf)")):
+        formats = (("docx", "Word (.docx)"), ("pdf", "PDF (.pdf)"))
+        if heatmaps:
+            formats += (("xlsx", "히트맵 Excel (.xlsx)"),)
+        for key, title in formats:
             control = button(title)
             control.setMinimumHeight(48)
             control.setAutoDefault(False)
@@ -39,6 +43,8 @@ class ReportFormatDialog(ImportDialog):
             choices.addWidget(control, 1)
             self.format_buttons[key] = control
         self.body.addLayout(choices)
+        if heatmaps:
+            self.add_message("Excel은 선택한 히트맵만 항목별 시트에 저장합니다. 셀의 값과 색상을 편집할 수 있습니다.")
         self.cancel_button = self.add_action("취소", self.reject, default=True)
         self.finish_layout()
 

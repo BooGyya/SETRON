@@ -113,6 +113,7 @@ class ReportSection:
     chart: str = ""  # distribution / trend / line_trend / heatmap
     visual: object = None
     content_key: str = ""
+    heatmap_mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -193,11 +194,11 @@ def generate_report(source, request, versions=None):
 
     selected = set(request.selected_contents)
 
-    def add(tab, title, note="", columns=(), rows=(), chart="", visual=None, *, content="summary"):
+    def add(tab, title, note="", columns=(), rows=(), chart="", visual=None, *, content="summary", heatmap_mode=""):
         if content not in selected and content not in request.selected_types:
             return
         sections.append(ReportSection(tab, title, note, Table(title, tuple(columns), tuple(tuple(r) for r in rows))
-                                      if columns else None, chart, visual, content))
+                                      if columns else None, chart, visual, content, heatmap_mode))
 
     line_trends, heatmaps, line_counts, risk_rows = report_visuals(frozen, frames, current)
 
@@ -279,7 +280,7 @@ def generate_report(source, request, versions=None):
                 ("묶음", "라인", "설비", "버전 단계", "위험"),
                 tuple((panel.group, line, cell.code, cell.tier.value, cell.risk.value)
                       for panel in panels for line, cells in panel.lines for cell in cells),
-                "heatmap", panels, content="heatmap")
+                "heatmap", panels, content="heatmap", heatmap_mode=mode)
     add(2, "위험 후보 설비와 근거", "목표 달성 여부와 별도입니다. 위험 후보가 없더라도 위험 미확인 설비를 안전으로 확정하지 않습니다.",
         ("분류", "사업장", "설비군", "라인", "설비", "위험", "근거"), risk_rows, content="risk")
     excluded_rows = hpa_rows(current, frozen, request.query, request.base_date) if request.demo != "empty" else ()

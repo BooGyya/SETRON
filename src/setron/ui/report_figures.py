@@ -8,13 +8,12 @@ from PySide6.QtCore import QByteArray, QBuffer, QDateTime, QIODevice, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen
 
 from setron.features.risk.schemas import RiskStatus
-from setron.features.version.groups import TIER_LABELS, Tier
+from setron.features.version.groups import TIER_LABELS
 from setron.ui.chat_export import chart_png
+from setron.ui.report_visual_data import HEATMAP_TIER_COLORS as TIER_COLORS
 
 
 PAPER_INK = "#142033"
-TIER_COLORS = {Tier.ABOVE: "#A9DBBD", Tier.AT: "#DDF4E5", Tier.ONE_BELOW: "#FFF0B7",
-               Tier.TWO_BELOW: "#F8C5CE", Tier.UNKNOWN: "#ECEEF1"}
 LINE_COLORS = ("#1D4ED8", "#C2410C", "#15803D", "#7E22CE", "#0E7490", "#BE123C")
 FIGURE_WIDTH, ROWS_PER_COLUMN, COLUMNS_PER_PAGE = 1200, 12, 6
 

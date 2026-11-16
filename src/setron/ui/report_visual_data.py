@@ -12,6 +12,10 @@ from setron.ui.heatmap_data import record_tiles
 from setron.ui.heatmap_grouping import GROUPING_MODES, build_heatmap_groups
 
 
+HEATMAP_TIER_COLORS = {Tier.ABOVE: "#A9DBBD", Tier.AT: "#DDF4E5", Tier.ONE_BELOW: "#FFF0B7",
+                       Tier.TWO_BELOW: "#F8C5CE", Tier.UNKNOWN: "#ECEEF1"}
+
+
 @dataclass(frozen=True)
 class ReportHeatmapCell:
     code: str
