@@ -141,7 +141,10 @@ def test_actual_schema_family_requires_input_model_or_direct_parent_owner(schema
         tx.update("equipment_group", {"group_id": other["group_id"]}, {"parent_group_id": owner["group_id"]})
     assert not has_errors(service.validate((source,)))
     assert len(service.prepare((source,), "direct-parent-owner")) == 1
+    # 최종 멘토링(11-16): 릴리즈노트는 SW 계열이 하나로 정해지면 모델명이 없어도 된다. 계열도 모르면 지금처럼 막는다.
     no_model = draft(row(model_name=None, family_name="소유 검증 계열", content="합성 Item"), kind=ExtractKind.RELEASE_NOTE)
-    assert any(issue.code == "MODEL_REQUIRED" for issue in service.validate((no_model,)))
+    assert not has_errors(service.validate((no_model,)))
+    unknown = draft(row(model_name=None, family_name="없는 계열", content="합성 Item"), kind=ExtractKind.RELEASE_NOTE)
+    assert any(issue.code == "MODEL_REQUIRED" for issue in service.validate((unknown,)))
     with pytest.raises(ImportBlockedError):
-        service.prepare((no_model,), "missing-release-model")
+        service.prepare((unknown,), "missing-release-model")

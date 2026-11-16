@@ -202,7 +202,50 @@ def draft_from_review(review: ExtractionReview, *, source: ResponseSource | None
                         workbook_id=workbook_id)
     if review.kind is ExtractKind.EQUIPMENT_STATUS:
         return _derive_lines(_derive_families(draft))
-    return _derive_families(draft)          # 릴리즈노트도 SW 계열이 비면 모델로 (11/12 멘토 피드백 5)
+    # 릴리즈노트도 SW 계열이 비면 모델로 (11/12 멘토 피드백 5). 모델 · 계열이 빈 행은 같은 시트 · 파일 이름에서 (11-16)
+    return _derive_families(_derive_release_context(draft))
+
+
+def _derive_release_context(draft: ImportDraft) -> ImportDraft:
+    """릴리즈노트의 빈 모델명 · SW 계열을 채운다 (최종 멘토링 11-16: 대량 릴리즈노트의 계열 칸이 모두 빨간색).
+
+    릴리즈노트 한 시트는 한 계열이다. 그래서
+    1. 다른 행에 적힌 값이 한 가지뿐이면 빈 행에 같은 값을 쓴다.
+    2. 모델명이 어느 행에도 없으면 시트 이름 · 파일 이름('P_PJT_M-C4_SW_정기_Release_List')에서 모델을 찾는다.
+    채운 값은 사용자 수정처럼 표시되어 검토 화면에서 확인하고 고칠 수 있다.
+    """
+    from setron.features.rule_extraction.release_rules import _find_model
+
+    active = [row for row in draft.rows if not row.excluded]
+    fill = {}
+    for name in ("model_name", "family_name"):
+        if name not in draft.fields:
+            continue
+        found = {row.value(name).strip() for row in active
+                 if isinstance(row.value(name), str) and row.value(name).strip()}
+        if len(found) == 1:
+            fill[name] = found.pop()
+        elif not found and name == "model_name":
+            for text in (draft.sheet.sheet_name, draft.workbook_name):
+                model = _find_model(re.sub(r"[_.]+", " ", text or ""))
+                if model:
+                    fill[name] = model
+                    break
+    if not fill:
+        return draft
+    rows, changed = [], False
+    for row in draft.rows:
+        edits = {name: value for name, value in fill.items()
+                 if not row.excluded and name not in row.edits and _blank_text(row.value(name))}
+        if edits:
+            row = replace(row, edits={**row.edits, **edits})
+            changed = True
+        rows.append(row)
+    return replace(draft, rows=tuple(rows)) if changed else draft
+
+
+def _blank_text(value) -> bool:
+    return value is None or isinstance(value, str) and not value.strip()
 
 
 # 라인처럼 생긴 시트 이름: P1F · V2 · S5 · P3-S5 · 15L · M1 (Memory · Foundry · Sheet1 같은 이름은 아님)
@@ -771,11 +814,13 @@ def _reference_issues(draft: ImportDraft, reference: ReferenceData | None) -> li
         if draft.kind is ExtractKind.EQUIPMENT_STATUS and code is not None and code not in reference.equipment_codes:
             issues.append(Issue(IssueLevel.REVIEW, f"등록되지 않은 설비 호기({code})입니다. 저장하면 새 설비로 등록됩니다.",
                                 row.row_id, "equipment_code", row.sources.get("equipment_code"), code="NEW_EQUIPMENT"))
-        if (problem := model_issue(row, draft.kind, reference)) is not None:
-            issues.append(problem)
-            continue
         resolved = resolve_family(row, draft.kind, reference, sheet_name=draft.sheet.sheet_name,
                                   workbook_name=draft.workbook_name)
+        # 릴리즈노트는 SW 계열이 정해지면 모델명이 없어도 된다 (최종 멘토링 11-16: 대량 릴리즈노트의 빨간 칸)
+        if not (draft.kind is ExtractKind.RELEASE_NOTE and _blank(row.value("model_name")) and resolved is not None) \
+                and (problem := model_issue(row, draft.kind, reference)) is not None:
+            issues.append(problem)
+            continue
         if resolved is not None:
             if version is None:
                 continue

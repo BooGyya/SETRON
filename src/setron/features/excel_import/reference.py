@@ -111,6 +111,14 @@ def _registered_models(raw, reference, category=None):
     group_id = aliases.get(key, aliases.get(canonical.casefold()))
     matches = [model for model in reference.models if model.group_id == group_id] if group_id else [
         model for model in reference.models if model.model_name.casefold() == canonical.casefold()]
+    if not matches:
+        # 표기만 다른 등록 설비군 ('C4(DFB)' ↔ 'M-C4 DFB', 최종 멘토링 11-16). 하나로 정해질 때만 쓴다.
+        from setron.features.reference_data import group_key
+
+        loose = group_key(raw)
+        matches = [model for model in reference.models if loose and group_key(model.model_name) == loose]
+        if len(matches) != 1:
+            matches = []
     return tuple(model for model in matches if category is None or model.category == category)
 
 
@@ -291,18 +299,28 @@ def resolve_family(row, kind: ExtractKind, reference: ReferenceData, *,
       등록 모델 목록이 미연결이면 기존 순수 계산의 구분값 매칭만 수행.
     """
     key = family_key(row, kind, reference)
-    if key is None:
-        return None
-    matches = [family for family in reference.families if identity(family.key) == identity(key)]
-    if reference.models is not None:
-        models = _matching_models(row, kind, reference)
-        if len(models) != 1:
-            return None
-        model = models[0]
-        owners = {model.group_id}
-        if model.parent_group_id is not None:
-            owners.add(model.parent_group_id)
-        matches = [family for family in matches if family.owner_group_id in owners]
+    matches = None
+    if key is not None:
+        matches = [family for family in reference.families if identity(family.key) == identity(key)]
+        if reference.models is not None:
+            models = _matching_models(row, kind, reference)
+            if len(models) != 1:
+                matches = None
+            else:
+                matches = [family for family in matches if family.owner_group_id in _owners(models[0])]
+    if matches is not None:
+        matches = _by_area(matches, row, reference, sheet_name, workbook_name)
+        if len(matches) == 1:
+            return matches[0]
+    return _owned_family(row, kind, reference, sheet_name, workbook_name)
+
+
+def _owners(model: ModelReference) -> set[int]:
+    return {model.group_id} | ({model.parent_group_id} if model.parent_group_id is not None else set())
+
+
+def _by_area(matches, row, reference, sheet_name, workbook_name):
+    """같은 이름의 메모리 · 파운드리 계열이 함께 있으면 행의 영역(장소표)으로 고른다."""
     if any(family.production_area == "FOUNDRY" for family in matches):
         values = {name: row.value(name) for name in ("production_area", "site", "line")}
         supplied = values.get("production_area")
@@ -311,4 +329,48 @@ def resolve_family(row, kind: ExtractKind, reference: ReferenceData, *,
                 if label.casefold() == supplied.strip().casefold()), supplied)
         want = "FOUNDRY" if area_of(values, sheet_name, workbook_name) == "FOUNDRY" else None
         matches = [family for family in matches if family.production_area == want]
-    return matches[0] if len(matches) == 1 else None
+    return matches
+
+
+def _family_text(row) -> str | None:
+    value = row.value("family_name")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _owned_family(row, kind, reference, sheet_name, workbook_name) -> FamilyReference | None:
+    """SW 계열이 비었거나 번역표에 없는 설비군이어도 계열을 하나로 정한다 (최종 멘토링 11-16: SW 계열 필수 아님).
+
+    - 모델이 하나로 정해지면: 그 모델(개조형이면 기본형)이 가진 계열. 계열명을 적었으면 그 이름과 맞는 것만.
+    - 릴리즈노트에 모델명이 없으면: 적은 계열명과 이름이 같은 계열.
+    하나로 정해지지 않으면 None (지금처럼 '계열 대응 확인' 오류).
+    """
+    if reference.models is None:
+        return None
+    from setron.features.reference_data import group_key, strip_foundry
+
+    family = _family_text(row)
+    model = row.value("model_name")
+    if isinstance(model, str) and model.strip():
+        models = _matching_models(row, kind, reference)
+        if len(models) != 1:
+            return None
+        owners = _owners(models[0])
+        candidates = [f for f in reference.families if f.owner_group_id in owners]
+        own = [f for f in candidates if f.owner_group_id == models[0].group_id]
+        candidates = own or candidates               # 개조형에 자기 계열이 없으면 기본형 계열 (DFB → C4)
+    elif kind is ExtractKind.RELEASE_NOTE and family is not None:
+        candidates = list(reference.families)
+    else:
+        return None
+    if family is not None:
+        wanted = group_key(strip_foundry(family)[0])
+        candidates = [f for f in candidates if group_key(strip_foundry(f.key.family_name)[0]) == wanted]
+    # C3 구UI · 통합UI, KCTC Inline · Cluster처럼 행에 적힌 구분은 후보가 하나여도 지킨다
+    key = family_key(row, kind, reference)
+    if key is not None:
+        if key.ui_type:
+            candidates = [f for f in candidates if f.key.ui_type in (None, key.ui_type)]   # UI를 정하지 않은 계열은 허용
+        if key.structure_type:
+            candidates = [f for f in candidates if f.key.structure_type in (None, key.structure_type)]
+    candidates = _by_area(candidates, row, reference, sheet_name, workbook_name)
+    return candidates[0] if len(candidates) == 1 else None

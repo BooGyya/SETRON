@@ -1527,10 +1527,18 @@ class DataAdminService:
         same = next((g for g in groups if _text(g["group_name"]).casefold() == name.casefold()), None)
         if same is not None and same.get("parent_group_id"):
             parent_name = next((_text(g["group_name"]) for g in groups if g["group_id"] == same["parent_group_id"]), "상위 설비군")
-            require(False, f"'{_text(same['group_name'])}'은(는) 이미 '{parent_name}'의 개조형으로 등록돼 있습니다.")
-        require(same is None, "이미 있는 설비군 이름입니다.")
+            require(False, f"'{_text(same['group_name'])}'은(는) 이미 '{parent_name}'의 개조형으로 등록돼 있습니다. "
+                    "새로 추가하지 않아도 가져오기에서 인식됩니다.")
+        require(same is None, f"'{name}'은(는) 이미 있는 설비군입니다. 새로 추가하지 않아도 됩니다.")
         require(all(alias.casefold() != name.casefold() for alias in model_aliases(tx)),
                 "다른 설비군의 이전 이름입니다.")
+        # 표기만 다른 같은 설비군 ('C4(DFB)' ↔ 'M-C4 DFB')은 새로 만들지 않는다. 가져오기에서 그대로 인식된다 (최종 멘토링 11-16)
+        from setron.features.reference_data import group_key
+
+        twin = next((g for g in groups if group_key(_text(g["group_name"])) == group_key(name)), None)
+        require(twin is None, f"'{name}'은(는) 이미 등록된 설비군 '{_text(twin['group_name'])}'과(와) 같은 설비군입니다. "
+                "가져오기에서 그대로 인식되므로 새로 추가하지 않아도 됩니다. 이름을 맞추려면 설비군 표에서 이름을 고쳐 주세요."
+                if twin is not None else "")
         parent = None
         if parent_id is not None:
             parent = next((g for g in groups if g["group_id"] == parent_id), None)
