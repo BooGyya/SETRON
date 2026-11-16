@@ -114,7 +114,11 @@ def test_header_list_opens_latest_hpa_search_and_actual_observation_detail(windo
     assert page.model.ids == (9,)
     page.table.setCurrentIndex(page.model.index(0, 0))
     QTest.keyClick(page.table, Qt.Key.Key_Return)
-    assert page.mode == "detail" and page.selected_id == 9
+    assert page.mode == "list" and page.selected_id == 9
+    drawer = window.equipment_drawer
+    assert drawer.is_open and drawer.request == EquipmentSelection(query, ANALYSIS, 9, LATEST)
+    assert drawer.detail.record.equipment_id == 9 and drawer.detail.record.base_date == LATEST
+    assert drawer.software_cards[0].observation.current == "vHPA.2_d5 "
     assert page.detail_model.rows[0][2:5] == ("vHPA.2_d5 ", "—", "분석 제외")
     assert page.observation_date.text() == f"관측일 {LATEST}"
     evidence = {title: value for _, title, value in page.evidence_values}

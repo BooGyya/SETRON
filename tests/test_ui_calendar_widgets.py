@@ -23,7 +23,7 @@ from setron.ui.management_page import ValueEditor
 from setron.ui.query_panel import QueryPanel
 from setron.ui.query_state import QueryState, preview_catalog
 from setron.ui.replay_page import ReplayPage
-from test_ui_import_ver5 import own  # noqa: F401
+from test_ui_import_ver5 import own, until  # noqa: F401
 
 
 def test_year_precedes_month_and_both_use_native_dropdowns(own):
@@ -347,6 +347,8 @@ def test_clicking_the_query_date_text_opens_calendar_until_day_confirmation(own)
 def test_each_screen_date_popup_uses_shared_calendar(own, screen):
     if screen in {"replay", "delete"}:
         page = own(ReplayPage(demo_dashboard_source()) if screen == "replay" else ImportDeletePage())
+        if screen == "replay":
+            until(lambda: page.data is not None and not page.busy)
         field = page.query_panel.range_button if screen == "replay" else page.period_button
         field.click()
         calendar = field.dialog.calendar
