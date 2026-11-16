@@ -9,7 +9,7 @@ the owned process stops. There is no connection to port 3306 or 13306.
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from hashlib import sha1
+from hashlib import sha1, sha256
 import os
 from pathlib import Path
 import secrets
@@ -36,8 +36,8 @@ pytestmark = pytest.mark.skipif(
     reason="Explicit Windows MySQL home and 300-equipment dump opt-in required.",
 )
 
-_DATABASES = {"qa_source", "qa_binary"}
-_PRIVILEGES = "SELECT, CREATE, DROP, INSERT, REFERENCES, DELETE"
+_DATABASES = {"qa_source", "qa_binary", "qa_fresh", "qa_pending"}
+_PRIVILEGES = "SELECT, CREATE, DROP, INSERT, REFERENCES, DELETE, TRIGGER"
 _LINES = {"P1F", "P1D", "P4H", "P4D"}
 
 
@@ -452,13 +452,8 @@ def test_windows_mysql_frozen_exe_and_batch_round_trip(windows_mysql, initialize
     server.admin("REVOKE DELETE ON `qa_binary`.* FROM %s@'127.0.0.1'", (server.username,))
     try:
         code, message = server.invoke(folder, "2\nY\n\n", batch=True)
-        assert code == 1 and "1142" in message and "[계정·권한 확인]" in message
-        assert "SELECT, DELETE" in message and "백업" in message
-        created = _backups(folder) - backups
-        assert len(created) == 1
-        backup = created.pop()
-        assert str(backup) in message
-        _assert_backup(initializer, folder, backup, original[1])
+        assert code == 1 and "DELETE" in message and "[계정·권한 확인]" in message
+        assert _backups(folder) == backups  # denied before backup or deletion
         assert server.snapshot("qa_binary") == original
     finally:
         server.admin("GRANT DELETE ON `qa_binary`.* TO %s@'127.0.0.1'", (server.username,))
@@ -471,4 +466,193 @@ def test_windows_mysql_frozen_exe_and_batch_round_trip(windows_mysql, initialize
         assert _backups(folder) == backups and server.snapshot("qa_binary") == original
     finally:
         server.write_env(folder, "qa_binary")
-    print("Isolated Windows frozen EXE/BAT: import/cancel/reset/restore/1142/1045; 13-table structure, all rows, unrelated sentinel and credential-safe guidance verified")
+    print("Isolated Windows frozen EXE/BAT: import/cancel/reset/restore/permission preflight/1045; 13-table structure, all rows, unrelated sentinel and credential-safe guidance verified")
+
+
+def _source_program(server, initializer, name):
+    folder = server.own_path(server.root / name)
+    folder.mkdir()
+    shutil.copyfile(server.dump, folder / "SETRON_DB.sql")
+    config = server.config("qa_source")
+    assert initializer.prepare(config, folder=folder, confirm=lambda _: True).applied
+    return folder, config, server.assert_seed("qa_source")
+
+
+def _pending_operations(folder):
+    return set(folder.glob(".setron-db-*.pending.json"))
+
+
+def test_windows_mysql_missing_create_privilege_does_not_create_a_database(windows_mysql, initializer, monkeypatch):
+    server = windows_mysql
+    folder = server.own_path(server.root / "fresh-permission-preflight")
+    folder.mkdir()
+    shutil.copyfile(server.dump, folder / "SETRON_DB.sql")
+    config = server.config("qa_fresh")
+    existing = "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = %s"
+    assert not server.admin(existing, (config.database,))
+    server.admin("REVOKE CREATE ON `qa_fresh`.* FROM %s@'127.0.0.1'", (server.username,))
+    try:
+        with monkeypatch.context() as isolated:
+            isolated.setattr(initializer, "load_config", lambda: config)
+            isolated.setattr(initializer, "program_folder", lambda: folder)
+            code, message = initializer.run(confirm=lambda _: pytest.fail("Fresh privilege denial must precede confirmation"))
+        assert code == 1 and "CREATE" in message and "권한" in message
+        assert not server.admin(existing, (config.database,))
+        assert not _backups(folder) and not _pending_operations(folder)
+        server.assert_sentinel()
+    finally:
+        server.admin("GRANT CREATE ON `qa_fresh`.* TO %s@'127.0.0.1'", (server.username,))
+    assert initializer.prepare(config, folder=folder).applied
+    server.assert_seed("qa_fresh")
+    print("Isolated fresh database: missing CREATE permission never provisions a partial database")
+
+
+def test_windows_mysql_missing_privileges_abort_before_backup_and_changes(windows_mysql, initializer, monkeypatch):
+    server = windows_mysql
+    folder, config, original = _source_program(server, initializer, "permission-preflight")
+    backups, pending = _backups(folder), _pending_operations(folder)
+    with monkeypatch.context() as isolated:
+        isolated.setattr(initializer, "load_config", lambda: config)
+        isolated.setattr(initializer, "program_folder", lambda: folder)
+        for privilege, mode in (
+            ("CREATE", "import"), ("INSERT", "import"), ("DROP", "import"),
+            ("DELETE", "reset"), ("TRIGGER", "import"), ("TRIGGER", "reset"),
+        ):
+            server.admin(f"REVOKE {privilege} ON `qa_source`.* FROM %s@'127.0.0.1'", (server.username,))
+            confirmations = []
+            try:
+                code, message = initializer.run(confirm=lambda text: confirmations.append(text) or True, mode=mode)
+                assert code == 1 and privilege in message and "권한" in message
+                assert "[계정·권한 확인]" in message
+                assert all(secret not in message for secret in (server.password, server.app_password))
+                assert not confirmations, "Permission denial must precede destructive-action confirmation"
+                assert _backups(folder) == backups and _pending_operations(folder) == pending
+                assert server.snapshot("qa_source") == original
+            finally:
+                server.admin(f"GRANT {privilege} ON `qa_source`.* TO %s@'127.0.0.1'", (server.username,))
+    print("Isolated privilege preflight: CREATE/INSERT/DROP/DELETE/TRIGGER denial preserves every table, row and backup")
+
+
+def test_windows_mysql_existing_trigger_is_blocked_without_cross_database_effects(windows_mysql, initializer):
+    server = windows_mysql
+    folder, config, original = _source_program(server, initializer, "trigger-protection")
+    backups, pending = _backups(folder), _pending_operations(folder)
+    # This trigger would mutate the unrelated sentinel if any equipment DELETE
+    # ran. The server/administrator identity is checked before both DDL calls.
+    server.admin(
+        "CREATE TRIGGER `qa_source`.`qa_delete_guard` BEFORE DELETE ON `qa_source`.`equipment` "
+        "FOR EACH ROW UPDATE `unrelated_db`.`sentinel` SET token = 'unexpected-trigger-execution'"
+    )
+    try:
+        for action in (initializer.prepare, initializer.reset_data):
+            with pytest.raises(initializer.SetupError, match="트리거"):
+                action(config, folder=folder, confirm=lambda _: pytest.fail("Trigger rejection must precede confirmation"))
+            assert server.snapshot("qa_source") == original
+            assert _backups(folder) == backups and _pending_operations(folder) == pending
+            server.assert_sentinel()
+        server.admin("REVOKE TRIGGER ON `qa_source`.* FROM %s@'127.0.0.1'", (server.username,))
+        try:
+            for action in (initializer.prepare, initializer.reset_data):
+                with pytest.raises(initializer.SetupError, match="TRIGGER"):
+                    action(config, folder=folder, confirm=lambda _: pytest.fail("Invisible metadata must not be treated as empty"))
+                assert server.snapshot("qa_source") == original
+                assert _backups(folder) == backups and _pending_operations(folder) == pending
+                server.assert_sentinel()
+        finally:
+            server.admin("GRANT TRIGGER ON `qa_source`.* TO %s@'127.0.0.1'", (server.username,))
+    finally:
+        server.admin("DROP TRIGGER IF EXISTS `qa_source`.`qa_delete_guard`")
+    assert server.assert_seed("qa_source") == original
+    print("Isolated trigger protection: visible and privilege-hidden triggers never execute or change another database")
+
+
+def test_windows_mysql_another_initializer_lock_blocks_all_changes(windows_mysql, initializer, monkeypatch):
+    server = windows_mysql
+    folder, config, original = _source_program(server, initializer, "initializer-lock")
+    backups, pending = _backups(folder), _pending_operations(folder)
+    lock_name = "setron-init:" + sha256(config.database.casefold().encode()).hexdigest()[:32]
+    monkeypatch.setattr(initializer, "LOCK_WAIT_SECONDS", 0)
+    with closing(server.connect()) as owner:
+        server.guard_connection(owner)
+        with owner.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 0)", (lock_name,))
+            assert cursor.fetchone() == (1,)
+            try:
+                for action in (initializer.prepare, initializer.reset_data):
+                    started = time.monotonic()
+                    with pytest.raises(initializer.SetupError, match="실행 중"):
+                        action(config, folder=folder, confirm=lambda _: pytest.fail("A concurrent tool must not request confirmation"))
+                    assert time.monotonic() - started < 5
+                    assert server.snapshot("qa_source") == original
+                    assert _backups(folder) == backups and _pending_operations(folder) == pending
+            finally:
+                cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
+                assert cursor.fetchone() == (1,)
+    assert initializer.prepare(config, folder=folder, confirm=lambda _: True).applied
+    assert server.assert_seed("qa_source") == original
+    print("Isolated concurrent-tool lock: both actions reject a second owner and resume after release")
+
+
+@pytest.mark.skipif(not os.environ.get("SETRON_WINDOWS_PACKAGE_DIR"), reason="Frozen Windows helper directory opt-in required")
+def test_windows_mysql_frozen_missing_insert_permissions_preserve_data(windows_mysql, initializer):
+    server = windows_mysql
+    package = Path(os.environ["SETRON_WINDOWS_PACKAGE_DIR"]).resolve()
+    folder = server.own_path(server.root / "권한 검증" / "program")
+    folder.mkdir(parents=True)
+    for name in ("SETRON_DB_INIT.exe", "prepare_demo_db.bat", "SETRON_DB.sql"):
+        assert (package / name).is_file()
+        shutil.copyfile(package / name, folder / name)
+    config = server.config("qa_binary")
+    assert initializer.prepare(config, folder=folder, confirm=lambda _: True).applied
+    original = server.assert_seed("qa_binary")
+    backups, pending = _backups(folder), _pending_operations(folder)
+    server.write_env(folder, "qa_binary")
+    for index, privilege in enumerate(("CREATE", "INSERT", "DROP", "TRIGGER")):
+        server.admin(f"REVOKE {privilege} ON `qa_binary`.* FROM %s@'127.0.0.1'", (server.username,))
+        try:
+            code, message = server.invoke(folder, "1\nY\n\n", batch=bool(index % 2))
+            assert code == 1 and privilege in message and "[계정·권한 확인]" in message
+            assert _backups(folder) == backups and _pending_operations(folder) == pending
+            assert server.snapshot("qa_binary") == original
+        finally:
+            server.admin(f"GRANT {privilege} ON `qa_binary`.* TO %s@'127.0.0.1'", (server.username,))
+    print("Isolated frozen EXE/BAT privilege denial: CREATE/INSERT/DROP/TRIGGER rejection precedes every data change")
+
+
+@pytest.mark.skipif(not os.environ.get("SETRON_WINDOWS_PACKAGE_DIR"), reason="Frozen Windows helper directory opt-in required")
+def test_windows_mysql_frozen_pending_operation_blocks_restart_with_verified_backup(windows_mysql, initializer):
+    """Exercise a persisted unfinished-operation record, without killing onefile workers."""
+    server = windows_mysql
+    package = Path(os.environ["SETRON_WINDOWS_PACKAGE_DIR"]).resolve()
+    folder = server.own_path(server.root / "중단 기록 검증" / "program")
+    folder.mkdir(parents=True)
+    for name in ("SETRON_DB_INIT.exe", "prepare_demo_db.bat", "SETRON_DB.sql"):
+        assert (package / name).is_file()
+        shutil.copyfile(package / name, folder / name)
+    config = server.config("qa_pending")
+    assert initializer.prepare(config, folder=folder, confirm=lambda _: True).applied
+    original = server.assert_seed("qa_pending")
+    server.write_env(folder, "qa_pending")
+    server.guard()
+    with initializer._connect(config) as connection, connection.cursor() as cursor:
+        connection.select_db(config.database)
+        backup, _, _ = initializer._backup(connection, cursor, folder, config)
+    _assert_backup(initializer, folder, backup, original[1])
+    assert sum(map(len, initializer.read_dataset(backup).values())) == 9869
+    # Use the production writer/format, leaving its pending status intact. This
+    # tests actual next-launch behavior; abrupt process termination is not tested.
+    operation = initializer.begin_operation(folder, config, "import", backup)
+    record = operation.path.read_text(encoding="utf-8")
+    assert all(secret not in record for secret in (server.password, server.app_password))
+    backups, pending = _backups(folder), _pending_operations(folder)
+    assert pending == {operation.path}
+    for choice, batch in (("1", False), ("2", True)):
+        code, message = server.invoke(folder, f"{choice}\nY\n\n", batch=batch)
+        assert code == 1 and "이전 DB 작업" in message and "작업 기록" in message
+        assert str(operation.path) in message and str(backup) in message
+        assert operation.path.read_text(encoding="utf-8") == record
+        assert _backups(folder) == backups and _pending_operations(folder) == pending
+        assert server.snapshot("qa_pending") == original
+        server.assert_sentinel()
+    _assert_backup(initializer, folder, backup, original[1])
+    print("Isolated frozen unfinished-operation recovery: next EXE/BAT launch stops, retains verified 9869-row backup and preserves the database; no forced termination performed")

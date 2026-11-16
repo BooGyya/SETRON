@@ -20,6 +20,8 @@ import pymysql
 from pymysql.converters import escape_item
 
 from init_local_db import is_loopback
+from demo_db_safety import (SafetyError, CommitOutcomeUnknown, assert_no_pending,
+                            begin_operation, check_privileges, journal_path, recovery_message)
 from setron.features.db_export.service import _header
 from setron.features.db_import.dump import (DUMP_COLUMNS, DumpFormatError, _read_file,
     columns_from_definition, supported_columns, values_for_columns, with_legacy_jira)
@@ -28,6 +30,8 @@ from setron.infrastructure.database import DatabaseConfig, DatabaseConfigError
 from setron.infrastructure.env_file import load_env_file
 
 TITLE = "SETRON 시연 DB 준비"
+LOCK_WAIT_SECONDS = 5
+QUERY_WAIT_SECONDS = 30
 HERE = Path(__file__).resolve().parent
 DUMP = HERE / "dataset.dump"
 SCHEMA = HERE / "schema_mysql5619.sql"
@@ -38,14 +42,14 @@ _ENDING = ("SET FOREIGN_KEY_CHECKS = @OLD_FOREIGN_KEY_CHECKS;\n"
            "SET collation_connection = @OLD_COLLATION_CONNECTION;\n")
 
 
-class SetupError(ValueError):
-    """화면에 표시할 오류. 비밀번호나 원문 SQL은 포함하지 않는다."""
+SetupError = SafetyError
 
 
 @dataclass(frozen=True)
 class SetupResult:
     applied: bool
     backup: Path | None = None
+    warning: str = ""
 
 
 def program_folder() -> Path:
@@ -176,9 +180,11 @@ def _backup(connection, cursor, folder, config):
             raise SetupError("백업 SQL의 값이 원본 DB와 일치하지 않습니다.")
         connection.commit()
         return path, backed_up, tuple(definitions)
-    except Exception:
-        connection.rollback()
-        path.unlink(missing_ok=True)
+    except (Exception, KeyboardInterrupt):
+        try:
+            connection.rollback()
+        finally:
+            path.unlink(missing_ok=True)
         raise
 
 
@@ -206,7 +212,16 @@ def _projected_values(rows, definitions):
     return rows, columns_by_table, values
 
 
-def _apply(connection, cursor, rows, definitions):
+def _commit(connection, *, guarded=False):
+    try:
+        connection.commit()
+    except (pymysql.MySQLError, OSError, KeyboardInterrupt) as error:
+        if guarded:
+            raise CommitOutcomeUnknown("최종 저장 응답을 받지 못해 DB 반영 결과를 확인할 수 없습니다.") from error
+        raise
+
+
+def _apply(connection, cursor, rows, definitions, *, guarded_commit=False):
     rows, columns_by_table, values = _projected_values(rows, definitions)
     cursor.execute("SET SESSION SQL_MODE = 'STRICT_TRANS_TABLES,NO_AUTO_VALUE_ON_ZERO'")
     cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
@@ -224,33 +239,76 @@ def _apply(connection, cursor, rows, definitions):
         if cursor.fetchone()[0] != len(rows[table]):
             raise SetupError(f"{table}의 적용 행 수가 SQL 파일과 다릅니다.")
     cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
-    connection.commit()
+    _commit(connection, guarded=guarded_commit)
+
+
+def _connect(config):
+    return pymysql.connect(host=config.host, port=config.port, user=config.username,
+                           password=config.password, charset="utf8mb4", connect_timeout=config.connect_timeout,
+                           read_timeout=QUERY_WAIT_SECONDS, write_timeout=QUERY_WAIT_SECONDS)
+
+
+def _start_session(cursor):
+    cursor.execute("SELECT @@version_compile_os")
+    if not cursor.fetchone()[0].lower().startswith("win"):
+        raise SetupError("Windows에 설치된 MySQL에 접속해 주세요. 설정 파일의 포트를 확인하세요.")
+    cursor.execute("SET SESSION lock_wait_timeout = %s", (QUERY_WAIT_SECONDS,))
+    cursor.execute("SET SESSION innodb_lock_wait_timeout = %s", (QUERY_WAIT_SECONDS,))
+
+
+def _progress(callback, text):
+    if callback is not None:
+        try:
+            callback(text)
+        except (OSError, RuntimeError):
+            pass
+
+
+def _release_lock(cursor, lock_name):
+    try:
+        cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
+    except (pymysql.MySQLError, KeyboardInterrupt):
+        pass
+
+
+def _unknown_result(operation, backup, error):
+    operation.uncertain()
+    suffix = f"\n백업: {backup}" if backup else ""
+    return SetupError("최종 저장 결과를 확인할 수 없습니다. 이미 반영되었을 수 있으므로 다시 실행하거나 자동 복원하지 않습니다.\n"
+                      "연결을 복구한 뒤 관리자에게 대상 DB 확인을 요청하세요."
+                      f"{suffix}\n작업 기록: {operation.path}")
 
 
 def prepare(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = None,
-            folder: Path | None = None, source: Path | None = None) -> SetupResult:
-    """검증 → 대상 확인 → 사용자 확인 → 백업 검증 → 초기화 → 행 수 확인."""
+            folder: Path | None = None, source: Path | None = None,
+            progress: Callable[[str], None] | None = None) -> SetupResult:
+    """검증·권한 확인·백업·작업 기록을 마친 뒤에만 테이블을 교체한다."""
     folder = Path(folder) if folder is not None else program_folder()
+    if not is_loopback(config.host):
+        raise SetupError("이 도구는 이 PC에 설치된 Windows MySQL에서만 시연 DB를 준비합니다.")
+    assert_no_pending(folder, config)
     rows = read_dataset(source or dump_path(folder))
     definitions = schema_statements()
     _check_references(rows, definitions)
-    if not is_loopback(config.host):
-        raise SetupError("이 도구는 이 PC에 설치된 Windows MySQL에서만 시연 DB를 준비합니다.")
     lock_name = "setron-init:" + sha256(config.database.casefold().encode()).hexdigest()[:32]
-    with pymysql.connect(host=config.host, port=config.port, user=config.username,
-                         password=config.password, charset="utf8mb4", connect_timeout=config.connect_timeout) as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT @@version_compile_os")
-        if not cursor.fetchone()[0].lower().startswith("win"):
-            raise SetupError("Windows에 설치된 MySQL에 접속해 주세요. 설정 파일의 포트를 확인하세요.")
-        cursor.execute("SELECT GET_LOCK(%s, 5)", (lock_name,))
+    _progress(progress, "DB 연결·권한을 확인하는 중…")
+    with _connect(config) as connection, connection.cursor() as cursor:
+        _start_session(cursor)
+        cursor.execute("SELECT GET_LOCK(%s, %s)", (lock_name, LOCK_WAIT_SECONDS))
         if cursor.fetchone() != (1,):
             raise SetupError("시연 DB 준비 작업이 이미 실행 중입니다. 잠시 후 다시 시도해 주세요.")
+        operation = None
         try:
+            # 잠금을 기다리는 동안 다른 실행이 중단됐을 수도 있어 다시 확인한다.
+            assert_no_pending(folder, config)
+            check_privileges(cursor, config.database, "import", TABLE_NAMES)
             try:
                 connection.select_db(config.database)
             except pymysql.err.OperationalError as error:
                 if error.args[0] != 1049:
                     raise
+                check_privileges(cursor, config.database, "import", TABLE_NAMES, create_database=True)
+                operation = begin_operation(folder, config, "import", None)
                 identifier = "`" + config.database.replace("`", "``") + "`"
                 cursor.execute(f"CREATE DATABASE IF NOT EXISTS {identifier} DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
                 connection.select_db(config.database)
@@ -262,37 +320,53 @@ def prepare(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = N
                 message = ("[시연 데이터 삽입]\n"
                            f"대상: {config.host}:{config.port} / DB: {config.database}\n"
                            "관리 테이블 13개의 데이터를 모두 교체합니다.\n"
+                           "앱과 다른 DB 도구의 저장 작업을 먼저 종료하세요.\n"
                            f"백업 폴더: {folder / 'backups'}\n\n"
                            "기존 데이터를 덮어쓰시겠습니까?")
                 if confirm is None or not confirm(message):
                     return SetupResult(False)
+                _progress(progress, "기존 데이터를 백업·검증하는 중…")
                 try:
                     backup, old_rows, old_definitions = _backup(connection, cursor, folder, config)
-                except Exception as error:
-                    raise SetupError("기존 DB의 SQL 백업·검증에 실패했습니다. 기존 테이블과 데이터를 변경하지 않았습니다.") from error
+                except (Exception, KeyboardInterrupt) as error:
+                    raise SetupError("기존 DB의 SQL 백업·검증에 실패하거나 중단됐습니다. 기존 테이블과 데이터를 변경하지 않았습니다.") from error
+            operation = operation or begin_operation(folder, config, "import", backup)
+            _progress(progress, "시연 데이터를 적용하는 중… 창을 닫지 마세요.")
             try:
                 if objects:
                     _drop(cursor)
-                _apply(connection, cursor, rows, definitions)
-            except Exception as error:
+                _apply(connection, cursor, rows, definitions, guarded_commit=True)
+            except CommitOutcomeUnknown as error:
+                raise _unknown_result(operation, backup, error) from error
+            except (Exception, KeyboardInterrupt) as error:
                 try:
                     connection.rollback()
                     _drop(cursor)
                     if old_rows is not None:
-                        _apply(connection, cursor, old_rows, old_definitions)
+                        _apply(connection, cursor, old_rows, old_definitions, guarded_commit=True)
                     else:
                         cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
                     restored = "기존 데이터를 자동 복원했습니다." if backup else "이번에 만든 관리 테이블을 정리했습니다."
-                except Exception:
-                    restored = "자동 복원을 완료하지 못했습니다. 백업 SQL로 복원해 주세요." if backup else "관리 테이블 준비 상태를 확인해 주세요."
+                    warning = operation.complete()
+                    if warning:
+                        restored += "\n" + warning
+                except (Exception, KeyboardInterrupt):
+                    operation.uncertain()
+                    restored = ("자동 복원을 완료하지 못했습니다. 백업 SQL로 복원해 주세요." if backup
+                                else "관리 테이블 준비 상태를 확인해 주세요.")
+                    restored += f"\n작업 기록: {operation.path}"
                 suffix = f"\n백업: {backup}" if backup else ""
-                raise SetupError(f"시연 데이터 적용에 실패했습니다. {restored}{suffix}") from error
-            return SetupResult(True, backup)
+                action = "시연 데이터 적용이 중단되었습니다." if isinstance(error, KeyboardInterrupt) else "시연 데이터 적용에 실패했습니다."
+                raise SetupError(f"{action} {restored}{suffix}") from error
+            return SetupResult(True, backup, operation.complete())
+        except (pymysql.MySQLError, OSError, KeyboardInterrupt) as error:
+            if operation is not None:
+                operation.uncertain()
+                raise SetupError("DB 준비 중 연결·파일 오류 또는 중단이 발생했습니다. DB 상태를 확인해 주세요.\n"
+                                 f"작업 기록: {operation.path}") from error
+            raise
         finally:
-            try:
-                cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
-            except pymysql.MySQLError:
-                pass
+            _release_lock(cursor, lock_name)
 
 
 def _check_reset_tables(cursor, config):
@@ -307,7 +381,7 @@ def _check_reset_tables(cursor, config):
             raise SetupError(f"{table}의 구조가 지원하는 관리 스키마와 다릅니다. 아무것도 변경하지 않았습니다.")
 
 
-def _reset_rows(connection, cursor):
+def _reset_rows(connection, cursor, *, guarded_commit=False):
     """테이블은 그대로 두고 명시적 단일 트랜잭션으로 모든 행을 삭제한다."""
     cursor.execute("SELECT @@SESSION.FOREIGN_KEY_CHECKS")
     foreign_key_checks = cursor.fetchone()[0]
@@ -329,29 +403,37 @@ def _reset_rows(connection, cursor):
         finally:
             # 세션 설정 복구까지 성공해야 삭제 내용을 commit한다.
             cursor.execute("SET FOREIGN_KEY_CHECKS = %s", (foreign_key_checks,))
-        connection.commit()
-    except Exception:
-        connection.rollback()
+        _commit(connection, guarded=guarded_commit)
+    except CommitOutcomeUnknown:
+        raise
+    except (Exception, KeyboardInterrupt):
+        try:
+            connection.rollback()
+        except (Exception, KeyboardInterrupt) as error:
+            if guarded_commit:
+                raise CommitOutcomeUnknown("데이터 초기화 취소 결과를 확인할 수 없습니다.") from error
+            raise
         raise
 
 
 def reset_data(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = None,
-               folder: Path | None = None) -> SetupResult:
+               folder: Path | None = None, progress: Callable[[str], None] | None = None) -> SetupResult:
     """덤프 없이 관리 테이블을 검사하고 확인·백업을 마친 뒤 데이터만 지운다."""
     folder = Path(folder) if folder is not None else program_folder()
-    schema_statements()  # 신뢰하는 관리 테이블 목록과 번들 스키마 상태를 확인한다.
     if not is_loopback(config.host):
         raise SetupError("이 도구는 이 PC에 설치된 Windows MySQL에서만 데이터를 초기화합니다.")
+    assert_no_pending(folder, config)
+    schema_statements()  # 신뢰하는 관리 테이블 목록과 번들 스키마 상태를 확인한다.
     lock_name = "setron-init:" + sha256(config.database.casefold().encode()).hexdigest()[:32]
-    with pymysql.connect(host=config.host, port=config.port, user=config.username,
-                         password=config.password, charset="utf8mb4", connect_timeout=config.connect_timeout) as connection, connection.cursor() as cursor:
-        cursor.execute("SELECT @@version_compile_os")
-        if not cursor.fetchone()[0].lower().startswith("win"):
-            raise SetupError("Windows에 설치된 MySQL에 접속해 주세요. 설정 파일의 포트를 확인하세요.")
-        cursor.execute("SELECT GET_LOCK(%s, 5)", (lock_name,))
+    _progress(progress, "DB 연결·권한을 확인하는 중…")
+    with _connect(config) as connection, connection.cursor() as cursor:
+        _start_session(cursor)
+        cursor.execute("SELECT GET_LOCK(%s, %s)", (lock_name, LOCK_WAIT_SECONDS))
         if cursor.fetchone() != (1,):
             raise SetupError("DB 준비 또는 초기화 작업이 이미 실행 중입니다. 잠시 후 다시 시도해 주세요.")
         try:
+            assert_no_pending(folder, config)
+            check_privileges(cursor, config.database, "reset", TABLE_NAMES)
             try:
                 connection.select_db(config.database)
             except pymysql.err.OperationalError as error:
@@ -367,25 +449,30 @@ def reset_data(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None 
                        f"대상: {config.host}:{config.port} / DB: {config.database}\n"
                        "관리 테이블 13개의 모든 데이터를 삭제합니다.\n"
                        "테이블 구조는 유지합니다.\n"
+                       "앱과 다른 DB 도구의 저장 작업을 먼저 종료하세요.\n"
                        f"백업 폴더: {folder / 'backups'}\n\n"
                        "모든 데이터를 삭제하시겠습니까?")
             if confirm is None or not confirm(message):
                 return SetupResult(False)
+            _progress(progress, "기존 데이터를 백업·검증하는 중…")
             try:
                 backup, _, _ = _backup(connection, cursor, folder, config)
-            except Exception as error:
-                raise SetupError("기존 DB의 SQL 백업·검증에 실패했습니다. 기존 테이블과 데이터를 변경하지 않았습니다.") from error
+            except (Exception, KeyboardInterrupt) as error:
+                raise SetupError("기존 DB의 SQL 백업·검증에 실패하거나 중단됐습니다. 기존 테이블과 데이터를 변경하지 않았습니다.") from error
+            operation = begin_operation(folder, config, "reset", backup)
+            _progress(progress, "데이터를 초기화하는 중… 창을 닫지 마세요.")
             try:
-                _reset_rows(connection, cursor)
-            except Exception as error:
+                _reset_rows(connection, cursor, guarded_commit=True)
+            except CommitOutcomeUnknown as error:
+                raise _unknown_result(operation, backup, error) from error
+            except (Exception, KeyboardInterrupt) as error:
+                warning = operation.complete()
+                suffix = f"\n{warning}" if warning else ""
                 raise SetupError("데이터 초기화에 실패했습니다. 삭제 트랜잭션의 취소를 요청했습니다.\n"
-                                 f"기존 데이터 백업: {backup}") from error
-            return SetupResult(True, backup)
+                                 f"기존 데이터 백업: {backup}{suffix}") from error
+            return SetupResult(True, backup, operation.complete())
         finally:
-            try:
-                cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
-            except pymysql.MySQLError:
-                pass
+            _release_lock(cursor, lock_name)
 
 
 def load_config(folder: Path | None = None) -> DatabaseConfig:
@@ -401,10 +488,11 @@ def _permission_guidance(config: DatabaseConfig | None, mode: str) -> str:
     """계정 권한은 자동 변경하지 않고 해당 DB에 한정한 확인·설정 방법을 안내한다."""
     target = (f"대상: {config.host}:{config.port} / DB: {config.database} / 계정: {config.username}"
               if config is not None else "설정: 실행 파일 옆 setron.env")
-    permissions = "SELECT, DELETE" if mode == "reset" else "SELECT, CREATE, DROP, INSERT, REFERENCES"
+    permissions = "SELECT, DELETE, TRIGGER" if mode == "reset" else "SELECT, CREATE, DROP, INSERT, REFERENCES, TRIGGER"
     return ("\n\n[계정·권한 확인]\n"
             f"{target}\n"
             "setron.env의 계정·비밀번호·포트를 확인하세요.\n"
+            "비밀번호 앞뒤에 공백이 있으면 전체를 따옴표로 감싸세요.\n"
             "새 MySQL에서는 계정을 먼저 생성하세요.\n"
             "관리자 확인: SHOW GRANTS FOR '계정명'@'접속호스트';\n"
             f"필요 권한: {permissions}\n"
@@ -424,6 +512,8 @@ def _mysql_failure(error: BaseException) -> str:
                 1142: "이 작업의 MySQL 명령 실행 권한이 부족합니다.",
                 1143: "이 작업의 MySQL 컬럼 접근 권한이 부족합니다.",
                 1227: "이 작업에 필요한 MySQL 권한이 부족합니다.",
+                1205: "다른 작업의 잠금 대기 시간이 초과됐습니다. 앱과 다른 DB 도구의 작업을 종료한 뒤 다시 확인하세요.",
+                1213: "다른 DB 작업과 충돌했습니다. 표시된 백업·복원 결과를 확인하세요.",
                 1049: "지정한 DB가 없습니다. setron.env의 DB 이름과 최초 DB 준비 상태를 확인하세요.",
                 2002: "이 PC의 MySQL에 연결할 수 없습니다. MySQL 서비스와 포트를 확인하세요.",
                 2003: "이 PC의 MySQL에 연결할 수 없습니다. MySQL 서비스와 포트를 확인하세요.",
@@ -435,7 +525,8 @@ def _mysql_failure(error: BaseException) -> str:
     return ""
 
 
-def run(*, confirm: Callable[[str], bool] | None = None, mode: str = "import") -> tuple[int, str]:
+def run(*, confirm: Callable[[str], bool] | None = None, mode: str = "import",
+        progress: Callable[[str], None] | None = None) -> tuple[int, str]:
     config = None
 
     def failed(message: str, error: BaseException) -> tuple[int, str]:
@@ -446,15 +537,27 @@ def run(*, confirm: Callable[[str], bool] | None = None, mode: str = "import") -
         if mode not in {"import", "reset"}:
             return 2, "지원하지 않는 DB 작업입니다."
         config = load_config()
-        result = (reset_data if mode == "reset" else prepare)(config, confirm=confirm)
+        _progress(progress, f"대상: {config.host}:{config.port} / DB: {config.database} / 계정: {config.username}")
+        overridden = [key.removeprefix("SETRON_DB_") for key in os.environ if key.startswith("SETRON_DB_")]
+        if overridden:
+            _progress(progress, "Windows 환경변수 우선 적용: " + ", ".join(sorted(overridden)))
+        _progress(progress, "앱과 다른 DB 도구의 저장 작업을 종료한 상태에서 진행하세요.")
+        options = {"confirm": confirm}
+        if progress is not None:
+            options["progress"] = progress
+        result = (reset_data if mode == "reset" else prepare)(config, **options)
         if not result.applied:
             cancelled = "데이터 초기화를 취소했습니다." if mode == "reset" else "시연 데이터 삽입을 취소했습니다."
             return 3, cancelled + "\nDB를 변경하지 않았습니다."
         suffix = f"\n백업: {result.backup}" if result.backup else ""
+        if result.warning:
+            suffix += "\n" + result.warning
     except (SetupError, DumpFormatError) as error:
         return failed(str(error), error)
     except DatabaseConfigError as error:
-        return failed("DB 연결 설정을 확인할 수 없습니다. setron.env를 확인해 주세요.", error)
+        return failed(f"DB 연결 설정을 확인할 수 없습니다.\n{error}\nsetron.env를 확인해 주세요.", error)
+    except KeyboardInterrupt as error:
+        return failed("사용자가 작업을 중단했습니다. 다시 실행하여 미완료 작업 기록과 DB 상태를 확인하세요.", error)
     except (OSError, UnicodeError, ValueError) as error:
         return failed("DB 설정·SQL 데이터·관리 스키마를 읽거나 검증하지 못했습니다. 기존 데이터를 삭제하지 않았습니다.", error)
     except pymysql.MySQLError as error:
@@ -514,7 +617,7 @@ def _console_menu() -> int:
             break
         print("1, 2, 3 중 하나를 입력하세요.")
     mode = "import" if choice == "1" else "reset"
-    code, message = run(confirm=_console_confirm, mode=mode)
+    code, message = run(confirm=_console_confirm, mode=mode, progress=lambda text: print(text, flush=True))
     print(message)
     try:
         input("Enter 키를 누르면 창을 닫습니다: ")
@@ -551,7 +654,7 @@ def main() -> int:
         print(message)
         return code
     if "--console" in options:
-        code, message = run(confirm=_console_confirm, mode=mode)
+        code, message = run(confirm=_console_confirm, mode=mode, progress=lambda text: print(text, flush=True))
         print(message)
         return code
     import tkinter as tk
