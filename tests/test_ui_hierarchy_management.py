@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog
 
 from setron.ui import data_management_page as module
-from test_ui_data_management import EQUIPMENT, GROUPS, LINES, FakeGateway, page_with, settle
+from test_ui_data_management import C, EQUIPMENT, GROUPS, LINES, FakeGateway, page_with, settle
 from test_ui_import_ver5 import own, until  # noqa: F401
 
 
@@ -181,10 +181,11 @@ def test_custom_area_can_be_selected_in_sheet_and_saved_with_new_line(own):
     sheet = page.sheet_panel
     assert sheet.add_row()
     row = sheet.table.rowCount() - 1
-    for column, value in ((0, "EQ-NEW"), (1, "새 검사 라인"), (3, "M-C4"), (5, "개발 공정"), (6, "v2")):
+    for column, value in ((C["equipment_code"], "EQ-NEW"), (C["line"], "새 검사 라인"), (C["group"], "M-C4"),
+                          (C["production_area"], "개발 공정"), (C["version_raw"], "v2")):
         sheet.table.item(row, column).setText(value)
     assert sheet.new_rows[-1]["values"]["production_area"] == "AREA1"
-    assert sheet.table.item(row, 5).text() == "개발 공정"
+    assert sheet.table.item(row, C["production_area"]).text() == "개발 공정"
     assert sheet.save()
     settle(page)
     assert gateway.done["add_line"][-1] == (("화성", "새 검사 라인", "AREA1"), {})

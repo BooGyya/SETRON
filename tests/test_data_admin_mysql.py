@@ -445,3 +445,49 @@ def test_empty_sheet_keeps_its_area_and_rows_know_the_latest_group_version(stora
     ordered = [r for r in service.release_rows(family) if r.item_id is None or r.first_of_version]
     assert data.latest_versions[(c4, "MEMORY")] == ordered[0].version_raw   # 최신 버전이 위 (확인된 순서가 가장 큼)
 
+
+
+# --- 11-16: 현황표 = 가져오기 검토 표와 같은 열 · PM 한 줄 · DB 값 모두 수정 -------------------------------------
+def test_sheet_rows_are_one_line_per_pm_with_family_choices_and_details(storage):
+    service = DataAdminService(storage)
+    service.add_site("QA전체열")
+    batch = service.create_sheet("QA전체열", date(2026, 11, 16), "MEMORY")
+    c4 = next(g for g in service.equipment_overview()[0] if g.name == "M-C4")
+    family = next(f for f in service.release_families() if f.group_id == c4.group_id)
+    pm = {"group_name": "M-C4", "equipment_code": "QA-PM1", "production_area": "MEMORY", "process_name": "V6 CS",
+          "geometry_type": "6각", "modification_type": "CIP"}
+    result = service.apply_rows(batch, adds=[
+        ({**pm, "pm_name": "PM1", "version_raw": "v1"}, None),
+        ({**pm, "pm_name": "PM2", "version_raw": "v2"}, None),          # 같은 새 설비의 PM 한 줄 더
+        ({"group_name": "M-C4", "equipment_code": "QA-PM0", "production_area": "MEMORY", "version_raw": "v1",
+          "family_id": family.family_id}, None)])
+    assert len(result["added"]) == 2                                    # 설비 현황은 두 개 (PM 줄은 앞 설비에 더함)
+    data = service.sheet_rows(batch)
+    pms = sorted((r for r in data.rows if r.equipment_code == "QA-PM1"), key=lambda r: r.pm_names)
+    assert [(r.pm_names, r.version_raw, r.has_pm, r.pm_id is not None) for r in pms] == [
+        ("PM1", "v1", True, True), ("PM2", "v2", True, True)]
+    assert {(r.process_name, r.geometry_type, r.modification_type) for r in pms} == {("V6 CS", "6각", "CIP")}
+    assert len({r.version_id for r in pms}) == 2 and pms[0].snapshot_id == pms[1].snapshot_id
+    plain = next(r for r in data.rows if r.equipment_code == "QA-PM0")
+    assert (plain.pm_id, plain.family_id, plain.process_name) == (None, family.family_id, "")
+    assert family.family_id in {f for f, _, _ in data.families[c4.group_id]}
+    with pytest.raises(StorageValidationError, match="이미 있습니다"):   # 저장된 설비에 PM을 더하지 않는다
+        service.apply_rows(batch, adds=[({**pm, "pm_name": "PM3", "version_raw": "v3"}, None)])
+    service.undo_rows(batch, added=result["added"])                     # 되돌리면 PM까지 함께 지운다
+    assert not service.sheet_rows(batch).rows
+
+
+def test_process_and_details_are_editable_through_management_save(storage):
+    service = DataAdminService(storage)
+    service.add_site("QA공정수정")
+    batch = service.create_sheet("QA공정수정", date(2026, 11, 16), "MEMORY")
+    service.apply_rows(batch, adds=[({"group_name": "M-C4", "equipment_code": "QA-PRC", "production_area": "MEMORY",
+                                      "pm_name": "PM1", "version_raw": "v1"}, None)])
+    row = service.sheet_rows(batch).rows[0]
+    management = ManagementService(storage)
+    snapshot = management.get_record("equipment_snapshot", {"snapshot_id": row.snapshot_id})
+    management.save((RecordEdit("equipment_snapshot", {"snapshot_id": row.snapshot_id}, snapshot.revision,
+                                {"process_name": "12.9/14.0", "geometry_type": "5각"}),))
+    after = service.sheet_rows(batch).rows[0]
+    assert (after.process_name, after.geometry_type, after.pm_names) == ("12.9/14.0", "5각", "PM1")
+    assert ("공정", "12.9/14.0") in {(e.field, e.after) for e in service.history()[:5]}

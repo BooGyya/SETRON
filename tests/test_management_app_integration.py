@@ -27,6 +27,7 @@ from setron.infrastructure.ai_client import ResponseSource
 from setron.infrastructure.database import Database, DatabaseCommitUnknownError, DatabaseSaveError
 from setron.ui.app import create_window
 from setron.ui.database_source import DatabaseDashboardSource, load_dashboard_source
+from setron.ui.data_management_page import COLUMN
 from setron.ui.management_data import ManagementGateway
 from setron.ui.query_state import QuerySelection, TargetN
 from setron.ui.risk_rule_save import RiskRuleSaveController
@@ -362,15 +363,15 @@ def test_confirmed_save_failure_retains_draft_and_reloads_known_old_values(app, 
                  and sheet.data.batch_id == snapshot.batch_id)
         row = next(r for r, (kind, entry) in enumerate(sheet.view)
                    if kind == "row" and entry.snapshot_id == snapshot.snapshot_id)
-        sheet.table.item(row, 1).setText("저장 실패 초안")  # Line 칸 (DB 값 기준 현황표, 11-11 6차)
+        sheet.table.item(row, COLUMN["line"]).setText("저장 실패 초안")
         # 처음 보는 라인은 그 줄의 메모리/파운드리로 등록한다 (11-12). 모르면 저장을 막으므로 값을 정해 둔다
-        sheet.table.item(row, 5).setText("메모리")
+        sheet.table.item(row, COLUMN["production_area"]).setText("메모리")
         assert sheet.pending and sheet.save()
         wait_for_save(window, app)
         wait_for(app, lambda: window.pages["dashboard"].snapshot is not None)
         assert not page.saving and sheet.save_button.isEnabled()
         assert sheet.pending and sheet.edits[("line", snapshot.snapshot_id)] == "저장 실패 초안"
-        assert sheet.table.item(row, 1).text() == "저장 실패 초안" and "저장하지 못했습니다" in sheet.notice.text()
+        assert sheet.table.item(row, COLUMN["line"]).text() == "저장 실패 초안" and "저장하지 못했습니다" in sheet.notice.text()
         assert all_rows(file_storage, "equipment_snapshot")[0]["line"] == "1라인"
         assert window.pages["dashboard"].snapshot.selected_records[0].line == "1라인"
         assert calls == []
@@ -396,7 +397,7 @@ def test_sheet_unknown_commit_is_reconciled_from_db_without_resubmitting(app, fi
         wait_for(app, lambda: not sheet.request.busy and sheet.data is not None)
         row = next(r for r, (kind, entry) in enumerate(sheet.view)
                    if kind == "row" and entry.snapshot_id == snapshot.snapshot_id)
-        sheet.table.item(row, 6).setText("v-committed")
+        sheet.table.item(row, COLUMN["version_raw"]).setText("v-committed")
         assert sheet.save()
         wait_for(app, lambda: page.uncertain and not page.save_request.busy)
         assert window.management_uncertain and not window.management_saving
@@ -407,5 +408,5 @@ def test_sheet_unknown_commit_is_reconciled_from_db_without_resubmitting(app, fi
         wait_for(app, lambda: not page.uncertain and not window.management_uncertain)
         wait_for(app, lambda: not any(request.busy for request in window.findChildren(ReadRequest)))
         assert gateway.attempts == 1 and sheet.isEnabled() and not sheet.pending
-        assert sheet.table.item(row, 6).text() == "v-committed"
+        assert sheet.table.item(row, COLUMN["version_raw"]).text() == "v-committed"
         assert window.query_panel.apply_draft() is not None

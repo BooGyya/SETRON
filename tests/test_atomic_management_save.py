@@ -106,6 +106,34 @@ def test_later_invalid_row_cancels_earlier_new_row_and_cell_edit(atomic_storage)
     assert all_data(atomic_storage) == before
 
 
+def test_atomic_sheet_save_and_undo_keep_new_pm_rows_on_one_snapshot(atomic_storage):
+    admin, batch, _, _, creates, adds, _ = sheet(atomic_storage)
+    values = {**adds[0][0], "geometry_type": "5각", "modification_type": "CIP"}
+    pm_adds = tuple(({**values, "pm_name": name, "version_raw": version}, None)
+                    for name, version in (("PM1", "v1"), ("PM2", "v2")))
+    saved = admin.save_sheet(batch, registers=(("LNEW", "MEMORY"),), creates=creates, adds=pm_adds)
+    assert len(saved.rows["added"]) == 1
+    rows = [row for row in admin.sheet_rows(batch).rows if row.equipment_code == values["equipment_code"]]
+    assert sorted((row.pm_names, row.version_raw) for row in rows) == [("PM1", "v1"), ("PM2", "v2")]
+    assert {row.snapshot_id for row in rows} == set(saved.rows["added"])
+    assert all(row.geometry_type == "5각" and row.modification_type == "CIP" for row in rows)
+    admin.undo_sheet(batch, added=saved.rows["added"])
+    with atomic_storage.transaction() as tx:
+        assert not EquipmentRepository().rows(tx, "equipment_snapshot", snapshot_id=saved.rows["added"][0])
+        assert not EquipmentRepository().rows(tx, "equipment_pm", snapshot_id=saved.rows["added"][0])
+    assert not any(row.equipment_code == values["equipment_code"] for row in admin.sheet_rows(batch).rows)
+
+
+def test_atomic_sheet_save_rolls_back_duplicate_pm_and_new_registrations(atomic_storage):
+    admin, batch, _, request, creates, adds, _ = sheet(atomic_storage)
+    before = all_data(atomic_storage)
+    values = {**adds[0][0], "pm_name": "PM1"}
+    with pytest.raises(StorageValidationError, match="두 번"):
+        admin.save_sheet(batch, registers=(("LNEW", "MEMORY"),), creates=creates, edits=(request,),
+                         adds=((values, None), ({**values, "pm_name": "pm1"}, None)))
+    assert all_data(atomic_storage) == before
+
+
 def test_sheet_undo_structure_and_cells_roll_back_together_and_rebase_owned_revisions(atomic_storage, monkeypatch):
     admin, batch, sid, request, creates, adds, _ = sheet(atomic_storage)
     other = admin.create_group("되돌릴 소속 " + uuid4().hex[:9], "OXIDE")

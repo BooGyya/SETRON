@@ -199,7 +199,9 @@ def test_registered_line_setting_covers_all_effective_lines_and_classifies_them(
                 for value in (snapshot_template(effective, entry) for entry in plan) if value["area"] is not None}
     class SettingRows:
         def get(self, table, key):
-            assert table == "app_setting" and key == {"setting_key": REGISTERED_LINES_KEY}
+            assert table == "app_setting"
+            if key != {"setting_key": REGISTERED_LINES_KEY}:
+                raise LookupError(key)
             return {"setting_value": {"lines": registered}}
     actual = registered_lines(SettingRows())
     assert {(row["site"], row["line"], row["fab"]) for row in actual} == expected

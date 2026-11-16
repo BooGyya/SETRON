@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from setron.infrastructure.database import DatabaseCommitUnknownError
-from test_ui_data_management import FakeGateway, answer, cell, settle, sheet_page
+from test_ui_data_management import C, FakeGateway, answer, cell, settle, sheet_page
 from test_ui_import_ver5 import own, until  # noqa: F401
 
 
@@ -29,10 +29,11 @@ def test_mixed_sheet_save_dispatches_one_atomic_request_and_preserves_failed_dra
     gateway = AtomicGateway()
     gateway.error = ValueError("검증용 행 저장 거절")
     page, sheet = sheet_page(own, gateway)
-    cell(sheet, 0, 6).setText("v2")
+    cell(sheet, 0, C["version_raw"]).setText("v2")
     sheet.add_row()
     new = sheet.table.rowCount() - 1
-    for column, value in ((0, "NEW-1"), (1, "신규 Line"), (3, "신규 모델"), (2, "POLY"), (5, "Memory"), (6, "v1")):
+    for column, value in ((C["equipment_code"], "NEW-1"), (C["line"], "신규 Line"), (C["group"], "신규 모델"),
+                          (C["category"], "POLY"), (C["production_area"], "Memory"), (C["version_raw"], "v1")):
         cell(sheet, new, column).setText(value)
     assert sheet.save()
     settle(page)
@@ -55,7 +56,7 @@ def test_uncertain_commit_blocks_retry_until_successful_explicit_reread(own):
     gateway = AtomicGateway()
     gateway.error = DatabaseCommitUnknownError("검증용 commit 응답 끊김")
     page, sheet = sheet_page(own, gateway)
-    cell(sheet, 0, 6).setText("v2")
+    cell(sheet, 0, C["version_raw"]).setText("v2")
     uncertain, reconciled, failed = [], [], []
     page.save_uncertain.connect(lambda: uncertain.append(True))
     page.save_reconciled.connect(lambda: reconciled.append(True))

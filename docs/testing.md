@@ -1,5 +1,7 @@
 # 테스트 전략
 
+> 문서 기준: 2026-11-16, develop `f0cfc8d`. 이 시점의 `tests/`에는 `test_*.py` 287개가 있고, 그중 실제 MySQL이 필요한 통합 테스트(`*_mysql.py`)는 39개입니다. 이 문서를 고치면서 테스트를 다시 실행하지는 않았습니다. 각 절의 통과 수와 "합성 자료"·"DB 미연결"·"메모리 저장소" 표현은 그 절을 쓴 날짜의 기록입니다. 지금 앱은 `SETRON_DB_*` 설정이 있으면 DB 자료를 읽고 저장합니다.
+
 개발 단계에서 무엇을 어떤 방법으로 검증할지 정합니다. 기능별 완료 기준의 원본은 팀 기능 및 요구사항 명세서의 `백엔드 작업표`(완료 확인 방법 열)이며, 이 문서는 그 기준을 테스트 종류별로 나누고 실행·기록 방법을 정합니다.
 
 ## 1. 테스트 종류와 범위
@@ -15,7 +17,7 @@
 - 업무 규칙은 단위 테스트로 먼저 확인합니다. 통합 테스트는 실제 연동에서만 확인할 수 있는 동작으로 범위를 좁힙니다.
 - 단위 테스트는 Excel, MySQL, 회사 AI가 없는 PC에서도 통과해야 합니다.
 - AI 추출의 합격 기준(필드별 일치율 등)은 Jira S15P31B106-71에서 정한 기준을 따릅니다.
-- MySQL 통합 테스트는 Docker의 전용 MySQL 5.6.19에서 자동 실행합니다. 실제 사용 PC의 Windows MySQL 접속·저장 검증은 해당 환경이 준비된 뒤 별도로 진행합니다.
+- MySQL 통합 테스트는 Docker의 전용 MySQL 5.6.19에서 자동 실행합니다. 설치형 Windows MySQL 5.6.19에서의 접속·저장·복원 확인은 2026-11-03에 한 번 했습니다([Windows 패키지 6절](windows-package.md#6-설치형-mysql-실사용-확인), 당시 MySQL 테스트 9개 파일). 이후 늘어난 MySQL 테스트는 설치형 서버에서 다시 실행하지 않았습니다.
 
 BE-007의 GMS 실제 호출과 전체 필드 평가는 [AI Excel 추출 테스트 결과](test-results/be-007-ai-extraction.md)에 기록합니다. 원본 셀로 먼저 고정한 135개 레코드·16개 필드와 같은 지시문으로 `gpt-6.1-sol`·`gpt-6-luna`를 비교했습니다. 후처리 일치율은 sol 99.36%, luna 90.10%(추가 결과 페널티 포함)이며, 같은 정답 위치만 비교하면 luna 91.52%입니다. 판정 보류 131개를 제외한 커버리지는 93.94%로 같고, 모델별·시트별 1회 측정입니다. [sol 원본·정답·실제 응답](test-results/be-007-evaluation/README.md), [luna 응답·토큰·시간](test-results/be-007-evaluation-luna/README.md), [모델별 추출 오류 비교표](test-results/be-007-evaluation-luna/model-field-errors.md)와 재계산 스크립트를 보존합니다.
 
@@ -120,7 +122,7 @@ uv run --locked python -m pytest tests/test_excel_import_service.py tests/test_u
 uv run --locked python -m setron --demo-excel
 ```
 
-실제 Excel 연결과 DB 저장은 검증하지 않았다. 기본 저장소는 메모리이며 AI 결과는 예제 응답이다.
+실제 Excel 연결과 DB 저장은 검증하지 않았다. 기본 저장소는 메모리이며 AI 결과는 예제 응답이다. (당시 기록. 지금은 DB 설정이 있으면 `features/import_save/`의 `DatabaseImportSaver`로 저장하며 `tests/test_import_save_mysql.py` 등이 실제 MySQL 저장을 검증한다.)
 
 ### AI 분석 C-4 검증
 
@@ -141,7 +143,7 @@ uv run --locked python -m pytest tests/test_ui_ai.py -q
   | --- | --- | --- |
   | Excel (xlwings) | `monkeypatch`로 모듈의 `xw`를 가짜 객체로 교체 | `tests/test_excel_reader.py`의 `use_fake_excel` |
   | 회사 AI | `ExampleChatClient`에 정상·실패 응답을 넣어 서비스에 전달 | `tests/test_ai_service.py` |
-  | DB | 서비스가 받는 Repository 형식을 따르는 메모리 저장소를 테스트에서 만들어 전달 | Repository 구현 시 추가 |
+  | DB | SQLite 메모리 DB 또는 메모리 저장소·가짜 공급자를 전달. 실제 MySQL 동작은 `*_mysql.py`에서 확인 | `tests/test_database.py`(SQLite), `tests/test_import_validation_repository.py` |
 
 DB 연결·트랜잭션의 단위 테스트는 SQLite 메모리 DB에서 실제 SQL을 실행합니다. MySQL 5.6.19의 SQL·자료형·잠금 동작은 아래 통합 테스트에서 확인합니다.
 
@@ -251,6 +253,8 @@ MySQL 통합 테스트까지 실행할 때는 개발 DB와 분리된 `mysql-test
 docker compose --profile test up -d --wait mysql-test
 uv run --locked --env-file .env python -m pytest -q
 ```
+
+실제 MySQL이 필요한 테스트는 파일 이름이 `_mysql.py`로 끝납니다(2026-11-16 기준 39개 파일). `SETRON_TEST_DB_NAME`이 없으면 이 파일들은 건너뜁니다.
 
 스키마는 프로젝트의 `database/schema_mysql5619.sql`을 테스트 파일 위치를 기준으로 찾으므로 별도 경로 설정이 필요하지 않습니다. 기존 관리 테이블이 없는 테스트 DB에 스키마를 적용하고 이번 검증에서 만든 테이블만 삭제합니다. 접속 설정이 없으면 실제 MySQL 테스트를 건너뛰며, 설정했는데 연결이나 권한에 문제가 있으면 실패로 보고합니다.
 

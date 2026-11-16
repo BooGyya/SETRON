@@ -38,8 +38,9 @@ from .validation import validate_changes_in, validate_risk_in, validate_snapshot
 
 EDITABLE = {
     "equipment": frozenset({"equipment_code"}),
+    # 공정(11-14 추가)은 데이터 관리 현황표에서 고친다 (11-16). PM 이름은 날짜 간 고정 위치라 고치지 않는다.
     "equipment_snapshot": frozenset({"line", "model_name", "group_id", "production_area",
-                                     "structure_type", "geometry_type", "modification_type"}),
+                                     "structure_type", "geometry_type", "modification_type", "process_name"}),
     "equipment_version": frozenset({"family_id", "version_raw", "release_version_id"}),
     "equipment_pm": frozenset({"group_id", "model_name_raw", "family_id", "version_raw", "release_version_id"}),
     "release_version": RELEASE_EDITABLE,

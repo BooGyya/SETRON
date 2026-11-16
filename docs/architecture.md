@@ -1,8 +1,10 @@
 # 폴더 아키텍처
 
+> 문서 기준: 2026-11-16, develop `f0cfc8d`. "현재 구조", "폴더별 책임", "모듈 간 관계", "DB 연결과 공통 저장" 절은 지금 코드에 맞췄습니다. "작업 단위 2~7", "B-1~B-4", "B-2", "C 담당 화면" 등 작업별 절은 개발 단계의 연결 계약 기록이며, 그 안의 "합성 예시"·"미연결"·"후속 작업" 표현은 당시 기준입니다. 지금과 다른 곳은 그 자리에 표시했습니다.
+
 setron은 Python 기반 Windows 데스크톱 애플리케이션입니다. 단일 저장소와 실행 패키지 `src/setron/` 안에서 역할별 모듈을 분리합니다.
 
-화면, 업무 로직, 외부 기술 연동을 나누는 최소 구조를 사용합니다. 현재는 열린 Excel 읽기, 버전 비교·집계·Item·위험 판정, 예제 응답으로 동작하는 AI 호출 흐름, DB 연결·공통 저장 서비스와 해당 테스트가 구현되어 있습니다. 화면과 각 업무 흐름을 DB에 연결하는 코드는 후속 작업입니다.
+화면(`ui/`), 업무 로직(`features/`), 외부 기술 연동(`infrastructure/`)을 나눕니다. 앱은 `SETRON_DB_*` 설정이 있으면 모든 화면이 MySQL 자료를 읽고 저장하며, 설정이 없거나 접속에 실패하면 합성 예시 자료로 시작합니다. DB 공급자는 `ui/database_source.py`의 `DatabaseDashboardSource` 하나이고 대시보드·히트맵·리플레이·아이템 매니저·AI 분석·보고서가 이를 함께 씁니다.
 
 개발·테스트용 MySQL 5.6.19는 Docker Compose로 분리해 실행합니다. Python 앱과 Excel은 Windows에서 실행하며, 실제 사용 PC의 앱은 Windows에 설치된 MySQL에 접속합니다.
 
@@ -10,171 +12,52 @@ DB 연동은 두 환경에서 같은 코드를 사용하고, `SETRON_DB_*` 환�
 
 ## 현재 구조
 
+2026-11-16, develop `f0cfc8d` 기준입니다. 파일이 많은 폴더는 묶어서 적었습니다. 각 폴더의 책임은 아래 [폴더별 책임](#폴더별-책임) 표에 있습니다.
+
 ```text
 S15P31B106/
-├── src/
-│   └── setron/
-│       ├── __init__.py
-│       ├── __main__.py
-│       ├── ui/
-│       │   ├── __init__.py
-│       │   ├── app.py
-│       │   ├── main_window.py
-│       │   ├── components.py
-│       │   ├── query_state.py
-│       │   ├── query_panel.py
-│       │   ├── dashboard.py
-│       │   ├── dashboard_charts.py
-│       │   ├── dashboard_data.py
-│       │   ├── dashboard_demo.py
-│       │   ├── heatmap.py
-│       │   ├── heatmap_data.py
-│       │   ├── equipment.py
-│       │   ├── equipment_data.py
-│       │   ├── target_data.py
-│       │   ├── target_dialog.py
-│       │   ├── versions.py
-│       │   ├── version_data.py
-│       │   ├── version_demo.py
-│       │   ├── import_page.py
-│       │   ├── import_demo.py
-│       │   ├── ai_page.py
-│       │   ├── ai_data.py
-│       │   ├── theme.py
-│       │   ├── assets/
-│       │   └── check_environment.py
-│       ├── features/
-│       │   ├── __init__.py
-│       │   ├── aggregation/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── aging/
-│       │   │   ├── __init__.py
-│       │   │   ├── repository.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── ai/
-│       │   │   ├── __init__.py
-│       │   │   ├── examples.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── analysis/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── db_export/
-│       │   │   ├── __init__.py
-│       │   │   └── service.py
-│       │   ├── export/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── forecast/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── import_save/
-│       │   │   ├── __init__.py
-│       │   │   └── service.py
-│       │   ├── item/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── priority/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── query/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── report/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── risk/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── excel_import/
-│       │   │   ├── __init__.py
-│       │   │   ├── schemas.py
-│       │   │   └── service.py
-│       │   ├── storage/
-│       │   │   ├── __init__.py
-│       │   │   ├── repository.py
-│       │   │   ├── service.py
-│       │   │   └── validation.py
-│       │   └── version/
-│       │       ├── __init__.py
-│       │       ├── schemas.py
-│       │       └── service.py
-│       └── infrastructure/
-│           ├── __init__.py
-│           ├── ai_client.py
-│           ├── database.py
-│           ├── env_file.py
-│           └── excel_reader.py
-├── database/
-│   ├── reset_demo_db.py
-│   ├── schema_mysql5619.sql
-│   └── seed_demo_catalog.sql
-├── packaging/
-│   ├── build_windows.ps1
-│   ├── run_setron.py
-│   └── setron.spec
-├── tests/
-│   ├── test_aggregation_service.py
-│   ├── test_aging_mysql.py
-│   ├── test_aging_service.py
-│   ├── test_analysis_service.py
-│   ├── test_ai_service.py
-│   ├── test_database.py
-│   ├── test_database_environment.py
-│   ├── test_database_mysql.py
-│   ├── test_excel_import_service.py
-│   ├── test_excel_reader.py
-│   ├── test_export_service.py
-│   ├── test_forecast_service.py
-│   ├── test_item_service.py
-│   ├── test_priority_service.py
-│   ├── test_query_service.py
-│   ├── test_report_service.py
-│   ├── test_risk_service.py
-│   ├── test_schema_mysql.py
-│   ├── test_storage_service.py
-│   ├── test_storage_validation.py
-│   ├── test_ui_common.py
-│   ├── test_ui_query.py
-│   ├── test_ui_dashboard.py
-│   ├── test_ui_heatmap.py
-│   ├── test_ui_equipment.py
-│   ├── test_ui_targets.py
-│   ├── test_ui_import.py
-│   ├── test_ui_ai.py
-│   └── test_version_service.py
+├── src/setron/
+│   ├── __init__.py
+│   ├── __main__.py                 # 실행 진입점. 실행 파일은 옆의 setron.env를 먼저 읽음
+│   ├── ui/                         # PySide6 화면 모듈 110개 (아래 표에 주요 모듈)
+│   │   └── assets/                 # 로고·VER5 아이콘·폰트와 라이선스
+│   ├── features/
+│   │   ├── aggregation/   aging/        ai/            analysis/      chat/
+│   │   ├── data_admin/    db_export/    db_import/     deletion/      equipment/
+│   │   ├── excel_import/  export/       extraction/    forecast/      history/
+│   │   ├── import_save/   item/         management/    priority/      query/
+│   │   ├── query_options/ release/      report/        risk/          rule_extraction/
+│   │   ├── storage/       targets/      version/
+│   │   ├── reference_data.py       # 번역표·장소표(사이트·라인 → Memory/Foundry)
+│   │   ├── production_area.py      # Memory/Foundry 표시 이름과 저장 코드
+│   │   └── management_format.py
+│   └── infrastructure/
+│       ├── database.py             # 접속 설정·트랜잭션·오류 구분
+│       ├── ai_client.py            # OpenAI 호환 클라이언트, 예제 응답 클라이언트
+│       ├── excel_reader.py         # 열린 Excel 창 읽기 (xlwings)
+│       ├── env_file.py             # setron.env 읽기
+│       └── _lazy_module.py
+├── database/                       # 스키마·시드·DB 준비 스크립트 (아래 표)
+├── packaging/                      # Windows 실행 파일·시연 DB 도구 빌드
+├── tests/                          # test_*.py 287개, 그중 MySQL 통합 *_mysql.py 39개
 ├── docs/
-│   ├── architecture.md
-│   ├── git-conventions.md
-│   ├── testing.md
-│   └── mermaid-diagram.png
-├── .gitignore
-├── .env.example
-├── .python-version
-├── compose.yaml
-├── setron.env.example
 ├── docker/mysql5619/
-├── pyproject.toml
-├── uv.lock
+├── ai/                             # 데이터 파트 작업 폴더(svhm). 앱이 import하지 않음
+├── init_local_db.bat, prepare_demo_db.bat, prepare_docker_demo_db.bat
+├── compose.yaml, .env.example, setron.env.example
+├── pyproject.toml, uv.lock, .python-version
 └── README.md
 ```
 
-각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`는 `ui/app.py`의 `create_window()`를 통해 공통 UI에 예시 대시보드·히트맵과 설비 목록/상세 하위 화면을 등록합니다. 조회 적용 시 기존 순수 집계 서비스를 사용하지만 DB·Excel에는 연결하지 않습니다. 설치와 실행 방법은 [README](../README.md)를 참고합니다.
+`features/equipment_status/`는 소스 파일이 없는 빈 폴더입니다(캐시만 남음).
+
+각 Python 패키지에는 `__init__.py`를 둡니다. `__main__.py`의 `run()`이 `ui/app.py`의 `main()`을 부릅니다. `main()`은 시작 창을 띄우고 `dashboard_source_from_env()`로 DB 자료를 워커에서 읽은 뒤 `create_window()`로 모든 화면을 조립합니다. 메뉴 화면은 처음 열 때 만듭니다(`_DeferredPage`). 설치와 실행 방법은 [README](../README.md)를 참고합니다.
 
 `ui/check_environment.py`는 화면 개발 전 Python·PySide6·Qt 버전과 창 표시·종료를 확인하는 진단용 실행 모듈입니다. 업무 서비스나 DB를 호출하지 않습니다.
 
 ### 공통 UI (작업 단위 2)
+
+> 아래 작업 단위 2~7 절은 개발 단계 연결 계약 기록입니다. 메뉴는 지금 VER5 기준(`MENUS`, `MENU_GROUPS`, 숨김 메뉴 `versions`)이고, 대시보드 등은 DB 설정이 있으면 `DatabaseDashboardSource`를 씁니다. 목표 기준 버튼은 `TargetDialog` 대신 N 그룹 편집 창(`ui/group_dialog.py`)을 엽니다.
 
 작업 단위 2는 공통 UI 기반입니다. 작업 단위 3의 공통 조회 조건은 아래 계약으로 연결하며, 대시보드 지표·그래프, 히트맵, 설비 목록·상세, 목표 N 선택 및 저장은 별도 작업입니다.
 
@@ -254,7 +137,7 @@ window.query_panel.set_draft(QuerySelection(site_key=registered_site_key))
 
 `DashboardSource`에는 검증된 `QueryCatalog`, UI 설비군 키와 모델 ID의 `GroupBinding`, `EquipmentRecord` 관측 목록, 설비별 `EquipmentLocation`, 릴리즈/고정 목표 N, 기준일 위험 판정 결과를 주입합니다. UI 설비군 키를 버전 계열 ID로 취급하지 않습니다. 위치의 원본 구역(`raw_area`)과 정규 Fab·Line은 별개입니다. 누락·중복 모델/위치 매핑과 날짜별 중복 설비는 거부합니다. 위험 판정이 누락되면 안전으로 추정하지 않고 미확인으로 표시합니다.
 
-앱 기본 공급자는 `demo_dashboard_source()`입니다. 예시 Fab·Line은 모두 미지정이고 원본 구역에서 추론하지 않습니다. 자료의 마지막 관측일을 기준일로 사용합니다. 기준일 선택과 목표 N의 실제 저장은 아직 구현하지 않으며, 목표 N 임시 편집은 아래 7번 계약을 따릅니다. 합성 예시라는 사실을 앱 안내·결과·출처 문구에 표시합니다. DB/Excel 파일 읽기·저장·회사 AI를 호출하지 않습니다.
+(당시 기록. 지금은 DB 설정이 없을 때만) 앱 기본 공급자는 `demo_dashboard_source()`입니다. 예시 Fab·Line은 모두 미지정이고 원본 구역에서 추론하지 않습니다. 자료의 마지막 관측일을 기준일로 사용합니다. 기준일 선택과 목표 N의 실제 저장은 아직 구현하지 않으며, 목표 N 임시 편집은 아래 7번 계약을 따릅니다. 합성 예시라는 사실을 앱 안내·결과·출처 문구에 표시합니다. DB/Excel 파일 읽기·저장·회사 AI를 호출하지 않습니다.
 
 `query_applied` → `DashboardPage.apply_query()` → `DashboardSource.snapshot()` → `accept_result()` 순으로 처리합니다. 공통 초안 편집/초기화만으로는 결과를 바꾸지 않습니다. 선택지 교체 시 결과를 지우고 재조회를 요청하며 공급자의 선택지와도 같아야 합니다. 결과를 받는 시점에 `QueryState.is_current()`와 결과의 요청 객체를 검사하여 이전 요청이 화면을 덮어쓰지 못하게 합니다. 현재 작은 합성 자료만 동기로 계산합니다. 실제 DB/대량 자료 연결 시 조회는 워커로 옮기고 `accept_result()`는 UI 스레드에서 호출해야 합니다.
 
@@ -348,22 +231,48 @@ Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디�
 
 `features/export/`는 현황 보고서를 Excel(xlsx)로 저장합니다. 화면에서 계산한 집계·위험·노후도·우선순위 결과를 다시 계산하지 않고 표로 옮기므로 같은 조건이면 화면과 숫자가 같습니다. 조회 조건과 모델·계열별 목표 N을 첫 시트에 남기고, 계열별 막대·상태 구성비 원형·날짜별 적용률 꺾은선 차트는 같은 시트의 표 셀을 참조해 Excel에서 편집할 수 있습니다. 적용률을 계산할 수 없으면 0%가 아니라 빈 셀과 '계산 불가'로 적습니다. 저장 실패는 예외 대신 원인을 담은 결과로 돌려줍니다. 트리맵 차트는 아직 포함하지 않습니다. 관리값 요약 내보내기('데이터 내보내기' 화면과 상단 내보내기 메뉴의 '관리값 요약 Excel')는 `features/export/management.py`의 `save_management_summary(storage, path)`가 맡습니다. 13개 관리 테이블과 보관 원본을 그대로 옮기는 '관리 자료 XLSX'(`features/export/management_tables.py`의 `save_management_data`)와 다른 출력입니다. DB의 현재 관리값을 한 트랜잭션에서 읽어 **설비현황표**(기준일별 설비 현황, PM·적용 SW마다 한 줄)와 **릴리즈노트**(계열별 릴리즈 버전과 버전별 Item 적용 상태·모델 범위) 두 시트로 정리하고 ID 대신 이름을 함께 적습니다. 11-11부터 두 시트로 줄였습니다(김보경, 커밋 `72c1327`). 그 전에 있던 안내·모델·계열·위험 기준·관리 설정 시트는 빠졌으므로, 위험 기준과 설정값까지 옮기려면 '관리 자료 XLSX'나 DB 전체 SQL 내보내기를 씁니다. 원본 셀 위치·원문 값은 넣지 않으며(원문은 DB 전체 SQL 내보내기), `=` 등으로 시작하는 글자는 수식으로 실행되지 않게 글자로 저장합니다. `tests/test_management_export_mysql.py`가 검증합니다. `tests/test_export_service.py`가 검증합니다.
 
-데이터 관계를 정리한 [ERD](mermaid-diagram.png)는 작성 중인 초안이며, 확정된 DB 스키마가 아닙니다.
+DB 구조의 기준은 `database/schema_mysql5619.sql`(테이블 13개)입니다. 팀 확정 ERD(2026-11-16 판)와 테이블 13개가 같고, 코드 스키마에는 `equipment_snapshot.process_name`(공정) 칸과 FK·UNIQUE 제약이 더 있습니다. `docs/mermaid-diagram.png`는 스키마 확정 전의 옛 ERD 초안이므로 참고하지 않습니다.
 
 ## 폴더별 책임
 
 | 경로 | 책임 |
 | --- | --- |
-| `src/setron/ui/` | PySide6 화면, 사용자 입력, 화면용 테이블 모델, 백그라운드 작업 실행과 결과 표시 |
-| `src/setron/features/` | 설비·버전·Item·Excel·통계 업무 로직 |
-| `src/setron/features/storage/` | 공통 Repository, 저장값 변환·입력 검증·삭제 전 위험 근거 보존 |
-| `src/setron/features/equipment/` | 검토한 설비 현황 묶음 저장, 호기·날짜·PM 고정 위치 연결, 원문·출처와 정확한 날짜 조회 |
-| `src/setron/features/release/` | 릴리즈·Item 등록·수정·조회, 버전별 Item 연결, 원본 셀과 현재 관리값 비교 |
-| `src/setron/infrastructure/` | DB 엔진·세션과 외부 기술 연동 |
+| `src/setron/ui/` | PySide6 화면, 사용자 입력, 화면용 테이블 모델, 워커(`read_worker.BackgroundRead`) 실행과 결과 표시. `app.py`가 화면 조립, `database_source.py`가 DB 공급자, `ai_connection.py`가 AI 공급자 |
+| `features/aggregation/` | 공통 집계: 실제 호기 수, 모델별 대수, 업그레이드 필요 수, 적용률 (BE-012) |
+| `features/version/` | 같은 계열 안의 버전 비교와 N 단계 계산(BE-003), N 그룹 판정 규칙(`groups.py`) |
+| `features/targets/` | 모델별 적용 가능 릴리즈 근거(`service.py`)와 N 그룹 저장·이력·되돌리기(`groups.py`, `GroupStore`). 둘 다 `app_setting`에 저장 (BE-011) |
+| `features/item/` | Item 포함 버전·적용 설비 판정(BE-014), Item별 Jira 코드(`jira.py`)와 이전 DB의 `jira_code` 칸 보정(`jira_upgrade.py`) |
+| `features/risk/` | 위험 설비 판정 (BE-015) |
+| `features/aging/` | 버전 노후도와 기간 기준 저장 (BE-016) |
+| `features/priority/` | 업그레이드 우선순위 (BE-017) |
+| `features/query/`, `features/query_options/` | AI 질문 조건 검사·자료 선택(BE-018), 저장 기준일의 조회 선택지와 범위(BE-011) |
+| `features/ai/` | AI 작업 요청·응답 형식 해석과 오류 상태 변환 (BE-005) |
+| `features/chat/` | AI 분석 대화: 질문을 요청 종류·조건으로 나누고 기존 계산 기능으로 답을 만듦 |
+| `features/analysis/`, `features/forecast/` | AI 원인 설명 자료와 숫자 대조(BE-019), 참고 예측(BE-020) |
+| `features/report/`, `features/export/` | AI 분석 Word 보고서(BE-022), 현황·관리값·조회 결과 Excel 출력과 라인별 히트맵·트리맵(BE-021) |
+| `features/extraction/` | AI 추출 결과를 원본 셀과 대조한 검토 자료, 모델명 번역표 후보 (BE-007) |
+| `features/rule_extraction/` | 정해진 양식(설비 현황표·세로형 릴리즈노트)의 규칙 추출. 처음 보는 양식만 AI로 넘김 |
+| `features/excel_import/` | 시트 원본 보존, 검토·수정, 저장 전 검증, 저장 요청 생성 (BE-006~009) |
+| `features/import_save/` | 검토를 마친 가져오기 묶음의 DB 저장 (Jira S15P31B106-75) |
+| `features/equipment/` | 설비·기준일별 현황·PM·계열 저장과 조회(BE-002), 이전 DB의 `process_name` 칸 보정(`process_upgrade.py`) |
+| `features/release/` | 릴리즈·Item 등록·수정·조회(BE-004), 계열 교체·재판정(BE-010), 버전 순서 후보 |
+| `features/management/` | 관리 데이터 직접 조회·수정·검증·저장과 위험 기준 등록 (BE-025) |
+| `features/data_admin/` | 데이터 관리 화면(설비현황·릴리즈노트·변경 이력)용 조회, 설비군·Site·라인 등록 |
+| `features/history/` | 정확한 날짜의 이력 조회와 버전 리플레이 자료 |
+| `features/deletion/` | 저장한 설비 현황표를 기준일·사업장 단위로 삭제 |
+| `features/db_export/`, `features/db_import/` | DB 전체 SQL 내보내기(BE-023), SETRON SQL 백업 비교·병합 가져오기 |
+| `features/storage/` | 공통 Repository, 저장값 변환·입력 검증·삭제 전 위험 근거 보존 |
+| `features/reference_data.py` | 번역표(원문 설비군 → 등록 모델), 장소표(사이트·라인 → Memory/Foundry), 개조형 상위 설비군 |
+| `src/setron/infrastructure/` | DB 엔진·세션, AI 클라이언트, Excel 읽기, 설정 파일 읽기 |
 | `compose.yaml`, `docker/mysql5619/` | 개발·테스트용 MySQL 5.6.19 이미지, 초기 DB·계정 생성과 실행 설정 |
-| `database/schema_mysql5619.sql` | 개발·테스트·Windows MySQL 최초 설치에 공통으로 사용하는 5.6.19 스키마 |
-| `tests/` | 업무 로직 및 외부 연동 검증 |
-| `docs/` | 아키텍처, ERD, 협업 규칙과 테스트 전략 |
+| `database/schema_mysql5619.sql` | 개발·테스트·Windows MySQL 최초 설치에 공통으로 쓰는 스키마 (테이블 13개) |
+| `database/seed.sql` | 시연 자료: 설비 300대·2026년 5~10월 관측 1,800건, 모델 적용 근거·N 그룹 각 18건, 직접 지정 위험 버전 2건. `build_seed.py`로 생성. `SETRON_DB_INIT.exe`(배포 폴더)가 사용 |
+| `database/seed_demo_catalog.sql` | 모델·계열 기준 자료만 (설비·관측 없음). `reset_demo_db.py`가 사용 |
+| `database/SETRON_DB.sql` | 2026-11-11 `setron_master` DB 내보내기(테이블 13개·836행). 시연 DB 도구(`init_demo_dump.py`)가 사용. 개발팀 내부용 |
+| `database/init_local_db.py` | 개발용: 로컬 MySQL에 스키마(+`seed.sql`) 적용, `--no-seed`면 테이블만. 11-16부터 배포 묶음에 넣지 않음 |
+| `packaging/` | `setron.spec`·`build_windows.ps1`(배포 폴더 `dist/SETRON`), `build_demo_db.py`·`build_docker_demo_db.py`(시연 DB 도구, 개발팀 내부) |
+| `tests/` | 업무 로직·화면·외부 연동 검증. MySQL 통합은 `*_mysql.py` |
+| `docs/` | 아키텍처, 협업 규칙, 테스트 전략, Windows 패키지, 화면별 문서 |
 
 ## 모듈 간 관계
 
@@ -378,6 +287,8 @@ Figma VER3 `351:4261`과 보기 선택 `972:12515`, 밀집/버전 타일의 디�
 예를 들어 Heatmap 화면은 집계 서비스를 호출하고, 서비스는 Repository를 통해 필요한 설비·버전 데이터를 조회합니다.
 
 Excel 대량 처리처럼 오래 걸리는 작업은 `ui/`의 워커에서 서비스를 호출해 실행합니다. 위젯 생성과 화면 갱신은 UI 스레드에서 처리하고, 워커의 결과나 오류는 Qt 시그널로 전달합니다. 스레드 간 객체 호출은 [Qt의 스레드 규칙](https://doc.qt.io/qtforpython-6/overviews/qtdoc-threads-qobject.html)을 따릅니다.
+
+지금 앱은 `ui/read_worker.py`의 `BackgroundRead`(QThreadPool)와 `ReadRequest`로 이 규칙을 공통 적용합니다. 시작 시 DB 읽기, 가져오기의 Excel 읽기·AI 추출·기존값 검사·저장, AI 분석 화면(`ui/chat_page.py`)의 질문 처리와 보고서 준비, 아이템 매니저의 AI 답변, 버전·Item 자료 읽기가 워커에서 실행됩니다. Excel COM은 호출한 워커 스레드에서 초기화·정리합니다(`ui/import_tasks.py`).
 
 DB 작업을 실행하는 스레드에서 세션을 열고 작업이 끝나면 닫습니다. UI 스레드와 워커가 같은 `Session`을 공유하지 않습니다. 여러 저장을 하나의 업무로 처리해야 한다면 서비스가 트랜잭션 범위를 정하고, Repository가 호출마다 별도로 commit하지 않도록 합니다. 세션과 트랜잭션의 수명은 [SQLAlchemy의 세션 지침](https://docs.sqlalchemy.org/en/20/orm/session_basics.html)을 따릅니다.
 
@@ -394,6 +305,15 @@ DB 작업을 실행하는 스레드에서 세션을 열고 작업이 끝나면 �
 릴리즈 버전 삭제와 릴리즈 교체 내부의 Item 삭제는 대상과 위험 규칙을 잠근 뒤 기존 근거에 삭제 대상의 원문을 추가하고 `UNRESOLVED`로 바꿉니다. 근거 보존과 삭제는 함께 저장되거나 취소됩니다. 일반 Item 직접 삭제는 릴리즈 관리 서비스에서 제공하지 않습니다. 설비·릴리즈 서비스에서 계열 연결·원본 불변·명시한 모델 범위를 검증하고, 위험 범위와 재가져오기 재계산은 해당 업무 서비스에서 처리합니다.
 
 `features/storage/inputs.py`는 설비와 릴리즈에서 함께 쓰는 필수값·ID·원본 위치 검증을 담당합니다. 기존 `equipment.validation`의 함수 이름은 가져오기를 통해 유지하며 기능 사이에 서로의 검증 모듈을 직접 참조하지 않습니다.
+
+앱이 DB에 처음 연결할 때(`ui/database_source.py`의 `dashboard_source_from_env()`) 이전 스키마로 만든 DB를 보정합니다. 새로 만든 DB는 스키마에 두 칸이 이미 있어 아무것도 하지 않습니다.
+
+| 보정 | 모듈 | 동작 |
+| --- | --- | --- |
+| `item.jira_code` | `features/item/jira_upgrade.py` | 칸이 없으면 `ALTER TABLE`로 더하고 보관 원본에서 Jira 코드를 한 번 채움. 예전 이름 칸이 함께 있으면 값이 NULL까지 같은지 먼저 확인. 값을 잃을 수 있으면 이관하지 않고 합성 예시로 시작하며 안내 |
+| `equipment_snapshot.process_name` | `features/equipment/process_upgrade.py` | 칸이 없으면 맨 끝에 더함. 실패해도 앱 시작을 막지 않고 공정만 저장하지 않음 |
+
+두 보정은 DDL이라 앱 계정에 `ALTER` 권한이 필요합니다. 실패 내용은 Python `logging` 경고로만 남기며, 앱에는 로그 파일·핸들러 설정이 없습니다.
 
 MySQL 회귀 테스트는 테스트 파일 위치를 기준으로 프로젝트 내 스키마를 찾습니다. 별도 스키마 경로 설정 없이 전용 테스트 DB에서 생성·검증·정리하며, 동시 삭제와 저장 도중·COMMIT 전송 직전의 실제 연결 중단도 검증합니다. Windows MySQL은 `setron.env.example`을 기반으로 접속 설정을 준비하고 실제 서버에서 추가 검증합니다.
 
@@ -484,7 +404,7 @@ class ReleaseRepository:
 
 포함 Item 수는 해당 릴리즈에 저장된 APPLIED 행 수다. `items_verified=False`이면 0건도 전체 Item이 없다는 뜻으로 쓰지 않고 매핑 미완료를 표시한다. 상세는 같은 계열에서 알려진 Item을 보여주며 해당 릴리즈에 행이 없으면 미확인으로 남긴다. `ItemCatalog.version_state`와 `pm_application`으로 릴리즈 포함 상태와 선택 모델 판정을 분리한다. 후자는 실제 설비/PM 관측을 조회한 결과가 아니며 B-4 적용 현황과 구분한다.
 
-출처는 릴리즈와 Item 각각에 필드·문서·리비전·시트·셀·입력 작업 ID를 묶는다. 없는 정보는 미확인으로 표시하고 문서나 셀을 자동으로 열지 않는다. B-1은 읽기 전용을 유지한다. BE-004는 별도의 RecordView로 원본·관리값 조회와 허용 필드 수정을 제공하며 B-2 화면 연결은 후속 작업이다. O5 추가 추출 필드는 현재 계약에 추가하지 않는다.
+출처는 릴리즈와 Item 각각에 필드·문서·리비전·시트·셀·입력 작업 ID를 묶는다. 없는 정보는 미확인으로 표시하고 문서나 셀을 자동으로 열지 않는다. B-1은 읽기 전용을 유지한다. BE-004는 별도의 RecordView로 원본·관리값 조회와 허용 필드 수정을 제공하며 B-2 화면 연결은 후속 작업이다(당시 기록). O5 추가 추출 필드는 현재 계약에 추가하지 않는다(당시 기록. 지금 JIRA 열은 `jira_code`로 저장한다).
 
 `create_window(source=..., version_loader=...)`의 공급자는 **메모리에서 즉시 반환하는** `VersionCatalog`를 제공한다. 실제 DB·Excel I/O를 이 콜백 안에서 실행하면 UI가 멈추므로, 실데이터 통합 때는 워커에서 읽기·오류 처리를 완료하고 자료 갱신을 UI 스레드로 전달해야 한다. 현재 앱은 시작/재읽기 때 DB를 호출하지 않는다.
 
@@ -505,7 +425,7 @@ class ReleaseRepository:
 
 버전 순서는 확인된 `version_order`만 사용한다. 순서 미확인·중복을 구분하고 원문·접미사를 보존한다. Item은 `Application`의 적용/미적용/미확인/대상 외를 사용한다. 2026-11-07 사용자 확인에 따라 같은 계열의 포함 버전 이후에는 Item과 모델 범위를 누적 적용한다. 명시적 상태는 우선하며 순서·모델 범위가 미확인이면 상속을 추정하지 않는다. 원본 행을 복제하지 않으며 위험 판정과 목표 달성도 별개다.
 
-현재 `ReleaseVersion`과 `Item`의 순수 업무 형식에는 전체 출처 정보가 없다. DB의 `batch_id`, `source_reference`, 릴리즈 문서와 원본을 연결하는 읽기 계약은 C 및 데이터 담당자와 맞춘다. O5의 JIRA·접수라인·비고는 현재 `RELEASE_NOTE_FIELDS`에 없으므로 임의 필드로 저장하지 않는다. Fab·Line 및 UI 설비군/모델/계열 매핑, 목표 N 영속화, 저장 후 선택지·결과 갱신은 A와 함께 확인할 통합 사항이다.
+현재 `ReleaseVersion`과 `Item`의 순수 업무 형식에는 전체 출처 정보가 없다. DB의 `batch_id`, `source_reference`, 릴리즈 문서와 원본을 연결하는 읽기 계약은 C 및 데이터 담당자와 맞춘다. (2026-11-16 기준) O5 등의 JIRA 열은 `RELEASE_NOTE_FIELDS`의 `jira_code`로 추출해 Item별 `item.jira_code`에 저장하고 아이템 매니저에 표시한다(6차 멘토링). 접수라인·비고는 여전히 필드에 없어 저장하지 않는다. 목표 N 그룹은 `features/targets/groups.py`가 `app_setting`에 이력과 함께 저장한다. Fab·Line 및 UI 설비군/모델/계열 매핑, 저장 후 선택지·결과 갱신은 당시 A와 함께 확인할 통합 사항이었다.
 
 화면 위젯에서 SQL을 실행하지 않는다. BE-004의 저장·조회 서비스와 실제 데이터 공급자를 워커로 연결하기 전까지 합성 자료·미연결 상태를 명시한다. 위험 규칙 편집 정책을 임의로 구현하지 않으며 기존 설비 상세·목표 편집 화면을 복제하지 않는다.
 
@@ -566,7 +486,7 @@ BE-004의 ReleaseService 및 허용 필드는 현재 develop에 존재하지만 
 
 AI 분석 화면은 질문을 해석한 뒤 아무 조건도 바꾸지 않는다. Site·Line·설비군은 공통 조회 선택지의 이름·키와 정확히 같을 때만 연결하고, 원본 구역명을 Fab/Line으로 추정하지 않는다. 복수 선택·기준일·모델·SW 계열·버전·Item·해석 불가 조건은 그대로 표시하며, 사용자가 직접 체크를 해제하기 전에는 적용을 막는다. 확인창 승인 후 공통 조회 초안을 바꾸고 적용하며, 목표 N은 바꾸지 않는다. 목표 N 변경이 적용 대기 중이거나 해석 뒤 선택지가 바뀌면 적용하지 않는다. 분석은 현재 적용 조건의 대시보드 계산값만 보내고, 예제 응답의 근거 문장은 자료로 확인한 근거가 아니라고 표시한다.
 
-DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 있다. 후속 통합 사항: `ReferenceData` 공급, 회사 AI 실제 클라이언트, Excel 읽기·AI 호출의 워커 스레드 실행, 저장 후 선택지·결과 갱신 방식은 A·B·데이터 담당자와 확정한다. O5의 JIRA·접수라인·비고는 `RELEASE_NOTE_FIELDS`에 없어 추출·저장하지 않는다.
+DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 있다. 당시 후속 통합 사항이던 Excel 읽기·AI 추출의 워커 실행, OpenAI 호환 클라이언트(`ui/ai_connection.py`), 저장 후 선택지 갱신(`reload_catalog()`)은 2026-11-16 기준 연결되어 있다. AI 분석 메뉴는 지금 `AIPage` 대신 `ui/chat_page.py`의 `ChatPage`(`create_window(chat_enabled=True)`)를 쓴다. JIRA 열은 `jira_code`로 추출·저장하고, 접수라인·비고는 `RELEASE_NOTE_FIELDS`에 없어 추출·저장하지 않는다.
 
 ### 가져오기 DB 저장 (Jira S15P31B106-75)
 
@@ -578,10 +498,10 @@ DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 
 - 같은 호기·기준일 현황이 이미 있으면 `load_reference()`로 기존값을 불러와 검토한 요청만, 검토 당시 값과 DB 값이 같을 때 갱신한다. 검토 없이 보냈거나 검토 후 DB 값이 바뀌었으면 묶음 전체를 보류한다. 재가져오기 규칙(PM 위치별 갱신, 사업장 고정, 공통정보 출처 등)은 README의 "날짜별 현황 저장·재가져오기 갱신 (BE-009)"에 있다.
 - 같은 계열·버전 릴리즈가 이미 있으면 묶음 전체를 저장하지 않는다. 릴리즈 교체(BE-010), 저장 후 직접 수정(BE-025), 릴리즈 노트 문서 등록, Item 대상 모델 범위 지정은 이 저장소 범위가 아니다.
 - 앱(`python -m setron`)은 `SETRON_DB_NAME`이 설정돼 있으면 `ui/import_page.saver_from_env()`로 이 저장소를 쓰고, 없으면 메모리 저장소를 쓴다. DB 접속은 첫 저장 때 한다.
-- 같은 설정이면 조회 화면도 `ui/database_source.py`의 `DatabaseDashboardSource`로 DB 자료를 읽는다. '조회 적용'마다 DB를 다시 읽으므로 저장 후 조회 적용을 누르면 반영된다. 조회 선택지는 DB 저장 현황으로 만든다(아래 '조회 선택지 DB 연결'). 설비군은 `GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않거나 PM·HPA 연결을 확인해야 하는 현황은 빼고 건수를 안내한다. 목표 N·위험 기준은 DB에 없어 지정하지 않으므로 적용률은 계산 불가, 위험은 미확인으로 나온다. 목표 초안은 다시 읽은 모델·계열 목록에 맞춘다(고른 값 유지, 새 항목 미지정). 시작할 때 DB를 읽지 못하면 합성 예시로 시작하고 안내한다.
-- 위험은 DB의 `risk_rule`과 `release_version_item`으로 만든 `RiskAssessor`로 판정한다. 규칙 변환은 릴리즈 교체 재판정과 같은 `features/release/refresh.py`의 `rule_from_row()`(잘못된 연결은 미확인)·`families_from_rows()`를 쓴다. 사용 중인 위험 지정이 없으면 '위험 없음'으로 단정하지 않고 모두 미확인으로 둔다. 목표 N은 DB에 저장하지 않으므로 화면에서 고른다.
+- 같은 설정이면 조회 화면도 `ui/database_source.py`의 `DatabaseDashboardSource`로 DB 자료를 읽는다. '조회 적용'마다 DB를 다시 읽으므로 저장 후 조회 적용을 누르면 반영된다. 조회 선택지는 DB 저장 현황으로 만든다(아래 '조회 선택지 DB 연결'). 설비군은 `GROUP_MODELS`의 등록 모델 이름으로만 연결한다. 연결되지 않거나 PM·HPA 연결을 확인해야 하는 현황은 빼고 건수를 안내한다. (2026-11-16 기준) 모델별 적용 가능 릴리즈 근거는 `features/targets/service.py`, 저장한 N 그룹은 `features/targets/groups.py`가 `app_setting`에서 읽는다. 저장된 N 그룹이 있으면 화면에서 고른 목표 N보다 우선한다. 위험 기준은 `risk_rule`에서 읽는다. 목표 초안은 다시 읽은 모델·계열 목록에 맞춘다(고른 값 유지, 새 항목 미지정). 시작할 때 DB를 읽지 못하면 합성 예시로 시작하고 안내한다.
+- 위험은 DB의 `risk_rule`과 `release_version_item`으로 만든 `RiskAssessor`로 판정한다. 규칙 변환은 릴리즈 교체 재판정과 같은 `features/release/refresh.py`의 `rule_from_row()`(잘못된 연결은 미확인)·`families_from_rows()`를 쓴다. 사용 중인 위험 지정이 없으면 '위험 없음'으로 단정하지 않고 모두 미확인으로 둔다. 목표 N(릴리즈 하나)은 조회 조건으로만 유지하고 DB에 저장하지 않는다. 대신 N-2~N+2 칸에 버전을 묶은 N 그룹은 `features/targets/groups.py`(`GroupStore`)가 `app_setting`에 저장 순번이 붙은 행으로 이력과 함께 저장한다. DB 설정이 없으면 `MemoryGroupStore`로 앱 실행 중에만 유지한다.
 - 상단 '데이터 내보내기'는 `SETRON_DB_*` 설정이 있을 때 관리 데이터 Excel(`data_exporter_from_env`)과 DB 전체 SQL(`sql_exporter_from_env`) 중 하나를 골라 실행한다.
-- `SETRON_AI_*` 설정이 있으면 `ui/ai_connection.py`의 `ai_providers_from_env()`가 회사 AI 클라이언트 하나로 가져오기 추출·질문 해석·분석 공급자를 만들어 화면에 넘긴다. 설정이 없으면 예제 응답, 잘못되면 예제 응답으로 시작하고 이유를 안내한다. 클라이언트는 앱을 닫을 때 정리한다. AI 호출은 아직 화면 스레드에서 실행된다.
+- `SETRON_AI_*` 설정이 있으면 `ui/ai_connection.py`의 `ai_providers_from_env()`가 회사 AI 클라이언트 하나로 가져오기 추출·질문 해석·분석 공급자를 만들어 화면에 넘긴다. 설정이 없으면 예제 응답, 잘못되면 예제 응답으로 시작하고 이유를 안내한다. 클라이언트는 앱을 닫을 때 정리한다. AI 호출은 워커에서 실행된다: 가져오기 추출은 `ui/import_page.py`, AI 분석 질문·보고서 준비는 `ui/chat_page.py`, 아이템 매니저 답변은 `ui/items.py`가 `BackgroundRead`로 실행한다.
 - `database/reset_demo_db.py`는 시연·확인용 DB의 관리 테이블을 지우고 스키마와 시연용 기준 자료를 다시 넣는다. `--confirm`에 접속 설정의 DB 이름을 다시 적어야 실행되고, 관리 테이블 외의 테이블은 건드리지 않는다.
 - `database/seed_demo_catalog.sql`은 멘토 확정 분류표(`docs/mentor-confirmations.md`)의 모델 14개·계열 15개다(v2). 파운드리용 릴리즈노트가 따로 있는 O2·C3·C4는 ' (파운드리)' 계열을 두고, `features/reference_data.py`의 장소표(사이트·라인 → 메모리/파운드리)로 저장 시 계열을 고른다. 번역표(원문 설비군 글자 → 등록 모델)도 같은 파일이 기준이며 `extraction/model_candidates.py`는 그것으로 후보를 만든다.
 
@@ -593,7 +513,7 @@ DB 저장 서비스(`ImportSaver` 구현)는 아래 "가져오기 DB 저장"에 
 - 예측: '통일 예측 (참고)'가 같은 조회 조건의 모든 관측일(`DashboardSource.scoped_records`)로 `forecast()`를 계산하고 `explain_forecast()`로 설명을 받는다. 기간 끝은 스냅샷 기준일이다.
 - 보고서: 'Word 보고서 저장'이 마지막 분석·예측 결과로 `save_word_report()`를 부른다. AI를 다시 호출하지 않는다.
 - 질문 해석: AI 클라이언트가 있으면 `choice_parser()`가 현재 화면의 Site·Line·설비군 선택지를 `QueryChoices`로 함께 보낸다.
-- 앱(`main`)은 `ai_client`를 넘기고, 설정이 없으면 예제 응답 클라이언트로 같은 흐름을 쓴다. AI 호출은 아직 화면 스레드에서 실행된다.
+- 앱(`main`)은 `ai_client`를 넘기고, 설정이 없으면 예제 응답 클라이언트로 같은 흐름을 쓴다. (2026-11-16 기준) 앱의 AI 분석 메뉴는 이 절의 `AIPage` 대신 `ChatPage`를 등록하며, 질문 처리(`ChatService.ask`)와 보고서 준비를 `BackgroundRead` 워커에서 실행한다.
 
 ### 조회 선택지 DB 연결
 
@@ -642,7 +562,7 @@ DB 공급자는 `ui/database_source.py`의 `database_catalog()`로 저장 현황
 
 ### Windows 실행 파일 (Jira S15P31B106-77)
 
-`packaging/setron.spec`(PyInstaller)이 앱 `SETRON.exe`와 DB 초기화 도구 `SETRON_DB_INIT.exe`를 `dist/SETRON/`에 묶는다. 빌드할 때 루트의 `init_local_db.bat`을 배포 폴더에 복사한다. 배치 파일은 같은 폴더 또는 저장소 루트 아래 `dist/SETRON/`에서 초기화 도구를 찾는다. 앱과 초기화 도구는 각 실행 파일 옆의 `setron.env`를 읽는다. 앱은 `load_env_file()`로 아직 없는 환경변수를 채우고 초기화 도구는 `database/init_local_db.py`의 로직과 묶음에 포함된 SQL로 스키마·시연 데이터를 적용한다. 빌드·설치·설정 방법은 `docs/windows-package.md`에 있다.
+`packaging/build_windows.ps1 -DumpPath <SQL>`이 `packaging/setron.spec`(PyInstaller)으로 앱 `SETRON.exe`를 만들고, 이어서 `packaging/build_demo_db.py`로 지정한 SQL을 묶은 시연 메뉴 도구 `SETRON_DB_INIT.exe`(`database/init_demo_dump.py`, 메뉴: 1 시연 데이터 넣기 · 2 데이터 초기화 · 3 종료)와 `prepare_demo_db.bat`, `SETRON_DB.sql`을 `dist/SETRON/`에 둔다(11-16 김지훈 개편). 예전의 `init_local_db.py`(스키마 + `seed.sql`, `--no-seed`) 도구는 배포 묶음에서 빠졌고 개발용으로만 남았다. 앱과 도구는 실행 파일 옆의 `setron.env`를 읽는다. 빌드·설치·권한·실행 방법은 `docs/windows-package.md`에 있다.
 
 ## B 읽기 변환 공통 기반
 

@@ -281,7 +281,7 @@ def test_open_row_shows_application_toolbar_and_preserves_original_multiline_con
         assert page.title.textFormat() == Qt.TextFormat.PlainText
         assert not page.title.isVisible() and page.result_buttons[1].toolTip().startswith(content)
         assert page.summary.parentWidget() is page.application_toolbar and page.summary.isVisible()
-        assert [badge.text() for badge in page.summary.widgets] == ["적용 1대", "미적용 1대", "미확인 2대", "대상 외 1대", "HPA 제외 1대"]
+        assert [badge.text() for badge in page.summary.widgets] == ["적용 1대", "미적용 1대", "미확인 2대"]
         assert page.application_details.isVisible() and page.equipment_table.isVisible()
         assert not any(hasattr(page, name) for name in ("more_button", "update_card", "first_value", "missing_value", "inline_date", "inline_equipment", "observation_note", "content"))
         assert page.summary.isVisible() and page.application_details.isAncestorOf(page.summary)
