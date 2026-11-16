@@ -1,18 +1,21 @@
 # Windows 실행 파일 만들기·설치·실행 안내
 
-Jira S15P31B106-77. 폐쇄망 Windows PC에서 Python·uv 설치 없이 SETRON을 실행하기 위한 안내다.
+Python·uv 설치 없이 Windows에서 SETRON을 실행하는 방법이다.
 
 ## 1. 실행 파일 만들기 (개발 PC)
 
 인터넷이 되는 개발 PC에서 저장소 최상위 폴더를 기준으로 실행한다.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File packaging\build_windows.ps1 -DumpPath dist\SETRON\SETRON_DB.sql
 ```
 
-- Windows 빌드 결과는 `dist\SETRON`에 모인다. 앱 `SETRON.exe`, 초기화 도구 `SETRON_DB_INIT.exe`, 루트에서 복사한 `init_local_db.bat`, 설정 예시 `setron.env.example`, 그리고 실행 라이브러리와 초기화 SQL을 담은 `_internal` 폴더가 들어 있다.
+- `-DumpPath`는 필수이며, 실제 배포할 완전한 SETRON SQL을 지정한다. 위 명령은 기존 300대 배포 SQL을 그대로 사용한다. 첫 빌드에서는 승인된 배포 SQL의 실제 경로를 지정한다. 생성용 `database\seed.sql`과 별도 53대 원천은 자동 선택하지 않는다.
+- Windows 빌드 결과는 기본적으로 `dist\SETRON`에 모인다. `-OutputDir <경로>`를 지정하면 해당 폴더에 격리해 만들 수 있다. 상대 경로는 명령을 실행한 위치를 기준으로 해석한다.
+- 앱 `SETRON.exe`, 시연 메뉴 도구 `SETRON_DB_INIT.exe`, 동일 메뉴를 호출하는 `prepare_demo_db.bat`, 외부 `SETRON_DB.sql`, 설정 예시 `setron.env.example`, 실행 라이브러리 `_internal`이 들어 있다.
+- 기존 배포 폴더의 `setron.env`, `backups` 및 사용자 파일은 보존한다. 기존 외부 SQL이 지정한 dump와 다르면 교체 전에 중단한다. 빌드와 오프라인 SQL 검증을 마친 뒤 배포 폴더를 교체하며 실패하면 기존 배포본을 유지하거나 복구 경로를 안내한다.
 - 앱과 초기화 도구를 전달할 때는 `dist\SETRON` 폴더 전체를 압축한다. 사용자는 ZIP을 풀고 폴더 안의 배치 파일과 앱을 실행할 수 있다.
-- 빌드 설정은 `packaging\setron.spec`다. 화면 아이콘·폰트(`ui/assets`), MySQL 드라이버, 스키마와 시드 SQL을 함께 묶는다.
+- `packaging\setron.spec`는 GUI를 빌드한다. 이어서 `packaging\build_demo_db.py`가 명시한 SQL로 시연 메뉴 도구를 만들고 DB 연결 없이 검증한다. 이 빌드 과정은 실제 DB에 접속하지 않는다.
 
 ## 2. 사용자 PC 준비
 
@@ -20,17 +23,16 @@ powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 | --- | --- |
 | Windows | Windows 10 이상 64비트 |
 | Excel | 데스크톱 Excel. 데이터 가져오기는 사용자가 열어 둔 Excel 창에서 읽는다 |
-| MySQL | 초기화 전에 같은 PC에서 Windows용 MySQL 5.6.19를 실행하고 SETRON용 빈 DB와 계정을 준비한다. 계정에는 대상 DB의 테이블 생성·참조와 데이터 조회·입력 권한이 필요하다 |
+| MySQL | 같은 PC에서 Windows용 MySQL 5.6.19를 실행하고 SETRON용 DB와 계정을 준비한다 |
 
-개발 PC에서는 Windows 패키지를 빌드한 뒤 저장소 루트의 `init_local_db.bat`을 실행할 수 있다. 루트에서 실행하면 배치 파일이 `dist\SETRON`에 있는 초기화 도구를 찾는다.
+MySQL을 새로 설치했다면 관리자 계정으로 SETRON용 DB와 계정을 먼저 생성한다. 실행 도구는 계정이나 권한을 자동으로 만들지 않는다.
 
-시연·확인 전에 DB를 빈 상태로 다시 만들려면 개발 PC에서 아래를 실행한다. 관리 테이블 13개를 지우고 스키마와 시연용 기준 자료를 다시 넣는다. 대상 DB의 SETRON 자료가 모두 지워지므로 `--confirm`에 접속 설정의 DB 이름을 한 번 더 적어야 실행된다.
+관리자는 SETRON 계정에 **대상 DB에 한정해** 다음 권한을 부여한다.
 
-```powershell
-uv run --locked --env-file dist/SETRON/setron.env python database/reset_demo_db.py --confirm <SETRON_DB_NAME 값>
-```
-
-다른 사용자에게 받은 DB 내보내기 파일(.sql)이 있으면 스키마 대신 그 파일을 빈 DB에서 실행한다. 내보내기 파일에 구조와 자료가 모두 들어 있다. HeidiSQL에서는 빈 DB를 선택한 뒤 파일을 불러와 실행한다(9.2에서 확인).
+| 기능 | 필요한 권한 |
+| --- | --- |
+| 시연 데이터 넣기 | `SELECT, CREATE, DROP, INSERT, REFERENCES` |
+| 데이터 초기화 | `SELECT, DELETE` |
 
 ## 3. 설정 파일
 
@@ -40,20 +42,28 @@ uv run --locked --env-file dist/SETRON/setron.env python database/reset_demo_db.
 | --- | --- |
 | `SETRON_DB_HOST`, `SETRON_DB_PORT` | MySQL 주소와 포트 (보통 `127.0.0.1`, `3306`) |
 | `SETRON_DB_NAME`, `SETRON_DB_USER`, `SETRON_DB_PASSWORD` | SETRON용 DB 이름과 계정 |
-| `SETRON_DB_CONNECT_TIMEOUT` | 접속 대기 초. 비우면 5초 |
+| `SETRON_DB_CONNECT_TIMEOUT` | 접속 대기 초. 항목을 생략하면 5초 |
 | `SETRON_AI_*` | 회사 AI 접속 정보. 있으면 데이터 가져오기 추출과 AI 분석이 회사 AI를 쓰고, 없으면 예제 응답을 쓴다 |
 
 - 한 줄에 `이름=값` 하나. `#`로 시작하는 줄은 주석이다. 비밀번호의 `#`·공백은 그대로 쓴다.
-- 앱은 시작할 때 `setron.env`를 읽으며 이미 Windows 환경변수에 같은 이름이 있으면 그 값을 쓴다. 초기화 도구는 설정 파일에 적힌 DB에 접속한다.
+- 앱과 초기화 도구는 `setron.env`를 읽는다. 같은 이름의 Windows 환경변수가 있으면 환경변수 값이 우선한다. 초기화 도구가 표시하는 대상 DB를 확인한 뒤 진행한다.
 - `setron.env`에는 비밀번호가 들어 있으므로 다른 사람에게 폴더를 넘길 때는 빼고 넘긴다.
 
 ## 4. 실행
 
 1. ZIP을 풀고 `setron.env`에 미리 준비한 로컬 DB의 접속 정보를 입력한다.
-2. 압축을 푼 폴더에서 `init_local_db.bat`을 실행한다. 관리 테이블 13개와 시연 설비 300대·관측 데이터 1,800건, 시연 목표 N(모델 적용 근거가 있는 모델·계열 11쌍, 최신 바로 아래 버전)을 적용한다. 위험 규칙은 넣지 않는다(시연에서 기준·설정 화면으로 등록). 시연 데이터가 적용된 상태에서 다시 실행하면 중복 없이 기존 적용 상태를 확인한다.
+2. 같은 폴더의 `prepare_demo_db.bat` 또는 `SETRON_DB_INIT.exe`를 실행한다. 두 파일의 메뉴와 안내는 같다.
 3. 같은 폴더의 `SETRON.exe`를 실행해 데이터를 조회한다.
 
-스키마만 준비하려면 명령 프롬프트에서 `init_local_db.bat --no-seed`를 실행한다.
+| 선택 | 동작 |
+| --- | --- |
+| 1. 시연 데이터 넣기 | 동봉한 SQL의 설비 300대·관측 1,800건을 포함한 시연 데이터를 넣는다. 기존 관리 테이블은 교체한다 |
+| 2. 데이터 초기화 | 관리 테이블 13개의 구조를 유지하고 모든 데이터를 삭제한다 |
+| 3. 종료 | DB를 변경하지 않고 종료한다 |
+
+기존 관리 테이블을 교체하거나 초기화할 때는 대상 DB와 작업 내용을 표시한 뒤 `Y`를 입력해야 진행한다. Enter·`N`은 취소다. 기존 데이터는 실행 전에 같은 폴더의 `backups`에 저장한다. 빈 DB에 처음 넣을 때는 바로 진행한다. 다른 DB와 관리 대상 밖의 테이블은 변경하지 않는다.
+
+삽입·삭제에 실패하면 화면에 표시된 MySQL 오류와 계정·권한 안내를 확인한다. 관리자에게 대상 DB의 계정 생성 여부와 필요한 권한을 확인하도록 요청한다. SQL 파일만 검사하려면 `SETRON_DB_INIT.exe --validate-dump`를 실행한다. 이 검사는 DB를 변경하지 않는다.
 
 | 상황 | 화면 |
 | --- | --- |

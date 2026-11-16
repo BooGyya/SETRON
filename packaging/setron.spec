@@ -10,15 +10,13 @@ block_cipher = None
 spec_dir = Path(SPECPATH).resolve()
 database_dir = spec_dir.parent / "database"
 gui_script = spec_dir / "run_setron.py"
-init_script = database_dir / "init_local_db.py"
 
 analysis = Analysis(
-    [str(gui_script), str(init_script)],
+    [str(gui_script)],
     pathex=[str(spec_dir.parent / "src")],
     datas=[
         *collect_data_files("setron"),  # ui/assets의 아이콘·폰트
         (str(database_dir / "schema_mysql5619.sql"), "database"),
-        (str(database_dir / "seed.sql"), "database"),
     ],
     # DB 드라이버와 최초 사용 시 불러오는 AI·Excel SDK도 배포 폴더에 포함한다.
     hiddenimports=["pymysql", "openai", "xlwings", *collect_submodules("sqlalchemy.dialects.mysql")],
@@ -27,7 +25,7 @@ analysis = Analysis(
 )
 # 공통 런타임 훅은 유지하고 각 EXE에는 자기 시작 스크립트만 넣는다.
 scripts = {Path(script[1]).resolve(): script for script in analysis.scripts}
-runtime_hooks = [script for path, script in scripts.items() if path not in {gui_script, init_script}]
+runtime_hooks = [script for path, script in scripts.items() if path != gui_script]
 pyz = PYZ(analysis.pure)
 exe = EXE(
     pyz,
@@ -38,12 +36,5 @@ exe = EXE(
     console=False,
     icon=str(spec_dir.parent / "src" / "setron" / "ui" / "assets" / "setron-window-icon.ico"),
 )
-db_init = EXE(
-    pyz,
-    [*runtime_hooks, scripts[init_script]],
-    [],
-    exclude_binaries=True,
-    name="SETRON_DB_INIT",
-    console=True,
-)
-coll = COLLECT(exe, db_init, analysis.binaries, analysis.datas, name="SETRON")
+# DB 도구는 build_windows.ps1이 명시한 dump로 build_demo_db.py에서 별도 생성한다.
+coll = COLLECT(exe, analysis.binaries, analysis.datas, name="SETRON")
