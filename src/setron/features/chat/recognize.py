@@ -125,7 +125,31 @@ def _strip_baseline(conditions, aggregate):
                    unresolved=tuple(u for u in conditions.unresolved if u.rstrip(".,?").casefold() != baseline))
 
 
+_MONTH = re.compile(r"(?<!\d)(1[0-2]|0?[1-9])\s*월")
+
+
+def compared_months(question: str) -> tuple[int, ...]:
+    """'9월이랑 10월 비교'처럼 두 달 이상을 견주는 질문의 달 (11/16). 아니면 빈 튜플."""
+    months = tuple(dict.fromkeys(int(m) for m in _MONTH.findall(question)))
+    words = ("비교", "대비", "vs", "차이", "달라졌", "바뀌었")
+    return months if len(months) >= 2 and any(w in question.casefold() for w in words) else ()
+
+
 def detect_aggregate(question: str) -> tuple[str, ...]:
+    found = _detect_aggregate(question)
+    if found:
+        return found
+    text = question.casefold()
+    if "위험도" in text or "위험 점수" in text or "위험 수준" in text:      # 명세서 '사이트별 위험도 계산' (11/16)
+        by = next((key for key, words in (("line", ("라인별",)), ("model", ("설비군별", "모델별")), ("site", ("사이트별", "사업장별")))
+                   if any(w in text for w in words)), "site")
+        return ("risk", by, "")
+    if compared_months(question) or _has(text, ("추이", "기준일별", "변화 추세", "달마다", "월별 변화")):
+        return ("achievement", "date", "")                   # '평택 추이' · '9월이랑 10월 비교' → 기준일별 달성률
+    return ()
+
+
+def _detect_aggregate(question: str) -> tuple[str, ...]:
     """범용 집계 요청 (무엇을 셀지, 무엇별로, 기준 버전). 아니면 ()."""
     text = _norm(question)
 
