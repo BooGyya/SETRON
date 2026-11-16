@@ -89,7 +89,7 @@ def test_wireframe_lowest_area_full_analysis():
     assert bar.labels[bar.highlight[0]] == "16L"
     assert result.cause and "16L의 C3 통합UI 설비 1대가 v3.52_13에 머물러 있습니다" in result.cause
     assert codes(result, "업그레이드 우선순위 추천") == ["H-003"]
-    line = next(c for c in result.charts if c.title.endswith("(노선도)"))
+    line = next(c for c in result.charts if "달성률 추이" in c.title)   # 진척이 없으면 '(진척이 없어 통일 예측 불가)' (11/16)
     assert line.title.startswith("16L C3 통합UI") and [name for name, _ in line.series][1] == "전체 평균"
 
 

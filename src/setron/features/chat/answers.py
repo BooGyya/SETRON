@@ -453,6 +453,62 @@ def _risky(data: ChatData, entry) -> bool:
     return bool(entry.risk.findings) or getattr(status, "value", status) == "RISK"
 
 
+def _risk_level(request: ChatRequest, data: ChatData, scope: _Scope, by: str, notices: list[str]) -> ChatAnswer:
+    """사업장(라인 · 모델)별 위험도 (명세서 AI 기능 '사이트별 위험도 계산', 11/16).
+
+    위험도 = (위험 후보 설비 + 목표 N보다 2단계 이상 뒤처진 설비) ÷ 판단할 수 있는 설비 × 100.
+    판정은 업그레이드 우선순위와 같다(위험 후보 = 대시보드의 위험 후보 · 등록된 위험 기준, 뒤처진 칸 = 목표 N과의 거리).
+    """
+    assessor = data.assessor or RiskAssessor(data.catalog.releases, ItemCatalog(data.catalog.releases, ()), ())
+    result = prioritize(scope.records, assessor, data.catalog.releases, data.thresholds, scope.base, targets=data.targets)
+    key = {"site": lambda r: r.site or "미지정", "line": lambda r: f"{r.site or ''} {r.line or '미지정'}".strip(),
+           "model": lambda r: r.model_name or "미지정"}[by]
+    dim = {"site": "사업장", "line": "라인", "model": "설비군"}[by]
+    groups: dict[str, dict[str, int]] = {}
+    hot: list[int] = []
+    for entry in result.ranked:
+        steps = max((p.steps_behind for p in entry.positions if p.steps_behind is not None), default=None)
+        risky = _risky(data, entry)
+        g = groups.setdefault(key(entry.record), {"total": 0, "risky": 0, "behind": 0, "unknown": 0})
+        g["total"] += 1
+        if risky:
+            g["risky"] += 1
+        elif steps is not None and steps >= 2:
+            g["behind"] += 1
+        elif steps is None:
+            g["unknown"] += 1
+        if risky or (steps is not None and steps >= 2):
+            hot.append(entry.record.equipment_id)
+    for entry in result.needs_check:
+        g = groups.setdefault(key(entry.record), {"total": 0, "risky": 0, "behind": 0, "unknown": 0})
+        g["total"] += 1
+        g["unknown"] += 1
+
+    def score(g):
+        known = g["total"] - g["unknown"]
+        return None if known <= 0 else round((g["risky"] + g["behind"]) / known * 100, 1)
+
+    ordered = sorted(groups.items(), key=lambda kv: (score(kv[1]) is None, -(score(kv[1]) or 0), kv[0]))
+    if not ordered:
+        return ChatAnswer(request, scope.understood, f"{scope.subject}에는 위험도를 계산할 설비가 없어요.", scope.base,
+                          suggestions=SUGGESTIONS[:3])
+    rows = tuple((name, str(g["total"]), str(g["risky"]), str(g["behind"]), str(g["unknown"]),
+                  "-" if score(g) is None else f"{score(g)}%") for name, g in ordered)
+    table = Table(f"{dim}별 위험도", (dim, "설비 수", "위험 후보", "2단계 이상 뒤처짐", "판단 불가", "위험도"), rows)
+    chart = BarChart(f"{dim}별 위험도 (0~100)", tuple(name for name, _ in ordered),
+                     tuple(score(g) for _, g in ordered), (0,) if score(ordered[0][1]) is not None else ())
+    top, g = ordered[0]
+    has_rules = result.has_rules or any(getattr(v, "value", v) == "RISK" for v in data.risks.values())
+    summary = (f"{scope.subject}에서 위험도가 가장 높은 {dim}은(는) {top}({score(g) if score(g) is not None else '-'}%)이에요. "
+               f"설비 {g['total']}대 중 위험 후보 {g['risky']}대, 목표 N보다 2단계 이상 뒤처진 설비 {g['behind']}대예요.")
+    notes = [*notices, "위험도 = (위험 후보 + 목표 N보다 2단계 이상 뒤처진 설비) ÷ 판단할 수 있는 설비. 업그레이드 우선순위와 같은 판정입니다."]
+    if not has_rules:
+        notes.append("등록된 위험 기준이 없어 목표에서 뒤처진 정도로만 계산했습니다. 위험 기준은 아이템 매니저에서 등록할 수 있어요.")
+    return ChatAnswer(request, scope.understood, summary, scope.base, tables=(table,), charts=(chart,),
+                      notices=tuple(notes), equipment_ids=tuple(hot), title=f"{dim}별 위험도",
+                      suggestions=("업그레이드 우선순위 알려줘", f"{top} 설비 보여줘", *SUGGESTIONS[:1]))
+
+
 def _forecast(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tuple[str, list, list[str]]:
     every = [r for r in scope.all_dates if not r.is_hpa and (scope.base is None or r.base_date <= scope.base)]
     records, where = every, None
@@ -480,7 +536,11 @@ def _forecast(request: ChatRequest, data: ChatData, scope: _Scope, focus) -> tup
     compare = _compare_line(data, scope, whole, line, points)
     if compare:
         series.append(("전체 평균", compare))
-    chart = LineChart(f"{label} 목표 N 달성률 추이 및 통일 예측 (노선도)", tuple(series), "예측은 지금까지의 증가 속도로 그린 참고선입니다.")
+    projected = any(p.projected and p.rate is not None for p in line)
+    title = (f"{label} 목표 N 달성률 추이 및 통일 예측 (노선도)" if projected
+             else f"{label} 목표 N 달성률 추이 (진척이 없어 통일 예측 불가)")
+    chart = LineChart(title, tuple(series), "예측은 지금까지의 증가 속도로 그린 참고선입니다." if projected
+                      else "기준일 사이에 목표 N 달성률이 오르지 않아 예측선을 그리지 않았습니다.")
     return _forecast_text(label, family), [chart], ["통일 예측은 지금까지의 속도로 계산한 참고값입니다."]
 
 
@@ -795,6 +855,8 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
     name = lambda fid: production_area_text(data.family_names.get(fid, str(fid)))
     # 분포 이름: 같은 계열을 여러 설비군이 쓰면 설비군을 붙인다 ('C4 (M-C4 DFB)', 11/12 멘토 피드백 2)
     label = lambda s_: f"{name(s_.family_id)} ({s_.model})" if s_.shared and s_.model else name(s_.family_id)
+    if spec.measure == "risk":
+        return _risk_level(request, data, scope, spec.by if spec.by in ("site", "line", "model") else "site", notices)
     if spec.measure == "baseline":
         family_id, release = agg.baseline_family(spec.baseline, data, found.family_ids, found.group_ids)
         if release is None:
@@ -845,7 +907,14 @@ def aggregate_answer(request: ChatRequest, data: ChatData) -> ChatAnswer:
                                         (dim or "범위", "판단 대수", "기준 이상", "기준 미만", "확인 필요", "최신화율"), rows),),
                           charts=(chart,) if len(rows) > 1 else (), notices=tuple(notices),
                           title=f"{label} 기준 최신화율")
-    items = agg.units(scope.all_dates if by == "date" else scope.records, data, found.family_ids)
+    dated = scope.all_dates
+    if by == "date":                                   # '9월이랑 10월 비교' → 그 달의 기준일만 (11/16)
+        from .recognize import compared_months
+
+        months = compared_months(request.question)
+        if months:
+            dated = [r for r in dated if r.base_date.month in months] or dated
+    items = agg.units(dated if by == "date" else scope.records, data, found.family_ids)
     if not items:
         return ChatAnswer(request, scope.understood, f"{scope.subject}에는 셀 수 있는 설비가 없어요.", scope.base,
                           suggestions=SUGGESTIONS[:3])

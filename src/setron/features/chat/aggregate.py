@@ -23,7 +23,8 @@ from setron.features.aggregation.service import summarize
 from setron.features.query.service import resolve_conditions
 
 MEASURES = {"count": "설비 수", "versions": "버전 종류 수", "fragmentation": "파편화",
-            "achievement": "목표 N 달성률", "baseline": "기준 버전 이상 비율"}
+            "achievement": "목표 N 달성률", "baseline": "기준 버전 이상 비율",
+            "risk": "위험도"}   # 명세서 AI 기능 '사이트별 위험도 계산' (11/16): 위험 후보 + 목표에서 2단계 이상 뒤처짐
 DIMENSIONS = {"site": "사업장", "line": "라인", "model": "모델", "family": "계열", "version": "버전", "pm": "PM",
               "date": "기준일"}
 NO_VERSION = "버전 없음"

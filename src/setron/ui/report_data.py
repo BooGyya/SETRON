@@ -340,8 +340,9 @@ def generate_report(source, request, versions=None):
                 if indices:
                     add(3, table.title, "기존 AI 응답의 표 · 보고서 공통 집계와 별도",
                         tuple(table.columns[i] for i in indices), tuple(tuple(row[i] for i in indices) for row in table.rows), content="ai")
-            for notice in (*answer.issues, *answer.notices):
-                add(3, "AI 주의 사항", notice, content="ai")
+            notices = tuple(dict.fromkeys((*answer.issues, *answer.notices)))
+            if notices:                         # 주의 문장마다 제목을 반복하지 않고 한 항목에 목록으로 (11/16 멘토)
+                add(3, "AI 주의 사항", "\n".join(f"· {notice}" for notice in notices), content="ai")
         add(3, "예측 안내", "참고용 계산이며 완료 약속이 아닙니다. 판단 불가·미관측·목표 미지정은 별도 표시하고 자료가 부족하면 예측을 생략합니다.", content="ai")
     elif "ai" in request.selected_types:
         add(3, "AI 분석 결과 없음", "AI 분석에서 완료한 답변이 없습니다. AI를 다시 호출하거나 답변을 임의로 생성하지 않습니다.", content="ai")

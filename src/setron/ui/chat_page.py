@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 from PySide6.QtCharts import (
+    QHorizontalStackedBarSeries,
+    QCategoryAxis,
     QBarCategoryAxis, QBarSet, QChart, QChartView, QDateTimeAxis, QLineSeries, QStackedBarSeries, QValueAxis,
 )
 from PySide6.QtCore import QDateTime, QEvent, QObject, QPoint, Qt, QTime, QTimer, Signal
@@ -122,49 +124,70 @@ def table_widget(table: Table) -> QTableWidget:
 
 
 def bar_chart(chart: BarChart) -> QChartView:
-    """구역별 달성률 막대. 강조할 막대(가장 낮은 곳 등)는 다른 색으로 쌓아 그린다."""
+    """구역별 달성률 막대. 강조할 막대(가장 낮은 곳 등)는 다른 색으로 쌓아 그린다.
+
+    막대가 많으면(9개 이상) 가로 막대로 그려 이름이 잘리지 않게 하고, 판단할 설비가 없는 항목(값 없음)은 그래프에서
+    빼 숫자 표시를 살린다(표에는 그대로 있다). 11/16 멘토: AI 보고서 그래프가 이상하게 보임.
+    """
+    shown = [(index, label, float(value)) for index, (label, value) in enumerate(zip(chart.labels, chart.values))
+             if value is not None]
+    many = len(shown) > 8
+    order = list(reversed(shown)) if many else shown          # 가로 막대는 아래부터 쌓이므로 첫 항목이 위로 오게
     normal, picked = QBarSet("달성률"), QBarSet("강조")
     normal.setColor(ui_color("#c9a54c"))
     picked.setColor(ui_color("#b23a48"))
-    for index, value in enumerate(chart.values):
-        value = 0.0 if value is None else float(value)
+    for index, _, value in order:
         normal.append(0.0 if index in chart.highlight else value)
         picked.append(value if index in chart.highlight else 0.0)
-    series = QStackedBarSeries()
+    series = QHorizontalStackedBarSeries() if many else QStackedBarSeries()
     series.append(normal)
     series.append(picked)
-    series.setLabelsVisible(all(value is not None for value in chart.values))
+    series.setLabelsVisible(True)
     view = _chart_view(chart.title)
     view.chart().legend().hide()                 # 강조는 색으로 보인다 (범례 '달성률·강조'는 혼란만 준다)
     view.chart().addSeries(series)
-    axis_x = QBarCategoryAxis()
-    axis_x.append(list(chart.labels))
-    axis_y = QValueAxis()
-    axis_y.setRange(0, 100)
-    axis_y.setLabelFormat("%d%%")
-    _attach(view.chart(), series, axis_x, axis_y)
+    axis_names = QBarCategoryAxis()
+    axis_names.append([label for _, label, _ in order])
+    axis_values = QValueAxis()
+    axis_values.setRange(0, 100)
+    axis_values.setLabelFormat("%d%%")
+    if many:
+        view.setMinimumHeight(max(260, 24 * len(order) + 100))
+        _attach(view.chart(), series, axis_values, axis_names)    # 값 축은 아래, 이름 축은 왼쪽
+    else:
+        _attach(view.chart(), series, axis_names, axis_values)
     return view
 
 
 def line_chart(chart: LineChart) -> QChartView:
-    """노선도: 실적은 실선, 예측은 점선(마지막 실적 점에서 이어 그림). 전체 평균은 회색 점선."""
+    """노선도: 실적은 실선, 예측은 점선(마지막 실적 점에서 이어 그림). 전체 평균은 회색 점선.
+
+    가로축은 예측까지 모든 선의 날짜를 담고(11/16 멘토: 통일 예측 그래프에 예측선이 잘려 보임), 눈금은 달 단위로
+    겹치지 않게 찍는다. 보고서는 이 화면 그래프를 그대로 캡처하므로 함께 바로잡힌다.
+    """
     view = _chart_view(chart.title)
-    axis_x, axis_y = QDateTimeAxis(), QValueAxis()
-    axis_x.setFormat("yy.MM")
+    days = sorted({point.day for _, points in chart.series for point in points if point.rate is not None})
+    ticks = _month_ticks(days[0], days[-1]) if days else []
+    origin = ticks[0] if ticks else None
+    axis_x, axis_y = QCategoryAxis(), QValueAxis()
+    axis_x.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
+    for tick in ticks:
+        axis_x.append(tick.strftime("%y.%m"), float((tick - origin).days))
+    if days:
+        axis_x.setRange(0.0, float(max((days[-1] - origin).days, (ticks[-1] - origin).days, 1)))
     axis_y.setRange(0, 100)
     axis_y.setLabelFormat("%d%%")
-    days = sorted({point.day for _, points in chart.series for point in points if point.rate is not None})
-    axis_x.setTickCount(max(2, min(len(days), 8)))   # 기준일 수만큼만 눈금 (같은 달이 겹쳐 보이지 않게)
     colors = (ui_color(PRIMARY), ui_color("#9aa1ad"))
     for index, (name, points) in enumerate(chart.series):
+        base = name.split(" (")[0]                    # 'C3 통합UI (실선 실적 · 점선 예측)' → 'C3 통합UI'
         actual, projected = QLineSeries(), QLineSeries()
-        actual.setName(name)
-        projected.setName(f"{name} · 예측") if index == 0 else None
+        actual.setName(f"{base} 실적" if index == 0 else base)
+        projected.setName(f"{base} 예측")
         last = None
         for point in points:
             if point.rate is None:
                 continue
-            x = QDateTime(point.day, QTime(0, 0)).toMSecsSinceEpoch()
+            x = float((point.day - origin).days)
             if point.projected:
                 if last is not None and projected.count() == 0:
                     projected.append(*last)
@@ -186,6 +209,23 @@ def line_chart(chart: LineChart) -> QChartView:
                 view.chart().addSeries(series)
                 _attach(view.chart(), series, axis_x, axis_y)
     return view
+
+
+def _month_ticks(first, last, limit=8):
+    """첫날이 속한 달부터 마지막 날까지 매달 1일 눈금. 많으면 2 · 3 · 6개월 간격으로 줄여 최대 limit개."""
+    from datetime import date
+
+    months = (last.year - first.year) * 12 + last.month - first.month + 1
+    step = next((n for n in (1, 2, 3, 6, 12) if -(-months // n) <= limit), 12)
+    year, month, ticks = first.year, first.month, []
+    while True:
+        tick = date(year, month, 1)
+        ticks.append(tick)
+        if tick > last or len(ticks) > limit + 1:
+            break
+        month += step
+        year, month = year + (month - 1) // 12, (month - 1) % 12 + 1
+    return ticks
 
 
 def _chart_view(title: str) -> QChartView:
@@ -804,9 +844,9 @@ class ChatPage(QWidget):
             dialog = ReportDialog(parts, title=f"SETRON 표준화 보고서 {month}".strip(), parent=self)
         else:
             index = self.cards.index(card)
-            previous = [ReportPart(c.answer, tuple(chart_png(v) for v in c.charts)) for c in self.cards[:index]
+            previous = [ReportPart(c.answer, tuple(chart_png(v, (900, max(420, v.minimumHeight()))) for v in c.charts)) for c in self.cards[:index]
                         if c.answer.request.understood and not c.answer.issues and not c.is_stale]
-            dialog = ReportDialog([ReportPart(card.answer, tuple(chart_png(v) for v in card.charts))],
+            dialog = ReportDialog([ReportPart(card.answer, tuple(chart_png(v, (900, max(420, v.minimumHeight()))) for v in card.charts))],
                                   previous=previous, parent=self)
         return dialog
 
@@ -920,7 +960,7 @@ class ChatPage(QWidget):
     def _chart_image(self, chart):
         view = self._chart(chart)
         try:
-            return chart_png(view, (900, 420))
+            return chart_png(view, (900, max(420, view.minimumHeight())))   # 가로 막대가 많으면 그만큼 높게
         finally:
             view.deleteLater()
 

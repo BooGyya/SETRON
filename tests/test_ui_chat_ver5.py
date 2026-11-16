@@ -359,8 +359,8 @@ def test_chart_highlight_and_projected_line_are_driven_by_contract(ui):
     from setron.ui.chat_page import line_chart
     chart = ui(bar_chart(BarChart("강조", ("A", "B", "C"), (25, 50, None), (0,))))
     normal, highlighted = chart.chart().series()[0].barSets()
-    assert highlighted.at(0) == 25 and normal.at(0) == 0 and normal.at(1) == 50
-    assert not chart.chart().series()[0].isLabelsVisible()    # None을 0% 숫자로 표시하지 않는다.
+    assert normal.count() == 2 and highlighted.at(0) == 25 and normal.at(0) == 0 and normal.at(1) == 50
+    assert chart.chart().series()[0].isLabelsVisible()        # None(C)은 0% 막대로 그리지 않고 빼므로 숫자를 보여도 된다 (11/16)
     line = ui(line_chart(LineChart("실적·예측", (("노선", (
         LinePoint(date(2026, 9, 1), 30), LinePoint(date(2026, 10, 1), 50),
         LinePoint(date(2026, 11, 1), 80, projected=True),
