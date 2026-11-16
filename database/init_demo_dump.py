@@ -259,10 +259,11 @@ def prepare(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = N
             backup = None
             old_rows, old_definitions = None, None
             if objects:
-                message = (f"대상: {config.host}:{config.port} / DB: {config.database}\n\n"
-                           "기존 데이터가 있습니다. 덮어쓰시겠습니까?\n"
-                           "관리 테이블 13개의 데이터가 모두 교체됩니다.\n"
-                           "진행하면 먼저 프로그램 폴더의 backups에 기존 DB를 SQL로 백업합니다.")
+                message = ("[시연 데이터 삽입]\n"
+                           f"대상: {config.host}:{config.port} / DB: {config.database}\n"
+                           "관리 테이블 13개의 데이터를 모두 교체합니다.\n"
+                           f"백업 폴더: {folder / 'backups'}\n\n"
+                           "기존 데이터를 덮어쓰시겠습니까?")
                 if confirm is None or not confirm(message):
                     return SetupResult(False)
                 try:
@@ -362,11 +363,12 @@ def reset_data(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None 
             if set(objects) != set(TABLE_NAMES):
                 raise SetupError("관리 테이블 13개가 없어 데이터 초기화를 중단했습니다. 아무것도 변경하지 않았습니다.")
             _check_reset_tables(cursor, config)
-            message = (f"대상: {config.host}:{config.port} / DB: {config.database}\n\n"
-                       "저장된 데이터를 모두 초기화하시겠습니까?\n"
-                       "설비·현황·릴리즈·Item·위험 지정·설정 등 관리 테이블 13개의 모든 행이 삭제됩니다.\n"
-                       "테이블 구조는 유지하며 시연 데이터는 넣지 않습니다.\n"
-                       "진행하면 먼저 프로그램 폴더의 backups에 기존 DB를 SQL로 백업합니다.")
+            message = ("[데이터 초기화]\n"
+                       f"대상: {config.host}:{config.port} / DB: {config.database}\n"
+                       "관리 테이블 13개의 모든 데이터를 삭제합니다.\n"
+                       "테이블 구조는 유지합니다.\n"
+                       f"백업 폴더: {folder / 'backups'}\n\n"
+                       "모든 데이터를 삭제하시겠습니까?")
             if confirm is None or not confirm(message):
                 return SetupResult(False)
             try:
@@ -395,38 +397,140 @@ def load_config(folder: Path | None = None) -> DatabaseConfig:
     return DatabaseConfig.from_env(values)
 
 
+def _permission_guidance(config: DatabaseConfig | None, mode: str) -> str:
+    """계정 권한은 자동 변경하지 않고 해당 DB에 한정한 확인·설정 방법을 안내한다."""
+    target = (f"대상: {config.host}:{config.port} / DB: {config.database} / 계정: {config.username}"
+              if config is not None else "설정: 실행 파일 옆 setron.env")
+    permissions = "SELECT, DELETE" if mode == "reset" else "SELECT, CREATE, DROP, INSERT, REFERENCES"
+    return ("\n\n[계정·권한 확인]\n"
+            f"{target}\n"
+            "setron.env의 계정·비밀번호·포트를 확인하세요.\n"
+            "새 MySQL에서는 계정을 먼저 생성하세요.\n"
+            "관리자 확인: SHOW GRANTS FOR '계정명'@'접속호스트';\n"
+            f"필요 권한: {permissions}\n"
+            "부족한 권한은 대상 DB에만 GRANT로 설정하세요.")
+
+
+def _mysql_failure(error: BaseException) -> str:
+    """감싼 DB 예외에서도 코드만 읽는다. 원문 SQL·비밀번호가 있는 오류 원문은 출력하지 않는다."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, pymysql.MySQLError):
+            code = error.args[0] if error.args and isinstance(error.args[0], int) else None
+            reason = {
+                1045: "MySQL 로그인에 실패했습니다. 계정·비밀번호와 접속 호스트를 확인하세요.",
+                1044: "지정한 DB에 접근할 권한이 없습니다. 대상 DB의 계정 권한을 확인하세요.",
+                1142: "이 작업의 MySQL 명령 실행 권한이 부족합니다.",
+                1143: "이 작업의 MySQL 컬럼 접근 권한이 부족합니다.",
+                1227: "이 작업에 필요한 MySQL 권한이 부족합니다.",
+                1049: "지정한 DB가 없습니다. setron.env의 DB 이름과 최초 DB 준비 상태를 확인하세요.",
+                2002: "이 PC의 MySQL에 연결할 수 없습니다. MySQL 서비스와 포트를 확인하세요.",
+                2003: "이 PC의 MySQL에 연결할 수 없습니다. MySQL 서비스와 포트를 확인하세요.",
+                2006: "MySQL 연결이 끊겼습니다. 서버 상태와 표시된 백업·복원 결과를 확인하세요.",
+                2013: "MySQL 응답 도중 연결이 끊겼습니다. 서버 상태와 표시된 백업·복원 결과를 확인하세요.",
+            }.get(code, "MySQL 작업에 실패했습니다. 서버 상태와 계정 권한을 확인하세요.")
+            return f"MySQL 오류 코드: {code if code is not None else '확인 불가'}\n{reason}"
+        error = error.__cause__ if error.__cause__ is not None else error.__context__
+    return ""
+
+
 def run(*, confirm: Callable[[str], bool] | None = None, mode: str = "import") -> tuple[int, str]:
+    config = None
+
+    def failed(message: str, error: BaseException) -> tuple[int, str]:
+        detail = _mysql_failure(error)
+        return 1, message + ("\n" + detail if detail else "") + _permission_guidance(config, mode)
+
     try:
         if mode not in {"import", "reset"}:
             return 2, "지원하지 않는 DB 작업입니다."
-        result = (reset_data if mode == "reset" else prepare)(load_config(), confirm=confirm)
+        config = load_config()
+        result = (reset_data if mode == "reset" else prepare)(config, confirm=confirm)
         if not result.applied:
-            return 3, "초기화를 취소했습니다. 기존 테이블과 데이터는 변경하지 않았습니다."
-        suffix = f"\n기존 DB 백업: {result.backup}" if result.backup else ""
+            cancelled = "데이터 초기화를 취소했습니다." if mode == "reset" else "시연 데이터 삽입을 취소했습니다."
+            return 3, cancelled + "\nDB를 변경하지 않았습니다."
+        suffix = f"\n백업: {result.backup}" if result.backup else ""
     except (SetupError, DumpFormatError) as error:
-        return 1, str(error)
-    except DatabaseConfigError:
-        return 1, "DB 연결 설정을 확인할 수 없습니다. setron.env를 확인해 주세요."
-    except (OSError, UnicodeError, ValueError):
-        return 1, "DB 설정·SQL 데이터·관리 스키마를 읽거나 검증하지 못했습니다. 기존 데이터를 삭제하지 않았습니다."
+        return failed(str(error), error)
+    except DatabaseConfigError as error:
+        return failed("DB 연결 설정을 확인할 수 없습니다. setron.env를 확인해 주세요.", error)
+    except (OSError, UnicodeError, ValueError) as error:
+        return failed("DB 설정·SQL 데이터·관리 스키마를 읽거나 검증하지 못했습니다. 기존 데이터를 삭제하지 않았습니다.", error)
     except pymysql.MySQLError as error:
-        code = error.args[0]
-        if code in (2002, 2003):
-            return 1, "이 PC의 MySQL에 연결할 수 없습니다. MySQL을 시작한 뒤 다시 실행해 주세요."
-        if code in (1044, 1045, 1142):
-            return 1, "DB 계정 또는 권한을 확인해 주세요. 테이블 조회·생성·삭제·입력 권한이 필요합니다."
-        return 1, f"시연 DB 준비를 중단했습니다. MySQL 오류 코드: {code}"
+        action = "데이터 초기화" if mode == "reset" else "시연 데이터 삽입"
+        return failed(f"{action} 작업을 중단했습니다.", error)
     if mode == "reset":
-        return 0, f"데이터 초기화가 끝났습니다. 관리 테이블 13개의 구조를 유지하고 모든 행이 0개인지 확인했습니다.{suffix}"
-    return 0, f"시연 DB 준비가 끝났습니다. 관리 테이블 13개와 SQL의 행 수를 확인했습니다.\nSETRON.exe를 실행해 주세요.{suffix}"
+        return 0, f"데이터 초기화 완료\n검증: 테이블 13개 유지 · 모든 데이터 0행{suffix}"
+    return 0, f"시연 데이터 삽입 완료\n검증: 테이블 13개 · SQL 행 수 일치{suffix}"
+
+
+def _configure_console_output():
+    """동결 EXE도 배치의 UTF-8 코드 페이지와 같은 인코딩으로 안내한다."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
+
+
+def _discard_pending_console_input():
+    """choice 메뉴에서 남은 Enter가 확인 질문을 자동 취소하지 않도록 비운다."""
+    if os.name == "nt" and sys.stdin is not None and sys.stdin.isatty():
+        import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getwch()
+
+
+def _console_confirm(message: str) -> bool:
+    _discard_pending_console_input()
+    print(message, flush=True)
+    try:
+        answer = input("진행: Y / 취소: Enter·N [기본 N]: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer.strip().casefold() in {"y", "yes", "예"}
+
+
+def _console_menu() -> int:
+    print("SETRON DB 관리 · Windows MySQL")
+    print("설정: 실행 파일 옆 setron.env\n")
+    print("1. 시연 데이터 넣기")
+    print("2. 데이터 초기화 (모든 데이터 삭제 · 테이블 유지)")
+    print("3. 종료\n")
+    while True:
+        try:
+            choice = input("선택 [1/2/3] 후 Enter: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            choice = "3"
+        if choice == "3":
+            print("종료: DB를 변경하지 않았습니다.")
+            return 0
+        if choice in {"1", "2"}:
+            break
+        print("1, 2, 3 중 하나를 입력하세요.")
+    mode = "import" if choice == "1" else "reset"
+    code, message = run(confirm=_console_confirm, mode=mode)
+    print(message)
+    try:
+        input("Enter 키를 누르면 창을 닫습니다: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+    return code
 
 
 def main() -> int:
+    _configure_console_output()
     options = sys.argv[1:]
-    allowed = {"--import-demo", "--reset-data", "--quiet", "--validate-dump"}
+    allowed = {"--import-demo", "--reset-data", "--quiet", "--console", "--validate-dump"}
     actions = {"--import-demo", "--reset-data", "--validate-dump"}.intersection(options)
-    if any(option not in allowed for option in options) or len(options) != len(set(options)) or len(actions) > 1:
-        print("--import-demo, --reset-data, --validate-dump 중 하나를 선택하세요. --quiet를 함께 사용할 수 있습니다.")
+    if (any(option not in allowed for option in options) or len(options) != len(set(options)) or len(actions) > 1
+            or {"--console", "--quiet"}.issubset(options)):
+        print("--import-demo, --reset-data, --validate-dump 중 하나를 선택하세요. --console 또는 --quiet를 함께 사용할 수 있습니다.")
         return 2
     if "--validate-dump" in options:
         try:
@@ -439,9 +543,15 @@ def main() -> int:
         print(f"SQL 검증 완료: {path}\n관리 테이블 {len(rows)}개 · 설비 {len(rows['equipment'])}대 · "
               f"관측 {len(rows['equipment_snapshot'])}개 · 전체 {sum(map(len, rows.values()))}행\nDB에는 접속하지 않았습니다.")
         return 0
+    if not actions and "--quiet" not in options:
+        return _console_menu()
     mode = "reset" if "--reset-data" in options else "import"
     if "--quiet" in options:
         code, message = run(mode=mode)  # callback이 없으므로 기존 DB를 덮어쓰거나 비우지 않는다.
+        print(message)
+        return code
+    if "--console" in options:
+        code, message = run(confirm=_console_confirm, mode=mode)
         print(message)
         return code
     import tkinter as tk

@@ -282,6 +282,7 @@ def test_approved_replacement_has_verified_backup_before_first_drop(initializer,
     assert initializer.read_dataset(result.backup) == old
     assert db.rows == initializer.read_dataset(source)
     assert "chosen_db" in confirmations[0] and "3306" in confirmations[0] and "덮어쓰시겠습니까?" in confirmations[0]
+    assert "13개" in confirmations[0] and str(tmp_path / "backups") in confirmations[0]
     drops = [sql for sql, _ in db.log if sql.startswith("DROP TABLE")]
     assert drops == [f"DROP TABLE IF EXISTS `{table}`" for table in reversed(TABLE_NAMES)]
     assert db.selected == [config.database] and connections[0].get("client_flag", 0) == 0
@@ -407,8 +408,9 @@ def test_reset_does_not_read_demo_sql_and_preserves_all_table_objects(initialize
     assert db.objects == objects and all(not rows for rows in db.rows.values())
     mutations = destructive(db)
     assert mutations == [f"DELETE FROM `{table}`" for table in reversed(TABLE_NAMES)]
-    assert "설정" in confirmations[0] and "13개" in confirmations[0] and "구조는 유지" in confirmations[0]
+    assert "데이터 초기화" in confirmations[0] and "13개" in confirmations[0] and "구조는 유지" in confirmations[0]
     assert "chosen_db" in confirmations[0] and "3306" in confirmations[0]
+    assert "모든 데이터" in confirmations[0] and str(tmp_path / "backups") in confirmations[0]
     assert [event for event, _ in db.log if event in {"BEGIN", "COMMIT"}] == ["COMMIT", "BEGIN", "COMMIT"]
     assert db.foreign_key_checks == 1
 
