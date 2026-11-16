@@ -56,6 +56,17 @@ _INDEX = {re.sub(r"\s+", "", k).casefold(): v for k, v in _ALIASES.items()}
 _RESOLVE_INDEX = {re.sub(r"\s+", "", k).casefold() for k in RESOLVE_BY_VERSION}
 
 
+def group_key(name: str | None) -> str:
+    """설비군 이름을 표기 차이 없이 비교하는 키 (최종 멘토링 11-16: '설비군 이름 그대로').
+
+    'C4(DFB)' · 'C4 DFB' · 'M-C4(DFB)' · 'M-C4 DFB'는 같은 설비군이다. 앞의 'M-', 공백, 괄호, '-' · '_' · '/'와
+    대소문자를 무시한다. '+'처럼 뜻이 있는 글자는 남긴다 ('M-C4'와 'M-C4+'는 다르다).
+    """
+    text = (name or "").strip().casefold()
+    text = re.sub(r"^m\s*-\s*", "", text)
+    return re.sub(r"[\s()\[\]\-_/]+", "", text)
+
+
 def resolve_model_text(raw: str | None, version_raw: str | None = None):
     """현황표 설비군 글자를 등록 모델명으로 푼다.
 

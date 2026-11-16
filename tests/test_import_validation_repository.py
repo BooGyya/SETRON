@@ -330,7 +330,9 @@ def test_equal_family_names_are_resolved_within_each_registered_models_owner_sco
 
 @pytest.mark.parametrize("model", [None, "   "])
 def test_db_connected_release_requires_model_without_changing_unconnected_draft_policy(database, model):
-    """DB 저장할 릴리즈의 모델 공란을 차단하고 모델 자료가 미연결인 기존 초안 규칙은 유지한다.
+    """DB 저장할 릴리즈의 모델 공란은 계열을 정할 수 없을 때만 차단하고, 모델 자료가 미연결인 기존 초안 규칙은 유지한다.
+
+    최종 멘토링(11-16): 릴리즈노트는 SW 계열이 하나로 정해지면 모델명이 없어도 된다.
 
     param
     - database: 등록 모델 자료를 조회할 임시 SQLite DB.
@@ -340,7 +342,9 @@ def test_db_connected_release_requires_model_without_changing_unconnected_draft_
     source = draft(row(model_name=model, content="합성 Item"), kind=ExtractKind.RELEASE_NOTE)
     assert not has_errors(validate(source))
     service = ImportValidationService(storage)
-    issues = service.validate((source,))
+    assert not has_errors(service.validate((source,)))          # 계열 O2가 정해진다
+    unknown = draft(row(model_name=model, family_name="없는 계열", content="합성 Item"), kind=ExtractKind.RELEASE_NOTE)
+    issues = service.validate((unknown,))
     assert any(issue.code == "MODEL_REQUIRED" and issue.field == "model_name" for issue in issues)
     with pytest.raises(ImportBlockedError):
-        service.prepare((source,), "release-without-model")
+        service.prepare((unknown,), "release-without-model")

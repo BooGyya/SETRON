@@ -28,8 +28,8 @@ from threading import Lock
 from setron.features.ai.schemas import ExtractKind
 from setron.features.data_admin.service import WORKBOOK_KEY, with_workbook
 from setron.features.reference_data import (
-    FOUNDRY_FAMILY_MODELS, FOUNDRY_SUFFIX, MODEL_CATEGORIES as _REFERENCE_CATEGORIES, area_of, resolve_model_text,
-    strip_foundry,
+    FOUNDRY_FAMILY_MODELS, FOUNDRY_SUFFIX, MODEL_CATEGORIES as _REFERENCE_CATEGORIES, area_of, group_key,
+    resolve_model_text, strip_foundry,
 )
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.schemas import PmInput, SnapshotInput, SoftwareInput
@@ -568,7 +568,8 @@ class DatabaseImportSaver:
         for row in rows:
             version = row.values.get("version_raw")
             _require(bool(version), f"{_where(row)}: 릴리즈 버전이 필요합니다.")
-            _require(bool(row.values.get("family_name")),
+            # 검증에서 계열을 정했으면(family_id) SW 계열 칸은 비어도 된다 (최종 멘토링 11-16)
+            _require(bool(row.values.get("family_name")) or row.family_id is not None,
                      f"{_where(row)}: SW 계열이 없어 릴리즈를 연결할 수 없습니다. 검토 화면에서 SW 계열을 입력해 주세요.")
             model = self._model(tx, row.values, row)
             family = self._family(tx, model, row.values, row)
@@ -655,12 +656,17 @@ class DatabaseImportSaver:
     def _model(self, tx, values: Mapping[str, Any], row: SaveRow) -> dict:
         from setron.features.hierarchy import category_labels, model_aliases
         raw = (values.get("model_name") or "").strip()
+        groups = self.repository.rows(tx, "equipment_group")
+        if not raw and row.family_id is not None:
+            # 릴리즈노트는 검증에서 정한 계열의 관리 모델을 쓴다 — 모델명 칸이 비어도 된다 (최종 멘토링 11-16)
+            identifier(row.family_id, "family_id")
+            family = tx.get("version_family", {"family_id": row.family_id})
+            return next(group for group in groups if group["group_id"] == family["group_id"])
         name = MODEL_ALIASES.get(raw, raw)
         alias = resolve_model_text(raw, values.get("version_raw"))
         if alias is not None:
             name = alias[0]          # 번역표(멘토 확정 분류표)의 표기는 등록 모델명으로 푼다
         _require(bool(name), f"{_where(row)}: 모델명이 필요합니다.")
-        groups = self.repository.rows(tx, "equipment_group")
         matches = [group for group in groups if group["group_name"].casefold() == raw.casefold()]
         if not matches:
             aliases = {alias.casefold(): group_id for alias, group_id in model_aliases(tx).items()}
@@ -671,6 +677,11 @@ class DatabaseImportSaver:
         labels = category_labels(tx)
         category = next((code for code, label in labels.items() if label.casefold() == category_raw.casefold()),
                         CATEGORIES.get(category_raw.casefold(), category_raw))
+        if not matches:
+            # 표기만 다른 등록 설비군 ('C4(DFB)' ↔ 'M-C4 DFB', 최종 멘토링 11-16). 검증과 같은 규칙.
+            loose = group_key(raw)
+            matches = [group for group in groups if loose and group_key(group["group_name"]) == loose]
+            matches = matches if len(matches) == 1 else []
         if category_raw:
             matches = [group for group in matches if group["category"] == category]
         _require(len(matches) == 1, f"{_where(row)}: 모델 '{raw}'({category_raw})에 대응하는 등록 모델이 없거나 여러 개입니다.")
@@ -692,6 +703,14 @@ class DatabaseImportSaver:
         - StorageValidationError: UI·소유 범위·계열명·명시 ID가 불일치하거나 후보가 여러 개인 경우.
         """
         name = (values.get("family_name") or "").strip()
+        if not name and row.family_id is not None:
+            # SW 계열 칸이 비어도 검증에서 정한 계열을 쓴다 (최종 멘토링 11-16: SW 계열 필수 아님). 소유 범위는 다시 확인.
+            identifier(row.family_id, "family_id")
+            family = tx.get("version_family", {"family_id": row.family_id})
+            owners = {model["group_id"]} | ({model["parent_group_id"]} if model.get("parent_group_id") else set())
+            _require(family["group_id"] in owners,
+                     f"{_where(row)}: 검토한 계열이 모델 '{model['group_name']}'의 계열이 아닙니다.")
+            return family
         _require(bool(name), f"{_where(row)}: SW 계열이 필요합니다.")
         ui_raw = values.get("ui_type")
         ui = UI_TYPES.get((ui_raw or "").replace(" ", "").casefold())
