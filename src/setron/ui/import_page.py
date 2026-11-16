@@ -11,8 +11,10 @@ import json
 import re
 import uuid
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QFontMetrics, QPainter, QPen
+from PySide6.QtCore import (
+    QAbstractTableModel, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QRectF, Qt, QTimer, Signal,
+)
+from PySide6.QtGui import QFontMetrics, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLineEdit, QSizePolicy,
     QMenu, QScrollArea, QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView, QVBoxLayout, QWidget,
@@ -47,6 +49,8 @@ from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.release_import_review import choose_release_reviews
 from setron.ui.import_delete import ImportDeletePage
 from setron.features.excel_import.comparison import ComparisonScopeError, compare_import
+from setron.features.excel_import.bulk_edit import apply_edits, parse_clipboard, paste_plan, replace_plan
+from setron.ui.import_bulk_edit import BulkEditKeys, FindReplaceDialog, clipboard_text, set_clipboard_text
 from setron.ui.import_widgets import ComparisonCard, PeriodDateField, ImportComparison, ImportSteps, ImportTabs, Toast, import_combo_style, picture
 from setron.ui.import_dialogs import ImportConfirmDialog, ImportProgressDialog
 from setron.ui.import_tasks import discover_workbooks, read_workbook
@@ -135,6 +139,19 @@ class _ReviewRowModel(ReadTableModel):
         super().__init__(headings)
         self.text_colors, self.backgrounds, self.tips, self.edit_values, self.errors = {}, {}, {}, {}, set()
         self.editor = None
+        self.preview = {}   # 여러 칸을 고르고 입력하는 동안 다른 칸에 미리 보이는 글자 {(줄, 열): 글자}
+
+    def set_preview(self, cells, text):
+        """여러 칸을 고르고 입력하는 동안, 함께 바뀔 칸에 입력 중인 글자를 미리 보인다 (11-16)."""
+        old = set(self.preview)
+        self.preview = {cell: text for cell in cells}
+        for r, c in old | set(self.preview):
+            index = self.index(r, c)
+            self.dataChanged.emit(index, index)
+
+    def clear_preview(self):
+        if self.preview:
+            self.set_preview((), "")
 
     def flags(self, index):
         flags = super().flags(index)
@@ -145,6 +162,10 @@ class _ReviewRowModel(ReadTableModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid():
             key = (index.row(), index.column())
+            if key in self.preview and role == Qt.ItemDataRole.DisplayRole:
+                return self.preview[key]
+            if key in self.preview and role == Qt.ItemDataRole.ForegroundRole:
+                return ui_color(PRIMARY)
             if role == Qt.ItemDataRole.EditRole:
                 return self.edit_values.get(key, "")
             if role == Qt.ItemDataRole.ToolTipRole and key in self.tips:
@@ -168,22 +189,64 @@ class _ReviewRowModel(ReadTableModel):
 
 
 class _ReviewCellDelegate(QStyledItemDelegate):
-    """오류 칸에 빨간 테두리를 그린다. 편집은 Qt 기본 입력칸을 쓴다."""
+    """오류 칸에 빨간 테두리를 그린다. 편집은 Qt 기본 입력칸을 쓴다.
+
+    고른 칸은 파란 테두리로 표시하고, 노란(고친 칸) · 빨간(오류) 칸 위에는 옅은 파란색을 덧칠해 색 칸에서도
+    선택이 보이게 한다 (최종 멘토링 11-16). 같은 열의 여러 칸을 고르고 입력하면 다른 칸에도 입력 중인 글자가 보인다.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.closeEditor.connect(lambda *_: QTimer.singleShot(0, self._clear_preview))
+
+    def _clear_preview(self):
+        model = self.parent().model() if self.parent() is not None else None
+        if isinstance(model, _ReviewRowModel):
+            model.clear_preview()
+
+    def _peers(self, index):
+        """입력하는 칸과 같은 열에서 함께 고른 다른 칸 (줄, 열)."""
+        view = self.parent()
+        selection = view.selectionModel() if view is not None else None
+        if selection is None:
+            return []
+        return sorted({(i.row(), i.column()) for i in selection.selectedIndexes()
+                       if i.column() == index.column() and i.row() != index.row()
+                       and (i.row(), i.column()) in getattr(index.model(), "edit_values", {})})
+
+    def createEditor(self, parent, option, index):
+        editor = super().createEditor(parent, option, index)
+        peers = self._peers(index)
+        if peers and isinstance(editor, QLineEdit):
+            model = index.model()
+            editor.setPlaceholderText(f"고른 {len(peers) + 1}칸에 함께 입력")
+            editor.setToolTip(f"입력한 값이 이 열에서 고른 {len(peers) + 1}칸 모두에 들어갑니다. Esc로 취소합니다.")
+            editor.setStyleSheet(f"QLineEdit {{border:2px solid {PRIMARY};background:white;}}")
+            editor.textEdited.connect(lambda text: model.set_preview(peers, text))
+        return editor
 
     def paint(self, painter, option, index):
         background = index.data(Qt.ItemDataRole.BackgroundRole)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
         if background is not None:
             # 표 스타일시트(::item)가 모델 배경색을 덮으므로 고친 칸 배경은 직접 칠한다.
-            # 고른 행 안에서도 노란 배경이 보이게 선택 색은 칠하지 않는다.
             painter.fillRect(option.rect, background)
             option = QStyleOptionViewItem(option)
             option.state &= ~QStyle.StateFlag.State_Selected
+            if selected:   # 색 칸에서도 선택이 보이게 옅은 파란색을 덧칠한다
+                tint = ui_color(PRIMARY)
+                tint.setAlpha(46)
+                painter.fillRect(option.rect, tint)
         super().paint(painter, option, index)
-        if index.data(ERROR_ROLE):
-            painter.save()
-            painter.setPen(QPen(ui_color(TONES["danger"][2]), 2))
+        painter.save()
+        if selected:
+            painter.setPen(QPen(ui_color(PRIMARY), 2))
             painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
-            painter.restore()
+        if index.data(ERROR_ROLE):
+            painter.setPen(QPen(ui_color(TONES["danger"][2]), 2))
+            inset = 4 if selected else 1
+            painter.drawRect(option.rect.adjusted(inset, inset, -inset - 1, -inset - 1))
+        painter.restore()
 
 
 class _IssueModel(ReadTableModel):
@@ -394,6 +457,8 @@ class ImportPage(QWidget):
         self.workbook_id = None
         self.draft, self.issues, self.selected_row_id = None, (), None
         self.reviewed_issues = set()
+        self._undo_stack, self._redo_stack, self._history_base, self._restoring = [], [], None, False
+        self._keep_cells = ()   # 여러 칸을 바꾼 뒤 다시 그려도 고른 칸을 그대로 고른다 [(행 ID, 열)]
         self.state, self.generation, self.request_id, self.receipt = "idle", 0, None, None
         self.excel_request = ReadRequest(self)
         self.excel_request.completed.connect(self._excel_completed)
@@ -617,7 +682,12 @@ class ImportPage(QWidget):
         self.row_model = _ReviewRowModel(("행", "상태"))
         self.row_model.editor = self._table_edit
         self.row_table = _import_table(self.row_model, "추출 행 목록", (64, 120))
-        self.row_table.setEditTriggers(QTableView.EditTrigger.DoubleClicked | QTableView.EditTrigger.EditKeyPressed)
+        self.row_table.setEditTriggers(QTableView.EditTrigger.DoubleClicked | QTableView.EditTrigger.EditKeyPressed
+                                       | QTableView.EditTrigger.AnyKeyPressed)
+        # 여러 칸을 골라 한 번에 바꾼다 (최종 멘토링 11-16): 드래그 · Shift · Ctrl로 고르고 값을 입력 · Ctrl+V · Delete
+        self.row_table.setSelectionBehavior(QTableView.SelectionBehavior.SelectItems)
+        self.row_table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
+        self.bulk_keys = BulkEditKeys(self.row_table, paste=self.paste_cells, copy=self.copy_cells, clear=self.clear_cells)
         self.row_table.setItemDelegate(_ReviewCellDelegate(self.row_table))
         self.row_table.setItemDelegateForColumn(1, _BadgeDelegate(_row_state_tone, self.row_table))
         self.row_table.clicked.connect(lambda index: self.select_row(self.row_model.ids[index.row()]))
@@ -632,9 +702,37 @@ class ImportPage(QWidget):
         self.suggestion_button.hide()
         self.revert_button.clicked.connect(self.revert_selected)
         self.exclude_button.clicked.connect(self.toggle_excluded)
-        for widget in (self.suggestion_button, self.revert_button, self.exclude_button):
+        self.replace_button = button("찾아 바꾸기")
+        self.replace_button.setToolTip("한 항목에서 찾을 글자를 바꿀 글자로 한 번에 바꿉니다 (예: 설비 호기 · 모델명). "
+                                       "여러 칸을 골라 값을 입력하거나 Ctrl+V로 붙여 넣어도 한 번에 바뀝니다.")
+        self.replace_button.clicked.connect(self.open_find_replace)
+        # 검토 표 수정 되돌리기 · 다시 실행 (데이터 관리와 같은 아이콘 · 단축키, 11-16)
+        self.undo_button, self.redo_button = button("", asset="undo.svg"), button("", asset="redo.svg")
+        for control, name, tip, slot in (
+                (self.undo_button, "되돌리기", "되돌리기 (Ctrl+Z) · 검토 표에서 바로 앞에 고친 단계 하나를 되돌립니다", self.undo),
+                (self.redo_button, "다시 실행", "다시 실행 (Ctrl+Y) · 되돌린 단계를 다시 적용합니다", self.redo)):
+            control.setText("")
+            control.setAccessibleName(name)
+            control.setToolTip(tip)
+            control.setFixedWidth(44)
+            control.setEnabled(False)
+            control.clicked.connect(slot)
+        for keys, slot in ((QKeySequence.StandardKey.Undo, self.undo), (QKeySequence.StandardKey.Redo, self.redo),
+                           (QKeySequence("Ctrl+Shift+Z"), self.redo)):
+            shortcut = QShortcut(QKeySequence(keys), self.row_table)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(slot)
+        history = QWidget()
+        history_row = QHBoxLayout(history)
+        history_row.setContentsMargins(0, 0, 0, 0)
+        history_row.setSpacing(8)
+        history_row.addWidget(self.undo_button)
+        history_row.addWidget(self.redo_button)
+        for widget in (self.suggestion_button, self.revert_button, self.exclude_button, self.replace_button,
+                       self.undo_button, self.redo_button):
             widget.setFixedHeight(40)
-        self.row_actions = _WrapRow([self.suggestion_button, self.revert_button, self.exclude_button], 190)
+        self.row_actions = _WrapRow([history, self.suggestion_button, self.revert_button, self.exclude_button,
+                                     self.replace_button], 190)
         review.body.addWidget(self.row_actions)
         review.body.addWidget(self.row_table)
         self.row_empty = label("", color=SECONDARY, wrap=True)
@@ -1037,14 +1135,19 @@ class ImportPage(QWidget):
                         edit_values[line, column] = ""
         self.row_model.text_colors, self.row_model.backgrounds = colors, backgrounds
         self.row_model.tips, self.row_model.edit_values, self.row_model.errors = tips, edit_values, error_cells
+        self.row_model.preview = {}   # 다시 그리면 실제 값만 보인다
         self.row_model.set_rows(rows, ids)
         _fit(self.row_table)
         self.row_table.setVisible(bool(rows))
         self.row_empty.setVisible(not rows)
         self.row_empty.setText("추출 중입니다. 결과를 준비하고 있습니다." if self.state == "extracting" else
                               self.extract_hint if draft is None else "추출된 행이 없습니다.")
-        if self.selected_row_id in ids:
+        if self._keep_cells and any(row_id in ids for row_id, _ in self._keep_cells):
+            self._restore_cells(ids)
+        elif self.selected_row_id in ids:
             self.row_table.selectRow(ids.index(self.selected_row_id))
+        for control, stack in ((self.undo_button, self._undo_stack), (self.redo_button, self._redo_stack)):
+            control.setEnabled(bool(stack) and draft is not None and not self.busy and not self.locked)
         self.row_actions.setVisible(bool(rows))
         self.common_box.setVisible(self.kind is ExtractKind.EQUIPMENT_STATUS)
         self.release_context.hide()   # 릴리즈 노트의 ‘설비군 / SW 계열’ 입력은 화면에서 뺀다 (계열은 추출 결과에서 확인).
@@ -1053,7 +1156,7 @@ class ImportPage(QWidget):
                                         and self.comparison_card.comparison is not None)
         for widget in (self.common_date, self.common_site, self.common_site_combo, self.common_area, self.common_overwrite, self.release_family):
             widget.setEnabled(not self.busy and not self.locked)
-        for widget in (self.common_apply_button, self.family_apply_button):
+        for widget in (self.common_apply_button, self.family_apply_button, self.replace_button):
             widget.setEnabled(draft is not None and not self.busy and not self.locked)
         self.issue_model.levels = tuple(i.level for i in self.issues)
         self.issue_model.reviewed = {index for index, issue in enumerate(self.issues) if self._issue_key(issue) in self.reviewed_issues}
@@ -1318,6 +1421,7 @@ class ImportPage(QWidget):
         self.generation += 1
         self.draft, self.issues, self.selected_row_id = None, (), None
         self.reviewed_issues.clear()
+        self._undo_stack, self._redo_stack, self._history_base, self._keep_cells = [], [], None, ()
         self.state, self.request_id, self.receipt = "idle", None, None
         self.result_label.setText("")
         self.source_badge.setText("AI 추출 전")
@@ -1524,11 +1628,18 @@ class ImportPage(QWidget):
             self.select_row(draft.rows[0].row_id)
 
     def _changed(self, *, initial=False):
+        if initial or self._history_base is None:
+            self._undo_stack, self._redo_stack = [], []
+        elif not self._restoring and self._history_base != self.draft:
+            self._undo_stack.append(self._history_base)      # 고치기 전 초안 (되돌리기용, 최근 100단계)
+            del self._undo_stack[:-100]
+            self._redo_stack.clear()
         self.reviewed_issues.clear()
         self.comparison_request.cancel()
         self._comparison_context = None
         self.comparison_card.show_comparison(None)
         self.draft = refresh_hpa_coverage(self.draft)
+        self._history_base = self.draft
         # 내용이 바뀌면 새 저장 요청이다. 실패 후 그대로 재시도할 때만 같은 요청 번호를 쓴다.
         self.request_id = uuid.uuid4().hex
         if self.state == "failed":
@@ -1672,6 +1783,7 @@ class ImportPage(QWidget):
 
     def select_row(self, row_id):
         """행을 고른다. 표를 다시 그리지 않아 더블클릭 편집이 끊기지 않는다."""
+        self._keep_cells = ()   # 사용자가 다시 고르면 여러 칸 수정 뒤의 선택 복원은 끝낸다
         if self.draft is None:
             return False
         try:
@@ -1734,6 +1846,12 @@ class ImportPage(QWidget):
         fields = self.draft.fields
         if 2 <= column < 2 + len(fields):
             field = fields[column - 2]
+            # 같은 열에서 고른 칸 모두에 같은 값 (11-16). 다른 열은 건드리지 않는다 (행 전체를 골라도 이 칸만)
+            cells = [(r, c) for r, c in self._selected_cells() if c == column]
+            if len(cells) > 1 and (line, column) in cells:
+                changes = [(self.row_model.ids[r], field, text) for r, _ in cells]
+                QTimer.singleShot(0, lambda: self.edit_cells(changes, f"고른 {len(changes)}칸"))
+                return True
             QTimer.singleShot(0, lambda: self.edit_cell(field, text, row_id, confirm_blank=True))
             return True
         if column == 2 + len(fields) and self.kind is ExtractKind.EQUIPMENT_STATUS:
@@ -1805,16 +1923,163 @@ class ImportPage(QWidget):
     def revert_selected(self):
         if self.draft is None or self.busy or self.locked or self.selected_row_id is None:
             return False
-        self.draft = revert_row(self.draft, self.selected_row_id)
+        for row_id in self._selected_row_ids():          # 여러 행을 골랐으면 모두 되돌린다 (11-16)
+            self.draft = revert_row(self.draft, row_id)
         self._changed()
         return True
 
     def toggle_excluded(self):
         if self.draft is None or self.busy or self.locked or self.selected_row_id is None:
             return False
-        row = self.draft.row(self.selected_row_id)
-        self.draft = set_excluded(self.draft, row.row_id, not row.excluded)
+        exclude = not self.draft.row(self.selected_row_id).excluded   # 기준 행과 같은 방향으로 고른 행 모두
+        for row_id in self._selected_row_ids():
+            self.draft = set_excluded(self.draft, row_id, exclude)
         self._changed()
+        return True
+
+    # --- 여러 칸 한 번에 바꾸기 (최종 멘토링 11-16) ---------------------------------------------------------
+    def _field_columns(self):
+        """표의 (열 번호, 항목) 중 고칠 수 있고 보이는 것. 행 번호 · 상태 · 원본 셀 열은 뺀다."""
+        if self.draft is None:
+            return []
+        return [(column, name) for column, name in enumerate(self.draft.fields, start=2)
+                if not self.row_table.isColumnHidden(column)]
+
+    def _selected_cells(self):
+        """고른 칸 중 고칠 수 있는 칸의 (줄, 열). 표 순서대로."""
+        model = self.row_table.selectionModel()
+        if self.draft is None or model is None:
+            return []
+        columns = {column for column, _ in self._field_columns()}
+        return sorted({(index.row(), index.column()) for index in model.selectedIndexes()
+                       if index.column() in columns and 0 <= index.row() < len(self.row_model.ids)})
+
+    def _selected_row_ids(self):
+        """고른 칸이 있는 행 (없으면 지금 고른 행 하나)."""
+        model = self.row_table.selectionModel()
+        lines = sorted({index.row() for index in model.selectedIndexes()}) if model is not None else []
+        ids = [self.row_model.ids[line] for line in lines if 0 <= line < len(self.row_model.ids)]
+        if self.selected_row_id is not None and self.selected_row_id not in ids:
+            ids.append(self.selected_row_id)
+        return ids
+
+    def edit_cells(self, changes, what="여러 칸"):
+        """(행 ID, 항목, 새 값) 목록을 한 번에 반영하고 한 번만 다시 검사한다.
+
+        return
+        - 바뀐 칸이 있으면 True.
+        """
+        if self.draft is None or self.busy or self.locked:
+            return False
+        changes = [(row_id, name, production_area_value(text) if name == "production_area" else text)
+                   for row_id, name, text in changes]
+        draft, count = apply_edits(self.draft, changes)
+        if not count:
+            self._set_status("바뀐 칸 없음", "info", f"{what}의 값이 이미 같거나 제외한 행입니다.")
+            return False
+        columns = {name: column for column, name in self._field_columns()}
+        self._keep_cells = tuple((row_id, columns[name]) for row_id, name, _ in changes if name in columns)
+        self.draft = draft
+        self._changed()
+        self._set_status("여러 칸 수정", "info", f"{what} 중 {count}칸을 바꿨습니다. 검토 항목을 다시 확인해 주세요.")
+        self.show_toast(f"{count}칸을 바꿨습니다.")
+        return True
+
+    def paste_cells(self, text=None):
+        """Excel에서 복사한 열 · 표를 고른 칸부터 붙여 넣는다. 값 하나면 고른 칸 모두에 같은 값."""
+        if self.draft is None or self.busy or self.locked:
+            return False
+        grid = parse_clipboard(clipboard_text() if text is None else text)
+        cells = self._selected_cells()
+        current = self.row_table.currentIndex()
+        start = cells[0] if cells else (current.row(), current.column()) if current.isValid() else None
+        if not grid or start is None:
+            return False
+        visible = self._field_columns()
+        positions = [column for column, _ in visible]
+        if start[1] not in positions:
+            return False
+        plan = paste_plan(grid, start[0], positions.index(start[1]), self.row_model.ids,
+                          [name for _, name in visible],
+                          [(r, positions.index(c)) for r, c in cells if c in positions])
+        return self.edit_cells(plan, "붙여 넣은 칸")
+
+    def copy_cells(self):
+        """고른 칸을 Excel에 붙여 넣을 수 있는 글자(줄 바꿈 · 탭)로 복사한다."""
+        cells = self._selected_cells()
+        if not cells:
+            return False
+        lines = {}
+        for r, c in cells:
+            lines.setdefault(r, []).append(str(self.row_model.data(self.row_model.index(r, c)) or ""))
+        set_clipboard_text("\n".join("\t".join(values) for _, values in sorted(lines.items())))
+        return True
+
+    def clear_cells(self):
+        """고른 칸을 비운다 (직접 비운 값으로 기록)."""
+        cells = self._selected_cells()
+        if not cells or self.draft is None:
+            return False
+        fields = self.draft.fields
+        return self.edit_cells([(self.row_model.ids[r], fields[c - 2], "") for r, c in cells], "비운 칸")
+
+    def open_find_replace(self):
+        """[찾아 바꾸기] 창으로 한 항목의 글자를 한 번에 바꾼다 (예: 설비 호기 · 모델명)."""
+        if self.draft is None or self.busy or self.locked:
+            return False
+        rows = self._selected_row_ids()
+        dialog = FindReplaceDialog([(name, FIELD_LABELS.get(name, name)) for _, name in self._field_columns()], self,
+                                   selected_rows=len(rows))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        return self.find_replace(*dialog.values(), row_ids=rows)
+
+    def find_replace(self, field, find, replacement, whole_cell=False, only_selected=False, *, row_ids=None):
+        """한 항목에서 찾을 글자를 바꿀 글자로 바꾼다. 바꾼 칸이 있으면 True."""
+        if self.draft is None or self.busy or self.locked:
+            return False
+        plan = replace_plan(self.draft, field, find, replacement, whole_cell=whole_cell,
+                            row_ids=row_ids if only_selected else None)
+        if not plan:
+            self._set_status("바꿀 칸 없음", "info", f"{FIELD_LABELS.get(field, field)}에서 '{find}'을(를) 찾지 못했습니다.")
+            self.show_toast("바꿀 칸이 없습니다.", "warning")
+            return False
+        return self.edit_cells(plan, f"{FIELD_LABELS.get(field, field)} 찾아 바꾸기")
+
+    def _restore_cells(self, ids):
+        """여러 칸을 바꾼 뒤 다시 그려도 그 칸들을 고른 상태로 둔다 (바뀐 결과를 바로 확인)."""
+        selection = QItemSelection()
+        first = None
+        for row_id, column in self._keep_cells:
+            if row_id in ids:
+                index = self.row_model.index(ids.index(row_id), column)
+                selection.select(index, index)
+                first = first or index
+        model = self.row_table.selectionModel()
+        model.select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if first is not None:
+            model.setCurrentIndex(first, QItemSelectionModel.SelectionFlag.NoUpdate)
+
+    def undo(self):
+        """검토 표에서 바로 앞에 고친 단계 하나를 되돌린다 (Ctrl+Z)."""
+        return self._step_history(self._undo_stack, self._redo_stack, "되돌렸습니다")
+
+    def redo(self):
+        """되돌린 단계를 다시 적용한다 (Ctrl+Y)."""
+        return self._step_history(self._redo_stack, self._undo_stack, "다시 적용했습니다")
+
+    def _step_history(self, source, target, done):
+        if self.draft is None or self.busy or self.locked or not source:
+            return False
+        target.append(self.draft)
+        self.draft = source.pop()
+        self._keep_cells = ()
+        self._restoring = True
+        try:
+            self._changed()
+        finally:
+            self._restoring = False
+        self._set_status("검토 표 " + done, "info", "검토 항목을 다시 확인해 주세요.")
         return True
 
     def open_issue(self, index):
