@@ -42,7 +42,7 @@ SNAPSHOT_TEXT = frozenset({"line", "model_name", "production_area", "structure_t
 FIELD_LABELS = {
     "equipment_code": "호기", "site": "Site", "line": "Line", "base_date": "기준일", "model_name": "모델",
     "group_id": "설비군", "production_area": "생산 구분", "structure_type": "구조", "geometry_type": "형상",
-    "modification_type": "개조", "version_raw": "SW Ver", "family_id": "SW 계열", "pm_name": "PM",
+    "modification_type": "개조", "version_raw": "SW Ver", "family_id": "SW 계열", "pm_name": "PM", "process_name": "공정",
     "model_name_raw": "모델 원문", "released_at": "릴리즈일", "version_order": "버전 순서", "version_suffix": "접미사",
     "item_no": "Item No", "content": "Item 내용", "item_state": "적용 상태", "target_scope": "적용 범위",
     "target_group_ids": "적용 모델", "item_mapping_status": "Item 연결", "risk_reason": "위험 사유",
@@ -275,24 +275,35 @@ class GroupRow:
 
 @dataclass(frozen=True)
 class SheetRow:
-    """DB 값 기준 현황표 한 줄: 설비 현황 하나의 SW 하나 (SW가 없으면 설비 현황 한 줄)."""
+    """DB 값 기준 현황표 한 줄 (11-16: 가져오기 검토 표와 같은 단위).
+
+    PM이 있는 설비는 PM 하나가 한 줄이고(설비군 · SW 계열 · SW 버전은 그 PM의 값), PM이 없으면 SW 하나가 한 줄,
+    SW도 없으면 설비 현황 한 줄이다. 호기 · Line · 모델명 · Memory/Foundry · 공정 · 형상 · 개조는 설비 현황의 값이라
+    같은 설비의 줄이 함께 쓴다.
+    """
 
     snapshot_id: int
     equipment_id: int
     version_id: int | None
     equipment_code: str
     line: str
-    group_id: int | None
+    group_id: int | None       # PM 줄이면 그 PM의 설비군
     group_name: str
     model_name: str
     production_area: str | None
     version_raw: str
-    family_name: str  # 화면에는 보이지 않는다 (11-11 VOC 1)
-    pm_names: str
+    family_name: str
+    pm_names: str              # PM 줄이면 그 PM 이름 하나
     has_pm: bool
     sources: dict  # 항목 → 원본 셀 주소
     source_values: dict  # 항목 → 원본 셀 값
     model_mismatch: bool = False  # 모델명(원문)이 번역표로 다른 설비군으로 읽힌다 (예: 설비군 M-C3인데 모델명 M-C4)
+    pm_id: int | None = None
+    family_id: int | None = None
+    ui_type: str | None = None  # SW 계열의 UI (LEGACY · INTEGRATED · SMART)
+    process_name: str = ""
+    geometry_type: str = ""
+    modification_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -309,6 +320,7 @@ class SheetRows:
     default_area: str | None = None  # 빈 현황표를 만들 때 고른 메모리/파운드리 (새 행 · 새 라인의 기본값, 11-12)
     latest_versions: dict = field(default_factory=dict)  # (설비군 ID, MEMORY · FOUNDRY) → 그 계열 최신 릴리즈 버전 원문
     line_areas: dict = field(default_factory=dict)  # 이 Site 라인 → 메모리/파운드리 (등록값 → 현황 값 → 장소표). 모르면 없음
+    families: dict = field(default_factory=dict)  # 설비군 ID → ((계열 ID, 이름, UI), …) 그 설비군 · 상위 설비군의 SW 계열
 
 
 @dataclass(frozen=True)
@@ -664,9 +676,13 @@ class DataAdminService:
         with self.storage.transaction() as tx:
             return self._add_row_in(tx, batch_id, values, row_number)
 
-    def _add_row_in(self, tx, batch_id, values, row_number, base_date=None):
+    def _add_row_in(self, tx, batch_id, values, row_number, base_date=None, created=None):
         """설비 한 행을 더한다. 값: equipment_code · group_name(없으면 model_name으로 설비군을 찾음) · version_raw 필수,
-        line · model_name · production_area 선택. ``row_number``가 None이면 원본 칸 위치를 남기지 않는다(DB 값 기준 현황표)."""
+        line · model_name · production_area · pm_name · family_id · process_name · geometry_type · modification_type 선택
+        (11-16: 가져오기 검토 표와 같은 항목). ``row_number``가 None이면 원본 칸 위치를 남기지 않는다(DB 값 기준 현황표).
+
+        PM을 적으면 SW를 PM에 잇는다. ``created``(이번 저장에서 만든 설비 현황 ID)에 있는 설비를 다시 적으면 그 설비에
+        PM 한 줄을 더하고 None을 돌려준다."""
         values = {k: (v or "").strip() if isinstance(v, str) or v is None else v for k, v in values.items()}
         code, version, line = (values.get(k, "") for k in ("equipment_code", "version_raw", "line"))
         group_name = values.get("group_name") or values.get("model_name", "")
@@ -677,29 +693,77 @@ class DataAdminService:
         group = next((g for g in self.rows.rows(tx, "equipment_group")
                       if _text(g["group_name"]).casefold() == group_name.casefold()), None)
         require(group is not None, f"설비군 '{group_name}'이(가) 없습니다. 먼저 등록해 주세요.")
+        pm_name = values.get("pm_name") or ""
         found = next((e for e in self.rows.rows(tx, "equipment") if _text(e["equipment_code"]) == code), None)
         equipment = found or tx.insert("equipment", {"equipment_code": code})
-        require(not self.rows.rows(tx, "equipment_snapshot", equipment_id=equipment["equipment_id"], base_date=base_date),
-                f"'{code}'은(는) 이 기준일 현황에 이미 있습니다.")
+        existing = self.rows.rows(tx, "equipment_snapshot", equipment_id=equipment["equipment_id"], base_date=base_date)
+        if existing:
+            # 같은 저장에서 새로 넣는 설비의 PM 줄을 하나 더 넣는 경우 (가져오기 표처럼 PM마다 한 줄, 11-16).
+            # 이미 저장된 설비에 PM을 더하는 것은 하지 않는다 ([되돌리기]가 설비 전체를 지우게 되므로)
+            snapshot = existing[0]
+            require(snapshot["snapshot_id"] in (created or ()) and bool(pm_name),
+                    f"'{code}'은(는) 이 기준일 현황에 이미 있습니다.")
+            pms = self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot["snapshot_id"])
+            require(bool(pms), f"'{code}'의 새 행이 여럿이면 모든 행에 PM을 적어 주세요.")
+            require(all(_text(p["pm_name"]).casefold() != pm_name.casefold() for p in pms),
+                    f"'{code}'에 {pm_name}이(가) 두 번 있습니다.")
+            family = self._chosen_family(tx, group, values.get("family_id")) \
+                or self._family_for(tx, batch_id, group, snapshot.get("production_area"), exclude=snapshot["snapshot_id"])
+            self._add_pm_in(tx, snapshot, group, family, version, pm_name, batch_id)
+            return None
         area = self._row_area(tx, batch_id, site, line, values.get("production_area"))
-        family = self._family_for(tx, batch_id, group, area)
-        release = next((r["release_version_id"] for r in self.rows.rows(tx, "release_version", family_id=family)
-                        if _text(r["version_raw"]) == version), None)
+        family = self._chosen_family(tx, group, values.get("family_id")) or self._family_for(tx, batch_id, group, area)
+        release = self._release_of(tx, family, version)
         refs = {name: {"sheet": sheet, "cells": [f"{columns[name]}{row_number}"]} for name in ROW_FIELDS if name in columns}
+        details = {name: values.get(name) or None for name in ("geometry_type", "modification_type", "process_name")}
+        if details["process_name"] is None:
+            details.pop("process_name")  # 공정이 없으면 칸을 쓰지 않는다 (칸이 없는 예전 DB에도 저장, 박호진 11-14과 같은 규칙)
         snapshot = tx.insert("equipment_snapshot", {
             "equipment_id": equipment["equipment_id"], "base_date": base_date, "site": site, "line": line or None,
             "model_name": values.get("model_name") or _text(group["group_name"]), "group_id": group["group_id"],
-            "production_area": area, "batch_id": batch_id,
+            "production_area": area, "batch_id": batch_id, **details,
             "source_reference": {k: v for k, v in refs.items() if k != "version_raw"}})
-        tx.insert("equipment_version", {"snapshot_id": snapshot["snapshot_id"], "family_id": family, "version_raw": version,
-                                        "release_version_id": release, "batch_id": batch_id,
-                                        "source_reference": {k: v for k, v in refs.items() if k == "version_raw"}})
+        if pm_name:
+            self._add_pm_in(tx, snapshot, group, family, version, pm_name, batch_id)
+        else:
+            tx.insert("equipment_version", {"snapshot_id": snapshot["snapshot_id"], "family_id": family, "version_raw": version,
+                                            "release_version_id": release, "batch_id": batch_id,
+                                            "source_reference": {k: v for k, v in refs.items() if k == "version_raw"}})
         tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_create": {
             "table": "equipment_snapshot", "values": {
                 "snapshot_id": snapshot["snapshot_id"], "label": code, "batch_id": batch_id, "sheet": sheet,
                 "cells": sorted((c for ref in refs.values() for c in ref["cells"]), key=_cell_order),
                 "summary": " · ".join(v for v in (site, line, base_date.isoformat(), _text(group["group_name"]), version) if v)}}}})
         return snapshot["snapshot_id"]
+
+    def _release_of(self, tx, family_id, version):
+        return next((r["release_version_id"] for r in self.rows.rows(tx, "release_version", family_id=family_id)
+                     if _text(r["version_raw"]) == version), None)
+
+    def _chosen_family(self, tx, group, family_id):
+        """새 행에서 고른 SW 계열. 그 설비군 · 상위 설비군의 계열이어야 한다. 고르지 않았으면 None (자동으로 정함)."""
+        if not family_id:
+            return None
+        owners = {group["group_id"]} | ({group["parent_group_id"]} if group.get("parent_group_id") else set())
+        require(any(f["family_id"] == family_id for owner in owners for f in self.rows.rows(tx, "version_family", group_id=owner)),
+                f"고른 SW 계열이 설비군 '{_text(group['group_name'])}'의 계열이 아닙니다.")
+        return family_id
+
+    def _add_pm_in(self, tx, snapshot, group, family, version, pm_name, batch_id):
+        """설비 현황에 PM 한 줄을 더한다. 같은 계열 · 같은 버전 SW가 있으면 함께 쓰고, 없으면 SW를 만든다.
+        설비 현황의 설비군은 PM 설비군이 하나면 그 설비군, 여럿이면 비운다 (관리 저장과 같은 규칙)."""
+        sid = snapshot["snapshot_id"]
+        software = next((v for v in self.rows.rows(tx, "equipment_version", snapshot_id=sid)
+                         if v["family_id"] == family and _text(v["version_raw"]) == version), None)
+        software = software or tx.insert("equipment_version", {
+            "snapshot_id": sid, "family_id": family, "version_raw": version,
+            "release_version_id": self._release_of(tx, family, version), "batch_id": batch_id})
+        tx.insert("equipment_pm", {"snapshot_id": sid, "equipment_version_id": software["equipment_version_id"],
+                                   "pm_name": pm_name, "group_id": group["group_id"],
+                                   "model_name_raw": _text(snapshot.get("model_name")) or _text(group["group_name"]),
+                                   "batch_id": batch_id})
+        models = {p["group_id"] for p in self.rows.rows(tx, "equipment_pm", snapshot_id=sid)}
+        tx.update("equipment_snapshot", {"snapshot_id": sid}, {"group_id": next(iter(models)) if len(models) == 1 else None})
 
     def _regroup_in(self, tx, batch_id, snapshot_id, group_id):
         """설비 현황의 설비군을 바꾼다. 모델명은 새 설비군 이름으로, SW 계열이 새 설비군(또는 상위 설비군)의 것이 아니면
@@ -743,7 +807,11 @@ class DataAdminService:
         with self.storage.transaction() as tx:
             back = [(sid, self._regroup_in(tx, batch_id, sid, gid)) for sid, gid in regroup if sid not in set(deletes)]
             journal = self._delete_rows_in(tx, batch_id, deletes) if deletes else None
-            added = [self._add_row_in(tx, batch_id, values, row, base_date) for values, row in adds]
+            added = []
+            for values, row in adds:  # 같은 새 설비의 PM 줄은 앞에서 만든 설비 현황에 더한다 (None)
+                sid = self._add_row_in(tx, batch_id, values, row, base_date, created=added)
+                if sid is not None:
+                    added.append(sid)
             if back:
                 names = {g["group_id"]: _text(g["group_name"]) for g in self.rows.rows(tx, "equipment_group")}
                 tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_registry": {
@@ -764,9 +832,9 @@ class DataAdminService:
                     self._regroup_in(tx, batch_id, sid, old)
 
     def sheet_rows(self, batch_id, base_date=None) -> SheetRows:
-        """현황표를 DB 값 기준으로 읽는다 (11-11 6차): 설비 × SW 한 줄, 가져오기 3단계와 같은 항목.
+        """현황표를 DB 값 기준으로 읽는다 (11-11 6차). 11-16부터 가져오기 검토 표와 같은 단위 (PM 한 줄, PM이 없으면 SW 한 줄).
 
-        SW 계열은 화면에 보이지 않는다(11-11 VOC 1). 칸마다 원본 셀 위치 · 값을 함께 돌려 [원본 보기] · 툴팁에 쓴다.
+        SW 계열 · UI · 공정 · 형상 · 개조도 함께 돌려준다 (11-16). 칸마다 원본 셀 위치 · 값을 함께 돌려 [원본 보기] · 툴팁에 쓴다.
         """
         with self.storage.transaction() as tx:
             sheet, site, base_date, raw = self._sheet_place_or_empty(tx, batch_id, base_date)
@@ -775,16 +843,16 @@ class DataAdminService:
             equipment = {e["equipment_id"]: _text(e["equipment_code"]) for e in self.rows.rows(tx, "equipment")}
             groups = self.rows.rows(tx, "equipment_group")
             names = {g["group_id"]: _text(g["group_name"]) for g in groups}
-            families = {f["family_id"]: _text(f["family_name"]) for f in self.rows.rows(tx, "version_family")}
+            family_rows = self.rows.rows(tx, "version_family")
+            families = {f["family_id"]: _text(f["family_name"]) for f in family_rows}
+            ui_types = {f["family_id"]: f.get("ui_type") for f in family_rows}
             rows = []
             for snapshot in self.rows.rows(tx, "equipment_snapshot", batch_id=batch_id):
                 if base_date is not None and snapshot["base_date"] != base_date:
                     continue  # 입력 작업 하나에 기준일이 여럿이면(시연 seed) 고른 기준일만
                 versions = self.rows.rows(tx, "equipment_version", snapshot_id=snapshot["snapshot_id"])
-                pms = self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot["snapshot_id"])
-                pm_names = defaultdict(list)
-                for pm in pms:
-                    pm_names[pm.get("equipment_version_id")].append(_text(pm["pm_name"]))
+                pms = sorted(self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot["snapshot_id"]),
+                             key=lambda p: _natural_key(_text(p["pm_name"])))
 
                 def source(row, name):
                     for location in _locations(row, name):
@@ -801,17 +869,27 @@ class DataAdminService:
                 # 설비군은 원본의 모델 칸에서 정해진다 (가져올 때 남긴 group_name 출처는 제목 칸을 가리키는 경우가 있어 쓰지 않음)
                 model_cell = source(snapshot, "model_name")
                 base = {"equipment_code": source(snapshot, "equipment_code"), "line": source(snapshot, "line"),
-                        "model_name": model_cell, "group_name": model_cell}
-                for version in versions or [None]:
-                    sources = {**base, "version_raw": source(version, "version_raw") if version else None}
+                        "model_name": model_cell, "group_name": model_cell, "process_name": source(snapshot, "process_name")}
+                by_id = {v["equipment_version_id"]: v for v in versions}
+                # 가져오기 검토 표처럼 PM 하나가 한 줄 (11-16). PM이 없으면 SW 하나가 한 줄
+                lines = [(pm, by_id.get(pm.get("equipment_version_id"))) for pm in pms] or [(None, v) for v in versions] \
+                    or [(None, None)]
+                for pm, version in lines:
+                    group_id = pm["group_id"] if pm else snapshot.get("group_id")
+                    sources = {**base, "version_raw": source(version, "version_raw") if version else None,
+                               "pm": source(pm, "pm_name") if pm else None}
                     rows.append(SheetRow(
                         snapshot["snapshot_id"], snapshot["equipment_id"], version["equipment_version_id"] if version else None,
-                        equipment.get(snapshot["equipment_id"], ""), _text(snapshot.get("line")), snapshot.get("group_id"),
-                        names.get(snapshot.get("group_id"), ""), _text(snapshot.get("model_name")), snapshot.get("production_area"),
+                        equipment.get(snapshot["equipment_id"], ""), _text(snapshot.get("line")), group_id,
+                        names.get(group_id, ""), _text(snapshot.get("model_name")), snapshot.get("production_area"),
                         _text(version["version_raw"]) if version else "", families.get(version["family_id"], "") if version else "",
-                        ", ".join(pm_names.get(version["equipment_version_id"], [])) if version else "", bool(pms),
+                        _text(pm["pm_name"]) if pm else "", bool(pms),
                         {k: v for k, v in sources.items() if v}, {k: value(v) for k, v in sources.items() if v},
-                        _model_mismatch(_text(snapshot.get("model_name")), names.get(snapshot.get("group_id"), ""))))
+                        _model_mismatch(_text(snapshot.get("model_name")), names.get(snapshot.get("group_id"), "")),
+                        pm_id=pm["pm_id"] if pm else None, family_id=version["family_id"] if version else None,
+                        ui_type=ui_types.get(version["family_id"]) if version else None,
+                        process_name=_text(snapshot.get("process_name")), geometry_type=_text(snapshot.get("geometry_type")),
+                        modification_type=_text(snapshot.get("modification_type"))))
             placed = {(r["site"], r["line"]) for r in registered_lines(tx)} | {
                 (_text(s.get("site")), _text(s.get("line"))) for s in self.rows.rows(tx, "equipment_snapshot")
                 if s.get("site") and s.get("line")}
@@ -825,10 +903,18 @@ class DataAdminService:
                 groups, key=lambda g: names[g["group_id"]]) if _text(g["category"]) in CATEGORIES)
             latest = self._latest_versions(tx, groups)
             line_areas = self._line_areas(tx, site, lines)
+            parents = {g["group_id"]: g.get("parent_group_id") for g in groups}
+            owned = defaultdict(list)
+            for f in sorted(family_rows, key=lambda f: _natural_key(_text(f["family_name"]))):
+                owned[f["group_id"]].append((f["family_id"], _text(f["family_name"]), f.get("ui_type")))
+            # 설비군마다 고를 수 있는 SW 계열: 그 설비군의 계열 + 상위 설비군의 계열 (개조형 DFB는 C4 계열을 쓴다)
+            choosable = {gid: tuple(owned.get(gid, [])) + tuple(owned.get(parents[gid], []) if parents.get(gid) else ())
+                         for gid in parents}
         meta = raw.get(SHEET_KEY) if isinstance(raw.get(SHEET_KEY), dict) else {}
         return SheetRows(batch_id, ", ".join(all_cells) or sheet, _workbook(raw), site, base_date, tuple(rows), choices, tuple(lines),
                          {line: tuple(sorted(sites)) for line, sites in elsewhere.items()},
-                         meta.get("production_area") if meta.get("production_area") in FABS else None, latest, line_areas)
+                         meta.get("production_area") if meta.get("production_area") in FABS else None, latest, line_areas,
+                         {gid: found for gid, found in choosable.items() if found})
 
     def _line_areas(self, tx, site, lines):
         """이 Site 라인마다 아는 메모리/파운드리 (위치 탭과 같은 순서: 등록값 → 설비 현황의 생산 영역 → 장소표).
