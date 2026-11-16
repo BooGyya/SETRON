@@ -264,11 +264,19 @@ class _Panel(QWidget):
 # --- 설비현황 › 현황표 ---------------------------------------------------------------------
 # 대분류(POLY · OXIDE · KCTC)는 설비군의 값이라 설비군에서 자동으로 보이고, 모델명은 설비군을 따라간다 (11-12).
 # 대시보드의 '분류' 필터(Memory/Foundry)와 헷갈리지 않게 '대분류'라고 부른다.
-SHEET_COLUMNS = (("equipment_code", "설비 호기"), ("line", "Line"), ("category", "대분류"), ("group", "설비군"),
-                 ("model_name", "모델명"), ("production_area", "Memory/Foundry"), ("version_raw", "SW 버전"), ("pm", "PM"))
+# 11-16: 열 순서 · 이름을 데이터 가져오기 검토 표(AI 추출 결과)와 같게 하고, DB에 있는 값은 모두 고칠 수 있게 했다.
+# 기준일 · Site는 현황표가 정하고, UI 구분은 SW 계열의 값이라 고르지 않는다. Engine · EPD 버전은 DB에 칸이 없어 두지 않는다.
+SHEET_COLUMNS = (("base_date", "기준일"), ("site", "Site"), ("line", "Line"), ("category", "대분류"), ("group", "설비군"),
+                 ("model_name", "모델명"), ("production_area", "Memory/Foundry"), ("equipment_code", "설비 호기"),
+                 ("pm", "PM"), ("process_name", "공정"), ("family", "SW 계열"), ("version_raw", "SW 버전"),
+                 ("ui_type", "UI 구분"), ("geometry_type", "형상"), ("modification_type", "개조 정보"))
 COLUMN = {field: index for index, (field, _) in enumerate(SHEET_COLUMNS)}
 AREA_LABELS = {**PRODUCTION_AREA_LABELS, None: ""}
+UI_LABELS = {"LEGACY": "구UI", "INTEGRATED": "통합UI", "SMART": "스마트UI", None: ""}
 REQUIRED_NEW = ("equipment_code", "group", "production_area", "version_raw")  # Memory/Foundry도 필수 (11-12: 비우면 임의로 정해졌다)
+SHEET_FIXED = ("base_date", "site", "category", "ui_type")  # 표에서 직접 고르지 않는 칸 (현황표 · 설비군 · SW 계열이 정함)
+SNAPSHOT_FIELDS = {"line": "line", "model": "model_name", "area": "production_area", "process": "process_name",
+                   "geometry": "geometry_type", "modification": "modification_type"}  # 설비 현황에 저장하는 칸 (수정 키 → DB 칸)
 CATEGORY_CHOICES = ("POLY", "OXIDE", "KCTC")
 
 
@@ -379,23 +387,30 @@ GUIDE_STEPS = (
 GUIDE_FIELDS = ("<table cellspacing='0' cellpadding='4' style='border-collapse:collapse'>"
                 + "".join(f"<tr><td><b>{name}</b></td><td style='color:{'#ad344d' if need == '필수' else '#5d6678'}'>{need}</td>"
                           f"<td>{text}</td></tr>" for name, need, text in (
-                              ("설비 호기", "필수", "설비 ID (예: CC4H101)"),
+                              ("기준일 · Site", "자동", "고른 현황표의 값"),
                               ("Line", "선택", "목록에서 고르거나 새 이름 (새 라인은 저장 때 등록)"),
                               ("대분류", "자동", "설비군에서 정해짐 · 새 설비군이면 POLY · OXIDE · KCTC 중 고름"),
                               ("설비군", "필수", "목록에서 고름 (없으면 저장 때 등록)"),
                               ("모델명", "자동", "설비군과 같음"),
                               ("Memory/Foundry", "필수", "라인을 고르면 그 라인 값 · 모르는 라인은 직접 고름"),
-                              ("SW 버전", "필수", "설비군을 고르면 최신 버전이 자동으로 채워짐 · 실제 버전으로 고침")))
+                              ("설비 호기", "필수", "설비 ID (예: CC4H101)"),
+                              ("PM", "선택", "PM이 여럿이면 같은 호기로 줄을 더 만들고 PM마다 적음"),
+                              ("공정", "선택", "적힌 그대로 (복합공정은 AAAA/BBBB)"),
+                              ("SW 계열", "선택", "비우면 설비군 · Memory/Foundry로 자동으로 정함"),
+                              ("SW 버전", "필수", "설비군을 고르면 최신 버전이 자동으로 채워짐 · 실제 버전으로 고침"),
+                              ("UI 구분", "자동", "SW 계열에서 정해짐"),
+                              ("형상 · 개조 정보", "선택", "적힌 그대로")))
                 + "</table>")
 GUIDE_NOTE = ("위치 탭에서는 Site · 라인 이름을 표에서 바로 고치고(같은 라인 이름이면 합치기) 설비를 다른 라인으로 옮깁니다. "
               "설비 탭에서는 설비군 대분류 · (직접 추가한 설비군의) 이름을 표에서 고칩니다.")
 
 
 class SheetPanel(_Panel):
-    """현황표를 DB에 들어간 값 기준으로 보이고 고친다 (11-11 6차): 설비 × SW 한 줄, 가져오기 3단계와 같은 항목.
+    """현황표를 DB에 들어간 값 기준으로 보이고 고친다 (11-11 6차). 11-16부터 가져오기 검토 표와 같은 열 · 같은 단위
+    (PM 한 줄, PM이 없으면 SW 한 줄)이고, DB에 있는 값(공정 · SW 계열 · 형상 · 개조 · PM 포함)을 모두 고친다.
 
     칸 수정 · 행 추가 · 행 삭제 · 설비군 변경을 모아 두었다가 [저장]으로 한꺼번에 반영하고, [되돌리기]는 바로 앞 단계
-    하나(또는 마지막 저장 전체)를 되돌린다. SW 계열은 보이지 않는다(VOC 1).
+    하나(또는 마지막 저장 전체)를 되돌린다. 저장할 때 필수는 호기 · 설비군 · Memory/Foundry · SW 버전이다.
     """
 
     def __init__(self, page):
@@ -470,10 +485,12 @@ class SheetPanel(_Panel):
         self.table.setItemDelegateForColumn(COLUMN["model_name"], _ChoiceDelegate(
             self.table, lambda: [self._group_name(r.group_id) for r in self._selected_rows_data()][:1]))
         self.table.setItemDelegateForColumn(COLUMN["production_area"], _ChoiceDelegate(self.table, lambda: ("Memory", "Foundry", "")))
+        self.table.setItemDelegateForColumn(COLUMN["family"], _ChoiceDelegate(
+            self.table, lambda: [name for _, name, _ in self._family_choices(self.table.currentRow())]))
         self.table.itemChanged.connect(self._cell_changed)
         self.table.itemSelectionChanged.connect(self._sync)
         self.table.horizontalHeader().sectionClicked.connect(self._header_clicked)
-        self.page.columns.attach(self.table, "sheet.db")
+        self.page.columns.attach(self.table, "sheet.v2")  # 11-16 열이 바뀌어 예전에 기억한 폭은 쓰지 않는다
         card.body.addWidget(self.table)
         self._sync()
 
@@ -582,17 +599,53 @@ class SheetPanel(_Panel):
     # 값 ------------------------------------------------------------------------------------
     @staticmethod
     def _key(row, field):
-        """칸 수정이 기록되는 대상 (같은 설비의 여러 SW 줄이 같은 값을 공유한다)."""
+        """칸 수정이 기록되는 대상. 설비 현황의 칸은 같은 설비의 여러 줄(PM · SW)이 함께 쓰고,
+        PM 줄의 설비군 · SW 계열 · SW 버전은 그 PM만의 값이다 (11-16). PM 이름은 날짜 간 같은 PM을 잇는 고정 위치라
+        저장된 줄에서는 고치지 않는다 (관리 저장 규칙, 김지훈 11-03)."""
+        pm = row.pm_id
         return {"equipment_code": ("code", row.equipment_id), "line": ("line", row.snapshot_id),
-                "group": ("group", row.snapshot_id), "model_name": ("model", row.snapshot_id),
-                "production_area": ("area", row.snapshot_id),
-                "version_raw": ("version", row.version_id) if row.version_id else None}.get(field)
+                "group": ("pm_group", pm) if pm else ("group", row.snapshot_id), "model_name": ("model", row.snapshot_id),
+                "production_area": ("area", row.snapshot_id), "process_name": ("process", row.snapshot_id),
+                "geometry_type": ("geometry", row.snapshot_id), "modification_type": ("modification", row.snapshot_id),
+                "family": ("pm_family", pm) if pm else ("family", row.version_id) if row.version_id else None,
+                "version_raw": ("pm_version", pm) if pm else ("version", row.version_id) if row.version_id else None}.get(field)
 
     @staticmethod
     def _original(row, field):
         return {"equipment_code": row.equipment_code, "line": row.line, "group": row.group_id,
                 "model_name": row.model_name, "production_area": row.production_area, "version_raw": row.version_raw,
-                "pm": row.pm_names}[field]
+                "pm": row.pm_names, "family": getattr(row, "family_id", None), "ui_type": getattr(row, "ui_type", None),
+                "process_name": getattr(row, "process_name", ""), "geometry_type": getattr(row, "geometry_type", ""),
+                "modification_type": getattr(row, "modification_type", "")}.get(field)
+
+    def _families_of(self, gid):
+        """설비군에서 고를 수 있는 SW 계열 ((ID, 이름, UI), …): 그 설비군 · 상위 설비군의 계열."""
+        return tuple((getattr(self.data, "families", None) or {}).get(gid, ())) if self.data and gid else ()
+
+    def _family_info(self, fid):
+        """계열 ID → (이름, UI). 모르면 ("", None)."""
+        for found in (getattr(self.data, "families", None) or {}).values() if self.data else ():
+            for family_id, name, ui in found:
+                if family_id == fid:
+                    return name, ui
+        return "", None
+
+    def _row_group(self, row):
+        return self.edits.get(self._key(row, "group"), row.group_id)
+
+    def _row_family(self, row):
+        key = self._key(row, "family")
+        return self.edits.get(key, row.family_id) if key else getattr(row, "family_id", None)
+
+    def _family_choices(self, r):
+        """표 줄 ``r``의 SW 계열 칸 목록: 지금(고친) 설비군의 계열."""
+        if self.data is None or not (0 <= r < len(self.view)):
+            return ()
+        kind, entry = self.view[r]
+        if kind == "new":
+            known = self._known_group(entry["values"].get("group"))
+            return self._families_of(known[0]) if known else ()
+        return self._families_of(self._row_group(entry))
 
     def _group_name(self, gid):
         return next((name for g, name, _ in self.data.groups if g == gid), "") if self.data else ""
@@ -607,12 +660,23 @@ class SheetPanel(_Panel):
 
     def _value(self, row, field, *, edited=True):
         """화면에 보일 글자. ``edited``가 False면 저장 전 수정은 빼고 DB 값으로 (정렬용: 고치는 동안 행이 움직이지 않게)."""
+        if field == "base_date":
+            return self.data.base_date.isoformat() if self.data and self.data.base_date else ""
+        if field == "site":
+            return self.data.site if self.data else ""
+        if field in ("family", "ui_type"):
+            fid = self._row_family(row) if edited else getattr(row, "family_id", None)
+            if fid == getattr(row, "family_id", None):
+                name, ui = row.family_name, getattr(row, "ui_type", None)
+            else:
+                name, ui = self._family_info(fid)
+            return name if field == "family" else UI_LABELS.get(ui, ui or "")
         if field in ("category", "model_name"):
-            gid = self.edits.get(("group", row.snapshot_id), row.group_id) if edited else row.group_id
+            gid = self._row_group(row) if edited else row.group_id
             if field == "category":
                 return self._group_category(gid)
-            if edited and (("group", row.snapshot_id) in self.edits or ("model", row.snapshot_id) in self.edits):
-                return self._group_name(gid)  # 모델명은 설비군을 따라간다
+            if edited and not row.pm_id and (("group", row.snapshot_id) in self.edits or ("model", row.snapshot_id) in self.edits):
+                return self._group_name(gid)  # 모델명은 설비군을 따라간다 (PM 줄은 설비의 모델명 그대로)
             return row.model_name or ""
         key = self._key(row, field)
         value = self.edits.get(key, self._original(row, field)) if key and edited else self._original(row, field)
@@ -624,19 +688,20 @@ class SheetPanel(_Panel):
 
     def _mismatched(self, row):
         """모델명이 다른 설비군을 가리키는 줄 (예전 편집으로 생긴 값). 모델명 칸에서 설비군 이름으로 맞출 수 있다.
-        엑셀 원문 모델명('M-C4(DFB)' 등)이 같은 설비군을 가리키면 맞는 값이다 (서버 판단 ``model_mismatch``)."""
-        return bool(getattr(row, "model_mismatch", False)) and ("model", row.snapshot_id) not in self.edits \
-            and ("group", row.snapshot_id) not in self.edits
+        엑셀 원문 모델명('M-C4(DFB)' 등)이 같은 설비군을 가리키면 맞는 값이다 (서버 판단 ``model_mismatch``).
+        PM 줄은 PM마다 설비군이 달라 맞추지 않는다."""
+        return not row.pm_id and bool(getattr(row, "model_mismatch", False)) \
+            and ("model", row.snapshot_id) not in self.edits and ("group", row.snapshot_id) not in self.edits
 
     def _editable(self, row, field):
         if field == "model_name":  # 모델명은 설비군을 따라간다. 설비군과 다른 줄만 설비군 이름으로 맞출 수 있다
             return row.snapshot_id not in self.deletes and self._mismatched(row)
-        if row.snapshot_id in self.deletes or field in ("pm", "category"):
-            return False  # 대분류는 설비군의 값
-        if field == "group":
-            return not row.has_pm
-        if field == "version_raw":
-            return row.version_id is not None and not row.has_pm
+        if row.snapshot_id in self.deletes or field in SHEET_FIXED:
+            return False  # 기준일 · Site는 현황표, 대분류는 설비군, UI 구분은 SW 계열의 값
+        if field == "family":
+            return self._key(row, field) is not None and bool(self._families_of(self._row_group(row)))
+        if field in ("pm", "version_raw"):
+            return self._key(row, field) is not None
         return True
 
     # 표 그리기 --------------------------------------------------------------------------------
@@ -645,7 +710,8 @@ class SheetPanel(_Panel):
         if self.sort is not None:
             field = SHEET_COLUMNS[self.sort[0]][0]
             return [_natural(self._value(row, field, edited=False)), row.snapshot_id]
-        return [_natural(self._value(row, f, edited=False)) for f in ("line", "group", "equipment_code")] + [row.snapshot_id]
+        return [_natural(self._value(row, f, edited=False)) for f in ("line", "group", "equipment_code")] \
+            + [row.snapshot_id, _natural(row.pm_names or "")]
 
     def _render(self):
         rows = sorted(self.data.rows, key=self._sort_key) if self.data else []
@@ -663,7 +729,6 @@ class SheetPanel(_Panel):
                 item = QTableWidgetItem()
                 self.table.setItem(r, c, item)
                 self._paint(r, c)
-        self.table.setColumnHidden(COLUMN["pm"], not any(r.pm_names for r in rows))
         self.page.columns.fit(self.table)
         self.table.blockSignals(False)
         self._sync_sort()
@@ -681,17 +746,28 @@ class SheetPanel(_Panel):
         if kind == "new":
             values = entry["values"]
             known = self._known_group(values.get("group"))
-            value = values.get(field, "") if field not in ("pm", "category", "model_name") else ""
+            value = values.get(field, "") if field not in ("category", "model_name", "ui_type") else ""
             if field == "category":
                 value = known[2] if known else values.get("category", "")
             elif field == "model_name":
                 value = known[1] if known else values.get("group", "")
+            elif field in ("base_date", "site"):
+                value = self._value(None, field)
+            elif field == "ui_type":
+                fid = next((f for f, name, _ in self._families_of(known[0] if known else None)
+                            if name == values.get("family")), None)
+                value = UI_LABELS.get(self._family_info(fid)[1], "") if fid else ""
             item.setText(AREA_LABELS.get(value, value) if field == "production_area" else value)
-            fixed = field in ("pm", "model_name") or (field == "category" and (known is not None or not values.get("group")))
+            fixed = field in ("model_name", "base_date", "site", "ui_type") \
+                or (field == "category" and (known is not None or not values.get("group"))) \
+                or (field == "family" and not (known and self._families_of(known[0])))
             needed = field in REQUIRED_NEW or (field == "category" and values.get("group") and known is None)
             if fixed:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                item.setToolTip({"category": "대분류는 설비군에서 자동으로 정해집니다", "model_name": "모델명은 설비군과 같습니다"}
+                item.setToolTip({"category": "대분류는 설비군에서 자동으로 정해집니다", "model_name": "모델명은 설비군과 같습니다",
+                                 "base_date": "기준일은 현황표에서 정해집니다", "site": "Site는 현황표에서 정해집니다",
+                                 "ui_type": "UI 구분은 SW 계열에서 정해집니다",
+                                 "family": "설비군을 고르면 그 설비군의 SW 계열 중에서 고릅니다 (비우면 자동으로 정함)"}
                                 .get(field, ""))
             else:
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
@@ -702,14 +778,17 @@ class SheetPanel(_Panel):
                                 + (" · 라인의 Memory/Foundry로 자동 채움" if field == "production_area" and value
                                    and values.get("area_auto") and values.get("line") else "")
                                 + (" · 설비군의 최신 버전으로 자동 채움 (실제 버전이 다르면 고칩니다)"
-                                   if field == "version_raw" and values.get("version_auto") and value else ""))
+                                   if field == "version_raw" and values.get("version_auto") and value else "")
+                                + (" · 같은 설비의 PM이 여럿이면 같은 호기로 줄을 더 만들고 PM을 적습니다" if field == "pm" else "")
+                                + (" · 비우면 설비군 · Memory/Foundry로 자동으로 정합니다" if field == "family" else ""))
         else:
             row = entry
             item.setText(self._value(row, field))
             editable = self._editable(row, field)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable if editable else item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            source = row.sources.get(field if field != "group" else "group_name")
-            origin = f"원본 {source} · {row.source_values.get(field if field != 'group' else 'group_name') or '(빈칸)'}" \
+            name = {"group": "group_name"}.get(field, field)
+            source = row.sources.get(name)
+            origin = f"원본 {source} · {row.source_values.get(name) or '(빈칸)'}" \
                 if source else "원본 셀 없음 (직접 입력 또는 가져오기 판정값)"
             key = self._key(row, field)
             if row.snapshot_id in self.deletes:
@@ -721,18 +800,27 @@ class SheetPanel(_Panel):
                 item.setToolTip(f"모델명({row.model_name})이 설비군({self._group_name(row.group_id)})과 다릅니다 · "
                                 "모델명 칸을 두 번 눌러 설비군 이름으로 맞추거나, 설비군 칸에서 맞는 설비군을 고릅니다")
             elif field in ("category", "model_name"):
-                if ("group", row.snapshot_id) in self.edits or ("model", row.snapshot_id) in self.edits:
+                if self._key(row, "group") in self.edits or ("model", row.snapshot_id) in self.edits:
                     item.setBackground(QBrush(SAVING))
                 item.setToolTip("대분류는 설비군에서 자동으로 정해집니다 (설비 탭에서 관리)" if field == "category"
                                 else "모델명은 설비군을 따라갑니다 · 설비군 칸을 고칩니다")
+            elif field in ("base_date", "site"):
+                item.setToolTip(("기준일" if field == "base_date" else "Site") + "은(는) 현황표에서 정해집니다 · "
+                                "다른 기준일 · Site면 그 현황표에 넣습니다")
+            elif field == "ui_type":
+                if self._key(row, "family") in self.edits:
+                    item.setBackground(QBrush(SAVING))
+                item.setToolTip("UI 구분은 SW 계열에서 정해집니다 · SW 계열 칸을 고칩니다")
             elif key is not None and key in self.edits:
                 item.setBackground(QBrush(SAVING))
                 before = self._original(row, field)
                 before = self._group_name(before) if field == "group" else AREA_LABELS.get(before, before) \
-                    if field == "production_area" else before
+                    if field == "production_area" else row.family_name if field == "family" else before
                 item.setToolTip(f"{before or '(빈칸)'} → {item.text() or '(빈칸)'} · 저장 전 · {origin}")
             else:
-                note = " · PM 설비는 버전 관리에서 고칩니다" if row.has_pm and field in ("group", "version_raw") else ""
+                note = " · 이 PM만의 값입니다" if row.pm_id and field in ("group", "family", "version_raw") else ""
+                note += " · PM 이름은 날짜 간 같은 PM을 잇는 고정 위치라 고치지 않습니다" if field == "pm" and row.pm_id else ""
+                note += " · 설비군에 등록된 SW 계열이 없습니다" if field == "family" and not editable else ""
                 item.setToolTip(origin + note)
         self.table.blockSignals(blocked)
 
@@ -781,6 +869,10 @@ class SheetPanel(_Panel):
                     values["area_auto"] = False     # 직접 고른 Memory/Foundry는 라인을 바꿔도 덮어쓰지 않는다
                 elif field == "line":
                     self._fill_area(values)
+                if field == "group":  # 다른 설비군이면 고른 SW 계열을 비운다 (그 설비군의 계열이 아님)
+                    known = self._known_group(values.get("group"))
+                    if values.get("family") not in {name for _, name, _ in self._families_of(known[0] if known else None)}:
+                        values["family"] = ""
                 if field in ("group", "production_area", "line"):
                     self._fill_version(values)
                 self.steps.append(("state", before))
@@ -800,13 +892,30 @@ class SheetPanel(_Panel):
                 return
             before = self._state()
             self._set_edit(key, gid, row.group_id)
-            name = self._group_name(gid)
-            # 설비군이 그대로면 모델명만 맞춘다 (모델명이 설비군과 달랐던 줄). 바뀌면 저장 때 서버가 모델명을 맞춘다
-            self._set_edit(("model", row.snapshot_id), name if gid == row.group_id else row.model_name, row.model_name)
+            if row.pm_id:
+                # PM 줄: 그 PM의 설비군만 바꾼다. 지금 SW 계열이 새 설비군의 계열이 아니면 맞는 계열 하나를 고른다
+                self._pick_family(row, gid)
+            else:
+                name = self._group_name(gid)
+                # 설비군이 그대로면 모델명만 맞춘다 (모델명이 설비군과 달랐던 줄). 바뀌면 저장 때 서버가 모델명 · 계열을 맞춘다
+                self._set_edit(("model", row.snapshot_id), name if gid == row.group_id else row.model_name, row.model_name)
             if self._state() != before:
                 self.steps.append(("state", before))
             self._repaint_all()
             return
+        elif field == "family":
+            fid = next((f for f, name, _ in self._families_of(self._row_group(row)) if name == value), None)
+            if fid is None:
+                self.say(f"SW 계열 '{value}'은(는) 이 설비군의 계열이 아닙니다. 목록에서 골라 주세요.", error=True)
+                self._paint(r, c)
+                return
+            value = fid
+        elif field in ("process_name", "geometry_type", "modification_type"):
+            limit = {"process_name": 100, "geometry_type": 50, "modification_type": 100}[field]
+            if len(value) > limit:
+                self.say(f"{SHEET_COLUMNS[c][1]}은(는) {limit}자까지 적을 수 있습니다.", error=True)
+                self._paint(r, c)
+                return
         elif field == "model_name":  # 설비군과 다른 줄만: 설비군 이름으로 맞춘다
             name = self._group_name(self.edits.get(("group", row.snapshot_id), row.group_id))
             if value.casefold() != name.casefold():
@@ -828,6 +937,21 @@ class SheetPanel(_Panel):
         self.steps.append(("cell", key, previous, field, row))
         self._set_edit(key, value, self._original(row, field))
         self._repaint_all()  # 같은 설비의 다른 SW 줄도 같은 값을 보인다
+
+    def _pick_family(self, row, gid):
+        """PM 설비군을 바꾼 줄의 SW 계열을 새 설비군에 맞춘다. 지금 계열이 새 설비군의 계열이면 그대로 두고, 아니면
+        Memory/Foundry에 맞는 계열((파운드리) 표기) 중 하나 → 여럿이면 통합UI를 고른다. 정할 수 없으면 직접 고르게 안내한다."""
+        key, current = self._key(row, "family"), self._row_family(row)
+        choices = self._families_of(gid)
+        if key is None or any(f == current for f, _, _ in choices):
+            return
+        area = self.edits.get(("area", row.snapshot_id), row.production_area)
+        fitting = [c for c in choices if ("(파운드리)" in c[1]) == (area == "FOUNDRY")] or list(choices)
+        fitting = [c for c in fitting if c[2] == "INTEGRATED"] or fitting if len(fitting) > 1 else fitting
+        if len(fitting) == 1:
+            self._set_edit(key, fitting[0][0], row.family_id)
+        else:
+            self.say(f"{row.equipment_code} {row.pm_names}의 SW 계열을 새 설비군의 계열로 골라 주세요.", error=True)
 
     def _fill_area(self, values):
         """새 행 Memory/Foundry를 고른 라인의 값으로 채운다 (그 라인을 알 때만, 직접 고른 값은 그대로)."""
@@ -869,7 +993,8 @@ class SheetPanel(_Panel):
         self._temp += 1
         self.new_rows.append({"temp": self._temp, "values": {
             "equipment_code": "", "line": "", "group": "", "category": "",
-            "production_area": self.data.default_area or "", "area_auto": True, "version_raw": "", "version_auto": True}})
+            "production_area": self.data.default_area or "", "area_auto": True, "version_raw": "", "version_auto": True,
+            "pm": "", "process_name": "", "family": "", "geometry_type": "", "modification_type": ""}})
         self.steps.append(("new_row", self._temp))
         self._render()
         self.table.scrollToBottom()
@@ -913,12 +1038,16 @@ class SheetPanel(_Panel):
         for (kind, ident), value in edits.items():
             if kind == "code":
                 grouped[("equipment", (("equipment_id", ident),))]["equipment_code"] = value
-            elif kind in ("line", "model", "area"):
-                name = {"line": "line", "model": "model_name", "area": "production_area"}[kind]
-                grouped[("equipment_snapshot", (("snapshot_id", ident),))][name] = value or None
-            elif kind == "version":
+            elif kind in SNAPSHOT_FIELDS:
+                grouped[("equipment_snapshot", (("snapshot_id", ident),))][SNAPSHOT_FIELDS[kind]] = value or None
+            elif kind in ("version", "family"):
                 grouped[("equipment_version", (("equipment_version_id", ident),))].update(
-                    {"version_raw": value, "release_version_id": None})
+                    {"version_raw" if kind == "version" else "family_id": value, "release_version_id": None})
+            elif kind in ("pm_group", "pm_version", "pm_family"):
+                # PM 줄: 관리 저장이 PM의 SW를 같은 값끼리 나누고 합친다 (설비 현황의 설비군도 PM 설비군으로 다시 맞춘다)
+                name = {"pm_group": "group_id", "pm_version": "version_raw", "pm_family": "family_id"}[kind]
+                grouped[("equipment_pm", (("pm_id", ident),))].update(
+                    {name: value, **({"release_version_id": None} if kind in ("pm_version", "pm_family") else {})})
         return [(table, dict(key), changes) for (table, key), changes in grouped.items()]
 
     def save(self):
@@ -955,18 +1084,17 @@ class SheetPanel(_Panel):
                 f"{' …' if len(self.deletes) > 6 else ''})을 지우고 저장할까요?\n되돌리기 아이콘(Ctrl+Z)으로 저장 전으로 돌릴 수 있습니다.") \
                 != QMessageBox.StandardButton.Yes:
             return False
-        equipment_of = {r.equipment_id: r.snapshot_id for r in self.data.rows}
-        live = {k: v for k, v in self.edits.items() if not (
-            (k[0] in ("line", "model", "area", "group") and k[1] in self.deletes)
-            or (k[0] == "version" and next((r.snapshot_id for r in self.data.rows if r.version_id == k[1]), None) in self.deletes)
-            or (k[0] == "code" and equipment_of.get(k[1]) in self.deletes))}
+        live = {k: v for k, v in self.edits.items() if self._snapshot_of_key(k) not in self.deletes}
+        for row in self.data.rows:  # PM 설비군을 바꾼 줄은 SW 계열도 새 설비군의 계열이어야 한다
+            if ("pm_group", row.pm_id) in live and row.pm_id and not any(
+                    f == self._row_family(row) for f, _, _ in self._families_of(self._row_group(row))):
+                self.say(f"{row.equipment_code} {row.pm_names}의 SW 계열을 새 설비군({self._group_name(self._row_group(row))})의 "
+                         "계열로 골라 주세요.", error=True)
+                return False
         regroup = [(k[1], v) for k, v in live.items() if k[0] == "group"]
         edits = {k: v for k, v in live.items() if k[0] != "group"}
         olds = {k: self._original_of(k) for k in edits}
-        adds = [({"equipment_code": n["values"]["equipment_code"], "line": n["values"]["line"],
-                  "group_name": n["values"]["group"], "model_name": "",
-                  "production_area": n["values"]["production_area"] or None, "version_raw": n["values"]["version_raw"]}, None)
-                for n in self.new_rows]
+        adds = [(self._new_values(n["values"]), None) for n in self.new_rows]
         deletes = tuple(self.deletes)
         batch_id, base_date, gateway = self.data.batch_id, self.data.base_date, self.page.gateway
         save_edits = self.page.edit_work(self._edit_changes(edits)) if edits else None
@@ -991,6 +1119,25 @@ class SheetPanel(_Panel):
                   "deletes": {rows[sid].equipment_id: code for sid, code in self.deletes.items() if sid in rows}}
         return self.page.change(work, self, message="저장하고 있습니다…",
                                 done=lambda result: self._saved_all(result, olds, counts, registered, replay))
+
+    def _snapshot_of_key(self, key):
+        """수정 키가 가리키는 설비 현황 ID (삭제 예정 행의 수정은 저장하지 않는다)."""
+        kind, ident = key
+        for row in self.data.rows:
+            if (kind == "code" and row.equipment_id == ident) or (kind in ("version", "family") and row.version_id == ident) \
+                    or (kind.startswith("pm") and row.pm_id == ident) \
+                    or (kind in (*SNAPSHOT_FIELDS, "group") and row.snapshot_id == ident):
+                return row.snapshot_id
+        return None
+
+    def _new_values(self, values):
+        """새 행 값 → 서버 행 추가 값 (11-16: PM · 공정 · SW 계열 · 형상 · 개조도 함께)."""
+        known = self._known_group(values.get("group"))
+        family = next((f for f, name, _ in self._families_of(known[0] if known else None) if name == values.get("family")), None)
+        return {"equipment_code": values["equipment_code"], "line": values["line"], "group_name": values["group"],
+                "model_name": "", "production_area": values["production_area"] or None, "version_raw": values["version_raw"],
+                "pm_name": values.get("pm", ""), "family_id": family, "process_name": values.get("process_name", ""),
+                "geometry_type": values.get("geometry_type", ""), "modification_type": values.get("modification_type", "")}
 
     def other_site_lines(self):
         """저장할 Line 값 중 이 Site에는 없고 다른 Site에만 있는 라인 {라인: (Site, …)} — 다른 현황표에 넣는 실수 안내."""
