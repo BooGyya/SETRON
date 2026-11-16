@@ -73,6 +73,7 @@ class ReportsPage(QWidget):
         self.generation_allowed = generation_allowed
         self._controls_ready = False
         self.result = None
+        self._generation_query = None
         self.pictures = None
         self.generation_dialog = self.preview_dialog = None
         self.preparing_dialog = None
@@ -289,6 +290,20 @@ class ReportsPage(QWidget):
         self._kind_changed()
         self._render_library()
 
+    def invalidate_catalog(self):
+        """계층이 바뀌면 이전 조건으로 만드는 중인 보고서와 미저장 미리보기를 폐기한다."""
+        self.request.cancel()
+        self._generation_query = None
+        self._close_generation()
+        self.result, self.pictures = None, None
+        if self.state.catalog != self.source.catalog:
+            self.query_panel.set_catalog(self.source.catalog)
+        for name in ("format_dialog", "preview_dialog", "preparing_dialog"):
+            dialog = getattr(self, name, None)
+            if dialog is not None:
+                dialog.reject()
+        self._notice(self.state.selection_error or "조회 선택지가 변경되었습니다. 조건을 확인한 뒤 다시 생성해 주세요.")
+
     def reset_conditions(self):
         days = self.source.analysis_dates or self.source.dates
         with QSignalBlocker(self.start), QSignalBlocker(self.end):
@@ -426,10 +441,12 @@ class ReportsPage(QWidget):
             versions = loader() if "item" in request.selected_types and loader else None
             return generate_report(source, request, versions)
 
+        self._generation_query = query
         return self.request.start(BackgroundRead(load))
 
     def cancel_generation(self):
         self.request.cancel()
+        self._generation_query = None
         self._close_generation()
         self._notice("보고서 생성을 취소했습니다.")
 
@@ -442,6 +459,13 @@ class ReportsPage(QWidget):
 
     def _generated(self, result, error):
         self._close_generation()
+        if self.state.catalog != self.source.catalog:
+            self.invalidate_catalog()
+            return
+        query, self._generation_query = self._generation_query, None
+        if query is not None and not self.state.is_current(query):
+            self._notice(self.state.selection_error or "조회 조건이 변경되었습니다. 선택을 다시 확인한 뒤 보고서를 생성해 주세요.")
+            return
         if error is not None:
             self._alert("보고서를 생성하지 못했습니다.\n" + str(error))
             return

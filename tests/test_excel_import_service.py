@@ -234,4 +234,4 @@ def test_save_errors_map_to_screen_states(error, state):
 
 def test_unexpected_error_hides_internal_details():
     state, message = describe_save_error(RuntimeError("password=secret"))
-    assert state == "failed" and "secret" not in message
+    assert state == "unknown" and "secret" not in message

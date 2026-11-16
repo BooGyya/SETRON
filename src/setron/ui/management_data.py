@@ -159,6 +159,52 @@ class ManagementGateway:
         with self._storage() as storage:
             return getattr(DataAdminService(storage), method)(*args, **kwargs)
 
+    def hierarchy_options(self):
+        """분류 코드는 유지하고 사용자가 정한 표시 이름을 읽는다 (워커에서 호출)."""
+        return self.data_admin("hierarchy_options")
+
+    @staticmethod
+    def _record_edits(storage, changes):
+        from setron.features.management.schemas import RecordEdit
+
+        manager = ManagementService(storage)
+        return tuple(RecordEdit(table, key, manager.get_record(table, key).revision, values)
+                     for table, key, values in changes)
+
+    def save_sheet(self, batch_id, *, changes=(), context=None, **operations):
+        """현황표의 등록·수정·행 변경을 하나의 DB 작업으로 전달한다."""
+        from setron.features.data_admin import DataAdminService
+
+        with self._storage() as storage:
+            edits = self._record_edits(storage, changes)
+            return DataAdminService(storage).save_sheet(batch_id, edits=edits,
+                context=context if context is not None else RefreshContext(), **operations)
+
+    def save_release(self, family_id, plan, *, changes=(), context=None):
+        """릴리즈 칸 수정과 추가·삭제·순서 변경을 한 번에 저장한다."""
+        from setron.features.data_admin import DataAdminService
+
+        with self._storage() as storage:
+            edits = self._record_edits(storage, changes)
+            return DataAdminService(storage).save_release(family_id, plan, edits=edits,
+                context=context if context is not None else RefreshContext())
+
+    def undo_sheet(self, batch_id, *, changes=(), context=None, **operations):
+        from setron.features.data_admin import DataAdminService
+
+        with self._storage() as storage:
+            edits = self._record_edits(storage, changes)
+            return DataAdminService(storage).undo_sheet(batch_id, edits=edits,
+                context=context if context is not None else RefreshContext(), **operations)
+
+    def undo_release_changes(self, undo, *, changes=(), context=None):
+        from setron.features.data_admin import DataAdminService
+
+        with self._storage() as storage:
+            edits = self._record_edits(storage, changes)
+            return DataAdminService(storage).undo_release_changes(undo, edits=edits,
+                context=context if context is not None else RefreshContext())
+
     def export_management(self, path):
         from setron.features.export.management_tables import save_management_data
         from setron.features.export.schemas import ExportResult, ExportStatus

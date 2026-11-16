@@ -56,7 +56,9 @@ from setron.ui.risk_rule_save import RiskRuleSaveController
 from setron.ui.data_management_page import DataManagementPage
 from setron.ui.data_export_page import DataExportPage
 from setron.ui.management_data import gateway_from_env
-from setron.ui.management_integration import export_failure, report_filter, save_numbered_export
+from setron.ui.management_integration import (
+    export_failure, report_filter, reserve_numbered_export, save_numbered_export, write_reserved_export,
+)
 from setron.ui.settings_page import SettingsPage
 from setron.ui.import_dialogs import ImportProgressDialog, confirm_numbered_save
 
@@ -143,11 +145,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                           else f"{getattr(source, 'notice', source.source_label)} · 목표 N 임시 선택")
     window.query_panel.set_target_describer(lambda targets: describe_targets(source, targets))
     window.query_panel.set_target_draft(initial_targets(source))
-    window.query_panel.goal_button.setEnabled(True)
-    window.query_panel.version_button.setEnabled(True)
+    window.query_panel.set_goal_available(True)
+    window.query_panel.set_version_available(True)
     window.version_filter_dialog = None
 
     def open_version_filter():
+        if window.query_state.invalid_selections or getattr(window, "management_uncertain", False):
+            window.notice.setText(window.query_state.selection_error or "저장 결과를 먼저 확인해 주세요.")
+            return
         if window.version_filter_dialog is not None and window.version_filter_dialog.isVisible():
             window.version_filter_dialog.raise_()
             window.version_filter_dialog.activateWindow()
@@ -176,6 +181,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.target_dialog = None
 
     def open_targets():
+        if window.query_state.invalid_selections or getattr(window, "management_uncertain", False):
+            window.notice.setText(window.query_state.selection_error or "저장 결과를 먼저 확인해 주세요.")
+            return
         if window.target_dialog is not None and window.target_dialog.isVisible():
             window.target_dialog.raise_()
             window.target_dialog.activateWindow()
@@ -210,6 +218,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     last_group_pair = None
 
     def open_groups():
+        if window.query_state.invalid_selections or getattr(window, "management_uncertain", False):
+            window.notice.setText(window.query_state.selection_error or "저장 결과를 먼저 확인해 주세요.")
+            return
         if window.group_dialog is not None and window.group_dialog.isVisible():
             window.group_dialog.raise_()
             window.group_dialog.activateWindow()
@@ -245,8 +256,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     window.query_panel.goal_button.clicked.connect(open_groups)
     window.query_panel.catalog_changed.connect(
-        lambda catalog: window.query_panel.goal_button.setEnabled(catalog.is_view_of(source.catalog))
+        lambda catalog: window.query_panel.set_goal_available(catalog.is_view_of(source.catalog))
     )
+    def close_scope_dialogs(*_):
+        for name in ("target_dialog", "group_dialog", "version_filter_dialog"):
+            dialog = getattr(window, name, None)
+            if dialog is not None:
+                dialog.reject()
+    window.query_panel.catalog_changed.connect(close_scope_dialogs)
     dashboard = DashboardPage(window.query_state, source)
     window.query_panel.reset_button.clicked.connect(dashboard.reset_trend_period)
 
@@ -263,7 +280,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     dashboard.tabs.currentChanged.connect(sync_dashboard_date_mode)
     window.page_changed.connect(sync_dashboard_date_mode)
     window.register_page("dashboard", dashboard)
-    heatmap = _DeferredPage(window, "heatmap", lambda: HeatmapPage(window.query_state, source, detail_connected=True), uses_query=True)
+    heatmap = _DeferredPage(window, "heatmap", lambda: HeatmapPage(window.query_state, source, detail_connected=True, expanded=False), uses_query=True)
     equipment = _DeferredPage(window, "equipment", lambda: EquipmentPage(window.query_state, source),
                               parent_key="heatmap", title="설비 목록", uses_query=True)
     custom_versions = version_loader is not None
@@ -307,9 +324,11 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                           sql_importer=sql_importer))
     def configure_import_choices():
         importer.if_loaded(lambda page: page.configure_choices(dates=source.dates, sites=(s.label for s in source.catalog.sites),
-                                   families=(family_name(source, key) for key in source.families)))
+                                   families=(family_name(source, key) for key in source.families),
+                                   areas={option.key: option.label for option in source.catalog.fabs}))
     importer.ready(lambda page: page.configure_choices(dates=source.dates, sites=(s.label for s in source.catalog.sites),
-                                   families=(family_name(source, key) for key in source.families)))
+                                   families=(family_name(source, key) for key in source.families),
+                                   areas={option.key: option.label for option in source.catalog.fabs}))
     window.release_refresh_context = release_refresh_context
     def replay_targets():
         applied = window.query_state.applied
@@ -317,7 +336,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
                 initial_targets(source))
     replay = _DeferredPage(window, "replay", lambda: ReplayPage(source, targets_provider=replay_targets, drawer_parent=window.centralWidget()))
     def configure_replay(page):
-        page.query_panel.goal_button.setEnabled(True)
+        page.query_panel.set_goal_available(True)
         page.query_panel.goal_button.setToolTip(window.query_panel.goal_button.toolTip())
         page.query_panel.goal_button.clicked.connect(open_groups)
     replay.ready(configure_replay)
@@ -330,7 +349,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     data_page.ready(lambda page: page.attach_deletion(importer.deletion))
     importer.ready(lambda page: page.tabs.setTabVisible(1, False))
     versions.ready(lambda page: page.configure(management_gateway, release_refresh_context,
-                       edit_allowed=lambda: not risk_save.busy and not risk_save.locked))
+                       edit_allowed=lambda: not (risk_save.busy or risk_save.locked or window.management_saving
+                                                 or window.management_uncertain)))
     versions.connect("navigate_requested", window.navigate)
     def import_from_version(kind):
         importer.request_kind(kind)      # 자료 종류 판단은 가져오기 화면이 한다 (앱 조립 파일은 업무 코드를 직접 부르지 않음)
@@ -340,7 +360,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     item_risk_action = None
     def submit_item_risk_operation(action, operation):
         nonlocal item_risk_save_pending, item_risk_action
-        if risk_save.busy or risk_save.locked or window.management_saving or window.management_refresh.busy:
+        if (risk_save.busy or risk_save.locked or window.management_saving or window.management_uncertain
+                or window.management_refresh.busy):
             return False
         item_risk_save_pending, item_risk_action = True, action
         started = operation()
@@ -369,6 +390,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     catalog_refresh = ReadRequest(window)
     window.management_refresh_query = None
     window.management_saving = False
+    window.management_uncertain = False
     window.management_last_success = False
     window.management_progress = ImportProgressDialog(window)
 
@@ -403,7 +425,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     hooks = analysis_hooks(source, current_snapshot, ai_client)
     if ai_analyzer is not None:
         hooks["explainer"] = None  # 분석 공급자를 직접 넘기면 그 공급자로 분석한다
-    analysis_allowed = lambda: not (risk_save.busy or risk_save.locked or window.management_saving  # noqa: E731
+    analysis_allowed = lambda: not (risk_save.busy or risk_save.locked or window.management_saving or window.management_uncertain  # noqa: E731
                                      or window.management_refresh.busy or importer.if_loaded(
                                          lambda page: page.state == "saving" or page.deletion.phase == "deleting"))
     if chat_enabled:
@@ -526,10 +548,15 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         quiet = ("import", "export", "dashboard", "heatmap", "items", "replay", "versions", "data", "reports", "settings") + (("ai",) if chat_enabled else ())
         showing_equipment_result = (window.route == "equipment" and equipment.snapshot is not None
                                     and equipment.item_request is None)
-        window.notice.setVisible(window.management_saving or (window.route not in quiet and not showing_equipment_result))
+        window.notice.setVisible(window.management_saving or window.management_uncertain
+                                 or (window.route not in quiet and not showing_equipment_result))
         # 데이터 가져오기 화면도 머리 줄 '설비 목록' 버튼을 숨긴다 (11-10 2차 3-1).
         window.header.toolbar.setVisible(window.route not in {"import", "export", "items", "replay", "versions", "data", "reports", "settings"})
         list_action.setVisible(window.route not in ("dashboard", "heatmap", "ai"))
+        if window.management_uncertain:
+            window.notice.setText("저장 결과 확인 필요 · 데이터 관리에서 저장 결과를 다시 읽어 주세요.")
+            list_action.setEnabled(False)
+            return
         if window.management_saving:
             window.notice.setText("관리 데이터 저장 중 · 완료 후 관련 화면을 다시 읽습니다.")
             list_action.setEnabled(False)
@@ -627,6 +654,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         export_action.setEnabled(True)
         export_action.setToolTip("DB 전체 SQL · 관리 자료 XLSX · 현재 조회 현황 XLSX 내보내기")
 
+    window.sql_export_request = ReadRequest(window)
+    window.data_export_request = ReadRequest(window)
+
     def run_numbered_export(exporter, path, suffix, *, interactive):
         def write(destination):
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -641,29 +671,64 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def export_sql(path=None):
         """DB 전체를 .sql로 내보낸다. ``path``가 없으면 저장 위치를 묻고 결과를 알림창으로 알린다."""
         interactive = path is None
+        if window.management_uncertain:
+            return export_failure(path or "setron_db.sql", "저장 결과 확인 필요 · 데이터 관리에서 저장 결과를 다시 읽어 주세요.")
+        if (db_exporter is None or window.sql_export_request.busy or window.data_export_request.busy
+                or window.export_request.busy or window.management_saving):
+            return export_failure(path or "setron_db.sql", "DB 연결과 다른 저장·내보내기 진행 상태를 확인해 주세요.")
         if interactive:
             default = Path.home() / f"setron_db_{datetime.now():%Y%m%d_%H%M}.sql"
             path, _ = QFileDialog.getSaveFileName(window, "DB 전체 SQL 내보내기", str(default), "SQL 파일 (*.sql)",
                                                   options=QFileDialog.Option.DontConfirmOverwrite)
             if not path:
                 return None
-        result = run_numbered_export(db_exporter, path, ".sql", interactive=interactive)
-        if result is None:
+            destination = reserve_numbered_export(
+                path, ".sql", confirm_duplicate=lambda requested: confirm_numbered_save(window, requested))
+            if destination is None:
+                return None
+            if not isinstance(destination, Path):
+                finish_sql_export(destination, None)
+                return destination
+            started = (not window.management_saving and not window.management_uncertain
+                       and not window.export_request.busy and not window.data_export_request.busy
+                       and window.sql_export_request.start(BackgroundRead(lambda: write_reserved_export(db_exporter, destination))))
+            if not started:
+                # 확인창의 중첩 이벤트 처리 중 다른 내보내기가 시작됐을 수 있다.
+                result = write_reserved_export(
+                    lambda reserved: export_failure(reserved, "다른 내보내기가 진행 중입니다."), destination)
+                QMessageBox.warning(window, "DB 전체 SQL 내보내기", result.message)
+                return result
+            window.notice.setText("DB 전체 SQL 내보내기 · 저장 중")
+            sync_export_page()
             return None
+        return run_numbered_export(db_exporter, path, ".sql", interactive=False)
+
+    def finish_sql_export(result, error):
+        sync_export_page()
+        if error is not None or result is None:
+            result = export_failure("setron_db.sql", "DB 연결과 파일 저장 권한을 확인해 주세요.")
         text = (f"{result.path} 에 저장했습니다 ({result.message}).\n받은 사람은 빈 DB에서 이 파일을 실행하면 됩니다."
                 if result.saved else f"내보내지 못했습니다. {result.message}")
-        if interactive:
-            (QMessageBox.information if result.saved else QMessageBox.warning)(window, "DB 전체 SQL 내보내기", text)
-        return result
+        window.notice.setText("DB 전체 SQL 내보내기 완료" if result.saved else "DB 전체 SQL 내보내기 실패")
+        (QMessageBox.information if result.saved else QMessageBox.warning)(window, "DB 전체 SQL 내보내기", text)
+        sync_mode()
 
+    window.sql_export_request.completed.connect(finish_sql_export)
     window.export_sql = export_sql
     importer.ready(lambda page: page.deletion.setProperty("backupAvailable", db_exporter is not None))
     importer.ready(lambda page: page.deletion.backup_button.setEnabled(db_exporter is not None))
+    importer.ready(lambda page: page.deletion.set_backup_busy(
+        window.sql_export_request.busy or window.data_export_request.busy or window.export_request.busy))
     if db_exporter is not None:
         importer.ready(lambda page: page.deletion.backup_requested.connect(export_sql))
     def export_data(path=None):
         """현재 관리값을 선택한 생산 영역의 요약 Excel 형식으로 내보낸다."""
         interactive = path is None
+        if window.management_uncertain:
+            return export_failure(path or "setron_data.xlsx", "저장 결과 확인 필요 · 데이터 관리에서 저장 결과를 다시 읽어 주세요.")
+        if (data_exporter is None or window.sql_export_request.busy or window.data_export_request.busy
+                or window.export_request.busy or window.management_saving):
+            return export_failure(path or "setron_data.xlsx", "DB 연결과 다른 저장·내보내기 진행 상태를 확인해 주세요.")
         scope = export_page.production_area.currentData() if window.route == "export" else None
         batch_ids = export_page.selected_batch_ids() if window.route == "export" else None
         if batch_ids == () or batch_ids is not None and window.export_files_request.busy:
@@ -685,15 +750,38 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if batch_ids is not None:
             options["batch_ids"] = batch_ids
         exporter = data_exporter if not options else lambda destination: data_exporter(destination, **options)
-        result = run_numbered_export(exporter, path, ".xlsx", interactive=interactive)
-        if result is None:
-            return None
         if interactive:
-            text = (f"{result.path}에 저장했습니다. {result.message}" if result.saved
-                    else f"내보내지 못했습니다. {result.message}")
-            (QMessageBox.information if result.saved else QMessageBox.warning)(window, "관리 데이터 Excel 내보내기", text)
-        return result
+            destination = reserve_numbered_export(
+                path, ".xlsx", confirm_duplicate=lambda requested: confirm_numbered_save(window, requested))
+            if destination is None:
+                return None
+            if not isinstance(destination, Path):
+                finish_data_export(destination, None)
+                return destination
+            started = (not window.management_saving and not window.management_uncertain
+                       and not window.export_request.busy and not window.sql_export_request.busy
+                       and window.data_export_request.start(BackgroundRead(lambda: write_reserved_export(exporter, destination))))
+            if not started:
+                result = write_reserved_export(
+                    lambda reserved: export_failure(reserved, "다른 내보내기가 진행 중입니다."), destination)
+                QMessageBox.warning(window, "관리 데이터 Excel 내보내기", result.message)
+                return result
+            window.notice.setText("관리 데이터 Excel 내보내기 · 저장 중")
+            sync_export_page()
+            return None
+        return run_numbered_export(exporter, path, ".xlsx", interactive=False)
 
+    def finish_data_export(result, error):
+        sync_export_page()
+        if error is not None or result is None:
+            result = export_failure("setron_data.xlsx", "DB 연결과 파일 저장 권한을 확인해 주세요.")
+        text = (f"{result.path}에 저장했습니다. {result.message}" if result.saved
+                else f"내보내지 못했습니다. {result.message}")
+        window.notice.setText("관리 데이터 Excel 내보내기 완료" if result.saved else "관리 데이터 Excel 내보내기 실패")
+        (QMessageBox.information if result.saved else QMessageBox.warning)(window, "관리 데이터 Excel 내보내기", text)
+        sync_mode()
+
+    window.data_export_request.completed.connect(finish_data_export)
     window.export_data = export_data
     window.export_request = ReadRequest(window)
     window.export_title = None
@@ -712,15 +800,25 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     window.export_files_request.completed.connect(finish_export_files)
     export_page.connect("files_requested", load_export_files)
+
     window.page_changed.connect(lambda route: load_export_files() if route == "export" and
                                 export_page.selected_files_button.isChecked() else None)
 
     def sync_export_page(*_):
+        busy_export = window.export_request.busy or window.sql_export_request.busy or window.data_export_request.busy
+        export_action.setEnabled((db_exporter is not None or management_gateway is not None or data_exporter is not None)
+                                 and not busy_export and not window.management_saving and not window.management_uncertain)
+        importer.if_loaded(lambda page: page.deletion.set_backup_busy(busy_export))
+        versions.if_loaded(lambda page: page.history_panel.sql_button.setEnabled(
+            db_exporter is not None and not busy_export and not window.management_uncertain))
         if window.route != "export":
             return
+        export_page.set_area_choices({option.key: option.label for option in source.catalog.fabs})
         busy = ""
-        if window.export_request.busy:
+        if busy_export:
             busy = "내보내기 진행 중입니다."
+        elif window.management_uncertain:
+            busy = "저장 결과 확인 필요 · 데이터 관리에서 저장 결과를 다시 읽어 주세요."
         elif window.management_saving:
             busy = "관리 데이터 저장 완료 후 이용할 수 있습니다."
         export_page.set_availability({
@@ -732,6 +830,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def management_export(kind, path=None):
         interactive = path is None
+        if window.management_uncertain:
+            return export_failure(path or "setron_management.xlsx", "저장 결과 확인 필요 · 데이터 관리에서 저장 결과를 다시 읽어 주세요.")
         title = "관리 자료 XLSX 내보내기" if kind == "management" else "현재 조회 현황 XLSX 내보내기"
         if interactive:
             filename = f"setron_{kind}_{datetime.now():%Y%m%d_%H%M}.xlsx"
@@ -746,7 +846,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             return result
         if management_gateway is None or risk_save.busy or risk_save.locked or window.management_saving:
             return reject("DB 연결과 관리 저장 상태를 확인해 주세요.")
-        if window.export_request.busy:
+        if window.export_request.busy or window.sql_export_request.busy or window.data_export_request.busy:
             return reject("다른 내보내기가 진행 중입니다.")
         query = window.query_state.applied
         if kind == "status" and (query is None or not window.query_state.is_current(query)):
@@ -903,6 +1003,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def query_apply_block_reason():
         # 저장 후 같은 조건을 새 선택지에 연결하는 내부 재적용은 조회 워커를 따로 실행한다.
+        if window.management_uncertain:
+            return "저장 결과를 확인하지 못했습니다. 데이터 관리에서 저장 결과를 다시 읽어 주세요."
         if defer_query_apply:
             return ""
         if window.management_saving:
@@ -933,7 +1035,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def finish_query(value, error):
         query = pending_query
-        if query is None or not window.query_state.is_current(query) or window.management_saving or risk_save.locked:
+        if (query is None or not window.query_state.is_current(query) or window.management_saving
+                or window.management_uncertain or risk_save.locked):
             return
         if error is None:
             _, fresh, snapshot = value
@@ -973,7 +1076,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         if defer_query_apply:
             return
         cancel_query()
-        if window.management_saving or risk_save.locked:
+        if window.management_saving or window.management_uncertain or risk_save.locked:
             return
         if not dashboard.begin_query(query):
             return
@@ -1039,6 +1142,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.query_panel.catalog_changed.connect(lambda *_: heatmap.if_loaded(lambda page: page.invalidate()))
     window.query_panel.catalog_changed.connect(lambda *_: equipment.if_loaded(lambda page: page.clear()))
     window.query_panel.catalog_changed.connect(lambda *_: replay.if_loaded(lambda page: page.invalidate()))
+    window.query_panel.catalog_changed.connect(lambda *_: reports.if_loaded(lambda page: page.invalidate_catalog()))
     window.query_panel.catalog_changed.connect(lambda *_: list_action.setEnabled(False))
 
     def accept_current_snapshot(snapshot):
@@ -1127,14 +1231,14 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         same = (applied is not None and state.applied_is_current and state.draft == applied.selection
                 and state.target_draft == applied.targets)
         window.query_panel.set_catalog(catalog)
-        if not (reapply and same and state.draft == applied.selection):
+        if not (reapply and same and state.draft == applied.selection) or state.invalid_selections:
             return False
         defer_query_apply = True
         try:
-            window.query_panel.apply_draft()
+            query = window.query_panel.apply_draft()
         finally:
             defer_query_apply = False
-        return True
+        return query is not None
 
     def after_management_save(result):
         preserve_detail = item_risk_save_pending
@@ -1191,8 +1295,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     data_page.connect("save_failed", lambda: after_management_save(None))
     risk_save.saved.connect(lambda *_: data_page.if_loaded(lambda page: page.invalidate()))
     importer.connect("saved", lambda *_: data_page.if_loaded(lambda page: page.invalidate()))
+    importer.connect("result_uncertain", lambda: data_page.if_loaded(lambda page: page.invalidate()))
     importer.ready(lambda page: page.deletion.deleted.connect(lambda *_: data_page.if_loaded(lambda data: data.invalidate())))
     importer.ready(lambda page: page.sql_page.saved.connect(lambda *_: data_page.if_loaded(lambda data: data.invalidate())))
+    importer.ready(lambda page: page.sql_page.result_uncertain.connect(lambda: data_page.if_loaded(lambda data: data.invalidate())))
     risk_save.saved.connect(after_management_save)
     risk_save.save_uncertain.connect(uncertain_management_save)
     risk_save.save_failed.connect(lambda: after_management_save(None))
@@ -1201,7 +1307,9 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     versions.connect("save_failed", lambda: after_management_save(None))
     versions.connect("save_uncertain", uncertain_management_save)
     versions.connect("sql_requested", lambda: export_sql())
-    versions.ready(lambda page: page.history_panel.sql_button.setEnabled(db_exporter is not None))
+    versions.ready(lambda page: page.history_panel.sql_button.setEnabled(
+        db_exporter is not None and not (window.sql_export_request.busy or window.data_export_request.busy
+                                        or window.export_request.busy)))
     toggle_notices = {
         "disable": {"success": "기준을 해제했습니다.",
                     "danger": "기준 해제 실패 · 기존 상태 유지 · DB 연결을 확인하고 위험 기준 상세에서 다시 시도해 주세요.",
@@ -1226,7 +1334,8 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     window.management_refresh.completed.connect(finish_saved_refresh)
     window.after_management_save = after_management_save
     def close_guard():
-        busy = (risk_save.state == "saving" or versions.if_loaded(lambda page: page.saving or page.history_panel.read_request.busy)
+        busy = (window.sql_export_request.busy or window.data_export_request.busy or window.export_request.busy
+                or risk_save.state == "saving" or versions.if_loaded(lambda page: page.saving or page.history_panel.read_request.busy)
                 or data_page.if_loaded(lambda page: page.saving) or settings.if_loaded(lambda page: page.operation.busy)
                 or reports.if_loaded(lambda page: page.saving) or importer.if_loaded(
                     lambda page: page.state == "saving" or page.deletion.phase == "deleting" or page.sql_page.busy))
@@ -1287,11 +1396,15 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         cancel_management_refresh()
         dashboard.invalidate()
         cancel_query()
+        window.query_panel.set_catalog(window.query_state.catalog)
         heatmap.if_loaded(lambda page: page.invalidate())
         replay.if_loaded(lambda page: page.invalidate())
         equipment.if_loaded(lambda page: page.clear(message))
         ai.invalidate_data()
         list_action.setEnabled(False)
+        window.export_files_request.cancel()
+        export_page.if_loaded(lambda page: page.set_files((), error=True))
+        window.notice.setText(message)
         read_saved_catalog(finish_import_catalog, background=background)
 
     def after_import_delete(_result):
@@ -1301,8 +1414,43 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
     def after_sql_import(_result):
         refresh_after_data_change("SQL 자료 저장 완료 · 조회 조건을 다시 선택해 주세요.", background=True)
 
+    def after_uncertain_sql_import():
+        # 카탈로그 재조회가 느리거나 실패해도 기존 상세와 대기 중 응답을 사용하지 않는다.
+        versions.if_loaded(lambda page: page.refresh_after_save())
+        items.if_loaded(lambda page: page.refresh_after_save())
+        refresh_after_data_change("SQL 저장 결과 확인 필요 · 조회 조건을 다시 선택해 주세요.", background=True)
+
+    def after_uncertain_excel_import():
+        versions.if_loaded(lambda page: page.refresh_after_save())
+        items.if_loaded(lambda page: page.refresh_after_save())
+        refresh_after_data_change("Excel 저장 결과 확인 필요 · 조회 조건을 다시 선택해 주세요.", background=True)
+
+    def after_uncertain_management_save():
+        window.management_saving = False
+        window.management_uncertain = True
+        window.management_progress.set_operation(None)
+        refresh_after_data_change("저장 결과 확인 필요 · 데이터 관리에서 저장 결과를 다시 읽어 주세요.", background=True)
+        sync_export_page()
+        window.query_panel._render()
+        sync_mode()
+
+    def after_management_reconciled():
+        window.management_uncertain = False
+        versions.if_loaded(lambda page: page.setEnabled(True))
+        items.if_loaded(lambda page: page.setEnabled(True))
+        replay.if_loaded(lambda page: page.setEnabled(True))
+        refresh_after_data_change("저장 결과 다시 읽기 완료 · 조회 조건을 다시 확인해 주세요.", background=True)
+        sync_export_page()
+        window.query_panel._render()
+        ai.refresh()
+
+    data_page.connect("save_uncertain", after_uncertain_management_save)
+    data_page.connect("save_reconciled", after_management_reconciled)
+
     importer.ready(lambda page: page.deletion.deleted.connect(after_import_delete))
     importer.ready(lambda page: page.sql_page.saved.connect(after_sql_import))
+    importer.ready(lambda page: page.sql_page.result_uncertain.connect(after_uncertain_sql_import))
+    importer.connect("result_uncertain", after_uncertain_excel_import)
     return window
 
 

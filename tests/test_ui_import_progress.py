@@ -226,6 +226,7 @@ def test_excel_worker_initializes_and_releases_com_even_on_failure(monkeypatch):
     monkeypatch.setattr(import_tasks, "sys", SimpleNamespace(platform="win32"))
     monkeypatch.setitem(__import__("sys").modules, "pythoncom", SimpleNamespace(
         CoInitialize=lambda: calls.append("init"), CoUninitialize=lambda: calls.append("uninit")))
+    monkeypatch.setattr(import_tasks, "_com_backend", lambda: SimpleNamespace(N_COM_ATTEMPTS=0))
     def fail():
         calls.append("read")
         raise ValueError("합성 읽기 실패")

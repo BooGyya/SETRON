@@ -2,9 +2,21 @@
 
 import sys
 import warnings
+from importlib import import_module
+from threading import Lock
 
-from setron.infrastructure.excel_reader import ExcelDiscoveryWarning
+from setron.infrastructure.excel_reader import (
+    EXCEL_BUSY_MESSAGE, ExcelBusyError, ExcelDiscoveryWarning, is_excel_busy_error,
+)
 from setron.features.excel_import.service import snapshot_sheet
+
+
+_COM_LOCK = Lock()
+MAX_COM_ATTEMPTS = 20
+
+
+def _com_backend():
+    return import_module("xlwings._xlwindows")
 
 
 def excel_task(call, *, com=False):
@@ -14,7 +26,24 @@ def excel_task(call, *, com=False):
         import pythoncom
         pythoncom.CoInitialize()
     try:
-        return call()
+        if pythoncom is None:
+            return call()
+        # xlwings 기본값 0은 busy 오류를 무한 재시도한다. 전역 설정이므로 실제
+        # Excel 작업을 직렬화하고 이 호출이 끝나면 원래 값을 반드시 복구한다.
+        with _COM_LOCK:
+            backend = _com_backend()
+            previous = backend.N_COM_ATTEMPTS
+            backend.N_COM_ATTEMPTS = min(previous, MAX_COM_ATTEMPTS) if previous > 0 else MAX_COM_ATTEMPTS
+            try:
+                return call()
+            except ExcelBusyError:
+                raise
+            except Exception as error:
+                if is_excel_busy_error(error):
+                    raise ExcelBusyError(EXCEL_BUSY_MESSAGE) from error
+                raise
+            finally:
+                backend.N_COM_ATTEMPTS = previous
     finally:
         if pythoncom is not None:
             pythoncom.CoUninitialize()

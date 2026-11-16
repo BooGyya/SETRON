@@ -13,6 +13,13 @@ def _resolver(**tables):
     return resolve
 
 
+def test_managed_model_aliases_follow_remapped_group_ids():
+    row = {"setting_key": b"hierarchy.model_aliases.v1", "setting_value": '{"aliases":{"old":7}}'}
+    result = rewrite_json("app_setting", row, _resolver(equipment_group={7: 107}), ids_changed=True)
+    assert json.loads(result["setting_value"])["aliases"] == {"old": 107}
+    assert json.loads(row["setting_value"])["aliases"] == {"old": 7}
+
+
 def test_rewrites_active_references_and_rejects_missing_sources():
     row = {"source_reference": '{"line":[{"sheet":"S","cells":["A2"],"batch_id":5}]}'}
     resolve = _resolver(import_batch={5: 105}, equipment_group={7: 107})

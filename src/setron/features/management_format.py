@@ -5,7 +5,7 @@ from setron.features.extraction.model_candidates import find_candidate
 EQUIPMENT_HEADERS = (
     "설비 호기", "기준일", "사업장", "라인", "모델명(원문)", "대표 모델", "생산 영역", "구조", "형상",
     "개조 유형", "PM", "PM 모델", "PM 모델명(원문)", "SW 버전(원문)", "연결 릴리즈", "입력 작업",
-    "UI", "설비군",
+    "UI", "설비군", "공정",
 )
 RELEASE_HEADERS = (
     "관리 모델", "버전(원문)", "접미사", "출시일", "확인된 순서", "Item 매핑", "직접 수정 항목", "입력 작업",

@@ -84,6 +84,8 @@ def storage():
           Column("source_reference", String), UniqueConstraint("snapshot_id", "pm_name"),
           ForeignKeyConstraint(["snapshot_id", "equipment_version_id"],
                                ["equipment_version.snapshot_id", "equipment_version.equipment_version_id"]))
+    Table("app_setting", metadata, Column("setting_key", LargeBinary(400), primary_key=True),
+          Column("setting_value", String, nullable=False))
     for name in TABLE_NAMES:
         if name not in metadata.tables:
             Table(name, metadata, Column("id", Integer, primary_key=True))

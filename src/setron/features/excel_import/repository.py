@@ -32,11 +32,15 @@ class ImportValidationRepository:
         - ValueError: 등록 릴리즈 원문 또는 확정 별칭 대응이 상충하는 경우.
         """
         repository = EquipmentRepository()
+        from setron.features.hierarchy import area_labels, category_labels, model_aliases
+        hierarchy = {"category_labels": category_labels(tx), "area_labels": area_labels(tx),
+                     "model_aliases": model_aliases(tx)}
         groups = {row["group_id"]: row for row in repository.rows(tx, "equipment_group")}
         models = tuple(ModelReference(row["group_id"], row["group_name"], row["category"], row.get("parent_group_id"),
                                       analysis_enabled=bool(row["analysis_enabled"]))
                        for row in groups.values())
         family_rows = repository.rows(tx, "version_family")
+        metadata = ReferenceData(frozenset(), models=models, **hierarchy)
         references = []
         for row in family_rows:
             group = groups[row["group_id"]]
@@ -45,11 +49,11 @@ class ImportValidationRepository:
             key = family_key(ReviewRow(1, {
                 "group_name": group["category"], "model_name": group["group_name"],
                 "family_name": plain, "ui_type": row["ui_type"],
-            }), ExtractKind.EQUIPMENT_STATUS)
+            }), ExtractKind.EQUIPMENT_STATUS, metadata)
             if key is not None:
                 references.append(FamilyReference(key, FamilyReleases(row["family_id"], ()), owner_group_id=row["group_id"],
                                                   production_area="FOUNDRY" if foundry else None))
-        catalog = ReferenceData(frozenset(), families=tuple(references), catalog_loaded=True, models=models)
+        catalog = ReferenceData(frozenset(), families=tuple(references), catalog_loaded=True, models=models, **hierarchy)
         needed = set()
         for draft in drafts:
             for row in draft.active_rows:
@@ -123,4 +127,4 @@ class ImportValidationRepository:
         return ReferenceData(frozenset(code for code, value in equipment.items() if value is not None),
                              families=tuple(families), snapshots=tuple(value for value in snapshots.values() if value is not None),
                              stored_releases=tuple(stored), catalog_loaded=True, models=models,
-                             equipment_sites=equipment_sites, equipment_classifications=equipment_classifications)
+                             equipment_sites=equipment_sites, equipment_classifications=equipment_classifications, **hierarchy)

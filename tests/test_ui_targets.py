@@ -279,17 +279,15 @@ def test_explicit_unassigned_goal_produces_unknown_not_zero_or_success(window):
 
 
 @pytest.mark.parametrize("same_catalog", [True, False])
-def test_open_dialog_rejects_catalog_replacement_even_when_values_equal(window, same_catalog):
+def test_open_dialog_closes_on_catalog_replacement_even_when_values_equal(window, same_catalog):
     before = window.query_state.target_draft
     dialog = open_dialog(window)
     dialog.choose((101, 1001), 10011)
     catalog = window.query_state.catalog
     window.set_query_catalog(catalog if same_catalog else replace(catalog, source_label="새 자료"))
-    dialog.confirm_button.click()
-    assert dialog.isVisible() and "변경되었습니다" in dialog.error.text()
+    assert not dialog.isVisible() and window.target_dialog is None
     assert window.query_state.target_draft == before
     assert window.query_panel.goal_button.isEnabled() is same_catalog
-    dialog.reject()
 
 
 def test_open_dialog_rejects_changed_release_choices(window, source):

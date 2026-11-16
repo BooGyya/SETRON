@@ -118,95 +118,99 @@ class ManagementService:
         오래된 요청으로 판정하지 않는다. 원본·수정 전 관리값은 별도 MANUAL 입력
         작업에 보존하며, 기존 입력 작업과 source_reference를 덮어쓰지 않는다.
         """
+        with self.storage.transaction() as tx:
+            return self.save_in(tx, edits, applicability=applicability)
+
+    def save_in(self, tx, edits=(), *, applicability=()):
+        """열린 저장 트랜잭션을 사용한다. commit과 결과 반환 경계는 호출자가 책임진다."""
         edits, applicability = deepcopy(edits), deepcopy(applicability)
         self._requests(edits, applicability)
         context = _context_copy(self.context)
-        with self.storage.transaction() as tx:
-            self._lock(tx)
-            before = []
-            identities = set()
-            canonical = []
-            for edit in edits:
-                view = self._view(tx, edit.table, tx.get(edit.table, edit.key))
-                identity = (edit.table, _digest(view.key))
-                require(identity not in identities, "같은 기록의 수정 요청이 중복됐습니다.")
-                identities.add(identity)
-                require(view.revision == edit.revision,
-                        f"{edit.table}: 검토 후 자료가 바뀌었습니다. 다시 조회·검토해 주세요.")
-                require(set(edit.changes) <= set(view.editable_fields), "원본·식별자 또는 편집할 수 없는 항목입니다.")
-                validate_changes_in(tx, edit.table, view.current, edit.changes)
-                before.append(self._before(tx, edit.table, view.current))
-                canonical.append(RecordEdit(edit.table, view.key, edit.revision, edit.changes))
-            edits = tuple(canonical)
-            for change in applicability:
-                require(change.revision == self._applicability_revision(tx, change.model_id, change.family_id),
-                        "모델 적용 근거가 바뀌었습니다. 다시 조회·검토해 주세요.")
-            pm_changes = self._plan_pm_changes(tx, edits)
-            self._unique_names(tx, edits)
-            snapshots, invalidated, pm_snapshots, changed_applicability = set(), set(), set(), set()
-            explicit_groups = {e.key["snapshot_id"] for e in edits
-                               if e.table == "equipment_snapshot" and "group_id" in e.changes}
-            for edit in edits:
-                row = tx.get(edit.table, edit.key)
-                if "snapshot_id" in row:
-                    snapshots.add(row["snapshot_id"])
-                if edit.table == "equipment":
-                    snapshots.update(r["snapshot_id"] for r in self.rows.rows(tx, "equipment_snapshot",
-                                     equipment_id=row["equipment_id"]))
-                if edit.table in {"release_version", "item"}:
-                    updated = self.releases._edit(tx, edit.table, edit.key, edit.changes)
-                    if edit.table == "release_version" and updated != row:
-                        changed_applicability.add(row["release_version_id"])
-                    if edit.table == "release_version" and edit.changes.get("version_raw", row["version_raw"]) != row["version_raw"]:
-                        invalidated.add(row["release_version_id"])
-                elif edit.table == "equipment_pm":
-                    self._edit_pm(tx, row, pm_changes[row["pm_id"]])
-                    pm_snapshots.add(row["snapshot_id"])
-                elif edit.table == "equipment_version":
-                    require(not self.rows.rows(tx, "equipment_pm", equipment_version_id=row["equipment_version_id"]),
-                            "PM이 공유하는 SW는 수정할 PM 위치를 선택해 수정해야 합니다.")
-                    tx.update(edit.table, edit.key, self._software_changes(row, edit.changes))
-                elif edit.table == "release_version_item":
-                    self._edit_link(tx, row, edit.changes)
-                elif edit.table == "risk_rule":
-                    self._edit_risk(tx, row, edit.changes)
-                elif edit.table == "app_setting":
-                    require(row["setting_key"] == SETTING_KEY, "적용 후보는 전용 근거 수정 요청으로 저장해야 합니다.")
-                    value = parse_thresholds(edit.changes.get("setting_value", row["setting_value"]))
-                    tx.update(edit.table, edit.key, {"setting_value": value.to_setting()})
-                else:
-                    tx.update(edit.table, edit.key, edit.changes)
-            for snapshot_id in sorted(pm_snapshots - explicit_groups):
-                models = {p["group_id"] for p in self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot_id)}
-                tx.update("equipment_snapshot", {"snapshot_id": snapshot_id},
-                          {"group_id": next(iter(models)) if len(models) == 1 else None})
-            for change in applicability:
-                TargetService(None).confirm_in(tx, change.model_id, change.family_id, change.candidates)
-            # 변경 전 명시 목록을 먼저 무효화한 뒤, 같은 묶음에서 새로 확인한 근거만 복구한다.
-            context, _ = fresh_context_in(tx, context,
-                invalidated_applicability_release_ids=tuple(sorted(changed_applicability)))
-            context = self._current_applicability(tx, context, applicability)
-            # 날짜별 분류도 이번 묶음의 모든 명시적 수정을 적용한 최종 현황으로 검사한다.
-            for snapshot_id in sorted(snapshots):
-                validate_snapshot_in(tx, snapshot_id)
-            for edit in edits:
-                if edit.table == "risk_rule":
-                    validate_risk_in(tx, tx.get(edit.table, edit.key), context)
-            # 잘못 제출된 연결을 자동 재연결로 숨기지 않도록 입력 검증 후 재판정한다.
-            refresh = ReleaseRefreshService().refresh_in(tx, context=context,
-                                                        invalidated_release_ids=tuple(sorted(invalidated)))
-            thresholds = self._thresholds(tx)
-            ages = tuple((d.base_date, tuple(equipment_age(e.record, refresh.families, thresholds)
-                                            for e in d.summary.equipment)) for d in refresh.dates)
-            journal = {"schema": 1, "management_edit": {
-                "before": before, "changes": [asdict(e) for e in edits],
-                "applicability": [asdict(e) for e in applicability],
-            }}
-            # 날짜를 JSON으로 변환하고 SW 행 통합 후에도 원래 셀 위치를 조회할 수 있게 한다.
-            journal = json.loads(json.dumps(journal, ensure_ascii=False, default=_json_value, allow_nan=False))
-            audit = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": journal})
-            records = tuple(self._view(tx, e.table, tx.get(e.table, e.key)) for e in edits)
-            result = ManagementResult(records, refresh, ages, thresholds, audit["batch_id"])
+        self._lock(tx)
+        before = []
+        identities = set()
+        canonical = []
+        for edit in edits:
+            view = self._view(tx, edit.table, tx.get(edit.table, edit.key))
+            identity = (edit.table, _digest(view.key))
+            require(identity not in identities, "같은 기록의 수정 요청이 중복됐습니다.")
+            identities.add(identity)
+            require(view.revision == edit.revision,
+                    f"{edit.table}: 검토 후 자료가 바뀌었습니다. 다시 조회·검토해 주세요.")
+            require(set(edit.changes) <= set(view.editable_fields), "원본·식별자 또는 편집할 수 없는 항목입니다.")
+            validate_changes_in(tx, edit.table, view.current, edit.changes)
+            before.append(self._before(tx, edit.table, view.current))
+            canonical.append(RecordEdit(edit.table, view.key, edit.revision, edit.changes))
+        edits = tuple(canonical)
+        for change in applicability:
+            require(change.revision == self._applicability_revision(tx, change.model_id, change.family_id),
+                    "모델 적용 근거가 바뀌었습니다. 다시 조회·검토해 주세요.")
+        pm_changes = self._plan_pm_changes(tx, edits)
+        self._unique_names(tx, edits)
+        snapshots, invalidated, pm_snapshots, changed_applicability = set(), set(), set(), set()
+        explicit_groups = {e.key["snapshot_id"] for e in edits
+                           if e.table == "equipment_snapshot" and "group_id" in e.changes}
+        for edit in edits:
+            row = tx.get(edit.table, edit.key)
+            if "snapshot_id" in row:
+                snapshots.add(row["snapshot_id"])
+            if edit.table == "equipment":
+                snapshots.update(r["snapshot_id"] for r in self.rows.rows(tx, "equipment_snapshot",
+                                 equipment_id=row["equipment_id"]))
+            if edit.table in {"release_version", "item"}:
+                updated = self.releases._edit(tx, edit.table, edit.key, edit.changes)
+                if edit.table == "release_version" and updated != row:
+                    changed_applicability.add(row["release_version_id"])
+                if edit.table == "release_version" and edit.changes.get("version_raw", row["version_raw"]) != row["version_raw"]:
+                    invalidated.add(row["release_version_id"])
+            elif edit.table == "equipment_pm":
+                self._edit_pm(tx, row, pm_changes[row["pm_id"]])
+                pm_snapshots.add(row["snapshot_id"])
+            elif edit.table == "equipment_version":
+                require(not self.rows.rows(tx, "equipment_pm", equipment_version_id=row["equipment_version_id"]),
+                        "PM이 공유하는 SW는 수정할 PM 위치를 선택해 수정해야 합니다.")
+                tx.update(edit.table, edit.key, self._software_changes(row, edit.changes))
+            elif edit.table == "release_version_item":
+                self._edit_link(tx, row, edit.changes)
+            elif edit.table == "risk_rule":
+                self._edit_risk(tx, row, edit.changes)
+            elif edit.table == "app_setting":
+                require(row["setting_key"] == SETTING_KEY, "적용 후보는 전용 근거 수정 요청으로 저장해야 합니다.")
+                value = parse_thresholds(edit.changes.get("setting_value", row["setting_value"]))
+                tx.update(edit.table, edit.key, {"setting_value": value.to_setting()})
+            else:
+                tx.update(edit.table, edit.key, edit.changes)
+        for snapshot_id in sorted(pm_snapshots - explicit_groups):
+            models = {p["group_id"] for p in self.rows.rows(tx, "equipment_pm", snapshot_id=snapshot_id)}
+            tx.update("equipment_snapshot", {"snapshot_id": snapshot_id},
+                      {"group_id": next(iter(models)) if len(models) == 1 else None})
+        for change in applicability:
+            TargetService(None).confirm_in(tx, change.model_id, change.family_id, change.candidates)
+        # 변경 전 명시 목록을 먼저 무효화한 뒤, 같은 묶음에서 새로 확인한 근거만 복구한다.
+        context, _ = fresh_context_in(tx, context,
+            invalidated_applicability_release_ids=tuple(sorted(changed_applicability)))
+        context = self._current_applicability(tx, context, applicability)
+        # 날짜별 분류도 이번 묶음의 모든 명시적 수정을 적용한 최종 현황으로 검사한다.
+        for snapshot_id in sorted(snapshots):
+            validate_snapshot_in(tx, snapshot_id)
+        for edit in edits:
+            if edit.table == "risk_rule":
+                validate_risk_in(tx, tx.get(edit.table, edit.key), context)
+        # 잘못 제출된 연결을 자동 재연결로 숨기지 않도록 입력 검증 후 재판정한다.
+        refresh = ReleaseRefreshService().refresh_in(tx, context=context,
+                                                    invalidated_release_ids=tuple(sorted(invalidated)))
+        thresholds = self._thresholds(tx)
+        ages = tuple((d.base_date, tuple(equipment_age(e.record, refresh.families, thresholds)
+                                        for e in d.summary.equipment)) for d in refresh.dates)
+        journal = {"schema": 1, "management_edit": {
+            "before": before, "changes": [asdict(e) for e in edits],
+            "applicability": [asdict(e) for e in applicability],
+        }}
+        # 날짜를 JSON으로 변환하고 SW 행 통합 후에도 원래 셀 위치를 조회할 수 있게 한다.
+        journal = json.loads(json.dumps(journal, ensure_ascii=False, default=_json_value, allow_nan=False))
+        audit = tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": journal})
+        records = tuple(self._view(tx, e.table, tx.get(e.table, e.key)) for e in edits)
+        result = ManagementResult(records, refresh, ages, thresholds, audit["batch_id"])
         return result
 
     def create_risk_rule(self, values):

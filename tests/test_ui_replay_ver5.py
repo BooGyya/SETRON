@@ -243,13 +243,37 @@ def test_catalog_refresh_rebinds_only_unchanged_submitted_scope(own, changed_sco
                                  sites=tuple(s for s in source.catalog.sites if s.key != "hwaseong"),
                                  fabs=tuple(f for f in source.catalog.fabs if f.site_key != "hwaseong"),
                                  lines=tuple(line for line in source.catalog.lines if line.site_key != "hwaseong"))
+        # 갱신된 자료에 삭제된 사업장의 위치·관측이 남지 않도록 함께 정리한다.
+        source.locations = {key: location for key, location in source.locations.items()
+                            if location.site_key != "hwaseong"}
+        source.records = tuple(record for record in source.records if record.equipment_id in source.locations)
     else:
         source.catalog = replace(source.catalog, source_label="현재 자료의 조회 선택지")
     page.invalidate()
     if changed_scope:
         QTest.qWait(40)
         assert page.data is None and not page.busy and len(calls) == 2
-        assert page.state.applied is request.query and page.state.draft.site_key is None
+        assert page.state.applied is request.query and page.state.draft == request.query.selection
+        assert page.state.invalid_selections == {"site_key": ("hwaseong",)}
+        assert not page.state.is_current(request.query)
+        assert page.query_panel.status.text() == "선택 다시 확인"
+        assert not page.query_panel.search_button.isEnabled()
+        assert not page.version_button.isEnabled() and not page.play_button.isEnabled()
+        assert not page.enter() and not page.apply_query() and not page.play()
+        page.open_versions()
+        assert page.version_dialog is None and len(calls) == 2
+
+        page.query_panel.select("site_key", "pyeongtaek")
+        assert not page.state.invalid_selections and page.query_panel.search_button.isEnabled()
+        assert not page.enter() and len(calls) == 2  # 조건 수정만으로는 자동 조회하지 않는다.
+        page.query_panel.search_button.click()
+        until(lambda: page.data is not None and not page.busy)
+        assert len(calls) == 3 and page.data.request.query is not request.query
+        assert page.data.request.query.selection.site_key == "pyeongtaek"
+        assert page.data.request.start == request.start and page.data.request.end == request.end
+        assert all(tile.site_key == "pyeongtaek" for frame in page.data.frames for tile in frame.tiles)
+        assert page.state.is_current(page.data.request.query) and not page.dirty
+        assert page.version_button.isEnabled() and page.play_button.isEnabled()
     else:
         until(lambda: page.data is not None and not page.busy)
         assert len(calls) == 3 and page.data.request.query is not request.query

@@ -432,7 +432,7 @@ def test_windows_mysql_frozen_exe_and_batch_round_trip(windows_mysql, initialize
     assert (folder / "SETRON_DB.sql").read_bytes() == server.dump.read_bytes()
     server.write_env(folder, "qa_binary")
     code, message = server.invoke(folder, "1\n\n")
-    assert code == 0 and "시연 데이터 삽입 완료" in message
+    assert code == 0 and "시연 데이터 넣기 완료" in message
     original = server.assert_seed("qa_binary")
     backups = _backups(folder)
     code, message = server.invoke(folder, "1\nN\n\n", batch=True)
@@ -446,7 +446,7 @@ def test_windows_mysql_frozen_exe_and_batch_round_trip(windows_mysql, initialize
     definitions, empty = server.snapshot("qa_binary")
     assert definitions == original[0] and all(not values for values in empty.values())
     code, message = server.invoke(folder, "1\nY\n\n")
-    assert code == 0 and "시연 데이터 삽입 완료" in message
+    assert code == 0 and "시연 데이터 넣기 완료" in message
     assert server.assert_seed("qa_binary") == original
     backups = _backups(folder)
     server.admin("REVOKE DELETE ON `qa_binary`.* FROM %s@'127.0.0.1'", (server.username,))

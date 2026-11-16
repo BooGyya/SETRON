@@ -48,6 +48,7 @@ def database():
             ("pm_name", LargeBinary), ("group_id", Integer), ("model_name_raw", String), ("batch_id", Integer), ("source_reference", String)),
         "release_version_item": (("release_version_id", Integer), ("item_id", Integer)),
         "item": (("item_id", Integer), ("item_no", Integer), ("content", String)),
+        "app_setting": (("setting_key", LargeBinary), ("setting_value", String)),
     }
     for name in TABLE_NAMES:
         columns = definitions.get(name, (("id", Integer),))

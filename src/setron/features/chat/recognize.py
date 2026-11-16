@@ -243,10 +243,15 @@ def detect_verdict(question: str) -> Verdict | None:
     return None
 
 
-def detect_areas(question: str) -> tuple[str, ...]:
+def detect_areas(question: str, labels=None) -> tuple[str, ...]:
     text = _norm(question)
-    return tuple(area for area, korean, english in (("MEMORY", "메모리", "memory"), ("FOUNDRY", "파운드리", "foundry"))
-                 if korean in text or re.search(r"(?<![a-z])" + english + r"(?![a-z])", text))
+    found = [area for area, korean, english in (("MEMORY", "메모리", "memory"), ("FOUNDRY", "파운드리", "foundry"))
+             if korean in text or re.search(r"(?<![a-z])" + english + r"(?![a-z])", text)]
+    for code, label in (labels or {}).items():
+        name = _norm(label)
+        if name and re.search(r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])", text):
+            found.append(code)
+    return tuple(dict.fromkeys(found))
 
 
 def detect_group_by(question: str) -> GroupBy | None:
@@ -469,7 +474,8 @@ def recognize(question: str, catalog, ai_conditions: QueryConditions | None = No
     aggregate = detect_aggregate(question) if Intent.DATA_INFO not in intents else ()
     if aggregate:
         intents = (Intent.AGGREGATE,)
-    verdict, areas, group_by = detect_verdict(question), detect_areas(question), detect_group_by(question)
+    verdict, areas, group_by = (detect_verdict(question), detect_areas(question, getattr(catalog, "area_labels", {})),
+                               detect_group_by(question))
     if Intent.CHANGE in intents and Intent.COMPARE in intents and group_by is None and "별" not in _norm(question):
         intents = tuple(i for i in intents if i is not Intent.COMPARE)       # '지난달이랑 비교하면?'은 기간 변화
     has_conditions = any((conditions.sites, conditions.lines, conditions.groups, conditions.families,

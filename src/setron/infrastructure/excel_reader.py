@@ -29,12 +29,20 @@ class ExcelConnectionError(ExcelReadError):
     """실행 중인 Excel에 연결하지 못했다 (Excel 미설치, 응답 없음 등)."""
 
 
+class ExcelBusyError(ExcelConnectionError):
+    """Excel의 셀 편집·대화상자로 읽기 요청이 거부되었다."""
+
+
 class ExcelProtectedViewError(ExcelConnectionError):
     """제한된 보기 창으로 인한 Excel 연결 실패 오류."""
 
 
 class ExcelSheetReadError(ExcelReadError):
     """선택한 시트의 값·위치·파일명 읽기 실패 오류."""
+
+
+class ExcelSheetTooLargeError(ExcelSheetReadError):
+    """서식 등을 포함한 사용 영역이 한 번에 읽을 수 있는 셀 수를 넘었다."""
 
 
 class WorkbookNotFoundError(ExcelReadError):
@@ -240,6 +248,8 @@ def fill_merged(
 
 
 NOT_RUNNING_MESSAGE = "열려 있는 Excel 파일이 없습니다. 가져올 파일을 Excel로 연 뒤 다시 시도하세요."
+EXCEL_BUSY_MESSAGE = "Excel이 다른 작업을 처리하고 있습니다. 셀 편집이나 대화상자를 마친 뒤 다시 시도하세요."
+MAX_USED_CELLS = 1_000_000
 
 
 def list_open_workbooks() -> list[WorkbookInfo]:
@@ -253,6 +263,7 @@ def list_open_workbooks() -> list[WorkbookInfo]:
     raises
     - ExcelNotRunningError: Excel이 실행 중이 아니거나 열린 통합문서가 없는 경우.
     - ExcelProtectedViewError: 선택 가능한 파일이 없고 제한된 보기 연결 오류가 발생한 경우.
+    - ExcelBusyError: 선택 가능한 파일이 없고 Excel이 읽기 요청을 거부한 경우.
     - ExcelConnectionError: 선택 가능한 파일이 없고 연결·정보 조회 오류가 발생한 경우.
     """
     workbooks: list[WorkbookInfo] = []
@@ -306,11 +317,13 @@ def read_sheet(workbook_name: str, sheet_name: str, *, app_pid: int, full_name: 
     - ExcelNotRunningError: 열린 통합문서가 없는 경우.
     - ExcelProtectedViewError: 선택한 프로세스가 제한된 보기 창 때문에 연결에 실패한 경우.
     - ExcelConnectionError: Excel 연결이나 통합문서 검색에 실패한 경우.
+    - ExcelBusyError: Excel의 셀 편집·대화상자로 읽기 요청이 거부된 경우.
     - WorkbookNotFoundError: 선택한 파일이나 프로세스가 더 이상 열려 있지 않은 경우.
     - WorkbookSelectionChangedError: 선택한 파일의 전체 이름이 읽기 전후에 달라진 경우.
     - AmbiguousWorkbookError: 선택한 프로세스에 같은 이름의 후보가 여러 개 있는 경우.
     - SheetNotFoundError: 선택한 파일에 해당 시트가 없는 경우.
     - ExcelSheetReadError: 시트 정보·셀 값·병합 범위·파일명을 읽지 못한 경우.
+    - ExcelSheetTooLargeError: 사용 영역이 한 번에 읽을 수 있는 셀 수를 넘은 경우.
     """
     if type(app_pid) is not int or app_pid < 1:
         raise ValueError("선택 목록의 Excel 프로세스 번호를 전달해야 합니다.")
@@ -326,6 +339,13 @@ def read_sheet(workbook_name: str, sheet_name: str, *, app_pid: int, full_name: 
         if not file_name or not file_name.strip():
             raise ExcelSheetReadError("원본 파일명을 확인할 수 없습니다. 파일을 다시 선택하세요.")
         used = sheet.used_range
+        # 서식만 남은 거대한 UsedRange도 전체 값·원본 셀 사전을 할당하기 전에 보류한다.
+        used_api = used.api
+        if int(used_api.Rows.Count) * int(used_api.Columns.Count) > MAX_USED_CELLS:
+            raise ExcelSheetTooLargeError(
+                f"'{workbook_name}'의 '{sheet_name}' 사용 영역이 {MAX_USED_CELLS:,}셀을 넘습니다. "
+                "서식만 있는 행·열을 확인하거나 필요한 데이터만 별도 시트로 옮긴 뒤 다시 시도하세요."
+            )
         # 기본 변환은 Excel 오류도 None으로 만든다. 빈 셀과 오류 셀을 구분해 검토에 전달한다.
         raw = used.options(ndim=2, err_to_str=True).value
         values = [list(row) for row in raw] if raw else []
@@ -344,6 +364,8 @@ def read_sheet(workbook_name: str, sheet_name: str, *, app_pid: int, full_name: 
     except ExcelReadError:
         raise
     except Exception as exc:  # 시트 선택 후 Excel이 닫히거나 COM이 응답하지 않는 경우 등
+        if is_excel_busy_error(exc):
+            raise ExcelBusyError(EXCEL_BUSY_MESSAGE) from exc
         raise ExcelSheetReadError(
             f"'{workbook_name}'의 '{sheet_name}' 시트를 읽지 못했습니다. "
             "Excel과 선택한 파일·시트를 확인한 뒤 다시 시도하세요."
@@ -373,6 +395,26 @@ def _is_protected_view_error(exc: BaseException) -> bool:
     return False
 
 
+def is_excel_busy_error(exc: BaseException) -> bool:
+    """포장된 원인 예외까지 확인하고 알려진 Excel busy 오류만 구분한다."""
+    current, visited = exc, set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        hresult = getattr(current, "hresult", None)
+        details = getattr(current, "excepinfo", None)
+        if details is None and len(current.args) > 2:
+            details = current.args[2]
+        busy_dispatch = (hresult == -2147352567 and isinstance(details, (tuple, list))
+                         and len(details) == 6 and details[-1] == -2146777998)
+        if (isinstance(current, ExcelBusyError)
+                or hresult in {-2147418111, -2147417846} or busy_dispatch
+                or type(current).__name__ == "ExcelBusyError"
+                and type(current).__module__.startswith("xlwings.")):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _connection_error(exc: Exception) -> ExcelConnectionError:
     """Excel 연결 오류를 사용자에게 알릴 오류 형식으로 바꾼다.
 
@@ -382,7 +424,7 @@ def _connection_error(exc: Exception) -> ExcelConnectionError:
     - exc: 창·통합문서·메타데이터 조회 중 발생한 원인 예외.
 
     return
-    - 원인 예외가 연결된 ExcelConnectionError 또는 ExcelProtectedViewError.
+    - 원인 예외가 연결된 일반 연결·제한된 보기·Excel busy 오류.
     """
     if _is_protected_view_error(exc):
         error = ExcelProtectedViewError(
@@ -390,6 +432,8 @@ def _connection_error(exc: Exception) -> ExcelConnectionError:
             "해당 창의 보안 안내를 확인하고, 신뢰할 수 있는 파일인 경우 "
             "조직의 정책에 따라 직접 '편집 사용'을 선택한 뒤 다시 시도하세요."
         )
+    elif is_excel_busy_error(exc):
+        error = ExcelBusyError(EXCEL_BUSY_MESSAGE)
     else:
         error = ExcelConnectionError(
             "Excel에 연결하지 못했습니다. Excel이 설치되어 있고 응답하는지 확인하세요."

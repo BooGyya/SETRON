@@ -166,10 +166,13 @@ def test_mode_toggle_and_risk_filter_change_display_only_and_can_return(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
     before = page.snapshot
-    QTest.mouseClick(page.view_toggle, Qt.MouseButton.LeftButton)
     assert not page.view_toggle.isChecked() and page.view_toggle.text() == "상세보기"
+    assert all(tile.height() == 40 and tile.version_label is None for tile in page.tile_occurrences)
     QTest.mouseClick(page.view_toggle, Qt.MouseButton.LeftButton)
     assert page.view_toggle.isChecked() and page.view_toggle.text() == "간략히 보기"
+    assert all(tile.height() == 80 and tile.version_label is not None for tile in page.tile_occurrences)
+    QTest.mouseClick(page.view_toggle, Qt.MouseButton.LeftButton)
+    assert not page.view_toggle.isChecked() and page.view_toggle.text() == "상세보기"
     assert "PM1 · v99 · N-1" in page.tile_buttons[1].accessibleName()
     page.risk_button.click()
     assert tuple(page.tile_buttons) == (1, 2)
@@ -240,6 +243,7 @@ def test_keyboard_selection_emits_identity_and_opens_connected_detail(window):
 def test_tiles_show_risk_border_and_tooltip_with_matching_filter_checks(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
+    page.view_toggle.setChecked(True)
     # 위험 후보는 굵은 빨간 테두리로 표시하고 판정 설명은 툴팁으로 확인한다.
     style = page.tile_buttons[2].styleSheet()
     assert f"2px solid {RISK_LINE}" in style and RISK_FILL not in style
@@ -395,6 +399,7 @@ def test_responsive_tiles_have_no_main_horizontal_overflow(window, size, mode):
 def test_horizontal_filters_and_equal_display_button_heights_at_wide_and_narrow_sizes(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
+    page.view_toggle.setChecked(True)
     viewport = window.scroll.viewport()
     hpa, view, card_mode = page.hpa_button, page.view_toggle, page.layout_buttons.button(0)
     assert hpa.text() == "HPA 표시"
@@ -454,6 +459,7 @@ def test_horizontal_filters_and_equal_display_button_heights_at_wide_and_narrow_
 def test_compact_list_hides_detail_columns_and_keeps_row_selection(window):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
+    page.view_toggle.setChecked(True)
     page.layout_buttons.button(1).click()
     table, model = page.list_table, page.list_model
     assert page.list_tools.isVisible()
@@ -565,6 +571,7 @@ def test_long_raw_version_is_elided_in_fixed_tile_and_preserved_in_tooltip_and_l
 def test_each_grouping_supports_tree_projection_filter_changes_and_compact_columns(window, mode):
     window.query_panel.apply_draft()
     page = window.pages["heatmap"]
+    page.view_toggle.setChecked(True)
     snapshot = page.snapshot
     expected_ids = {1, 2, 3, 4, 5}
     if mode == "subline":

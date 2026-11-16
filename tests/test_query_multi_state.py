@@ -61,7 +61,7 @@ def test_parent_changes_retain_only_in_scope_children_without_applying(state):
     assert state.applied is applied and applied.selection.item_family_id == 41 and state.has_pending_changes
 
 
-def test_catalog_replacement_retains_partial_scope_without_applying(state):
+def test_catalog_replacement_preserves_complete_old_scope_and_blocks_apply(state):
     state.set_draft(QuerySelection(("s1", "s2"), ("f1", "f2", UNASSIGNED),
                                   ("l1", "l1u", "l2", UNASSIGNED), ("g1", "g2"), item_family_id=41))
     applied = state.apply()
@@ -71,7 +71,10 @@ def test_catalog_replacement_retains_partial_scope_without_applying(state):
                                   fabs=tuple(option for option in catalog.fabs if option.site_key != "s2"),
                                   lines=tuple(option for option in catalog.lines if option.site_key != "s2"),
                                   groups=tuple(option for option in catalog.groups if option.key != "g2")))
-    assert state.draft == QuerySelection("s1", ("f1", UNASSIGNED), ("l1", "l1u", UNASSIGNED), "g1")
+    assert state.draft == applied.selection
+    assert set(state.invalid_selections) == {"site_key", "fab_key", "line_key", "group_key"}
+    with pytest.raises(ValueError, match="선택 다시 확인"):
+        state.apply()
     assert state.applied is applied and not state.is_current(applied) and state.has_pending_changes
 
 

@@ -46,7 +46,8 @@ def main() -> None:
         ], cwd=ROOT, check=True)
         output.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(stage / "dist" / f"{NAME}.exe", output / f"{NAME}.exe")
-        shutil.copyfile(ROOT / "prepare_demo_db.bat", output / "prepare_demo_db.bat")
+        batch = (ROOT / "prepare_demo_db.bat").read_text(encoding="utf-8-sig")
+        (output / "prepare_demo_db.bat").write_bytes(batch.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n").encode("ascii"))
         if dump != output / "SETRON_DB.sql":
             shutil.copyfile(dump, output / "SETRON_DB.sql")
         print(output)

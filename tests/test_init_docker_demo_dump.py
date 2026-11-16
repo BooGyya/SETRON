@@ -302,7 +302,7 @@ def test_console_confirmation_defaults_to_no(initializer, setup, tmp_path, monke
     monkeypatch.setattr(initializer.shared, "program_folder", lambda: tmp_path)
     monkeypatch.setattr(initializer.subprocess, "run", runner)
     monkeypatch.setattr("builtins.input", lambda prompt: "")
-    assert initializer.main([]) == 3
+    assert initializer.main(["--import-demo"]) == 3
     assert db.rows == old and not destructive(db)
     captured = capsys.readouterr().out
     assert runner.values["MYSQL_USER"].decode() not in captured
@@ -333,3 +333,154 @@ def test_line_summary_counts_unique_equipment_and_preserves_site_scope(initializ
     assert summary == initializer._source_summary(rows)
     assert summary["lines"]["P1F"] == {"equipment": 2, "observations": 3}
     assert summary["lines"]["P4H"] == {"equipment": 1, "observations": 1}
+
+
+def test_reset_backs_up_before_delete_and_preserves_structure_without_dump(initializer, setup, tmp_path, monkeypatch):
+    _, old, db, runner, _ = setup
+    objects, columns = deepcopy(db.objects), deepcopy(db.columns)
+    monkeypatch.setattr(initializer.shared, "dump_path", lambda *args: pytest.fail("reset must not read demo SQL"))
+    monkeypatch.setattr(initializer.shared, "load_config", lambda *args: pytest.fail("must not use Windows settings"))
+    messages = []
+
+    def guard():
+        files = list((tmp_path / "backups").glob("*.sql"))
+        assert len(files) == 1 and initializer.shared.read_dataset(files[0]) == old
+
+    db.backup_guard = guard
+    result = initializer.reset_data(folder=tmp_path, runner=runner,
+                                    confirm=lambda message: messages.append(message) or True)
+    assert result.applied and result.summary == {"tables": 13, "rows": 0}
+    assert initializer.shared.read_dataset(result.backup) == old
+    assert db.objects == objects and db.columns == columns
+    assert all(not rows for rows in db.rows.values())
+    assert destructive(db) == [f"DELETE FROM `{table}`" for table in reversed(TABLE_NAMES)]
+    assert db.foreign_key_checks == 1 and db.transaction_rows is None
+    assert db.selected == ["setron_dev"]
+    assert "13306" in messages[0]
+    assert "테이블 구조를 유지" in messages[0] and str(tmp_path / "backups") in messages[0]
+    assert runner.values["MYSQL_PASSWORD"].decode() not in messages[0]
+    assert any(sql.startswith("SELECT RELEASE_LOCK") for sql, _ in db.log)
+
+
+@pytest.mark.parametrize("confirm", [None, lambda _: False])
+def test_reset_cancel_has_no_backup_or_data_changes(initializer, setup, tmp_path, confirm):
+    _, old, db, runner, _ = setup
+    assert not initializer.reset_data(folder=tmp_path, runner=runner, confirm=confirm).applied
+    assert db.rows == old and not destructive(db)
+    assert not (tmp_path / "backups").exists()
+
+
+@pytest.mark.parametrize("problem", ["empty", "partial", "extra", "view", "trigger", "engine", "columns", "windows", "hostname", "lock", "missing-db"])
+def test_reset_rejects_unsupported_target_before_confirmation(initializer, setup, tmp_path, problem):
+    _, old, db, runner, _ = setup
+    if problem == "empty":
+        db.objects.clear()
+    elif problem == "partial":
+        db.objects.pop("app_setting")
+    elif problem == "extra":
+        db.objects["unrelated"] = "BASE TABLE"
+    elif problem == "view":
+        db.objects["equipment"] = "VIEW"
+    elif problem == "trigger":
+        db.unsupported.add("TRIGGERS")
+    elif problem == "engine":
+        db.engines["equipment"] = "MyISAM"
+    elif problem == "columns":
+        db.columns["equipment"] = ("unknown_column",)
+    elif problem == "windows":
+        db.platform = "Win64"
+    elif problem == "hostname":
+        db.hostname = "different-container"
+    elif problem == "lock":
+        db.lock = 0
+    elif problem == "missing-db":
+        db.missing = True
+    with pytest.raises((ValueError, pymysql.MySQLError)):
+        initializer.reset_data(folder=tmp_path, runner=runner,
+                               confirm=lambda _: pytest.fail("must verify target first"))
+    assert db.rows == old and not destructive(db)
+    assert not (tmp_path / "backups").exists()
+
+
+def test_reset_backup_failure_never_deletes(initializer, setup, tmp_path, monkeypatch):
+    _, old, db, runner, _ = setup
+
+    def fail(*args):
+        raise OSError("fixture backup failure")
+
+    monkeypatch.setattr(initializer.shared, "_backup", fail)
+    with pytest.raises(ValueError, match="백업"):
+        initializer.reset_data(folder=tmp_path, runner=runner, confirm=lambda _: True)
+    assert db.rows == old and not destructive(db)
+
+
+@pytest.mark.parametrize("failure", ["delete", "verify"])
+def test_failed_reset_rolls_back_rows_and_retains_verified_backup(initializer, setup, tmp_path, failure):
+    _, old, db, runner, _ = setup
+    if failure == "delete":
+        db.fail_delete = "equipment"
+    else:
+        db.reset_bad_count = True
+    with pytest.raises(ValueError) as error:
+        initializer.reset_data(folder=tmp_path, runner=runner, confirm=lambda _: True)
+    assert db.rows == old and db.foreign_key_checks == 1
+    assert set(db.objects) == set(TABLE_NAMES)
+    assert ("ROLLBACK", None) in db.log
+    backup, = (tmp_path / "backups").glob("*.sql")
+    assert initializer.shared.read_dataset(backup) == old and str(backup) in str(error.value)
+
+
+@pytest.mark.parametrize("answer,code", [("", 3), ("N", 3), ("Y", 0)])
+def test_reset_cli_uses_explicit_confirmation_and_custom_container(initializer, setup, tmp_path, monkeypatch, capsys, answer, code):
+    _, old, db, runner, _ = setup
+    monkeypatch.setattr(initializer.shared, "program_folder", lambda: tmp_path)
+    monkeypatch.setattr(initializer.subprocess, "run", runner)
+    monkeypatch.setattr("builtins.input", lambda prompt: answer)
+    assert initializer.main(["--reset-data", "--container", "chosen-mysql"]) == code
+    assert runner.calls and all("chosen-mysql" in call for call in runner.calls)
+    if code == 0:
+        assert all(not rows for rows in db.rows.values())
+        assert "구조를 유지" in capsys.readouterr().out
+    else:
+        assert db.rows == old and not destructive(db)
+
+
+def test_reset_quiet_is_cancelled_and_conflicting_modes_never_connect(initializer, setup, tmp_path, monkeypatch):
+    _, old, db, runner, _ = setup
+    monkeypatch.setattr(initializer.shared, "program_folder", lambda: tmp_path)
+    monkeypatch.setattr(initializer.subprocess, "run", runner)
+    with pytest.raises(SystemExit) as error:
+        initializer.main(["--reset-data", "--import-demo"])
+    assert error.value.code == 2 and not runner.calls and not db.log
+    assert initializer.main(["--reset-data", "--quiet"]) == 3
+    assert db.rows == old and not destructive(db)
+
+
+def test_packager_normalizes_ascii_wrapper_to_crlf_without_connecting(initializer, setup, tmp_path, monkeypatch):
+    source, _, _, _, connections = setup
+    root = tmp_path / "builder-source"
+    root.mkdir()
+    wrapper = b"@echo off\nsetlocal DisableDelayedExpansion\necho sample\n"
+    (root / "prepare_docker_demo_db.bat").write_bytes(wrapper)
+    location = Path(__file__).resolve().parents[1] / "packaging" / "build_docker_demo_db.py"
+    spec = importlib.util.spec_from_file_location("build_docker_demo_db_for_test", location)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = tmp_path / "deployment"
+    monkeypatch.setattr(module, "ROOT", root)
+    monkeypatch.setattr(sys, "argv", ["build_docker_demo_db.py", "--dump", str(source), "--output-dir", str(output)])
+    commands = []
+
+    def build(command, **kwargs):
+        commands.append(command)
+        dist = Path(command[command.index("--distpath") + 1])
+        dist.mkdir()
+        (dist / "SETRON_DOCKER_DB_INIT.exe").write_bytes(b"fixture-executable")
+
+    monkeypatch.setattr(module.subprocess, "run", build)
+    monkeypatch.setattr(module.tempfile, "tempdir", str(tmp_path))
+    module.main()
+    assert (output / "prepare_docker_demo_db.bat").read_bytes() == wrapper.replace(b"\n", b"\r\n")
+    assert (output / "SETRON_DB.sql").read_bytes() == source.read_bytes()
+    assert {path.name for path in output.iterdir()} == {"SETRON_DOCKER_DB_INIT.exe", "prepare_docker_demo_db.bat", "SETRON_DB.sql"}
+    assert "--console" in commands[0] and not connections

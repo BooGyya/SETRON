@@ -14,7 +14,7 @@ class QueryFilterPopup(QDialog):
 
     selection_changed = Signal(object)
 
-    def __init__(self, title, options, selected, *, parent, anchor=None, show_groups=True):
+    def __init__(self, title, options, selected, *, parent, anchor=None, show_groups=True, invalid_names=()):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.anchor = parent if anchor is None else anchor
         self.setObjectName("queryFilterPopup")
@@ -24,6 +24,7 @@ class QueryFilterPopup(QDialog):
         self.selected_keys = ()
         self.checks = {}
         self._sections = {}
+        self.preserve_explicit_selection = bool(invalid_names)
         selected = set(selected)
 
         body = QVBoxLayout(self)
@@ -35,6 +36,9 @@ class QueryFilterPopup(QDialog):
         self.count.setAccessibleName("선택한 항목 개수")
         header.addWidget(self.count, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         body.addLayout(header)
+        if invalid_names:
+            body.addWidget(label("선택 다시 확인 · " + ", ".join(invalid_names)
+                                 + "\n현재 목록에서 범위를 다시 선택해 주세요.", 12, color=SECONDARY, wrap=True))
         self.search = QLineEdit()
         self.search.setAccessibleName(f"{title} 검색")
         self.search.setPlaceholderText(f"{title} 검색")
@@ -153,7 +157,7 @@ class QueryFilterPopup(QDialog):
         self.all_button.setEnabled(bool(self.checks))
         self.count.setText("하나 이상 선택해 주세요" if not count and self.checks else f"{count}개 선택 중")
         self.confirm_button.setEnabled(count > 0)
-        self.selected_keys = () if count == len(self.checks) else selected
+        self.selected_keys = (() if count == len(self.checks) else selected) if not self.preserve_explicit_selection else selected
         if selected:
             self.selection_changed.emit(self.selected_keys)
 

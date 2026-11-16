@@ -279,6 +279,11 @@ def _unknown_result(operation, backup, error):
                       f"{suffix}\n작업 기록: {operation.path}")
 
 
+def _target_text(config: DatabaseConfig, folder: Path) -> str:
+    return (f"대상 DB: {config.database} · {config.host}:{config.port}\n"
+            f"백업 위치: {(folder / 'backups').resolve()}")
+
+
 def prepare(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = None,
             folder: Path | None = None, source: Path | None = None,
             progress: Callable[[str], None] | None = None) -> SetupResult:
@@ -291,13 +296,13 @@ def prepare(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = N
     definitions = schema_statements()
     _check_references(rows, definitions)
     lock_name = "setron-init:" + sha256(config.database.casefold().encode()).hexdigest()[:32]
-    _progress(progress, "DB 연결·권한을 확인하는 중…")
     with _connect(config) as connection, connection.cursor() as cursor:
         _start_session(cursor)
         cursor.execute("SELECT GET_LOCK(%s, %s)", (lock_name, LOCK_WAIT_SECONDS))
         if cursor.fetchone() != (1,):
             raise SetupError("시연 DB 준비 작업이 이미 실행 중입니다. 잠시 후 다시 시도해 주세요.")
         operation = None
+        target_reported = False
         try:
             # 잠금을 기다리는 동안 다른 실행이 중단됐을 수도 있어 다시 확인한다.
             assert_no_pending(folder, config)
@@ -308,6 +313,8 @@ def prepare(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = N
                 if error.args[0] != 1049:
                     raise
                 check_privileges(cursor, config.database, "import", TABLE_NAMES, create_database=True)
+                _progress(progress, _target_text(config, folder))
+                target_reported = True
                 operation = begin_operation(folder, config, "import", None)
                 identifier = "`" + config.database.replace("`", "``") + "`"
                 cursor.execute(f"CREATE DATABASE IF NOT EXISTS {identifier} DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
@@ -317,21 +324,17 @@ def prepare(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None = N
             backup = None
             old_rows, old_definitions = None, None
             if objects:
-                message = ("[시연 데이터 삽입]\n"
-                           f"대상: {config.host}:{config.port} / DB: {config.database}\n"
-                           "관리 테이블 13개의 데이터를 모두 교체합니다.\n"
-                           "앱과 다른 DB 도구의 저장 작업을 먼저 종료하세요.\n"
-                           f"백업 폴더: {folder / 'backups'}\n\n"
-                           "기존 데이터를 덮어쓰시겠습니까?")
+                message = (_target_text(config, folder) + "\n\n"
+                           "기존 데이터가 있습니다. 시연 데이터로 덮어쓰시겠습니까?\n")
                 if confirm is None or not confirm(message):
                     return SetupResult(False)
-                _progress(progress, "기존 데이터를 백업·검증하는 중…")
                 try:
                     backup, old_rows, old_definitions = _backup(connection, cursor, folder, config)
                 except (Exception, KeyboardInterrupt) as error:
                     raise SetupError("기존 DB의 SQL 백업·검증에 실패하거나 중단됐습니다. 기존 테이블과 데이터를 변경하지 않았습니다.") from error
+            elif not target_reported:
+                _progress(progress, _target_text(config, folder))
             operation = operation or begin_operation(folder, config, "import", backup)
-            _progress(progress, "시연 데이터를 적용하는 중… 창을 닫지 마세요.")
             try:
                 if objects:
                     _drop(cursor)
@@ -425,7 +428,6 @@ def reset_data(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None 
     assert_no_pending(folder, config)
     schema_statements()  # 신뢰하는 관리 테이블 목록과 번들 스키마 상태를 확인한다.
     lock_name = "setron-init:" + sha256(config.database.casefold().encode()).hexdigest()[:32]
-    _progress(progress, "DB 연결·권한을 확인하는 중…")
     with _connect(config) as connection, connection.cursor() as cursor:
         _start_session(cursor)
         cursor.execute("SELECT GET_LOCK(%s, %s)", (lock_name, LOCK_WAIT_SECONDS))
@@ -445,22 +447,15 @@ def reset_data(config: DatabaseConfig, *, confirm: Callable[[str], bool] | None 
             if set(objects) != set(TABLE_NAMES):
                 raise SetupError("관리 테이블 13개가 없어 데이터 초기화를 중단했습니다. 아무것도 변경하지 않았습니다.")
             _check_reset_tables(cursor, config)
-            message = ("[데이터 초기화]\n"
-                       f"대상: {config.host}:{config.port} / DB: {config.database}\n"
-                       "관리 테이블 13개의 모든 데이터를 삭제합니다.\n"
-                       "테이블 구조는 유지합니다.\n"
-                       "앱과 다른 DB 도구의 저장 작업을 먼저 종료하세요.\n"
-                       f"백업 폴더: {folder / 'backups'}\n\n"
-                       "모든 데이터를 삭제하시겠습니까?")
+            message = (_target_text(config, folder) + "\n\n"
+                       "테이블 구조를 유지하고 모든 데이터를 삭제하시겠습니까?\n")
             if confirm is None or not confirm(message):
                 return SetupResult(False)
-            _progress(progress, "기존 데이터를 백업·검증하는 중…")
             try:
                 backup, _, _ = _backup(connection, cursor, folder, config)
             except (Exception, KeyboardInterrupt) as error:
                 raise SetupError("기존 DB의 SQL 백업·검증에 실패하거나 중단됐습니다. 기존 테이블과 데이터를 변경하지 않았습니다.") from error
             operation = begin_operation(folder, config, "reset", backup)
-            _progress(progress, "데이터를 초기화하는 중… 창을 닫지 마세요.")
             try:
                 _reset_rows(connection, cursor, guarded_commit=True)
             except CommitOutcomeUnknown as error:
@@ -486,7 +481,7 @@ def load_config(folder: Path | None = None) -> DatabaseConfig:
 
 def _permission_guidance(config: DatabaseConfig | None, mode: str) -> str:
     """계정 권한은 자동 변경하지 않고 해당 DB에 한정한 확인·설정 방법을 안내한다."""
-    target = (f"대상: {config.host}:{config.port} / DB: {config.database} / 계정: {config.username}"
+    target = (f"대상 DB: {config.database} · {config.host}:{config.port}\n계정: {config.username}"
               if config is not None else "설정: 실행 파일 옆 setron.env")
     permissions = "SELECT, DELETE, TRIGGER" if mode == "reset" else "SELECT, CREATE, DROP, INSERT, REFERENCES, TRIGGER"
     return ("\n\n[계정·권한 확인]\n"
@@ -537,19 +532,15 @@ def run(*, confirm: Callable[[str], bool] | None = None, mode: str = "import",
         if mode not in {"import", "reset"}:
             return 2, "지원하지 않는 DB 작업입니다."
         config = load_config()
-        _progress(progress, f"대상: {config.host}:{config.port} / DB: {config.database} / 계정: {config.username}")
-        overridden = [key.removeprefix("SETRON_DB_") for key in os.environ if key.startswith("SETRON_DB_")]
-        if overridden:
-            _progress(progress, "Windows 환경변수 우선 적용: " + ", ".join(sorted(overridden)))
-        _progress(progress, "앱과 다른 DB 도구의 저장 작업을 종료한 상태에서 진행하세요.")
+        if any(key.startswith("SETRON_DB_") for key in os.environ):
+            _progress(progress, "설정: Windows 환경변수 우선 적용")
         options = {"confirm": confirm}
         if progress is not None:
             options["progress"] = progress
         result = (reset_data if mode == "reset" else prepare)(config, **options)
         if not result.applied:
-            cancelled = "데이터 초기화를 취소했습니다." if mode == "reset" else "시연 데이터 삽입을 취소했습니다."
-            return 3, cancelled + "\nDB를 변경하지 않았습니다."
-        suffix = f"\n백업: {result.backup}" if result.backup else ""
+            return 3, "취소했습니다. DB는 변경하지 않았습니다."
+        suffix = f"\n백업 파일: {result.backup}" if result.backup else ""
         if result.warning:
             suffix += "\n" + result.warning
     except (SetupError, DumpFormatError) as error:
@@ -564,8 +555,8 @@ def run(*, confirm: Callable[[str], bool] | None = None, mode: str = "import",
         action = "데이터 초기화" if mode == "reset" else "시연 데이터 삽입"
         return failed(f"{action} 작업을 중단했습니다.", error)
     if mode == "reset":
-        return 0, f"데이터 초기화 완료\n검증: 테이블 13개 유지 · 모든 데이터 0행{suffix}"
-    return 0, f"시연 데이터 삽입 완료\n검증: 테이블 13개 · SQL 행 수 일치{suffix}"
+        return 0, f"데이터 초기화 완료{suffix}"
+    return 0, f"시연 데이터 넣기 완료{suffix}"
 
 
 def _configure_console_output():
@@ -591,7 +582,7 @@ def _console_confirm(message: str) -> bool:
     _discard_pending_console_input()
     print(message, flush=True)
     try:
-        answer = input("진행: Y / 취소: Enter·N [기본 N]: ")
+        answer = input("선택 [Y/N]: ")
     except (EOFError, KeyboardInterrupt):
         print()
         return False
@@ -599,23 +590,23 @@ def _console_confirm(message: str) -> bool:
 
 
 def _console_menu() -> int:
-    print("SETRON DB 관리 · Windows MySQL")
-    print("설정: 실행 파일 옆 setron.env\n")
-    print("1. 시연 데이터 넣기")
-    print("2. 데이터 초기화 (모든 데이터 삭제 · 테이블 유지)")
+    print("SETRON Windows MySQL 데이터 관리")
+    print("1. 시연 데이터 넣기 - 기존 자료 교체")
+    print("2. 데이터 초기화 - 테이블 구조 유지, 모든 데이터 삭제")
     print("3. 종료\n")
     while True:
         try:
-            choice = input("선택 [1/2/3] 후 Enter: ").strip()
+            choice = input("선택 [1/2/3]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             choice = "3"
         if choice == "3":
-            print("종료: DB를 변경하지 않았습니다.")
+            print("종료합니다.")
             return 0
         if choice in {"1", "2"}:
             break
         print("1, 2, 3 중 하나를 입력하세요.")
+    print()
     mode = "import" if choice == "1" else "reset"
     code, message = run(confirm=_console_confirm, mode=mode, progress=lambda text: print(text, flush=True))
     print(message)

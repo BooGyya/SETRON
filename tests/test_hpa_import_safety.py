@@ -137,6 +137,8 @@ def test_direct_snapshot_cannot_mix_hpa_and_analysis_enabled_models():
 
     class Transaction:
         def get(self, table, key):
+            if table == "app_setting":
+                raise LookupError("사용자 위치 설정 없음")
             if table == "import_batch":
                 return {"source_type": "MANUAL"}
             if table == "equipment_group":

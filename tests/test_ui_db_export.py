@@ -13,6 +13,8 @@ from setron.ui.app import create_window
 from setron.ui.database_source import data_exporter_from_env, sql_exporter_from_env
 from setron.ui.import_dialogs import ImportConfirmDialog
 from test_release_revision import revision_storage  # noqa: F401
+from test_management_app_integration import file_storage  # noqa: F401
+from test_ui_import_ver5 import until
 
 
 @pytest.fixture(scope="module")
@@ -73,6 +75,7 @@ def test_sidebar_export_confirms_and_numbers_duplicate_names(qapp, tmp_path, mon
             monkeypatch.setattr(QFileDialog, "getSaveFileName", select)
             prompt_count = len(prompts)
             page.buttons[key].click()
+            until(lambda: not window.sql_export_request.busy and not window.data_export_request.busy)
             assert calls[-1] == (key, path) and len(prompts) == prompt_count
             path.write_text("기존 파일", encoding="utf-8")
             call_count = len(calls)
@@ -86,6 +89,7 @@ def test_sidebar_export_confirms_and_numbers_duplicate_names(qapp, tmp_path, mon
             original = path
             for number in (1, 2, 3):
                 page.buttons[key].click()
+                until(lambda: not window.sql_export_request.busy and not window.data_export_request.busy)
                 saved = original.with_name(f"{original.stem} ({number}){suffix}")
                 assert calls[-1] == (key, saved)
                 assert saved.read_text(encoding="utf-8") == key
@@ -96,6 +100,7 @@ def test_sidebar_export_confirms_and_numbers_duplicate_names(qapp, tmp_path, mon
             path = original.with_name(f"{original.stem} (2) (1){suffix}")
             path.write_text("이전 사본", encoding="utf-8")
             page.buttons[key].click()
+            until(lambda: not window.sql_export_request.busy and not window.data_export_request.busy)
             assert calls[-1] == (key, original.with_name(f"{original.stem} (4){suffix}"))
             assert path.read_text(encoding="utf-8") == "이전 사본"
             assert len(prompts) == prompt_count + 5
@@ -216,24 +221,25 @@ def test_export_action_runs_data_exporter(qapp, tmp_path):
     window.close()
 
 
-def test_sidebar_excel_export_saves_only_equipment_and_release_notes(qapp, revision_storage, tmp_path, monkeypatch):
+def test_sidebar_excel_export_saves_only_equipment_and_release_notes(qapp, file_storage, tmp_path, monkeypatch):
     from openpyxl import load_workbook
 
     from setron.features.export.management import save_management_summary
     from test_management_db_source import connected
 
-    connected(revision_storage)
+    connected(file_storage)
     path = tmp_path / "두시트.xlsx"
     messages = []
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_, **__: (str(path), ""))
     monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[-1]))
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: pytest.fail(args[-1]))
-    window = create_window(data_exporter=lambda destination: save_management_summary(revision_storage, destination))
+    window = create_window(data_exporter=lambda destination: save_management_summary(file_storage, destination))
     try:
         window.nav["export"].click()
         page = window.pages["export"]
-        assert page.details["summary"].text() == "설비현황표와 릴리즈노트 두 시트를 Excel로 저장합니다."
+        assert not page.panels["summary"].isHidden()
         page.buttons["summary"].click()
+        until(lambda: not window.data_export_request.busy)
         book = load_workbook(path)
         try:
             assert book.sheetnames == ["설비현황표", "릴리즈노트"]

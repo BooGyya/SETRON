@@ -409,7 +409,7 @@ class HeatmapPage(DeferredResultMixin, QWidget):
     view_count = ResultAttribute()
     equipment_selected = Signal(object)
 
-    def __init__(self, state, source, *, detail_connected=False, show_summary=True, show_grouping=True):
+    def __init__(self, state, source, *, detail_connected=False, show_summary=True, show_grouping=True, expanded=True):
         super().__init__()
         self.state, self.source, self.snapshot = state, source, None
         self.detail_connected = detail_connected
@@ -476,7 +476,7 @@ class HeatmapPage(DeferredResultMixin, QWidget):
                                   "padding:0 10px;}"
                                   f"QLineEdit#heatmapSearch:focus {{border:2px solid {PRIMARY};}}")
         self.search.textChanged.connect(self._render_tiles)
-        self.view_toggle = button("간략히 보기")
+        self.view_toggle = button("간략히 보기" if expanded else "상세보기")
         self.view_toggle.setObjectName("heatmapView")
         self.view_toggle.setMinimumWidth(104)
         self.hpa_button = button("HPA 표시")
@@ -493,7 +493,7 @@ class HeatmapPage(DeferredResultMixin, QWidget):
             control.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             control.setStyleSheet(display_style)
             control.setFixedHeight(toolbar_height)
-        self.view_toggle.setChecked(True)
+        self.view_toggle.setChecked(expanded)
         self.view_toggle.toggled.connect(self._change_view)
         self.hpa_button.setToolTip("분석에서 제외한 HPA 설비를 별도 묶음으로 함께 표시합니다.")
         self.hpa_button.hide()

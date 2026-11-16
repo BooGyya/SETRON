@@ -143,7 +143,17 @@ def test_missing_helper_reports_one_distinct_diagnostic_and_never_runs_menu(menu
     result, trace = invoke(menu, tmp_path, answer="\r\n")
     assert result.returncode == 1
     text = result.stdout.decode("utf-8")
-    assert text.count("SETRON_DB_INIT.exe를 찾지 못했습니다.") == 1
+    assert text.count("SETRON_DB_INIT.exe was not found.") == 1
     assert "WINDOWS_MENU_FIXTURE" not in text
     assert trace is None
     assert result.stderr == b""
+
+
+def test_ascii_wrapper_is_safe_when_copied_with_lf_line_endings(menu, helper, tmp_path):
+    original = menu.read_bytes()
+    original.decode("ascii")
+    menu.write_bytes(original.replace(b"\r\n", b"\n"))
+    result, trace = invoke(menu, tmp_path, answer="3\r\n")
+    assert result.returncode == 0 and result.stderr == b""
+    assert result.stdout.decode("utf-8").count("WINDOWS_MENU_FIXTURE") == 1
+    assert Path(trace[0]) == helper

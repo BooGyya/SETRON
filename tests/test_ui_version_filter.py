@@ -7,7 +7,7 @@ from datetime import date
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -24,7 +24,7 @@ from setron.ui.query_state import (
 )
 from setron.ui.theme import install_theme
 from setron.ui.version_filter import version_options
-from setron.ui.version_filter_dialog import VersionFilterDialog
+from setron.ui.version_filter_dialog import VersionChoice, VersionFilterDialog
 
 DAY = date(2026, 10, 21)
 PAST = date(2026, 9, 21)
@@ -144,6 +144,38 @@ def open_filter(window):
     window.query_panel.version_button.click()
     QApplication.processEvents()
     return window.version_filter_dialog
+
+
+def test_opening_version_filter_never_shows_choices_as_separate_windows(window, app):
+    class WindowShows(QObject):
+        def __init__(self):
+            super().__init__()
+            self.choices = []
+
+        def eventFilter(self, watched, event):
+            if (event.type() == QEvent.Type.Show and isinstance(watched, VersionChoice)
+                    and watched.isWindow()):
+                self.choices.append(watched.accessibleName())
+            return False
+
+    shows = WindowShows()
+    app.installEventFilter(shows)
+    try:
+        for _ in range(2):
+            dialog = open_filter(window)
+            assert dialog.isVisible()
+            assert open_filter(window) is dialog
+            for width in (420, 720):
+                dialog.resize(width, 560)
+                for index in range(dialog.group_filter.count()):
+                    dialog.group_filter.setCurrentIndex(index)
+                    app.processEvents()
+            dialog.reject()
+            app.processEvents()
+            assert window.version_filter_dialog is None
+        assert shows.choices == []
+    finally:
+        app.removeEventFilter(shows)
 
 
 def test_popup_matches_figma_controls_cancels_and_blocks_zero(window):

@@ -57,6 +57,9 @@ class QueryCatalog:
     dates: tuple[date, ...] = ()
     releases: Mapping[int, FamilyReleases] = field(default_factory=dict)
     items: tuple[Item, ...] = ()
+    line_parents: Mapping[tuple[str, str], str] = field(default_factory=dict)
+    line_aliases: Mapping[tuple[str, str], str] = field(default_factory=dict)
+    area_labels: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def analysis_groups(self) -> tuple[GroupChoice, ...]:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import re
 
 from setron.ui.heatmap_data import EquipmentTile, GoalState
+from setron.features.hierarchy import legacy_line_parts
 
 
 GROUPING_MODES = (
@@ -38,19 +39,7 @@ def group_families(tile, group_name=None):
 
 def split_line(value: str | None) -> tuple[str | None, str | None]:
     """표시용 Line과 세부 Line을 나눈다. 원래 타일의 Line 원문은 그대로 둔다."""
-    if not value or not value.strip():
-        return None, None
-    cleaned = re.sub(r"\(\s*\d+\s*[Ff]?\s*\)", "", value)
-    cleaned = " ".join(cleaned.split())
-    if not cleaned:
-        return None, None
-    match = re.fullmatch(r"(P\d+)\s*([FD])", cleaned, flags=re.IGNORECASE)
-    if match:
-        line, suffix = (part.upper() for part in match.groups())
-        return line, line + suffix
-    if re.fullmatch(r"P4\s*H", cleaned, flags=re.IGNORECASE):
-        return "P4", "P4H"
-    return cleaned, None
+    return legacy_line_parts(value)
 
 
 @dataclass(frozen=True)
@@ -75,7 +64,8 @@ def _position(tile):
     raw_fab = (tile.fab_label or "").strip()
     fab_key = raw_fab.upper() if raw_fab.casefold() in ("memory", "foundry") else raw_fab
     fab_label = {"MEMORY": "Memory", "FOUNDRY": "Foundry"}.get(fab_key, raw_fab or None)
-    line, subline = split_line(tile.line_label or tile.area)
+    line, subline = ((tile.parent_line_label, tile.subline_label) if tile.hierarchy_configured else
+                     split_line(tile.line_label or tile.area))
     return _Position(tile.site_key or "", tile.site_label or "Site 미지정", fab_key, fab_label, line, subline)
 
 

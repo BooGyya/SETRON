@@ -14,6 +14,7 @@ from setron.infrastructure.database import Database
 
 from .dump import read_dump
 from .merge import MergePlan, SqlImportError, build_plan, fingerprint
+from .validation import validate_merge
 
 
 class SqlImportService:
@@ -44,6 +45,7 @@ class SqlImportService:
                 repository, target, next_ids = _read_target(session, lock=True)
                 if plan.revision != fingerprint(target, next_ids):
                     raise SqlImportError("대상 DB가 미리보기 이후 바뀌었습니다. 변경 사항을 다시 확인해 주세요.")
+                validate_merge(target, plan.writes, repository)
                 for write in plan.writes:
                     if write.action == "insert":
                         repository.insert(session, write.table, write.row)

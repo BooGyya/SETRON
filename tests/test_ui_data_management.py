@@ -92,6 +92,39 @@ class FakeGateway:
         self.saved.append((edits, context))
         return SimpleNamespace(records=(), audit_batch_id=41)
 
+    def _save_changes(self, changes, context):
+        if not changes:
+            return None
+        from setron.features.management.schemas import RecordEdit
+        return self.save(tuple(RecordEdit(table, key, self.get(table, key).revision, values)
+                               for table, key, values in changes), context)
+
+    def save_sheet(self, batch_id, *, changes=(), context=None, registers=(), creates=(), adds=(),
+                   deletes=(), regroup=(), base_date=None):
+        for line, area in registers:
+            self.data_admin("add_line", SHEET.site, line, area)
+        for name, category in creates:
+            self.data_admin("create_group", name, category, None)
+        saved = self._save_changes(changes, context)
+        rows = self.data_admin("apply_rows", batch_id, adds, deletes, regroup, base_date=base_date) \
+            if adds or deletes or regroup else {"added": [], "journal": None, "regroup": []}
+        return SimpleNamespace(records=getattr(saved, "records", ()), refresh=None, rows=rows)
+
+    def save_release(self, family_id, plan, *, changes=(), context=None):
+        saved = self._save_changes(changes, context)
+        undo = self.data_admin("apply_release", family_id, plan) if any(plan.values()) else None
+        return SimpleNamespace(records=getattr(saved, "records", ()), refresh=None, undo=undo)
+
+    def undo_sheet(self, batch_id, *, changes=(), context=None, added=(), journal=None, regroup=()):
+        if added or journal is not None or regroup:
+            self.data_admin("undo_rows", batch_id, added, journal, regroup)
+        return self._save_changes(changes, context) or SimpleNamespace(records=(), refresh=None)
+
+    def undo_release_changes(self, undo, *, changes=(), context=None):
+        if undo:
+            self.data_admin("undo_release", undo)
+        return self._save_changes(changes, context) or SimpleNamespace(records=(), refresh=None)
+
 
 class Store(dict):
     """열 폭 기억용 가짜 설정 (사용자 PC 설정을 건드리지 않는다)."""
@@ -554,8 +587,8 @@ def test_equipment_groups_show_category_once_per_group_and_list_model_site_line(
     assert gateway.created == [("M-C7", "POLY", None)] and added
 
 
-def test_group_table_edits_wait_for_save_and_builtin_names_stay(own, monkeypatch):
-    """11-12: 설비군 이름 · 대분류를 표에서 고치고 [저장]으로 한꺼번에. 기본 설비군 이름은 막고, 독립 보기는 없앴다."""
+def test_group_table_edits_wait_for_save_including_builtin_names(own, monkeypatch):
+    """설비군 이름 · 대분류를 표에서 고치고 저장한다. 기본 설비군도 ID를 유지하며 이름을 바꾼다."""
     answer(monkeypatch)
     gateway = FakeGateway()
     page = page_with(own, gateway)
@@ -568,19 +601,19 @@ def test_group_table_edits_wait_for_save_and_builtin_names_stay(own, monkeypatch
     def editable(row, column):
         return bool(table.item(row, column).flags() & Qt.ItemFlag.ItemIsEditable)
 
-    assert editable(0, 1) and not editable(1, 1) and not editable(2, 1)  # 이름: 직접 추가한 C7만
+    assert editable(0, 1) and editable(1, 1) and editable(2, 1)
     assert editable(1, 0) and not editable(2, 0)                        # 대분류: 기본형만 (개조형은 따라감)
     table.item(0, 1).setText("C7X")                                     # C7 이름 (저장 전)
     assert table.item(0, 1).background().color() == module.SAVING and "update_groups" not in gateway.calls
-    table.item(1, 1).setText("M-C4 새이름")                             # 기본 설비군 이름은 거부하고 되돌린다
-    assert "기본 설비군" in panel.last_note and panel.notice.text() and table.item(1, 1).text() == "M-C4"
+    table.item(1, 1).setText("M-C4 새이름")
+    assert panel.pending[1]["name"] == "M-C4 새이름" and table.item(1, 1).text() == "M-C4 새이름"
     row = next(r for r in range(table.rowCount()) if table.item(r, 1).text() == "M-O2")
     table.item(row, 0).setText("KCTC")                                  # M-O2 대분류 (저장 전)
-    assert panel.save_button.text() == "저장 (2)" and not panel.add_group_button.isEnabled()
-    assert panel.undo() and panel.save_button.text() == "저장 (1)" and panel.redo()
+    assert panel.save_button.text() == "저장 (3)" and not panel.add_group_button.isEnabled()
+    assert panel.undo() and panel.save_button.text() == "저장 (2)" and panel.redo()
     assert panel.save()
     settle(page)
-    assert gateway.done["update_groups"] == [(([(4, "C7X", None), (3, None, "KCTC")],), {})] and not panel.pending
+    assert gateway.done["update_groups"] == [(([(4, "C7X", None), (1, "M-C4 새이름", None), (3, None, "KCTC")],), {})] and not panel.pending
     table.selectRow(0)
     assert panel.delete_group()
     settle(page)

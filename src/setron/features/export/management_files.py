@@ -22,7 +22,9 @@ class ImportedFile:
 
 def read_management_data(storage):
     with storage.transaction() as tx:
-        return {name: EquipmentRepository().rows(tx, name) for name in TABLES}
+        from setron.features.hierarchy import area_labels, category_labels
+        return {**{name: EquipmentRepository().rows(tx, name) for name in TABLES},
+                "_hierarchy_areas": area_labels(tx), "_hierarchy_categories": category_labels(tx)}
 
 
 def origin_batches(row):

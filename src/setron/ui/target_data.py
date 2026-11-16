@@ -32,7 +32,7 @@ class TargetPair:
 
 
 def target_pairs(source) -> tuple[TargetPair, ...]:
-    groups = {mid: group for group in source.catalog.groups for mid in source.bindings[group.key]}
+    groups = {mid: group for group in source.catalog.groups for mid in source.bindings.get(group.key, ())}
     known = set(source.targets) | {(pm.group_id, pm.family_id) for record in source.records if not record.is_hpa for pm in record.pms}
     result = []
     for model_id, family_id in sorted(known):

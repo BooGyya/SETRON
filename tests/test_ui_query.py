@@ -145,16 +145,19 @@ def test_unknown_field_and_option_do_not_change_state(state):
     assert state.draft == QuerySelection()
 
 
-def test_replacing_catalog_normalizes_draft_without_reapplying(state):
+def test_replacing_catalog_preserves_unresolved_draft_without_reapplying(state):
     state.set_draft(QuerySelection("s1", "f1", "l1", "g1"))
     applied = state.apply()
     state.replace_catalog(QueryCatalog())
-    assert state.draft == QuerySelection()
+    assert state.draft == applied.selection
     assert state.applied is applied
     assert "테스트 Fab A" in applied.description
     assert state.has_pending_changes
     assert not state.applied_is_current
     assert not state.is_current(applied)
+    with pytest.raises(ValueError, match="선택 다시 확인"):
+        state.apply()
+    state.reset_draft()
     assert state.apply().revision == 2
 
 
@@ -162,8 +165,11 @@ def test_catalog_parent_change_also_invalidates_old_response(state, catalog):
     state.set_draft(QuerySelection("s1", "f1", "l1", "g1"))
     old = state.apply()
     state.replace_catalog(replace(catalog, fabs=(catalog.fabs[1],), lines=(catalog.lines[1], catalog.lines[2])))
-    assert state.draft == QuerySelection("s1", None, None, "g1")
+    assert state.draft == old.selection
     assert not state.is_current(old)
+    with pytest.raises(ValueError, match="선택 다시 확인"):
+        state.apply()
+    state.select("fab_key", None)  # 사용자가 명시적으로 범위를 다시 고친다.
     current = state.apply()
     state.replace_catalog(state.catalog)
     assert not state.is_current(current)  # 같은 선택지여도 새 데이터 세대임
@@ -308,9 +314,11 @@ def test_catalog_replacement_rebuilds_controls_but_keeps_applied_summary(window)
     spy = QSignalSpy(panel.applied)
     window.set_query_catalog(QueryCatalog())
     assert panel.state.applied is old
-    assert panel.status.text() == "변경사항 미적용"
+    assert panel.status.text() == "선택 다시 확인"
     assert "테스트 Line A" in panel.applied_summary.text()
-    assert not panel.combos["site_key"].isEnabled() and panel.combos["site_key"].caption == "전체"
+    assert "선택 다시 확인" in panel.combos["site_key"].caption
+    assert "테스트 Site A" in panel.combos["site_key"].caption
+    assert not panel.search_button.isEnabled() and panel.apply_draft() is None
     assert panel.filter_popup is None
     assert spy.count() == 0
 

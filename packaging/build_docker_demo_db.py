@@ -45,7 +45,10 @@ def main():
         ], cwd=ROOT, check=True)
         output.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(stage / "dist" / f"{NAME}.exe", output / f"{NAME}.exe")
-        shutil.copyfile(ROOT / "prepare_docker_demo_db.bat", output / "prepare_docker_demo_db.bat")
+        # Git/editor settings may change line endings; CMD receives CRLF only.
+        wrapper = (ROOT / "prepare_docker_demo_db.bat").read_bytes()
+        wrapper = wrapper.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        (output / "prepare_docker_demo_db.bat").write_bytes(wrapper.replace(b"\n", b"\r\n"))
         if source != output / "SETRON_DB.sql":
             shutil.copyfile(source, output / "SETRON_DB.sql")
     print(output)

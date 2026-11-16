@@ -27,6 +27,9 @@ from sqlalchemy import select
 
 from setron.features.data_admin.service import registered_lines, registered_sites
 from setron.features.reference_data import default_area, use_registered_lines
+from setron.features.hierarchy import _clean_line, area_labels, category_labels, line_parts, model_aliases
+from setron.features.management_format import equipment_group_name
+from setron.features.production_area import use_area_labels
 from setron.features.equipment.repository import EquipmentRepository
 from setron.features.equipment.read import read_equipment_record
 from setron.features.item.schemas import Item, ItemState, TargetScope, VersionItem
@@ -69,70 +72,104 @@ class _LoadedRiskAssessor(RiskAssessor):
 
 
 def database_catalog(snapshots, model_names=None, *, extra_groups=(), extra_sites=(), extra_lines=(),
-                     area_resolver=None) -> QueryCatalog:
+                     area_resolver=None, area_names=None, group_options=None, category_names=None) -> QueryCatalog:
     """저장된 현황의 실제 Site·Line으로 조회 선택지를 만든다.
 
-    - Site: VER3 선택지(평택·화성·기흥, 키 유지) 뒤에 DB에만 있는 Site와 데이터 관리에서 등록한 Site(``extra_sites``)를
-      이름 그대로 덧붙인다. 등록만 하고 관측이 없는 Site도 선택지에 보인다 (11-11).
-    - Fab: 저장된 production_area의 Memory/Foundry이며 Site 공통 선택지다.
+    - Site: 실제 관측과 등록 목록을 사용하고 기존 평택·화성·기흥의 키만 호환한다.
+    - Fab: 데이터 관리의 생산 분류 코드와 표시 이름이며 Site 공통 선택지다.
     - Line: 관측된 (Site, Fab, Line) 조합. 생산 영역이 없는 기존 키는 유지한다. 데이터 관리에서 등록한 라인
       (``extra_lines``: {"site", "line", "fab"})은 설비가 없어도 덧붙인다 (11-11 6차).
-    - 설비군: VER3 선택지 중 :data:`GROUP_MODELS`의 모델이 DB에 등록된 것만 둔다 (``model_names``).
-      등록 모델이 없는 설비군(예: Inline Ox·Cluster Ox)은 골라도 항상 0대라 빼고, ``model_names``가 없으면 모두 둔다.
-      데이터 관리에서 등록한 새 기본형 설비군(``extra_groups``, :func:`registered_group_options`)은 같은 분류 뒤에 넣는다.
+    - 설비군: ``group_options``가 있으면 DB의 이름·분류·부모 관계를 사용한다.
+      구형 호출의 ``extra_groups``와 기존 설비군 키는 계속 지원한다.
     """
-    snapshots = tuple(snapshots)
+    snapshots, extra_lines, extra_groups = tuple(snapshots), tuple(extra_lines), tuple(extra_groups)
     area_for = area_resolver or line_area
     base = preview_catalog()
     known = {option.label for option in base.sites}
-    extra = sorted({value.site for value in snapshots if value.site and value.site not in known}
-                   | {name for name in extra_sites if name and name not in known})
-    sites = (*base.sites, *(SiteOption(name, name) for name in extra))
+    active = ({value.site for value in snapshots if value.site} | {name for name in extra_sites if name}
+              | {entry["site"] for entry in extra_lines if entry.get("site")})
+    sites = (*(option for option in base.sites if option.label in active),
+             *(SiteOption(name, name) for name in sorted(active - known)))
     keys = {option.label: option.key for option in sites}
-    lines = sorted({(keys[value.site], area_for(value.production_area, value.site, value.line), value.line)
+    managed = _managed_line_index(extra_lines)
+    lines = {(keys[value.site], area_for(value.production_area, value.site, value.line),
+              managed.get(_registry_line_key(value.site, value.line), {}).get("line", value.line))
                     for value in snapshots if value.site in keys and value.line}
-                   | {(keys[entry["site"]], entry["fab"], entry["line"]) for entry in extra_lines if entry["site"] in keys},
-                   key=lambda value: (value[0], value[1] or "", value[2]))
+    lines |= {(keys[entry["site"]], entry["fab"], entry["line"]) for entry in extra_lines if entry["site"] in keys}
+    labels_by_site = {key: name for name, key in keys.items()}
+    parents = {}
+    for site, fab, line in tuple(lines):
+        parent, subline = line_parts(labels_by_site[site], line, extra_lines)
+        if subline is not None and parent is not None:
+            lines.add((site, fab, parent))
+            parents[site, fab, line] = _line_key(site, fab, parent)
+    lines = sorted(lines, key=lambda value: (value[0], value[1] or "", value[2]))
     groups = [option for option in base.groups if model_names is None
               or any(name in model_names for name in GROUP_MODELS.get(option.key, ()))]
-    for option in extra_groups:
+    overrides = {option.key: option for option in extra_groups}
+    groups = [overrides.pop(option.key, option) for option in groups]
+    for option in overrides.values():
         same = [i for i, known_option in enumerate(groups) if known_option.category == option.category]
         groups.insert(same[-1] + 1 if same else len(groups), option)
+    if group_options is not None:
+        authoritative = {option.key: option for option in group_options}
+        groups = [authoritative.pop(option.key) for option in groups if option.key in authoritative]
+        groups.extend(authoritative.values())
+    category_order = {code: index for index, code in enumerate(
+        ("POLY", "OXIDE", "KCTC", "HPA") if category_names is None else category_names)}
+    groups.sort(key=lambda option: category_order.get(option.category, len(category_order)))
+    area_names = dict({"MEMORY": "Memory", "FOUNDRY": "Foundry"} if area_names is None else area_names)
+    for _, fab, _ in lines:
+        if fab is not None:
+            area_names.setdefault(fab, fab)
     return QueryCatalog(
         sites=sites,
-        fabs=(FabOption("MEMORY", "Memory", None), FabOption("FOUNDRY", "Foundry", None)),
-        lines=tuple(LineOption(_line_key(site, fab, line), line, site, fab) for site, fab, line in lines),
+        fabs=tuple(FabOption(code, label, None) for code, label in area_names.items()),
+        lines=tuple(LineOption(_line_key(site, fab, line), line, site, fab, parents.get((site, fab, line)))
+                    for site, fab, line in lines),
         groups=tuple(groups),
-        source_label="DB 저장 현황의 Site·Fab(Memory/Foundry)·Line",
+        source_label="DB 데이터 관리의 사업장·생산 분류·Line·세부 Line",
     )
 
 
-def group_keys(groups) -> dict:
+def group_keys(groups, aliases=None) -> dict:
     """DB 설비군 ID → 조회 설비군 키.
 
-    :data:`GROUP_MODELS`에 이름이 있으면 그 키, 없으면 상위 설비군(개조형의 기본형)의 키를 따른다.
-    둘 다 없으면 데이터 관리에서 새로 등록한 기본형이므로 ``group-<ID>``로 따로 둔다 (11-11).
+    명시한 상위 설비군의 키를 먼저 따르고 기존 기본형의 이름은 호환 키로 연결한다.
+    새 기본형은 ``group-<ID>``로 구분한다.
     """
     named = {name: key for key, names in GROUP_MODELS.items() for name in names}
+    alias_keys = {group_id: named[alias] for alias, group_id in (aliases or {}).items() if alias in named}
     by_id = {row["group_id"]: row for row in groups}
 
     def key_of(row, seen):
-        if row["group_name"] in named:
-            return named[row["group_name"]]
         parent = by_id.get(row.get("parent_group_id"))
         if parent is not None and parent["group_id"] not in seen:
             return key_of(parent, seen | {row["group_id"]})
-        return f"group-{row['group_id']}"
+        if row["group_name"] in named:
+            return named[row["group_name"]]
+        return alias_keys.get(row["group_id"], f"group-{row['group_id']}")
 
     return {row["group_id"]: key_of(row, frozenset()) for row in groups}
 
 
-def registered_group_options(groups, keys) -> tuple[GroupOption, ...]:
-    """:data:`GROUP_MODELS`로 연결되지 않는 분석 대상 기본형 설비군(POLY·OXIDE·KCTC)의 조회 선택지."""
-    return tuple(GroupOption(keys[row["group_id"]], row["group_name"], row["category"]) for row in sorted(
-        groups, key=lambda row: row["group_id"])
-        if keys[row["group_id"]] == f"group-{row['group_id']}" and row["category"] in ("POLY", "OXIDE", "KCTC")
-        and row["analysis_enabled"])
+def registered_group_options(groups, keys, labels=None) -> tuple[GroupOption, ...]:
+    """DB의 실제 부모 설비군과 분류 표시 이름을 사용하는 분석 대상 선택지."""
+    labels = labels or {}
+    groups = tuple(groups)
+    roots = {row["group_id"]: row for row in groups}
+    options = {}
+    for row in sorted(groups, key=lambda value: value["group_id"]):
+        if not row["analysis_enabled"]:
+            continue
+        key = keys[row["group_id"]]
+        root, seen = row, set()
+        while root.get("parent_group_id") in roots and root["group_id"] not in seen:
+            seen.add(root["group_id"])
+            root = roots[root["parent_group_id"]]
+        options.setdefault(key, GroupOption(key, equipment_group_name(root["group_name"]), root["category"],
+                                            labels.get(root["category"], root["category"])))
+    return tuple(options.values())
 
 
 def line_area(stored, site, line):
@@ -146,24 +183,33 @@ def line_area(stored, site, line):
 
 def _line_area_resolver(entries):
     """다른 워커의 전역 갱신과 섞이지 않도록 이번 DB 읽기의 등록 라인만 사용한다."""
-    from setron.features.reference_data import LINE_AREAS, _clean_line
+    from setron.features.reference_data import LINE_AREAS
 
-    areas = {(str(entry["site"]).strip(), _clean_line(entry["line"])): entry["fab"] for entry in entries
-             if entry.get("fab") in {"MEMORY", "FOUNDRY"}}
+    areas = {_registry_line_key(entry["site"], entry["line"]): entry["fab"] for entry in entries
+             if entry.get("fab")}
+    managed = {_registry_line_key(entry["site"], entry["line"]): entry["fab"] for entry in entries
+               if "parent_line" in entry}
 
     def resolve(stored, site, line):
-        if stored:
-            return stored
         if not site or not line:
-            return None
-        key = site.strip(), _clean_line(line)
-        return areas.get(key) or LINE_AREAS.get(key)
+            return stored
+        key = _registry_line_key(site, line)
+        return (managed[key] if key in managed else
+                stored or areas.get(key) or LINE_AREAS.get((site.strip(), _clean_line(line))))
 
     return resolve
 
 
 def _line_key(site, fab, line):
     return f"{site}:{fab}:{line}" if fab is not None else f"{site}:{line}"
+
+
+def _registry_line_key(site, line):
+    return (site or "").strip().casefold(), _clean_line(line).casefold()
+
+
+def _managed_line_index(entries):
+    return {_registry_line_key(entry["site"], entry["line"]): entry for entry in entries if "parent_line" in entry}
 
 
 class _TargetReadView:
@@ -233,13 +279,17 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publi
         age_thresholds = thresholds_in(tx).thresholds
         extra_sites = registered_sites(tx)
         extra_lines = registered_lines(tx)
+        category_names, area_names = category_labels(tx), area_labels(tx)
+        aliases = model_aliases(tx)
     if publish_lines:
         use_registered_lines(extra_lines)  # 가져오기 · AI 분석도 채택한 등록 라인을 쓴다
+        use_area_labels(area_names)
     area_for = _line_area_resolver(extra_lines)
-    keys = group_keys(groups)
+    keys = group_keys(groups, aliases)
     catalog = catalog or database_catalog(stored, {group["group_name"] for group in groups},
-                                          extra_groups=registered_group_options(groups, keys), extra_sites=extra_sites,
-                                          extra_lines=extra_lines, area_resolver=area_for)
+                                          group_options=registered_group_options(groups, keys, category_names), extra_sites=extra_sites,
+                                          extra_lines=extra_lines, area_resolver=area_for, area_names=area_names,
+                                          category_names=category_names)
 
     # 개조형은 상위 설비군의 선택지에 함께 묶는다 (데이터 관리에서 등록한 개조형 포함, 11-11).
     bindings = tuple(GroupBinding(option.key, tuple(sorted(gid for gid, key in keys.items() if key == option.key)))
@@ -249,12 +299,16 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publi
 
     sites = {option.label: option.key for option in catalog.sites}
     records, skipped = [], 0
+    managed_lines = _managed_line_index(extra_lines)
     for value in stored:
         try:
             record = read_equipment_record(value, excluded)
         except StorageValidationError:
             skipped += 1  # PM 연결이 잘못되거나 HPA·분석 모델이 섞인 현황은 임의로 고치지 않고 뺀다
             continue
+        managed = managed_lines.get(_registry_line_key(record.site, record.line))
+        if managed is not None and not record.is_hpa:
+            record = replace(record, production_area=managed["fab"])
         models = {pm.group_id for pm in record.pms}
         if record.site not in sites or (not record.is_hpa and not models <= bound):
             skipped += 1
@@ -268,8 +322,12 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publi
     def location(record):
         fab = None if record.is_hpa else area_for(stored_areas[record.base_date, record.equipment_id], record.site, record.line)
         fab = fab if fab in fab_keys else None
-        key = _line_key(sites[record.site], fab, record.line)
-        return EquipmentLocation(sites[record.site], record.line, fab, key if key in line_keys else None)
+        managed = managed_lines.get(_registry_line_key(record.site, record.line))
+        canonical_line = managed["line"] if managed is not None else record.line
+        key = _line_key(sites[record.site], fab, canonical_line)
+        parent, subline = line_parts(record.site, record.line, extra_lines)
+        return EquipmentLocation(sites[record.site], record.line, fab, key if key in line_keys else None,
+                                 parent, subline, True)
 
     locations = {r.equipment_id: location(r) for r in sorted(records, key=lambda record: record.base_date)}
 
@@ -314,6 +372,8 @@ def load_dashboard_source(storage, catalog: QueryCatalog | None = None, *, publi
                              locations_by_date={(r.base_date, r.equipment_id): location(r) for r in records})
     source.applicability = target_catalog.applicability
     source.registered_line_entries = tuple(extra_lines)
+    source.category_labels, source.area_labels = category_names, area_names
+    source.excluded_model_ids = frozenset(excluded)
     # 버전(N) 기준 입력에서 저장한 N 그룹. 형식이 깨진 저장값은 그룹 없이(목표 N 하나로) 계산하고 안내한다.
     source.group_store = GroupStore(storage)
     try:
@@ -497,6 +557,8 @@ class DatabaseDashboardSource(DashboardSource):
             self._accepted_generation = generation
             if hasattr(fresh, "registered_line_entries"):
                 use_registered_lines(fresh.registered_line_entries)
+            if hasattr(fresh, "area_labels"):
+                use_area_labels(fresh.area_labels)
             return True
 
     @staticmethod

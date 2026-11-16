@@ -55,6 +55,7 @@ class LineOption:
     label: str
     site_key: str
     fab_key: str | None  # Fab 미지정인 Line도 독립적으로 등록 가능
+    parent_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,21 @@ class GroupOption:
     key: str
     label: str
     category: str = ""
+    category_label: str = ""
+
+
+def matches_line_selection(value, actual, lines):
+    """상위 라인을 선택하면 등록된 하위 세부라인을 함께 조회한다."""
+    if matches_selection(value, actual):
+        return True
+    parents = {line.key: line.parent_key for line in lines}
+    seen = set()
+    while actual is not None and actual not in seen:
+        seen.add(actual)
+        actual = parents.get(actual)
+        if actual is not None and matches_selection(value, actual):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -152,6 +168,11 @@ class QueryCatalog:
                 line.fab_key not in fabs or fabs[line.fab_key].site_key not in (None, line.site_key)
             ):
                 raise ValueError("Line의 Fab과 Site 관계가 올바르지 않습니다.")
+            if line.parent_key is not None:
+                parent = next((option for option in self.lines if option.key == line.parent_key), None)
+                if parent is None or parent.parent_key is not None or parent.key == line.key or (
+                    parent.site_key, parent.fab_key) != (line.site_key, line.fab_key):
+                    raise ValueError("세부 Line의 상위 Line 관계가 올바르지 않습니다.")
 
 
 @dataclass(frozen=True)
@@ -186,6 +207,44 @@ class QueryState:
         self.target_draft: tuple[TargetN, ...] | None = None
         self._revision = 0
         self._catalog_revision = 0
+        self._known_labels = {field: {} for field in ("site_key", "fab_key", "line_key", "group_key")}
+        self._remember_labels(catalog)
+
+    def _remember_labels(self, catalog):
+        for field, options in (("site_key", catalog.sites), ("fab_key", catalog.fabs),
+                               ("line_key", catalog.lines), ("group_key", catalog.groups)):
+            self._known_labels[field].update((option.key, option.label) for option in options)
+
+    def option_label(self, field, key):
+        return "미지정" if key is UNASSIGNED else self._known_labels[field].get(key, str(key))
+
+    def _invalid_selections(self, selection):
+        result = {}
+        for field, options, unassigned in (
+            ("site_key", self.catalog.sites, False), ("group_key", self.catalog.groups, False),
+            ("fab_key", self.available_fabs(selection), True), ("line_key", self.available_lines(selection), True),
+        ):
+            allowed = {option.key for option in options} | ({UNASSIGNED} if unassigned else set())
+            value = getattr(selection, field)
+            if not self._valid_keys(value, allowed):
+                result[field] = tuple(key for key in selection_keys(value)
+                                      if not isinstance(key, (str, SpecialSelection)) or key not in allowed)
+        return result
+
+    @property
+    def invalid_selections(self):
+        """변경된 계층에서 더는 유효하지 않은 원래 선택. 전체로 바꾸지 않는다."""
+        return self._invalid_selections(self.draft)
+
+    @property
+    def selection_error(self):
+        captions = {"site_key": "사업장", "fab_key": "분류", "line_key": "라인", "group_key": "설비군"}
+        issues = self.invalid_selections
+        if not issues:
+            return ""
+        details = " / ".join(captions[field] + " " + ", ".join(self.option_label(field, key) for key in keys)
+                             for field, keys in issues.items())
+        return "선택 다시 확인 · " + details + "\n삭제되었거나 상위 관계가 바뀐 항목을 다시 선택하거나 조건을 초기화해 주세요."
 
     @property
     def applied_is_current(self) -> bool:
@@ -250,9 +309,11 @@ class QueryState:
 
     def set_as_of(self, value: date | None) -> None:
         """기준일만 바꾼다. 오늘 이후 날짜는 최신 관측(None)과 같으므로 None으로 맞춘다."""
+        if value is not None and type(value) is not date:
+            raise ValueError("기준일은 날짜여야 합니다.")
         if value is not None and value >= date.today():
             value = None
-        self.set_draft(replace(self.draft, as_of=value))
+        self._set_repair_draft(replace(self.draft, as_of=value))
 
     def select(self, field: str, value: SelectionKey) -> None:
         if field not in QuerySelection.__dataclass_fields__:
@@ -266,7 +327,23 @@ class QueryState:
             selection = self._retain_lines(selection)
         elif field == "group_key":
             selection = replace(selection, item_family_id=None)
-        self.set_draft(selection)
+        self._set_repair_draft(selection, field)
+
+    def _set_repair_draft(self, selection, field=None):
+        """유효한 선택으로 고치면서 다른 필드의 미해결 선택은 그대로 유지한다."""
+        if selection.as_of is not None and type(selection.as_of) is not date:
+            raise ValueError("기준일은 날짜여야 합니다.")
+        if selection.versions is not None and not isinstance(selection.versions, VersionFilter):
+            raise ValueError("조회 버전 조건이 올바르지 않습니다.")
+        if selection.item_family_id is not None and (type(selection.item_family_id) is not int or selection.item_family_id <= 0):
+            raise ValueError("Item 조회 계열이 올바르지 않습니다.")
+        before, after = self.invalid_selections, self._invalid_selections(selection)
+        if not after:
+            self.validate(selection)
+        elif not before or field in after or any(
+                name not in before or not set(keys).issubset(before[name]) for name, keys in after.items()):
+            self.validate(selection)
+        self.draft = selection
 
     def _retain_fabs_and_lines(self, selection: QuerySelection) -> QuerySelection:
         fabs = {UNASSIGNED, *(option.key for option in self.available_fabs(selection))}
@@ -287,6 +364,8 @@ class QueryState:
         self.draft = QuerySelection()
 
     def apply(self) -> AppliedQuery:
+        if self.selection_error:
+            raise ValueError(self.selection_error)
         self.validate(self.draft)
         self._revision += 1
         self.applied = AppliedQuery(self.draft, self._revision, self._catalog_revision,
@@ -301,14 +380,9 @@ class QueryState:
         if not isinstance(catalog, QueryCatalog):
             raise ValueError("QueryCatalog가 필요합니다.")
         self.catalog = catalog
+        self._remember_labels(catalog)
         self._catalog_revision += 1
-        draft = replace(self.draft,
-                        site_key=_retain_keys(self.draft.site_key, {o.key for o in catalog.sites}),
-                        group_key=_retain_keys(self.draft.group_key, {o.key for o in catalog.groups}))
-        if draft.group_key != self.draft.group_key:
-            draft = replace(draft, item_family_id=None)
-        self.set_draft(self._retain_fabs_and_lines(draft))
-        # 적용 스냅샷은 보존한다. 정규화된 초안을 자동으로 적용하면 조회 범위가 달라진다.
+        # 원래 선택과 적용 스냅샷을 보존한다. 누락된 키를 전체/미지정으로 대체하지 않는다.
 
     def describe(self, selection: QuerySelection) -> str:
         captions = []
@@ -318,9 +392,11 @@ class QueryState:
             ("라인", selection.line_key, self.catalog.lines),
             ("설비군", selection.group_key, self.catalog.groups),
         ):
-            labels = {o.key: o.label for o in options}
+            field = {"분류": "fab_key", "사업장": "site_key", "라인": "line_key", "설비군": "group_key"}[name]
+            invalid = self._invalid_selections(selection).get(field, ())
             title = "전체" if value is None else ", ".join(
-                "미지정" if key is UNASSIGNED else labels[key] for key in selection_keys(value)
+                self.option_label(field, key) + (" (선택 다시 확인)" if key in invalid else "")
+                for key in selection_keys(value)
             )
             captions.append(f"{name} {title}")
         captions.append("기준일 최신" if selection.as_of is None else f"기준일 {selection.as_of.isoformat()}")

@@ -58,7 +58,7 @@ def test_console_confirmation_requires_an_explicit_yes(initializer, monkeypatch,
     prompts = answer(monkeypatch, value)
     assert initializer._console_confirm("대상: 시험 DB") is approved
     assert "대상: 시험 DB" in capsys.readouterr().out
-    assert len(prompts) == 1 and "기본 N" in prompts[0]
+    assert prompts == ["선택 [Y/N]: "]
 
 
 @pytest.mark.parametrize("failure", [EOFError(), KeyboardInterrupt()], ids=["EOF", "interrupt"])
@@ -103,7 +103,7 @@ def test_main_console_yes_preserves_a_verified_backup_before_replacement_or_rese
         assert destructive(db) == [f"DELETE FROM `{table}`" for table in reversed(TABLE_NAMES)]
     output = capsys.readouterr().out
     assert f"{config.host}:{config.port}" in output and config.database in output
-    assert "완료" in output and "검증:" in output and "백업" in output
+    assert "완료" in output and "백업 파일:" in output
     assert config.password not in output
 
 
@@ -165,9 +165,12 @@ def test_default_exe_menu_runs_the_selected_action_after_explicit_approval(
         assert db.objects == objects and all(not rows for rows in db.rows.values())
         assert destructive(db) == [f"DELETE FROM `{table}`" for table in reversed(TABLE_NAMES)]
     output = capsys.readouterr().out
-    assert all(token in output for token in ("1.", "2.", "3.", config.database, "완료", "검증:"))
-    assert "SETRON DB 관리 · Windows MySQL\n설정: 실행 파일 옆 setron.env" in output
-    assert "1. 시연 데이터 넣기\n2. 데이터 초기화 (모든 데이터 삭제 · 테이블 유지)\n3. 종료" in output
+    assert all(token in output for token in ("1.", "2.", "3.", config.database, "완료"))
+    assert "SETRON Windows MySQL 데이터 관리\n" in output
+    assert "1. 시연 데이터 넣기 - 기존 자료 교체\n2. 데이터 초기화 - 테이블 구조 유지, 모든 데이터 삭제\n3. 종료" in output
+    assert prompts[:2] == ["선택 [1/2/3]: ", "선택 [Y/N]: "]
+    assert output.count("대상 DB:") == output.count("백업 위치:") == 1
+    assert "이 창에서" not in output and "검증:" not in output
     assert config.password not in output
 
 

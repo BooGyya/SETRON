@@ -2,14 +2,13 @@
 
 import os
 import warnings
-from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import create_autospec
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEventLoop, QTimer, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -112,9 +111,18 @@ def wait_for_extraction(page, *, timeout=5):
     - page: 추출 결과를 기다리는 가져오기 화면.
     - timeout: 이벤트를 처리하며 기다릴 최대 초. 실제 SDK 최초 초기화는 별도로 여유를 둔다.
     """
-    end = monotonic() + timeout
-    while page.busy and monotonic() < end:
-        QTest.qWait(10)
+    # 실제 앱과 같은 이벤트 루프로 대기한다. 반복 qWait는 일부 PySide 버전에서
+    # Python 작업자에 GIL 실행 시간을 주지 않아 SDK 초기화가 지연될 수 있다.
+    loop, poll, deadline = QEventLoop(), QTimer(), QTimer()
+    deadline.setSingleShot(True)
+    poll.timeout.connect(lambda: loop.quit() if not page.busy else None)
+    deadline.timeout.connect(loop.quit)
+    poll.start(10)
+    deadline.start(round(timeout * 1000))
+    if page.busy:
+        loop.exec()
+    poll.stop()
+    deadline.stop()
     assert not page.busy
 
 

@@ -151,20 +151,16 @@ def test_missing_configuration_keeps_the_relevant_error_without_inventing_a_targ
     assert_no_database_work(setup)
 
 
-@pytest.mark.parametrize("mode,expected", [
-    ("import", "시연 데이터 삽입을 취소했습니다."),
-    ("reset", "데이터 초기화를 취소했습니다."),
-])
+@pytest.mark.parametrize("mode", ["import", "reset"])
 def test_cancellation_names_the_selected_action_and_does_not_show_a_failure_guide(
-        initializer, setup, monkeypatch, mode, expected):
+        initializer, setup, monkeypatch, mode):
     configured_run(initializer, setup, monkeypatch)
     monkeypatch.setattr(initializer, "prepare" if mode == "import" else "reset_data",
                         lambda *a, **kw: initializer.SetupResult(False))
 
     status, message = initializer.run(mode=mode)
 
-    assert status == 3 and expected in message
-    assert "DB를 변경하지 않았습니다." in message
+    assert status == 3 and message == "취소했습니다. DB는 변경하지 않았습니다."
     assert GUIDE_TITLE not in message
     assert_no_database_work(setup)
 
@@ -179,9 +175,8 @@ def test_success_keeps_the_backup_path_without_a_failure_guide(
 
     status, message = initializer.run(mode=mode)
 
-    expected = ("데이터 초기화 완료\n검증: 테이블 13개 유지 · 모든 데이터 0행" if mode == "reset"
-                else "시연 데이터 삽입 완료\n검증: 테이블 13개 · SQL 행 수 일치")
-    assert status == 0 and message == f"{expected}\n백업: {backup}"
+    expected = "데이터 초기화 완료" if mode == "reset" else "시연 데이터 넣기 완료"
+    assert status == 0 and message == f"{expected}\n백업 파일: {backup}"
     assert GUIDE_TITLE not in message and "SHOW GRANTS" not in message
     assert config.password not in message
     assert_no_database_work(setup)

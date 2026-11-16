@@ -15,7 +15,7 @@ UI_TYPES = {"구ui": "LEGACY", "legacy": "LEGACY", "통합ui": "INTEGRATED", "in
 MODEL_CATEGORIES = {"C3": "POLY", "C4": "POLY", **_REFERENCE_CATEGORIES}
 
 
-def normalize(values, kind, row_number, sources):
+def normalize(values, kind, row_number, sources, *, categories=None, models=None, areas=None, semantic_model=None):
     """원문 복사본을 정리하고 확인이 필요한 해석을 반환한다. 원본은 바꾸지 않는다."""
     result = dict(values)
     issues = []
@@ -43,10 +43,13 @@ def normalize(values, kind, row_number, sources):
         issue("model_name", "C2는 관리 대상이 아닙니다. 원문을 확인하세요.")
 
     category_raw = result.get("group_name")
-    category = CATEGORIES.get((category_raw or "").casefold())
-    expected_category = MODEL_CATEGORIES.get(model)
+    category_names = {**CATEGORIES, **{label.casefold(): code for code, label in (categories or {}).items()}}
+    category = category_names.get((category_raw or "").casefold())
+    if category_raw in (categories or {}) or re.fullmatch(r"C[0-9]{9}", category_raw or ""):
+        category = category_raw
+    expected_category = (models or {}).get(model, MODEL_CATEGORIES.get(model))
     if category_raw and category is None:
-        issue("group_name", "설비군 분류를 Poly·Oxide·KCTC·HPA 중에서 확인하세요.")
+        issue("group_name", "등록된 설비군 분류를 확인하세요.")
     elif category is None:
         category = expected_category
     if category and expected_category and category != expected_category:
@@ -70,7 +73,11 @@ def normalize(values, kind, row_number, sources):
 
     area = result.get("production_area")
     if area:
-        normalized_area = {"memory": "MEMORY", "foundry": "FOUNDRY"}.get(area.casefold())
+        area_names = {"memory": "MEMORY", "foundry": "FOUNDRY",
+                      **{label.casefold(): code for code, label in (areas or {}).items()}}
+        normalized_area = area_names.get(area.casefold())
+        if area in (areas or {}) or re.fullmatch(r"A[0-9]{9}", area):
+            normalized_area = area
         if normalized_area is None:
             issue("production_area", "Memory/Foundry 값을 확인하세요. 모델 소속은 생산 영역으로 추정하지 않습니다.")
         result["production_area"] = normalized_area
@@ -83,7 +90,8 @@ def normalize(values, kind, row_number, sources):
         issue("ui_type", "구UI 또는 통합UI 구분을 확인하세요.")
     result["ui_type"] = normalized_ui
     family = result.get("family_name")
-    is_c3 = model in {"C3", "M-C3"} or family in {"C3", "C3 구UI", "C3 통합UI"}
+    semantic = semantic_model or model
+    is_c3 = semantic in {"C3", "M-C3"} or family in {"C3", "C3 구UI", "C3 통합UI"}
     if is_c3:
         family_ui = {"C3 구UI": "LEGACY", "C3 통합UI": "INTEGRATED"}.get(family)
         if family_ui and normalized_ui and family_ui != normalized_ui:
@@ -91,7 +99,9 @@ def normalize(values, kind, row_number, sources):
             normalized_ui = None
         else:
             normalized_ui = normalized_ui or family_ui
-        family = "C3"
+        # 관리 이름 변경으로 소유 계열도 함께 바뀐 경우 실제 이름은 유지하고 C3의 UI 의미만 적용한다.
+        if semantic_model is None or family in {None, "C3", "C3 구UI", "C3 통합UI"}:
+            family = "C3"
         if normalized_ui is None and not (ui or "").strip() and model_source is not None:
             # 모델 셀 원문에 UI가 적혀 있으면(예: 'M-C3 (구UI)' 셀에서 모델만 'M-C3'로 읽은 경우) 그 표기를 따른다.
             # 한 셀에 두 표기가 함께 있으면(예: 제목 '… 통합UI 기준 ※ 구UI 파일 확인 중') 정하지 않는다.
@@ -100,7 +110,7 @@ def normalize(values, kind, row_number, sources):
             integrated = bool(re.search(r"통합\s*UI", cell_text, re.IGNORECASE))
             if legacy != integrated:
                 normalized_ui = "LEGACY" if legacy else "INTEGRATED"
-        if (normalized_ui is None and not (ui or "").strip() and result.get("model_name") in {"C3", "M-C3"}
+        if (normalized_ui is None and not (ui or "").strip() and semantic in {"C3", "M-C3"}
                 and kind is ExtractKind.EQUIPMENT_STATUS):
             # 멘토 확정(2026-10-28 회신, 4차 멘토링 일지): 구UI/통합UI 표기가 없는 M-C3는 모두 통합UI. 구UI가 특별한 설비다.
             # UI 칸에 알 수 없는 글자가 있으면 기본값을 쓰지 않고 확인을 요청한다(표기 '없음'일 때만).
@@ -114,14 +124,15 @@ def normalize(values, kind, row_number, sources):
     structure = result.get("structure_type")
     if structure and structure.casefold() in {"inline", "cluster"}:
         structure = result["structure_type"] = structure.upper()
-    model_structure = MODEL_STRUCTURES.get(model)
+    model_structure = MODEL_STRUCTURES.get(semantic)
     if model_structure:
         if structure and structure != model_structure:
             issue("model_name", "모델과 Inline/Cluster 표기가 상충합니다. KCTC 설비는 모델명을 Inline Ox · Inline O2 · Cluster Ox · Cluster O2 중 하나로 골라 주세요.")
             structure = None
         else:
             structure = result["structure_type"] = model_structure
-    if category == "KCTC" and structure not in {"INLINE", "CLUSTER"}:
+    managed_custom = models is not None and model in models and semantic not in MODEL_STRUCTURES
+    if category == "KCTC" and not managed_custom and structure not in {"INLINE", "CLUSTER"}:
         issue("model_name", "KCTC 설비는 모델명을 Inline Ox · Inline O2 · Cluster Ox · Cluster O2 중 하나로 골라 주세요.")
         structure = None
 
@@ -146,9 +157,10 @@ def normalize(values, kind, row_number, sources):
         issue("modification_mark", "개조형 적용 표식의 대상 모델과 의미를 확인하세요.")
 
     key = None
-    if model not in {"C2", "M-C2"} and category and family and (not is_c3 or normalized_ui) and (category != "KCTC" or structure):
+    if model not in {"C2", "M-C2"} and category and family and (not is_c3 or normalized_ui) and (category != "KCTC" or structure or managed_custom):
         key = FamilyKey(category, family, normalized_ui if is_c3 else None,
-                        structure if category == "KCTC" else None, "C3" if is_c3 else result.get("model_name"))
+                        structure if category == "KCTC" and not managed_custom else None,
+                        "C3" if is_c3 else result.get("model_name"))
     if key is None:
         issue("family_name", "버전 계열 대응을 확인하세요. 다른 계열과 자동으로 합치지 않습니다.")
     return result, key, tuple(issues)

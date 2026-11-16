@@ -60,7 +60,7 @@ class ReplayPage(QWidget):
         self.start, self.end = self.query_panel.start_date, self.query_panel.end_date
         self.reset_button = self.query_panel.reset_button
         self.version_button = self.query_panel.version_button
-        self.version_button.setEnabled(True)
+        self.query_panel.set_version_available(True)
         self._reset_period()
         body.addWidget(self.query_panel)
         self.message = label("", 13, color=SECONDARY, wrap=True)
@@ -296,7 +296,7 @@ class ReplayPage(QWidget):
                     return False
                 return self._start_request(request)
             # 카탈로그만 바뀌고 조회 범위·목표·기간은 그대로일 때만 같은 조건을 새 선택지에 연결한다.
-            # 삭제된 선택지로 초안이 정규화됐거나 사용자가 바꾼 입력이 있으면 직접 조회하도록 둔다.
+            # 삭제된 선택은 apply_draft()에서 차단하고, 사용자가 바꾼 입력은 직접 조회하도록 둔다.
             same = (self.state.draft == request.query.selection and self.state.target_draft == request.query.targets
                     and self.start.date().toPython() == request.start and self.end.date().toPython() == request.end)
             if same:
@@ -690,7 +690,7 @@ class ReplayPage(QWidget):
         return True
 
     def open_versions(self):
-        if self.busy:
+        if self.busy or self.state.invalid_selections:
             return
         self.pause()
         if self.version_dialog is not None:

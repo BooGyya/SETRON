@@ -23,8 +23,8 @@ def choice_caption(value):
 class VersionChoice(QCheckBox):
     """긴 원문도 줄바꿈하며 체크박스의 Space·포커스·접근성 역할을 유지한다."""
 
-    def __init__(self, text):
-        super().__init__()
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
         self.setAccessibleName(text)
         self.setToolTip(text)
         set_widget_font(self, font(14, medium=True))
@@ -106,7 +106,8 @@ class VersionFilterDialog(QDialog):
         extra = () if original is None else (*original.versions, *((None,) if original.include_missing else ()))
         values = tuple(dict.fromkeys((*self.options, *extra)))
         for value in values:
-            control = VersionChoice("버전 미등록 포함" if value is None else choice_caption(value))
+            # 최초 배치에서 표시해도 독립 창이 생기지 않도록 목록에 먼저 소속시킨다.
+            control = VersionChoice("버전 미등록 포함" if value is None else choice_caption(value), parent=content)
             control.setChecked(original is None or (original.include_missing if value is None else value in original.versions))
             if value not in self.options:
                 control.setToolTip(control.toolTip() + " · 현재 관측 자료에 없음")

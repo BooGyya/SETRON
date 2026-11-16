@@ -231,7 +231,7 @@ class PdfPreviewDialog(QDialog):
             print_numbered_document(self.document_factory(self.report), printer)
 
     def _cleanup(self, *_):
-        self.view.setDocument(None)
+        # close()가 뷰에 빈 상태를 알린다. setDocument(None)은 Qt 링크 모델에서 경고를 낸다.
         self.pdf.close()
         self._buffer.close()
         self._temporary.cleanup()

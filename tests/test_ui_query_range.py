@@ -1,6 +1,7 @@
 """꺾은선 그래프의 기간 입력은 공통 기준 날짜 필드 하나를 사용한다."""
 
 from datetime import date
+from time import monotonic
 
 import pytest
 from PySide6.QtCore import QDate, QPoint, QSettings, Qt
@@ -45,6 +46,10 @@ def test_every_visible_period_picker_uses_the_same_header_first_design(app, tmp_
     host.show()
     try:
         QTest.qWait(30)
+        if screen == "replay":
+            deadline = monotonic() + 4
+            while host.busy and monotonic() < deadline:
+                QTest.qWait(5)
         assert control.isVisibleTo(host)
         control.click()
         dialog = control.dialog

@@ -350,7 +350,7 @@ def test_unknown_commit_result_blocks_ai_and_exports_until_reconciliation(app, f
 def test_confirmed_save_failure_retains_draft_and_reloads_known_old_values(app, file_storage):
     """전체 취소가 확인된 실패는 초안을 보존하고 기존 저장값으로 화면을 다시 읽는다."""
     class FailedGateway(ManagementGateway):
-        def save(self, edits, context, applicability=()):
+        def save_sheet(self, batch_id, **operations):
             raise DatabaseSaveError("검증용 저장 취소")
 
     with running_window(app, file_storage, gateway=FailedGateway(file_storage)) as (window, source, calls, release_id, item_id, snapshot):
@@ -374,3 +374,38 @@ def test_confirmed_save_failure_retains_draft_and_reloads_known_old_values(app, 
         assert all_rows(file_storage, "equipment_snapshot")[0]["line"] == "1라인"
         assert window.pages["dashboard"].snapshot.selected_records[0].line == "1라인"
         assert calls == []
+
+
+def test_sheet_unknown_commit_is_reconciled_from_db_without_resubmitting(app, file_storage):
+    from setron.ui.read_worker import ReadRequest
+
+    class UnknownSheetGateway(ManagementGateway):
+        attempts = 0
+
+        def save_sheet(self, batch_id, **operations):
+            self.attempts += 1
+            super().save_sheet(batch_id, **operations)
+            raise DatabaseCommitUnknownError("확정 응답만 유실된 저장")
+
+    gateway = UnknownSheetGateway(file_storage)
+    with running_window(app, file_storage, gateway=gateway) as (window, source, calls, release_id, item_id, snapshot):
+        page = window.pages["data"]
+        sheet = page.sheet_panel
+        sheet.open_batch(snapshot.batch_id)
+        window.navigate("data")
+        wait_for(app, lambda: not sheet.request.busy and sheet.data is not None)
+        row = next(r for r, (kind, entry) in enumerate(sheet.view)
+                   if kind == "row" and entry.snapshot_id == snapshot.snapshot_id)
+        sheet.table.item(row, 6).setText("v-committed")
+        assert sheet.save()
+        wait_for(app, lambda: page.uncertain and not page.save_request.busy)
+        assert window.management_uncertain and not window.management_saving
+        assert not sheet.isEnabled() and window.query_panel.apply_draft() is None
+        assert "기존값 유지" not in window.notice.text()
+        assert all_rows(file_storage, "equipment_version")[0]["version_raw"] == "v-committed"
+        assert page.reconcile_save()
+        wait_for(app, lambda: not page.uncertain and not window.management_uncertain)
+        wait_for(app, lambda: not any(request.busy for request in window.findChildren(ReadRequest)))
+        assert gateway.attempts == 1 and sheet.isEnabled() and not sheet.pending
+        assert sheet.table.item(row, 6).text() == "v-committed"
+        assert window.query_panel.apply_draft() is not None

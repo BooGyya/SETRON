@@ -285,7 +285,7 @@ def test_approved_replacement_has_verified_backup_before_first_drop(initializer,
     assert initializer.read_dataset(result.backup) == old
     assert db.rows == initializer.read_dataset(source)
     assert "chosen_db" in confirmations[0] and "3306" in confirmations[0] and "덮어쓰시겠습니까?" in confirmations[0]
-    assert "13개" in confirmations[0] and str(tmp_path / "backups") in confirmations[0]
+    assert "백업 위치:" in confirmations[0] and str(tmp_path / "backups") in confirmations[0]
     drops = [sql for sql, _ in db.log if sql.startswith("DROP TABLE")]
     assert drops == [f"DROP TABLE IF EXISTS `{table}`" for table in reversed(TABLE_NAMES)]
     assert db.selected == [config.database] and connections[0].get("client_flag", 0) == 0
@@ -379,6 +379,10 @@ def test_packager_takes_explicit_dump_and_copies_only_deployment_files(initializ
     output = tmp_path / "deployment"
     monkeypatch.setattr(sys, "argv", ["build_demo_db.py", "--dump", str(source), "--output-dir", str(output)])
     commands = []
+    build_root = tmp_path / "build_source"
+    build_root.mkdir()
+    (build_root / "prepare_demo_db.bat").write_bytes(b"@echo off\nsetlocal DisableDelayedExpansion\n")
+    monkeypatch.setattr(module, "ROOT", build_root)
     def build(command, **kwargs):
         commands.append(command)
         location = Path(command[command.index("--distpath") + 1])
@@ -390,6 +394,7 @@ def test_packager_takes_explicit_dump_and_copies_only_deployment_files(initializ
     module.main()
     assert {file.name for file in output.iterdir()} == {"SETRON_DB_INIT.exe", "SETRON_DB.sql", "prepare_demo_db.bat"}
     assert (output / "SETRON_DB.sql").read_bytes() == source.read_bytes()
+    assert (output / "prepare_demo_db.bat").read_bytes() == b"@echo off\r\nsetlocal DisableDelayedExpansion\r\n"
     assert "--console" in commands[0]
     assert sum("dataset.dump" in part for part in commands[0]) == 1
     assert sum("schema_mysql5619.sql" in part for part in commands[0]) == 1
@@ -411,7 +416,7 @@ def test_reset_does_not_read_demo_sql_and_preserves_all_table_objects(initialize
     assert db.objects == objects and all(not rows for rows in db.rows.values())
     mutations = destructive(db)
     assert mutations == [f"DELETE FROM `{table}`" for table in reversed(TABLE_NAMES)]
-    assert "데이터 초기화" in confirmations[0] and "13개" in confirmations[0] and "구조는 유지" in confirmations[0]
+    assert "테이블 구조를 유지하고 모든 데이터를 삭제하시겠습니까?" in confirmations[0]
     assert "chosen_db" in confirmations[0] and "3306" in confirmations[0]
     assert "모든 데이터" in confirmations[0] and str(tmp_path / "backups") in confirmations[0]
     assert [event for event, _ in db.log if event in {"BEGIN", "COMMIT"}] == ["COMMIT", "BEGIN", "COMMIT"]

@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date
+import re
 
 from setron.features.storage.inputs import identifier, merge_sources, require, required_text
 
@@ -35,8 +36,9 @@ def prepare_snapshot(value: SnapshotInput) -> SnapshotInput:
     if value.group_id is not None:
         identifier(value.group_id, "group_id")
     require(value.production_area is None or (
-        isinstance(value.production_area, str) and value.production_area in {"MEMORY", "FOUNDRY"}
-    ), "production_area: Memory/Foundry 또는 미확인(None)이어야 합니다.")
+        isinstance(value.production_area, str) and (value.production_area in {"MEMORY", "FOUNDRY"}
+                                                   or re.fullmatch(r"A[0-9]{9}", value.production_area))
+    ), "production_area: 등록된 생산 분류 코드 또는 미확인(None)이어야 합니다.")
     for field, limit in (("line", 50), ("structure_type", 50), ("geometry_type", 50), ("modification_type", 100)):
         text = getattr(value, field)
         require(text is None or isinstance(text, str) and len(text) <= limit, f"{field}: 문자열 또는 None이 필요합니다.")

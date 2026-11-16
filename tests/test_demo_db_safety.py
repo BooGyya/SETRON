@@ -214,18 +214,20 @@ def test_finite_network_and_lock_waits_are_applied(initializer, setup, tmp_path)
     assert ("SET SESSION innodb_lock_wait_timeout = %s", (initializer.QUERY_WAIT_SECONDS,)) in db.log
 
 
-def test_startup_reports_actual_target_and_environment_override_without_password(
-        initializer, setup, monkeypatch):
-    _, _, _, config, _ = setup
+@pytest.mark.parametrize("missing", [False, True], ids=["empty-database", "new-database"])
+def test_startup_reports_actual_target_once_and_environment_override_without_password(
+        initializer, setup, tmp_path, monkeypatch, missing):
+    _, _, db, config, _ = setup
+    db.objects = {}
+    db.missing = missing
     monkeypatch.setattr(initializer, "load_config", lambda: config)
-    monkeypatch.setattr(initializer, "prepare", lambda **kwargs: initializer.SetupResult(True))
-    # prepare takes config positionally; allow both while testing only startup text.
-    monkeypatch.setattr(initializer, "prepare", lambda *args, **kwargs: initializer.SetupResult(True))
+    monkeypatch.setattr(initializer, "program_folder", lambda: tmp_path)
     monkeypatch.setenv("SETRON_DB_NAME", config.database)
     progress = []
     status, _ = initializer.run(progress=progress.append)
     assert status == 0
-    assert config.database in progress[0] and str(config.port) in progress[0] and config.username in progress[0]
+    targets = [value for value in progress if value.startswith("대상 DB:")]
+    assert len(targets) == 1 and config.database in targets[0] and str(config.port) in targets[0]
     assert any("환경변수 우선" in value for value in progress)
     assert all(config.password not in value for value in progress)
 

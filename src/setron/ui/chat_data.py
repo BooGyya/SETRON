@@ -26,9 +26,9 @@ from setron.ui.analysis_data import family_names
 
 
 def chat_catalog(source) -> QueryCatalog:
-    """자료 출처의 설비 기록에서 엔진 선택지를 만든다. 사업장·라인은 기록에 적힌 그대로 쓴다."""
+    """DB 등록 이름·관계와 실제 관측으로 질문 선택지를 만든다."""
     records = source.records
-    models: dict[int, str] = {}
+    models: dict[int, str] = dict(getattr(source, "model_names", {}))
     for single_first in (True, False):          # 혼합 설비(모델 2개)보다 모델 1개짜리 기록의 이름을 먼저 쓴다
         for record in records:
             if (len(record.pms) == 1) != single_first:
@@ -40,12 +40,31 @@ def chat_catalog(source) -> QueryCatalog:
         for pm in record.pms:
             owners.setdefault(pm.family_id, pm.group_id)
     names = _names(source, models, owners)
-    groups = tuple(GroupChoice(group_id, re.sub(r"^M-", "", name), name, "") for group_id, name in sorted(models.items()))
+    categories = {model_id: group.category for group in source.catalog.groups
+                  for model_id in source.bindings[group.key]}
+    hpa_models = (set(getattr(source, "excluded_model_ids", ()))
+                  | {pm.group_id for record in records if record.is_hpa for pm in record.pms})
+    groups = tuple(GroupChoice(group_id, re.sub(r"^M-", "", name), name,
+                               "ETC" if group_id in hpa_models else categories.get(group_id, ""))
+                   for group_id, name in sorted(models.items()))
     families = tuple(FamilyChoice(family_id, names.get(family_id, f"계열 {family_id}"), owners[family_id])
                      for family_id in sorted(source.families) if family_id in owners)
-    return QueryCatalog(sites=tuple(sorted({r.site for r in records if r.site})),
-                        lines=tuple(sorted({r.line for r in records if r.line})),
-                        groups=groups, families=families, dates=tuple(source.dates), releases=dict(source.families))
+    site_names = {site.key: site.label for site in source.catalog.sites}
+    line_names = {line.key: line.label for line in source.catalog.lines}
+    line_parents = {(site_names[line.site_key], line.label): line_names[line.parent_key]
+                    for line in source.catalog.lines if line.parent_key is not None}
+    line_aliases = {}
+    for record in records:
+        location = source.location_for(record)
+        canonical = line_names.get(location.line_key)
+        if canonical is not None and record.line != canonical:
+            line_aliases[record.site, record.line] = canonical
+    return QueryCatalog(sites=tuple(sorted({r.site for r in records if r.site}
+                                          | set(site_names.values()))),
+                        lines=tuple(sorted({r.line for r in records if r.line} | set(line_names.values()))),
+                        groups=groups, families=families, dates=tuple(source.dates), releases=dict(source.families),
+                        line_parents=line_parents, line_aliases=line_aliases,
+                        area_labels=dict(getattr(source, "area_labels", {})))
 
 
 def _names(source, models: dict[int, str], owners: dict[int, int]) -> dict[int, str]:

@@ -108,6 +108,21 @@ def uncheck_blocked(page):
             page.condition_list.item(index).setCheckState(Qt.CheckState.Unchecked)
 
 
+def test_catalog_change_during_ai_confirmation_does_not_apply_old_conditions(window, page):
+    ask(page)
+    uncheck_blocked(page)
+    previous = window.query_state.applied
+
+    def change_catalog(_text):
+        window.query_panel.set_catalog(QueryCatalog())
+        return True
+
+    page.confirm = change_catalog
+    assert not page.apply_conditions()
+    assert window.query_state.applied is previous
+    assert "선택지" in page.apply_reason.text()
+
+
 def test_parse_shows_example_source_and_changes_nothing(window, page):
     draft, applied = window.query_state.draft, window.query_state.applied
     ask(page)

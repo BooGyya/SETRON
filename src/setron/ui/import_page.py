@@ -369,6 +369,7 @@ class ImportPage(QWidget):
     """
 
     saved = Signal(object)  # SaveReceipt
+    result_uncertain = Signal()
     saved_scope_requested = Signal(object, str, str)
     saved_history_requested = Signal()
     requery_requested = Signal()
@@ -718,7 +719,7 @@ class ImportPage(QWidget):
         self._paint_steps(self.status.tone)
         self._render()
 
-    def configure_choices(self, *, dates=(), families=(), sites=()):
+    def configure_choices(self, *, dates=(), families=(), sites=(), areas=None):
         """이미 읽은 선택지만 설정한다. 여기서 Excel이나 DB를 조회하지 않는다."""
         self.available_dates = tuple(dates)
         current = self.release_family.currentText()
@@ -731,6 +732,17 @@ class ImportPage(QWidget):
         self.common_site_combo.addItem("")
         self.common_site_combo.addItems(sorted(set(sites)))
         self.common_site_combo.setCurrentText(current_site)
+        if areas is not None:
+            selected = self.common_area.currentData()
+            self.common_area.blockSignals(True)
+            try:
+                self.common_area.clear()
+                self.common_area.addItem("생산 분류 · 라인 기준 자동", "")
+                for code, text in areas.items():
+                    self.common_area.addItem(text, code)
+                self.common_area.setCurrentIndex(max(0, self.common_area.findData(selected)))
+            finally:
+                self.common_area.blockSignals(False)
 
     def jump_to_step(self, index):
         if 0 <= index < len(self.step_cards):
@@ -1996,12 +2008,15 @@ class ImportPage(QWidget):
             menu.deleteLater()
 
     def _save_completed(self, receipt, error):
+        uncertain = False
         if error is None and not isinstance(receipt, SaveReceipt):
             error = DatabaseCommitUnknownError("저장 결과 형식을 확인할 수 없습니다. 중복 저장하지 말고 저장 기록을 확인해 주세요.")
         if error is not None:
             state, message = describe_save_error(error)
             if state == "unknown":
                 self.state = "unknown"
+                uncertain = True
+                self.deletion.invalidate_catalog()
                 self._set_status("저장 결과 확인 필요", "warning", "다시 저장하지 마세요. 연결 복구 후 저장된 내용을 확인해 주세요.")
                 self.show_toast(f"저장 결과 확인 필요 · {message}", "warning", 8000)
                 self.result_label.setText(message)
@@ -2028,6 +2043,8 @@ class ImportPage(QWidget):
         if self.selected_row_id is not None:
             self.select_row(self.selected_row_id)
         self._render()
+        if uncertain:
+            self.result_uncertain.emit()
 
     def return_to_start(self):
         """저장을 마치면 1단계로 돌아간다 (11-10 2차 1-2).

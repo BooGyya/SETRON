@@ -275,6 +275,7 @@ class ImportDeletePage(QWidget):
         self.gateway = gateway
         self.catalog = None
         self.phase = "idle"
+        self.backup_busy = False
         self.selected = set()
         self.checks = {}
         self._check_style = _DeleteCheckStyle(self)
@@ -695,8 +696,15 @@ class ImportDeletePage(QWidget):
         self.selected = set() if eligible and eligible <= self.selected else eligible
         self._render()
 
+    def set_backup_busy(self, busy):
+        """비동기 백업이 끝나기 전에는 삭제를 시작하지 않는다."""
+        if self.backup_busy == bool(busy):
+            return
+        self.backup_busy = bool(busy)
+        self._render()
+
     def _render(self):
-        locked = self.busy or self.phase == "unknown"
+        locked = self.busy or self.phase == "unknown" or self.backup_busy
         for widget in (self.kind_combo, self.site_combo, self.family_combo, self.start, self.end, self.period_button,
                        self.reload_button, self.search_button, self.cancel_button, *self.quick_buttons):
             widget.setEnabled(not locked)
@@ -789,7 +797,7 @@ class ImportDeletePage(QWidget):
                             self.family_combo.currentData() if not equipment else None)
 
     def confirm_delete(self):
-        if self.busy or self.phase == "unknown":
+        if self.busy or self.phase == "unknown" or self.backup_busy:
             return False
         plan = self.plan()
         if plan is None:
@@ -800,6 +808,9 @@ class ImportDeletePage(QWidget):
         confirmed = accepted and dialog.phrase.text() == "삭제" and connected
         dialog.deleteLater()
         if not confirmed:
+            return False
+        if self.backup_busy:
+            self._set_notice("DB 백업이 끝난 뒤 삭제 범위를 다시 확인해 주세요.")
             return False
         if self.plan() != plan:
             self._set_notice("목록 또는 선택 조건이 바뀌었습니다. 삭제 범위를 다시 확인해 주세요.")

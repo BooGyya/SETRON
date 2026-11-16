@@ -49,6 +49,10 @@ def rewrite_json(table: str, row: dict[str, object], resolve: Callable[[str, int
                                                                                  resolve, ids_changed))
             elif key.startswith("demo_seed."):
                 _rewrite_column(result, "setting_value", lambda value: _demo(value, resolve))
+            elif key == "hierarchy.model_aliases.v1":
+                _rewrite_column(result, "setting_value", lambda value: {
+                    **value, "aliases": {alias: _id(group_id, "equipment_group", resolve)
+                                          for alias, group_id in value.get("aliases", {}).items()}})
     except (AttributeError, KeyError, TypeError, ValueError) as error:
         raise ReferenceConflict(f"{table} 자료의 원본·설정 참조를 확인할 수 없습니다.") from error
     return result

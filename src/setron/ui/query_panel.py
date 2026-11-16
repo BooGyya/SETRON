@@ -122,6 +122,7 @@ class QueryPanel(QWidget):
         self.period = period
         self.target_describer = None
         self.apply_guard = None  # 허용 시 빈 값, 차단 시 사용자에게 보여 줄 사유를 반환한다.
+        self._goal_available = self._version_available = False
         self.combos: dict[str, _FilterButton] = {}
         self.filter_popup = None
         self.date_edit = None
@@ -292,7 +293,9 @@ class QueryPanel(QWidget):
         # 선택 중인 조건만 바꾸고, 조회 버튼을 누르기 전의 결과는 유지한다.
         popup = QueryFilterPopup(FILTER_CAPTIONS[field], self._filter_options(field),
                                  selection_keys(getattr(expected, field)), parent=self, anchor=anchor,
-                                 show_groups=field != "line_key")
+                                 show_groups=field != "line_key",
+                                 invalid_names=tuple(state.option_label(field, key)
+                                                     for key in state.invalid_selections.get(field, ())))
         self.filter_popup = popup
         anchor.arrow.set_expanded(True)
 
@@ -442,11 +445,27 @@ class QueryPanel(QWidget):
         self.set_draft(QuerySelection())
 
     def set_version_filter(self, value):
-        self.set_draft(replace(self.state.draft, versions=value))
+        self.select("versions", value)
 
     def set_target_describer(self, describer):
         self.target_describer = describer
         self._render()
+
+    def set_goal_available(self, available):
+        self._goal_available = available
+        self._render()
+
+    def set_version_available(self, available):
+        self._version_available = available
+        self._render()
+
+    def _describe_targets(self, targets):
+        if self.state.invalid_selections:
+            return "조회 선택 다시 확인"
+        try:
+            return self.target_describer(targets)
+        except (ValueError, KeyError):
+            return "목표 기준 다시 확인 · 현재 모델·계열 정보를 다시 읽어 주세요."
 
     def set_target_draft(self, targets):
         previous = self.state.target_draft
@@ -456,6 +475,9 @@ class QueryPanel(QWidget):
             self.targets_changed.emit(self.state.target_draft)
 
     def apply_draft(self):
+        if self.state.invalid_selections:
+            self._render()
+            return None
         if self.apply_guard is not None and self.apply_guard():
             self._render()
             return None
@@ -486,10 +508,13 @@ class QueryPanel(QWidget):
         for field, combo in self.combos.items():
             selected = selection_keys(getattr(self.state.draft, field))
             options = self._filter_options(field)
-            names = [name for key, name, _ in options if key in selected]
+            option_names = {key: name for key, name, _ in options}
+            names = [option_names.get(key, self.state.option_label(field, key)) for key in selected]
             caption = "전체" if not names else names[0] if len(names) == 1 else f"{names[0]} 외 {len(names) - 1}개"
+            if field in self.state.invalid_selections:
+                caption = "선택 다시 확인 · " + caption
             combo.set_caption(caption, ", ".join(names) if names else caption)
-            combo.setEnabled(bool(options))
+            combo.setEnabled(bool(options) or bool(selected))
         if self.date_edit is not None:
             today = date.today()
             previous_block = self.date_edit.blockSignals(True)
@@ -499,7 +524,7 @@ class QueryPanel(QWidget):
             self.date_edit.blockSignals(previous_block)
         self.draft_summary.setText("선택 중 · " + self.state.describe(self.state.draft))
         if self.target_describer is not None:
-            self.draft_summary.setText(self.draft_summary.text() + "\n선택 중 목표 N · " + self.target_describer(self.state.target_draft))
+            self.draft_summary.setText(self.draft_summary.text() + "\n선택 중 목표 N · " + self._describe_targets(self.state.target_draft))
         self.source_label.setText(self.state.catalog.source_label)
         applied = self.state.applied
         if applied is None:
@@ -516,7 +541,7 @@ class QueryPanel(QWidget):
                 status, tone = "조건 적용됨", "info"
             summary = f"적용 #{applied.revision} · {applied.description}"
             if self.target_describer is not None:
-                summary += "\n적용 목표 N · " + self.target_describer(applied.targets)
+                summary += "\n적용 목표 N · " + self._describe_targets(applied.targets)
         self.status.setText(status)
         self.status.set_tone(tone)
         self.applied_summary.setText(summary)
@@ -545,4 +570,13 @@ class QueryPanel(QWidget):
             self.status.setText("조회 잠김")
             self.status.set_tone("warning")
             self.status.setToolTip(blocked)
+        if self.state.invalid_selections:
+            self.status.show()
+            self.status.setText("선택 다시 확인")
+            self.status.set_tone("warning")
+            self.status.setToolTip(self.state.selection_error + "\n\n" + summary)
+        if hasattr(self, "search_button"):
+            self.search_button.setEnabled(not self.state.invalid_selections)
+        self.goal_button.setEnabled(self._goal_available and not self.state.invalid_selections and not blocked)
+        self.version_button.setEnabled(self._version_available and not self.state.invalid_selections and not blocked)
         self.status.setAccessibleDescription(self.status.toolTip())

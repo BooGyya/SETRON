@@ -57,7 +57,9 @@ class QueryScope:
                 else:
                     required_text(value, field, 50)
                     if field == "categories":
-                        require(value in {"POLY", "OXIDE", "KCTC", "HPA"}, "등록되지 않은 설비군입니다.")
+                        import re
+                        require(value in {"POLY", "OXIDE", "KCTC", "HPA"} or re.fullmatch(r"C[0-9]{9}", value),
+                                "등록되지 않은 설비군입니다.")
             canonical = sorted(set(values), key=lambda value: (value is not None, value))
             object.__setattr__(self, field, tuple(canonical))
         require(isinstance(self.site_lines, (tuple, list)), "site_lines: 사업장·라인 선택 목록이 필요합니다.")

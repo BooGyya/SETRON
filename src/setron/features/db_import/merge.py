@@ -14,7 +14,9 @@ from setron.features.storage.validation import JSON_COLUMNS, TABLE_NAMES, decode
 
 from .dump import DUMP_COLUMNS, DumpFormatError, allowed_columns, project_row, with_legacy_jira
 from .group_settings import group_history_prune
+from .hierarchy import HIERARCHY_KEYS, merge_hierarchy_setting, validate_hierarchy
 from .references import ReferenceConflict, rewrite_json
+from .validation import validate_merge
 
 
 class SqlImportError(ValueError):
@@ -140,6 +142,7 @@ def _ordered_groups(rows):
 class _Planner:
     def __init__(self, source, target, next_ids, repository, mode):
         self.target, self.next_ids, self.mode = target, next_ids, mode
+        self.repository = repository
         self.tables = {name: repository.table(name) for name in TABLE_NAMES}
         if any(tuple(table.columns.keys()) not in allowed_columns(name)
                for name, table in self.tables.items()):
@@ -190,11 +193,25 @@ class _Planner:
                     version = self.source_by_pk["equipment_version"].get((row["equipment_version_id"],))
                     if version is None or version["snapshot_id"] != row["snapshot_id"]:
                         raise SqlImportError("PM의 적용 버전이 파일의 같은 설비 현황에 속하지 않습니다.")
+                if name == "equipment_version" and row["release_version_id"] is not None:
+                    release = self.source_by_pk["release_version"][(row["release_version_id"],)]
+                    if release["family_id"] != row["family_id"]:
+                        raise SqlImportError("적용 SW와 연결 릴리즈의 버전 계열이 다릅니다.")
+                if name == "risk_rule":
+                    for field in ("release_version_id", "start_release_version_id", "end_release_version_id"):
+                        if row[field] is not None:
+                            release = self.source_by_pk["release_version"][(row[field],)]
+                            if release["family_id"] != row["family_id"]:
+                                raise SqlImportError("위험 정보와 연결 릴리즈의 버전 계열이 다릅니다.")
         sites = {}
         for row in self.source["equipment_snapshot"]:
             site = row["site"].strip().casefold()
             if sites.setdefault(row["equipment_id"], site) != site:
                 raise SqlImportError("SQL 파일에 같은 호기의 서로 다른 사업장이 있습니다.")
+        try:
+            validate_hierarchy(self.source)
+        except ValueError as error:
+            raise SqlImportError(str(error)) from None
 
     def resolve(self, name, source_id):
         return self.ids[name][source_id]
@@ -276,9 +293,15 @@ class _Planner:
             if key.startswith(ARCHIVE_KEY):
                 continue
             try:
-                incoming[key] = self._remap_row("app_setting", row)
+                mapped = self._remap_row("app_setting", row)
+                incoming[key] = merge_hierarchy_setting(mapped,
+                    self.current["app_setting"].get((mapped["setting_key"],)), self.mode)
             except ReferenceConflict:
+                if key in HIERARCHY_KEYS:
+                    raise SqlImportError("계층 설정의 참조를 확인할 수 없어 SQL을 병합할 수 없습니다.") from None
                 self._count("skip", "app_setting", note="references")
+            except ValueError as error:
+                raise SqlImportError(str(error)) from None
         try:
             suppressed, deleted = group_history_prune(incoming.values(), self.target["app_setting"], self.mode)
         except ValueError as error:
@@ -351,7 +374,7 @@ class _Planner:
                     self.incoming_children[name].add(mapped_key)
                 if _payload(name, match, pk) == _payload(name, row, pk) or name == "import_batch":
                     self._count("same", name)
-                elif self.mode == "overwrite":
+                elif self.mode == "overwrite" or (name == "app_setting" and row["setting_key"] in HIERARCHY_KEYS):
                     row.update(zip(pk, mapped_key))
                     self._write("update", name, row)
                     current[mapped_key] = row
@@ -415,11 +438,12 @@ class _Planner:
         return "검토 대상 설비 현황 · " + " / ".join(examples) + suffix
 
     def plan(self, destination, name):
-        for name in TABLE_NAMES:
-            self._process_table(name)
+        for table_name in TABLE_NAMES:
+            self._process_table(table_name)
         _ordered_groups(tuple(self.current["equipment_group"].values()))
         self._prune_snapshot_children()
         self._finalize_batches()
+        validate_merge(self.target, self.writes, self.repository)
         target_rows = sum(len(rows) for rows in self.target.values())
         labels = (("추가", "insert"), ("갱신", "update"), ("연결 자료 제거", "delete"),
                   ("동일", "same"), ("건너뜀", "skip"))

@@ -6,7 +6,7 @@ import hashlib
 import threading
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QSettings, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QSettings, Qt, qInstallMessageHandler
 from PySide6.QtGui import QImage, QPalette
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtTest import QTest
@@ -218,6 +218,37 @@ def test_pdf_preview_has_real_pages_navigation_and_cancelled_download(ui, tmp_pa
     dialog.download()
     assert dialog.result.saved and path.is_file()
     assert not Path(dialog._temporary.name).exists()      # Windows 잠금 없이 임시 파일 회수
+
+
+@pytest.mark.parametrize("available", [True, False])
+@pytest.mark.parametrize("finish", ["accept", "reject"])
+def test_pdf_preview_close_releases_resources_without_null_document_warnings(ui, available, finish):
+    warnings = []
+
+    def capture(kind, context, message):
+        if context.category == "qt.core.qobject.connect" and "invalid nullptr parameter" in message:
+            warnings.append(message)
+
+    previous = qInstallMessageHandler(capture)
+    dialog = None
+    try:
+        writer = None if available else lambda report, path: ExportResult(ExportStatus.FAILED, path, "미리보기 생성 실패")
+        dialog = PdfPreviewDialog(ChatReport("닫기 검사", (part(),)), preview_writer=writer)
+        assert dialog.available is available
+        if available:
+            assert dialog.pdf.pageCount() > 0 and dialog._buffer.isOpen()
+        getattr(dialog, finish)()
+        assert dialog.pdf.status() == QPdfDocument.Status.Null
+        assert not dialog._buffer.isOpen()
+        assert not Path(dialog._temporary.name).exists()
+    finally:
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            QApplication.processEvents()
+        qInstallMessageHandler(previous)
+    assert warnings == []
 
 
 def test_pdf_print_is_opt_in_and_cancel_does_not_print(ui, monkeypatch):

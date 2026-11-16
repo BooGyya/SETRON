@@ -4,16 +4,33 @@ import re
 
 PRODUCTION_AREA_LABELS = {"MEMORY": "Memory", "FOUNDRY": "Foundry"}
 _VALUES = {"memory": "MEMORY", "foundry": "FOUNDRY", "메모리": "MEMORY", "파운드리": "FOUNDRY"}
+_managed_labels = dict(PRODUCTION_AREA_LABELS)
+
+
+def use_area_labels(labels):
+    """채택한 DB 카탈로그의 표시 이름. 내부 업무 코드는 바꾸지 않는다."""
+    global _managed_labels
+    _managed_labels = dict(labels)
+
+
+def area_choices():
+    return tuple(_managed_labels.items())
 
 
 def production_area_value(value):
     """화면에서 선택·입력한 이름을 기존 DB 코드로 변환한다. 모르는 값은 검증에 맡긴다."""
-    return _VALUES.get(value.strip().casefold(), value) if isinstance(value, str) else value
+    if not isinstance(value, str):
+        return value
+    if value in _managed_labels or value in PRODUCTION_AREA_LABELS:
+        return value
+    text = value.strip().casefold()
+    labels = {label.casefold(): code for code, label in _managed_labels.items()}
+    return labels.get(text, _VALUES.get(text, value))
 
 
 def production_area_label(value, *, unknown=""):
-    """사용자용 분류값은 Memory/Foundry로 표시하고 원본 값은 바꾸지 않는다."""
-    return PRODUCTION_AREA_LABELS.get(production_area_value(value), value or unknown)
+    """안정적인 내부 코드에 대응하는 관리 이름을 표시한다."""
+    return _managed_labels.get(production_area_value(value), value or unknown)
 
 
 def production_area_text(text):

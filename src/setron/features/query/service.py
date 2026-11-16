@@ -91,7 +91,9 @@ def select_records(
             continue
         if query.sites and record.site not in query.sites:
             continue
-        if query.lines and record.line not in query.lines:
+        line = catalog.line_aliases.get((record.site, record.line), record.line)
+        if query.lines and record.line not in query.lines and line not in query.lines and (
+                catalog.line_parents.get((record.site, line)) not in query.lines):
             continue
         if not query.filters_pms:
             selected.append(record)

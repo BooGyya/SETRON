@@ -348,7 +348,7 @@ def test_lines_are_registered_under_memory_or_foundry_and_judge_new_imports(stor
 
 
 def test_group_table_edits_rename_added_groups_and_category_follows_variants(storage):
-    """11-12: 설비 탭 표 수정. 추가한 설비군은 쓰여도 이름을 바꾸고(설비 현황 모델명 · 계열도), 기본 설비군 이름은 막는다."""
+    """설비군의 ID를 유지하며 이름·분류를 바꾸고, 하위 모델에도 같은 분류를 적용한다."""
     service = DataAdminService(storage)
     base = service.create_group("QA표군", "KCTC")
     variant = service.create_group("QA표군 개조", "KCTC", base.group_id)
@@ -366,8 +366,9 @@ def test_group_table_edits_rename_added_groups_and_category_follows_variants(sto
                                                                              ("이름", "QA표군", "QA표군2 (설비 현황 1건)")]
     c4 = next(g for g in groups.values() if g.name == "M-C4")
     assert c4.builtin and not groups[base.group_id].builtin
-    with pytest.raises(StorageValidationError, match="기본 설비군"):
-        service.update_groups([(c4.group_id, "M-C4X", None)])
+    assert service.update_groups([(c4.group_id, "M-C4X", None)]) == 1
+    assert next(g for g in service.equipment_overview()[0] if g.group_id == c4.group_id).name == "M-C4X"
+    assert service.update_groups([(c4.group_id, "M-C4", None)]) == 1
     with pytest.raises(StorageValidationError, match="이미 있는"):
         service.update_groups([(base.group_id, "m-c4", None)])
     with pytest.raises(StorageValidationError, match="개조형"):

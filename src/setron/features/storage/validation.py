@@ -44,10 +44,8 @@ DEFAULTS = {
 }
 ENUMS = {
     "import_batch": {"source_type": {"EXCEL", "MANUAL"}},
-    "equipment_group": {"category": {"POLY", "OXIDE", "KCTC", "HPA"}},
     "version_family": {"ui_type": {None, "LEGACY", "INTEGRATED", "SMART"}},
     "release_version": {"item_mapping_status": {"UNKNOWN", "VERIFIED"}},
-    "equipment_snapshot": {"production_area": {None, "MEMORY", "FOUNDRY"}},
     "release_version_item": {
         "item_state": {"APPLIED", "NOT_APPLIED", "UNKNOWN"},
         "target_scope": {"ALL", "LISTED", "UNKNOWN"},
@@ -185,6 +183,16 @@ def encode_record(table, values, *, inserting=False):
         raise StorageValidationError("지원하지 않는 관리 테이블입니다.")
     result = deepcopy(DEFAULTS.get(table, {})) if inserting else {}
     result.update(normalize_item_jira(values) if table == "item" else deepcopy(values))
+    if table == "equipment_group":
+        category = result.get("category")
+        if not isinstance(category, str) or (category not in {"POLY", "OXIDE", "KCTC", "HPA"}
+                                             and not re.fullmatch(r"C[0-9]{9}", category)):
+            fail(table, "category", "등록된 분류 코드가 필요합니다.")
+    if table == "equipment_snapshot":
+        area = result.get("production_area")
+        if area is not None and (not isinstance(area, str) or
+                (area not in {"MEMORY", "FOUNDRY"} and not re.fullmatch(r"A[0-9]{9}", area))):
+            fail(table, "production_area", "등록된 생산 분류 코드 또는 None이 필요합니다.")
     for field, allowed in ENUMS.get(table, {}).items():
         value = result.get(field)
         if not isinstance(value, (str, type(None))) or value not in allowed:

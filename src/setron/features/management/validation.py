@@ -75,6 +75,8 @@ def validate_snapshot_in(tx, snapshot_id):
     equipment = tx.get("equipment", {"equipment_id": row["equipment_id"]})
     snapshot = repository.load(tx, equipment, row)
     prepared = prepare_snapshot(snapshot)
+    from setron.features.equipment.location import validate_location
+    validate_location(tx, prepared.site, prepared.line, prepared.production_area)
     groups = {group["group_id"]: group for group in repository.rows(tx, "equipment_group")}
     source_checker = EquipmentService(None)
     batches = {}

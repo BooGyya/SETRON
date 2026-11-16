@@ -98,6 +98,9 @@ class EquipmentTile:
     tier: Tier = Tier.UNKNOWN       # 설비 전체 5단계 (계열 중 가장 낮은 단계). 확인 필요·HPA는 비교 불가
 
     findings: tuple[RiskFinding, ...] = ()
+    parent_line_label: str | None = None
+    subline_label: str | None = None
+    hierarchy_configured: bool = False
 
     @property
     def risk_detail(self):
@@ -227,5 +230,6 @@ def record_tiles(records, summary, source: DashboardSource, *, hpa_locations=Non
                                     fabs.get(loc.fab_key), lines.get(loc.line_key), raw_area or None,
                                     _max_steps(p.comparison for f in families for p in f.pms),
                                     Tier.UNKNOWN if goal in (GoalState.EXCLUDED, GoalState.UNKNOWN)
-                                    else worst_tier(f.tier for f in items), assessment.findings if assessment else ()))
+                                    else worst_tier(f.tier for f in items), assessment.findings if assessment else (),
+                                    loc.parent_line_label, loc.subline_label, loc.hierarchy_configured))
     return tuple(result)

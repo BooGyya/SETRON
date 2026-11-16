@@ -96,15 +96,15 @@ REGISTERED_AREAS: dict[tuple[str, str], str] = {}
 
 
 def _clean_line(line) -> str:
-    cleaned = re.sub(r"\s+", " ", str(line)).strip()
-    return re.sub(r"\(\s*\d+\s*F\s*\)|\(\s*\d+\s*\)", "", cleaned).strip()
+    from setron.features.hierarchy import _clean_line as clean
+    return clean(str(line))
 
 
 def use_registered_lines(entries) -> None:
     """등록 라인 [{"site", "line", "fab"}]을 판정에 쓴다. 새 dict로 바꿔 끼워 다른 스레드가 읽는 중에도 안전하다."""
     global REGISTERED_AREAS
     REGISTERED_AREAS = {(str(e["site"]).strip(), _clean_line(e["line"])): e["fab"] for e in entries
-                        if e.get("fab") in {"MEMORY", "FOUNDRY"}}
+                        if isinstance(e.get("fab"), str) and e["fab"]}
 
 
 def default_area(site: str | None, line: str | None, sheet_name: str | None = None) -> str | None:
@@ -117,6 +117,10 @@ def default_area(site: str | None, line: str | None, sheet_name: str | None = No
     return
     - 'MEMORY' / 'FOUNDRY' / None.
     """
+    if site and line:
+        registered = REGISTERED_AREAS.get((site.strip(), _clean_line(line)))
+        if registered:
+            return registered
     name = (sheet_name or "").strip().casefold()
     if name in {"memory", "foundry"}:
         return name.upper()
@@ -144,8 +148,9 @@ def area_of(values, sheet_name: str | None = None, workbook_name: str | None = N
     return
     - 'MEMORY' / 'FOUNDRY' / None(판단 자료 없음 → 메모리·공통 계열을 쓴다).
     """
-    explicit = (values.get("production_area") or "").strip().upper()
-    if explicit in {"MEMORY", "FOUNDRY"}:
+    from setron.features.production_area import production_area_value
+    explicit = production_area_value((values.get("production_area") or "").strip())
+    if explicit in {"MEMORY", "FOUNDRY"} or re.fullmatch(r"A[0-9]{9}", explicit):
         return explicit
     area = default_area(values.get("site"), values.get("line"), sheet_name)
     if area:

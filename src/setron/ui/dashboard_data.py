@@ -16,7 +16,7 @@ from setron.features.version.groups import VersionGroups
 from setron.features.version.schemas import CompareReason, CompareStatus
 from setron.features.version.service import FamilyReleases
 from setron.ui.observation_interval import INTERVALS, interval_days
-from setron.ui.query_state import AppliedQuery, QueryCatalog, TargetN, matches_selection, selection_keys
+from setron.ui.query_state import AppliedQuery, QueryCatalog, TargetN, matches_line_selection, matches_selection, selection_keys
 from setron.ui.version_filter import matches_versions
 
 
@@ -57,12 +57,15 @@ class EquipmentLocation:
     raw_area: str | None = None
     fab_key: str | None = None
     line_key: str | None = None
+    parent_line_label: str | None = None
+    subline_label: str | None = None
+    hierarchy_configured: bool = False
 
 
-def _matches_location(selection, location: EquipmentLocation) -> bool:
+def _matches_location(selection, location: EquipmentLocation, lines=()) -> bool:
     return (matches_selection(selection.site_key, location.site_key)
             and matches_selection(selection.fab_key, location.fab_key)
-            and matches_selection(selection.line_key, location.line_key))
+            and matches_line_selection(selection.line_key, location.line_key, lines))
 
 
 @dataclass(frozen=True)
@@ -389,10 +392,9 @@ class DashboardSource:
             previous = self.location_for(record)
             site_key = sites.get(record.site, previous.site_key)
             stale_mapping = site_key != previous.site_key or previous.raw_area != record.line
-            location = EquipmentLocation(site_key, record.line,
-                                         None if stale_mapping else previous.fab_key,
-                                         None if stale_mapping else previous.line_key)
-            if not _matches_location(selection, location):
+            location = (EquipmentLocation(site_key, record.line) if stale_mapping else
+                        replace(previous, site_key=site_key, raw_area=record.line))
+            if not _matches_location(selection, location, self.catalog.lines):
                 continue
             if not matches_versions(record, selection.versions):
                 continue
@@ -434,7 +436,7 @@ class DashboardSource:
                     continue
                 record = replace(record, pms=pms)
             loc = self.location_for(record)
-            if not _matches_location(selection, loc):
+            if not _matches_location(selection, loc, self.catalog.lines):
                 continue
             if position is not None and (loc.site_key, loc.raw_area) != position:
                 continue
@@ -516,7 +518,8 @@ class DashboardSource:
         columns = [(o.label, (o.key,)) for o in self.catalog.groups if o.category != "KCTC"]
         kctc = tuple(o.key for o in self.catalog.groups if o.category == "KCTC")
         if kctc:
-            columns.append(("KCTC", kctc))
+            label = next((o.category_label for o in self.catalog.groups if o.category == "KCTC" and o.category_label), "KCTC")
+            columns.append((label, kctc))
         columns.append(("전체", None))
         site_names = {o.key: o.label for o in self.catalog.sites}
         site_order = {o.key: index for index, o in enumerate(self.catalog.sites)}

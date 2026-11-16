@@ -17,7 +17,7 @@ from setron.ui.theme import ASSETS, INK, LINE, PRIMARY, SECONDARY, TONES, icon, 
 
 
 class ImportTabs(QTabBar):
-    """회색 기준선과 선택 밑줄을 같은 좌표에 그리는 가져오기 전용 탭."""
+    """가져오기·내보내기의 실제 탭 영역에 기준선과 선택 밑줄을 그린다."""
 
     def __init__(self):
         super().__init__()
@@ -31,8 +31,11 @@ class ImportTabs(QTabBar):
 
     def paintEvent(self, event):
         super().paintEvent(event)
+        if not self.count():
+            return
         painter = QPainter(self)
-        baseline = QRectF(0, self.height() - 2, self.width(), 2)
+        tabs = self.tabRect(0).united(self.tabRect(self.count() - 1))
+        baseline = QRectF(tabs.left(), self.height() - 2, tabs.width(), 2)
         painter.fillRect(baseline, ui_color(LINE))
         if self.currentIndex() >= 0:
             selected = self.tabRect(self.currentIndex())

@@ -31,7 +31,8 @@ def parse_management_sheet(kind, sheet):
         if equipment:
             for field, header in (("equipment_code", "설비 호기"), ("base_date", "기준일"), ("site", "사업장"),
                                   ("line", "라인"), ("pm_name", "PM"), ("version_raw", "SW 버전(원문)"),
-                                  ("structure_type", "구조"), ("geometry_type", "형상"), ("modification_type", "개조 유형")):
+                                  ("structure_type", "구조"), ("geometry_type", "형상"), ("modification_type", "개조 유형"),
+                                  ("process_name", "공정")):
                 take(field, header)
             take("model_name", *( ("PM 모델", "PM 모델명(원문)", "모델명(원문)") if values.get("pm_name")
                                   else ("모델명(원문)", "대표 모델") ))

@@ -16,6 +16,14 @@ def export_failure(path, message):
 
 def save_numbered_export(exporter, path, suffix, *, confirm_duplicate=None):
     """동명 파일을 보존하고, 저장할 이름은 파일을 배타적으로 생성해 확보한다."""
+    destination = reserve_numbered_export(path, suffix, confirm_duplicate=confirm_duplicate)
+    if not isinstance(destination, Path):
+        return destination
+    return write_reserved_export(exporter, destination)
+
+
+def reserve_numbered_export(path, suffix, *, confirm_duplicate=None):
+    """확인은 호출 스레드에서 마치고, 작업자가 쓸 빈 파일을 확보한다."""
     requested = Path(path)
     if requested.suffix.lower() != suffix:
         return export_failure(requested, f"파일 이름은 {suffix}로 끝나야 합니다.")
@@ -36,6 +44,11 @@ def save_numbered_export(exporter, path, suffix, *, confirm_duplicate=None):
             return export_failure(path, "파일을 저장할 수 없습니다. 폴더 쓰기 권한을 확인해 주세요.")
         break
 
+    return path
+
+
+def write_reserved_export(exporter, path):
+    """확보한 파일에 쓰고 실패하면 이번 작업의 파일만 정리한다."""
     saved = False
     try:
         result = exporter(path)

@@ -54,7 +54,7 @@ class SnapshotInput:
     - software: 계열별 적용 SW와 연결된 PM 목록.
     - line: 기준 날짜의 라인. 값이 없으면 None.
     - group_id: 확인된 대표 모델 ID. 혼합 설비 등 대표 모델을 정할 수 없으면 None.
-    - production_area: MEMORY 또는 FOUNDRY. 확인되지 않았으면 None.
+    - production_area: 데이터 관리의 생산 분류 코드. 확인되지 않았으면 None.
     - structure_type: INLINE, CLUSTER 등 설비 구조. 값이 없으면 None.
     - geometry_type: 5각, 6각 등 원본 형상 표기. 값이 없으면 None.
     - modification_type: CIP 등 개조 유형. 값이 없으면 None.
@@ -81,12 +81,10 @@ class SnapshotInput:
         """생산 영역을 화면에 표시할 이름으로 변환한다.
 
         return
-        - Memory 또는 Foundry. 생산 영역이 None이면 '미확인'.
-
-        raises
-        - KeyError: 검증되지 않은 요청의 생산 영역이 MEMORY, FOUNDRY, None 중 어느 것도 아닌 경우.
+        - 관리한 생산 분류 이름. 생산 영역이 None이면 '미확인'.
         """
-        return {None: "미확인", "MEMORY": "Memory", "FOUNDRY": "Foundry"}[self.production_area]
+        from setron.features.production_area import production_area_label
+        return production_area_label(self.production_area, unknown="미확인")
 
 
 @dataclass(frozen=True, kw_only=True)

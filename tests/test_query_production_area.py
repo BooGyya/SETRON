@@ -2,6 +2,7 @@
 
 from datetime import date
 
+from setron.features.data_admin.service import SITES_KEY
 from setron.ui.database_source import load_dashboard_source
 from setron.ui.heatmap_data import equipment_tiles
 from setron.ui.query_panel import QueryPanel
@@ -18,6 +19,7 @@ EARLY, LATE = date(2026, 10, 1), date(2026, 10, 15)
 def source_with_saved_areas(storage):
     with storage.transaction() as tx:
         tx.update("equipment_group", {"group_id": 1}, {"group_name": "M-O2"})
+        tx.insert("app_setting", {"setting_key": SITES_KEY, "setting_value": {"sites": ["평택"]}})
     for code, day, area in (("MOVING", EARLY, "MEMORY"), ("MOVING", LATE, "FOUNDRY"),
                              ("MEMORY", LATE, "MEMORY"), ("UNKNOWN", LATE, None)):
         snapshot_id, _ = observation(storage, code=code, day=day)

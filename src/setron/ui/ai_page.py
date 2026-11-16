@@ -516,7 +516,21 @@ class AIPage(QWidget):
         if not self.confirm(text):
             self._set_status("적용 취소", "info", "조건을 적용하지 않았습니다.")
             return False
-        query = self.applier(selection)
+        if self.parsed_catalog_revision != self.state.catalog_revision:
+            self._set_status("선택 다시 확인", "warning", "조회 선택지가 바뀌었습니다. 질문을 다시 해석해 주세요.")
+            self.refresh()
+            return False
+        try:
+            self.state.validate(selection)
+            query = self.applier(selection)
+        except ValueError as error:
+            self._set_status("선택 다시 확인", "warning", str(error))
+            self.refresh()
+            return False
+        if query is None:
+            self._set_status("조건 적용 보류", "warning", "조회 조건과 저장 상태를 확인한 뒤 다시 적용해 주세요.")
+            self.refresh()
+            return False
         self.applied_query = query
         self.apply_result.setText(f"적용 #{query.revision} · {query.description}"
                                   + (f"\n제외한 조건: {', '.join(excluded)}" if excluded else ""))

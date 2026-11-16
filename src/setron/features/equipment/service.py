@@ -41,11 +41,14 @@ class EquipmentService:
         - StorageValidationError: 입력이 잘못됐거나 일치하는 모델이 없거나 여러 개인 경우.
         """
         required_text(model_name, "model_name", 255)
-        require(isinstance(category, str) and category in {"POLY", "OXIDE", "KCTC", "HPA"}, "설비군 분류를 확인해야 합니다.")
+        required_text(category, "category", 10)
         canonical = "M-O5" if model_name == "M5" else model_name
         with self.storage.transaction() as tx:
+            from setron.features.hierarchy import category_labels, model_aliases
+            require(category in category_labels(tx), "등록된 설비군 분류를 확인해야 합니다.")
+            alias_id = model_aliases(tx).get(canonical)
             matches = [row for row in self.repository.rows(tx, "equipment_group", category=category)
-                       if row["group_name"] == canonical]
+                       if row["group_name"] == canonical or row["group_id"] == alias_id]
             require(len(matches) == 1, "모델 대응이 없거나 여러 개입니다. 원본과 등록 모델을 확인해야 합니다.")
             return matches[0]
 
@@ -148,6 +151,8 @@ class EquipmentService:
 
     def _validate_links(self, tx, value):
         """신규 저장과 재가져오기에서 같은 출처·모델·계열·릴리즈 검사를 사용한다."""
+        from .location import validate_location
+        validate_location(tx, value.site, value.line, value.production_area)
         batch = tx.get("import_batch", {"batch_id": value.batch_id})
         self._check_sources(tx, batch, value.source_reference)
         group_ids = {pm.group_id for software in value.software for pm in software.pms}
@@ -372,6 +377,19 @@ class EquipmentService:
             batch = tx.get("import_batch", {"batch_id": value.batch_id})
             self._check_sources(tx, batch, changes["source_reference"])
         changes["group_id"] = representative if has_pm else value.group_id
+        if update_metadata and value.process_name is None and old.process_name is not None:
+            # 공란 재가져오기는 현재 공정과 그 원본 입력 작업을 함께 유지한다.
+            sources = deepcopy(changes.get("source_reference")) or {}
+            process_source = deepcopy((old.source_reference or {}).get("process_name"))
+            if process_source is None:
+                sources.pop("process_name", None)
+            else:
+                locations = process_source if isinstance(process_source, list) else [process_source]
+                for location in locations:
+                    location.setdefault("batch_id", old.batch_id)
+                sources["process_name"] = locations if isinstance(process_source, list) else locations[0]
+            changes["source_reference"] = sources or None
+            self._check_sources(tx, tx.get("import_batch", {"batch_id": value.batch_id}), changes["source_reference"])
         if changes.get("process_name") is None:          # 공정(11/13)이 없으면 바꾸지 않는다 — 칸이 없는 DB에도 그대로
             changes.pop("process_name", None)
         snapshot = tx.update("equipment_snapshot", {"snapshot_id": snapshot_id}, changes)

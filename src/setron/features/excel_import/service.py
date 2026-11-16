@@ -39,7 +39,10 @@ from setron.features.extraction.schemas import ExtractionReview
 from setron.features.extraction.normalization import normalize
 from setron.features.extraction.locations import record_locations
 from setron.infrastructure.ai_client import ResponseSource
-from .reference import ReferenceData, analysis_excluded, family_key, identity, model_issue, resolve_family
+from .reference import (
+    ReferenceData, _matching_models, analysis_excluded, family_key, identity,
+    model_issue, normalize_for_reference, resolve_family,
+)
 from setron.infrastructure.database import DatabaseCommitUnknownError, DatabaseError
 from setron.infrastructure.excel_reader import SheetData, cell_address
 
@@ -331,7 +334,7 @@ def parse_date(text: str) -> date:
     return date(*(int(part) for part in match.groups()))
 
 
-def _normalized_context(row: ReviewRow) -> dict:
+def _normalized_context(row: ReviewRow, reference=None) -> dict:
     """서로 의존하는 모델·계열·UI·구조를 한 번에 정리한다.
 
     param
@@ -343,7 +346,7 @@ def _normalized_context(row: ReviewRow) -> dict:
     """
     context = {field: row.value(field) for field in CONTEXT_FIELDS}
     if all(value is None or isinstance(value, str) for value in context.values()):
-        return normalize(context, ExtractKind.EQUIPMENT_STATUS, row.row_id, {})[0]
+        return normalize_for_reference(context, ExtractKind.EQUIPMENT_STATUS, row.row_id, reference)[0]
     return context
 
 
@@ -374,7 +377,8 @@ def _normalized(row: ReviewRow, name: str, *, context: dict | None = None) -> An
     if name == "item_no":
         return int(value.strip())
     if name == "production_area":
-        return value.strip().upper()
+        from setron.features.production_area import production_area_value
+        return production_area_value(value.strip())
     return value
 
 
@@ -450,7 +454,7 @@ def _is_hpa_row(draft: ImportDraft, row: ReviewRow, locations=()) -> bool:
                and parse_address(sources[name])[0] in identity_rows for name in classifiers)
 
 
-def _row_issues(draft: ImportDraft, row: ReviewRow) -> list[Issue]:
+def _row_issues(draft: ImportDraft, row: ReviewRow, reference=None) -> list[Issue]:
     """필수값과 저장 형식을 검사하며 핫픽스 접미사의 모양은 제한하지 않는다.
 
     param
@@ -501,8 +505,11 @@ def _row_issues(draft: ImportDraft, row: ReviewRow) -> list[Issue]:
             number = value.strip()
             if not (number.isascii() and number.isdecimal()) or len(number) > 10 or int(number) > 2147483647:
                 issues.append(Issue(IssueLevel.ERROR, f"{label}: 0~2147483647 범위의 숫자여야 합니다.", row.row_id, name, address))
-        if name == "production_area" and value.strip().upper() not in PRODUCTION_AREAS:
-            issues.append(Issue(IssueLevel.ERROR, f"{label}: Memory 또는 Foundry이거나 비워 두어야 합니다.",
+        area_names = reference.area_labels if reference is not None else {}
+        area_code = next((code for code, text in area_names.items() if text.casefold() == value.strip().casefold()),
+                         value.strip().upper()) if name == "production_area" else None
+        if name == "production_area" and area_code not in (set(area_names) or PRODUCTION_AREAS):
+            issues.append(Issue(IssueLevel.ERROR, f"{label}: 등록된 생산 분류를 선택하거나 비워 두어야 합니다.",
                                 row.row_id, name, address))
         elif name == "production_area" and name not in row.edits and draft.kind is ExtractKind.EQUIPMENT_STATUS:
             # AI가 넣은 값이 사업장 · 라인의 구분(장소표 · 데이터 관리 등록 라인)과 다르면 저장 직전이 아니라 지금 알린다 (11/12)
@@ -510,15 +517,17 @@ def _row_issues(draft: ImportDraft, row: ReviewRow) -> list[Issue]:
 
             expected = area_of({"site": row.value("site"), "line": row.value("line")}, draft.sheet.sheet_name,
                                draft.workbook_name)
-            if expected and value.strip().upper() != expected:
+            if expected and area_code != expected:
+                from setron.features.production_area import production_area_label
+                expected_label = area_names.get(expected, production_area_label(expected))
                 issues.append(Issue(IssueLevel.ERROR, f"{label}: 라인 {row.value('line')}은(는) "
-                                    f"{'Foundry' if expected == 'FOUNDRY' else 'Memory'}입니다. 값을 확인·수정하세요.",
+                                    f"{expected_label}입니다. 값을 확인·수정하세요.",
                                     row.row_id, name, address))
         if (source := _source_issue(draft, row, name)) is not None:
             issues.append(source)
     values = {name: row.value(name) for name in draft.fields}
     if all(value is None or isinstance(value, str) for value in values.values()):
-        _, _, notes = normalize(values, draft.kind, row.row_id, {})
+        _, _, notes = normalize_for_reference(values, draft.kind, row.row_id, reference)
         checked_fields = {"group_name", "ui_type", "structure_type", "modification_mark"}
         if (row.value("model_name") or "") in {"C2", "M-C2"}:
             checked_fields.add("model_name")
@@ -532,7 +541,7 @@ def _row_issues(draft: ImportDraft, row: ReviewRow) -> list[Issue]:
     return issues
 
 
-def _safe(row: ReviewRow, name: str) -> Any:
+def _safe(row: ReviewRow, name: str, reference=None) -> Any:
     """형식 오류가 있는 값을 그룹 비교에 사용하지 않는다.
 
     param
@@ -542,15 +551,30 @@ def _safe(row: ReviewRow, name: str) -> Any:
     - 비교할 정규 값. 형식 오류이면 None.
     """
     try:
-        return _normalized(row, name)
+        if reference is not None:
+            if name == "model_name" and reference.models is not None:
+                models = _matching_models(row, ExtractKind.EQUIPMENT_STATUS, reference)
+                if len(models) == 1:
+                    return models[0].model_name
+            if name == "production_area":
+                raw = row.value(name)
+                if isinstance(raw, str):
+                    if raw.strip() in reference.area_labels:
+                        return raw.strip()
+                    match = next((code for code, label in reference.area_labels.items()
+                                  if label.casefold() == raw.strip().casefold()), None)
+                    if match is not None:
+                        return match
+        context = _normalized_context(row, reference) if name in CONTEXT_FIELDS else None
+        return _normalized(row, name, context=context)
     except (ValueError, TypeError, AttributeError):
         return None
 
 
-def _group(rows: Iterable[ReviewRow], names: tuple[str, ...]) -> dict[tuple, list[ReviewRow]]:
+def _group(rows: Iterable[ReviewRow], names: tuple[str, ...], reference=None) -> dict[tuple, list[ReviewRow]]:
     groups: dict[tuple, list[ReviewRow]] = defaultdict(list)
     for row in rows:
-        key = tuple(_safe(row, name) for name in names)
+        key = tuple(_safe(row, name, reference) for name in names)
         if None not in key:
             groups[key].append(row)
     return groups
@@ -574,7 +598,7 @@ def _management_workbook(draft):
     return set(EQUIPMENT_HEADERS).issubset(headers)
 
 
-def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
+def _equipment_issues(rows: tuple[ReviewRow, ...], reference=None) -> list[Issue]:
     """같은 호기·날짜의 기준정보와 고정 PM 위치의 충돌을 검사한다.
 
     param
@@ -585,8 +609,8 @@ def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
     """
     issues = []
     # 사업장은 날짜별 변경값이 아니라 호기의 고정 소속이다.
-    for (code,), members in _group(rows, ("equipment_code",)).items():
-        sites = {_safe(row, "site") for row in members} - {None}
+    for (code,), members in _group(rows, ("equipment_code",), reference).items():
+        sites = {_safe(row, "site", reference) for row in members} - {None}
         if len(sites) > 1:
             for row in members:
                 issues.append(Issue(IssueLevel.ERROR,
@@ -594,8 +618,8 @@ def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
                                     row.row_id, "site", row.sources.get("site"), code="SITE_CONFLICT"))
     snapshot_fields = ("line", "group_name", "production_area",
                        "structure_type", "geometry_type", "modification_type")
-    for (_, code), members in _group(rows, ("base_date", "equipment_code")).items():
-        differing = [FIELD_LABELS[n] for n in snapshot_fields if len({_safe(r, n) for r in members} - {None}) > 1]
+    for (_, code), members in _group(rows, ("base_date", "equipment_code"), reference).items():
+        differing = [FIELD_LABELS[n] for n in snapshot_fields if len({_safe(r, n, reference) for r in members} - {None}) > 1]
         if differing:
             for row in members:
                 issues.append(Issue(IssueLevel.ERROR, f"같은 설비({code})·기준일인데 {', '.join(differing)} 값이 행마다 다릅니다.",
@@ -605,27 +629,27 @@ def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
             for row in members:
                 issues.append(Issue(IssueLevel.ERROR, "PM 구분이 있는 현황에서는 모든 SW의 PM 위치를 확인해야 합니다.",
                                     row.row_id, "pm_name", row.sources.get("pm_name"), code="PM_LINK_MISSING"))
-        if not with_pm and len({_safe(r, "model_name") for r in members}) > 1:
+        if not with_pm and len({_safe(r, "model_name", reference) for r in members}) > 1:
             for row in members:
                 issues.append(Issue(IssueLevel.ERROR, "PM 구분 없이 같은 설비의 모델이 서로 다릅니다.",
                                     row.row_id, "model_name", row.sources.get("model_name"), code="MODEL_CONFLICT"))
     # 고정 PM 위치는 계열과 무관하게 한 모델·한 SW에만 연결할 수 있다.
-    for (_, _, pm), members in _group(rows, ("base_date", "equipment_code", "pm_name")).items():
-        assignments = {(_row_family(r), _safe(r, "model_name"), _safe(r, "version_raw")) for r in members
-                       if _safe(r, "version_raw") is not None}
+    for (_, _, pm), members in _group(rows, ("base_date", "equipment_code", "pm_name"), reference).items():
+        assignments = {(_row_family(r, reference=reference), _safe(r, "model_name", reference), _safe(r, "version_raw", reference)) for r in members
+                       if _safe(r, "version_raw", reference) is not None}
         if len(assignments) > 1:
             for row in members:
                 issues.append(Issue(IssueLevel.ERROR, f"같은 PM({pm}) 위치의 모델·계열·SW 값이 상충합니다.",
                                     row.row_id, "version_raw", row.sources.get("version_raw"), code="PM_CONFLICT"))
     by_pm: dict[tuple, list[ReviewRow]] = defaultdict(list)
     for row in rows:
-        key = (_safe(row, "base_date"), _safe(row, "equipment_code"), _row_family(row))
+        key = (_safe(row, "base_date", reference), _safe(row, "equipment_code", reference), _row_family(row, reference=reference))
         if None not in key:
-            by_pm[(*key, _safe(row, "pm_name") or "")].append(row)
+            by_pm[(*key, _safe(row, "pm_name", reference) or "")].append(row)
     by_family: dict[tuple, set] = defaultdict(set)
     family_members = defaultdict(list)
     for (*family_key, pm), members in by_pm.items():
-        versions = {_safe(r, "version_raw") for r in members} - {None}
+        versions = {_safe(r, "version_raw", reference) for r in members} - {None}
         by_family[tuple(family_key)] |= versions
         family_members[tuple(family_key)].append(members)
         pm_label = pm or "PM 구분 없음"
@@ -635,7 +659,7 @@ def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
                                     row.row_id, "version_raw", row.sources.get("version_raw")))
         seen = {}
         for row in members:
-            exact = tuple((name, _safe(row, name)) for name in FIELDS[ExtractKind.EQUIPMENT_STATUS])
+            exact = tuple((name, _safe(row, name, reference)) for name in FIELDS[ExtractKind.EQUIPMENT_STATUS])
             if exact in seen:
                 issues.append(Issue(IssueLevel.REVIEW, "다른 추출 행과 정확히 같은 행입니다. 한 행으로 합쳐 저장합니다.",
                                     row.row_id, "version_raw", row.sources.get("version_raw"), code="DUPLICATE"))
@@ -644,14 +668,14 @@ def _equipment_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
         _, code, family = family_key
         pms = family_members[family_key]
         if (len(versions) > 1 and len(pms) > 1 and all(not _blank(r.value("pm_name")) for m in pms for r in m)
-                and all(len({_safe(r, "version_raw") for r in m} - {None}) == 1 for m in pms)):
+                and all(len({_safe(r, "version_raw", reference) for r in m} - {None}) == 1 for m in pms)):
             for members in pms:
                 issues.append(Issue(IssueLevel.INFO, f"{code}의 PM별 {family[1]} 버전이 다릅니다. PM 불일치 예외로 표시되며 저장할 수 있습니다.",
                                     members[0].row_id, "pm_name", members[0].sources.get("pm_name"), code="PM_VERSION_MISMATCH"))
     return issues
 
 
-def _row_family(row: ReviewRow, kind=ExtractKind.EQUIPMENT_STATUS) -> tuple:
+def _row_family(row: ReviewRow, kind=ExtractKind.EQUIPMENT_STATUS, reference=None) -> tuple:
     """같은 이름의 계열도 UI·분류·구조에 따라 구분하는 비교 키를 반환한다.
 
     param
@@ -661,13 +685,16 @@ def _row_family(row: ReviewRow, kind=ExtractKind.EQUIPMENT_STATUS) -> tuple:
     return
     - 확정된 계열 구분. 불명확하면 입력 구분값 그대로 구성한 보수적인 키.
     """
-    key = family_key(row, kind)
-    return identity(key) if key else tuple(_safe(row, name) for name in (
+    resolved = resolve_family(row, kind, reference) if reference is not None else None
+    if resolved is not None:
+        return (resolved.releases.family_id, resolved.key.family_name, resolved.key.ui_type, resolved.key.structure_type)
+    key = family_key(row, kind, reference)
+    return identity(key) if key else tuple(_safe(row, name, reference) for name in (
         "group_name", "family_name", "ui_type", "structure_type",
     ))
 
 
-def _release_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
+def _release_issues(rows: tuple[ReviewRow, ...], reference=None) -> list[Issue]:
     """같은 계열·릴리즈·원본 Item 번호의 중복과 상충 값을 검사한다.
 
     같은 버전이 다른 출시일로 여러 번 나오면 재배포로 보고 첫 출시일로 합친다(멘토 확인 2026-11-05).
@@ -682,12 +709,12 @@ def _release_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
     issues = []
     groups = defaultdict(list)
     for row in rows:
-        version = _safe(row, "version_raw")
+        version = _safe(row, "version_raw", reference)
         if version is not None:
-            groups[(_row_family(row, ExtractKind.RELEASE_NOTE), version)].append(row)
+            groups[(_row_family(row, ExtractKind.RELEASE_NOTE, reference), version)].append(row)
     items = defaultdict(list)
     for (family, version), members in groups.items():
-        dates = sorted({_safe(r, "release_date") for r in members} - {None})
+        dates = sorted({_safe(r, "release_date", reference) for r in members} - {None})
         if len(dates) > 1:
             first = members[0]
             issues.append(Issue(IssueLevel.REVIEW,
@@ -695,12 +722,12 @@ def _release_issues(rows: tuple[ReviewRow, ...]) -> list[Issue]:
                                 f"재배포로 보고 첫 출시일 {dates[0]}로 합쳐 저장합니다.",
                                 first.row_id, "release_date", first.sources.get("release_date"), code="RERELEASE"))
         for row in members:
-            number = _safe(row, "item_no")
+            number = _safe(row, "item_no", reference)
             if number is not None:
-                block = _safe(row, "release_date") if len(dates) > 1 else None
+                block = _safe(row, "release_date", reference) if len(dates) > 1 else None
                 items[(family, version, block, number)].append(row)
     for (_, version, _, number), members in items.items():
-        contents = {_safe(r, "content") for r in members}
+        contents = {_safe(r, "content", reference) for r in members}
         if len(contents) > 1:
             for row in members:
                 issues.append(Issue(IssueLevel.ERROR, f"{version}의 Item {number} 내용이 행마다 다릅니다.",
@@ -954,18 +981,18 @@ def validate(draft: ImportDraft, reference: ReferenceData | None = None,
     if not rows:
         issues.append(Issue(IssueLevel.ERROR, "저장할 행이 없습니다. 제외한 행을 다시 포함하거나 다시 추출하세요."))
     for row in rows:
-        issues.extend(_row_issues(draft, row))
+        issues.extend(_row_issues(draft, row, reference))
     if draft.kind is ExtractKind.EQUIPMENT_STATUS:
         for row in draft.rows:
             if row.row_id in excluded_hpa:
-                issues.extend(issue for issue in _row_issues(draft, row)
+                issues.extend(issue for issue in _row_issues(draft, row, reference)
                               if issue.blocks_save and issue.field in REQUIRED[draft.kind])
     if draft.kind is ExtractKind.EQUIPMENT_STATUS:
         if not _management_workbook(draft):
             issues.extend(_workbook_site_issues(rows))
-        issues.extend(_equipment_issues(rows))
+        issues.extend(_equipment_issues(rows, reference))
     else:
-        issues.extend(_release_issues(rows))
+        issues.extend(_release_issues(rows, reference))
     issues.extend(_reference_issues(draft, reference))
     issues.extend(_hpa_history_issues(batch_drafts if batch_drafts is not None else (draft,), reference, draft))
     order = {IssueLevel.ERROR: 0, IssueLevel.REVIEW: 1, IssueLevel.INFO: 2}
@@ -1010,7 +1037,8 @@ def validate_batch(drafts: tuple[ImportDraft, ...], reference: ReferenceData | N
             issues.append(replace(issue, row_id=row.row_id, workbook_name=draft.workbook_name,
                                   sheet_name=draft.sheet.sheet_name, workbook_id=draft.workbook_id))
     for kind, rows in rows_by_kind.items():
-        for issue in (_equipment_issues(tuple(rows)) if kind is ExtractKind.EQUIPMENT_STATUS else _release_issues(tuple(rows))):
+        for issue in (_equipment_issues(tuple(rows), reference) if kind is ExtractKind.EQUIPMENT_STATUS
+                      else _release_issues(tuple(rows), reference)):
             draft, row = lookup[issue.row_id]
             issues.append(replace(issue, row_id=row.row_id, workbook_name=draft.workbook_name,
                                   sheet_name=draft.sheet.sheet_name, workbook_id=draft.workbook_id))
@@ -1058,8 +1086,17 @@ def build_save_request(draft: ImportDraft, request_id: str, reference: Reference
         raise ImportBlockedError("오류가 남아 있어 저장할 수 없습니다.")
     merged: dict[tuple, SaveRow] = {}
     for row in draft.active_rows:
-        context = _normalized_context(row)
+        context = _normalized_context(row, reference)
         values = {name: _normalized(row, name, context=context) for name in draft.fields}
+        if reference is not None and values.get("production_area"):
+            values["production_area"] = next((code for code, text in reference.area_labels.items()
+                if text.casefold() == str(values["production_area"]).casefold()), values["production_area"])
+        if reference is not None:
+            # DB의 표시 이름은 원본 증거와 함께 전달한다. 저장 트랜잭션에서 현재 등록 코드로 다시 확인한다.
+            for field, labels in (("group_name", reference.category_labels), ("production_area", reference.area_labels)):
+                supplied = row.value(field)
+                if isinstance(supplied, str) and any(text.casefold() == supplied.strip().casefold() for text in labels.values()):
+                    values[field] = supplied.strip()
         family = (resolve_family(row, draft.kind, reference, sheet_name=draft.sheet.sheet_name,
                                  workbook_name=draft.workbook_name) if reference is not None else None)
         release = family.releases.match(values.get("version_raw")) if family is not None else None
@@ -1183,6 +1220,6 @@ def describe_save_error(error: Exception) -> tuple[str, str]:
         return "unknown", str(error)
     if isinstance(error, DuplicateSaveError):
         return "duplicate", "이미 저장한 요청입니다. 중복 저장하지 않았습니다."
-    if isinstance(error, (DatabaseError, StorageValidationError)):
+    if isinstance(error, (DatabaseError, StorageValidationError, ImportBlockedError)):
         return "failed", f"{error} 이번 묶음은 저장되지 않았고 기존 자료는 그대로입니다."
-    return "failed", "저장하지 못했습니다. 이번 묶음은 저장되지 않았습니다. 잠시 뒤 다시 시도하세요."
+    return "unknown", "저장 결과를 확인할 수 없습니다. 중복 저장하지 말고 연결 복구 후 저장 기록을 확인해 주세요."

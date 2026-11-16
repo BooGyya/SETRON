@@ -15,7 +15,7 @@ from setron.ui.database_source import (
     load_dashboard_source,
 )
 from setron.ui.dashboard_data import EquipmentLocation, RiskRuleState
-from setron.ui.query_state import AppliedQuery, QuerySelection, TargetN, preview_catalog
+from setron.ui.query_state import AppliedQuery, QuerySelection, TargetN
 from test_import_save_mysql import EQUIPMENT, request, row, storage  # noqa: F401  시드 적용 fixture 재사용
 from test_schema_mysql import schema_database  # noqa: F401
 
@@ -59,15 +59,18 @@ def test_saved_equipment_feeds_dashboard_and_db_only_site_becomes_choice(storage
     assert snapshot.base_date == date(2026, 10, 21)
     assert (snapshot.summary.equipment_count, snapshot.summary.hpa_excluded) == (3, 1)
     by_code = {r.equipment_code: r for r in source.records}
-    assert source.locations[by_code["D-O2"].equipment_id] == EquipmentLocation("pyeongtaek", "P1", None, "pyeongtaek:P1")
+    assert source.locations[by_code["D-O2"].equipment_id] == EquipmentLocation(
+        "pyeongtaek", "P1", "MEMORY", "pyeongtaek:MEMORY:P1", "P1", None, True)
     assert source.locations[by_code["D-BUSAN"].equipment_id].site_key == "부산"
     assert by_code["D-HPA"].is_hpa
-    # 선택지: VER3 Site 키는 유지하고 DB에만 있는 Site·관측된 Line을 덧붙인다.
-    assert [o.key for o in source.catalog.sites][:3] == [o.key for o in preview_catalog().sites]
+    # 실제 관측·등록된 사업장만 표시하고 기존 사업장의 호환 키는 유지한다.
+    assert [(o.key, o.label) for o in source.catalog.sites][:2] == [("pyeongtaek", "평택"), ("hwaseong", "화성")]
+    assert "giheung" not in {o.key for o in source.catalog.sites}
     assert ("부산", "부산") in {(o.key, o.label) for o in source.catalog.sites}
-    assert {("pyeongtaek:P1", "pyeongtaek"), ("부산:B1", "부산")} <= {(o.key, o.site_key) for o in source.catalog.lines}
-    assert all(o.fab_key is None for o in source.catalog.lines)
-    busan = AppliedQuery(QuerySelection(site_key="부산", line_key="부산:B1"), 2, 0, "부산 B1")
+    assert {("pyeongtaek:MEMORY:P1", "pyeongtaek"), ("부산:MEMORY:B1", "부산")} <= {
+        (o.key, o.site_key) for o in source.catalog.lines}
+    assert all(o.fab_key == "MEMORY" for o in source.catalog.lines)
+    busan = AppliedQuery(QuerySelection(site_key="부산", line_key="부산:MEMORY:B1"), 2, 0, "부산 B1")
     assert source.snapshot(busan).summary.equipment_count == 1
 
 
@@ -87,7 +90,7 @@ def test_catalog_stays_fixed_until_reload(storage):  # noqa: F811
     reloaded = live.reload_catalog()
 
     assert reloaded is live.catalog and "울산" in {o.key for o in reloaded.sites}
-    assert "울산:U1" in {o.key for o in reloaded.lines}
+    assert "울산:MEMORY:U1" in {o.key for o in reloaded.lines}
     assert "D-ULSAN" in {r.equipment_code for r in live.records}
 
 

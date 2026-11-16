@@ -26,19 +26,21 @@ from PySide6.QtCore import QDate, QEvent, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QKeySequence, QPen, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
-    QLabel, QLineEdit, QMessageBox, QRadioButton, QScrollArea, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate,
-    QStyleOptionViewItem, QTabBar, QTableWidget, QTableWidgetItem, QTreeWidget,
+    QLabel, QLineEdit, QMenu, QMessageBox, QRadioButton, QScrollArea, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate,
+    QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from shiboken6 import isValid
 
+from setron.infrastructure.database import DatabaseCommitUnknownError
 from setron.features.management.schemas import RecordEdit
 from setron.features.production_area import PRODUCTION_AREA_LABELS, production_area_text, production_area_value
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.theme import font, set_widget_font
 from setron.ui.equipment import ignore_width
+from setron.ui.import_widgets import ImportTabs
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.theme import ASSETS, LINE, PRIMARY, SECONDARY
 
@@ -67,6 +69,14 @@ def _text(value):
 def _natural(text):
     """'P10'이 'P9' 뒤에 오도록 숫자는 숫자로 비교한다."""
     return [(0, int(part), "") if part.isdigit() else (1, 0, part.casefold()) for part in re.split(r"(\d+)", text or "") if part]
+
+
+def _hierarchy_options(gateway):
+    """워커에서 관리 분류를 읽는다. DB 없는 미리보기 공급자는 기본 표시값을 쓴다."""
+    if hasattr(gateway, "hierarchy_options"):
+        return gateway.hierarchy_options()
+    return {"categories": {"POLY": "POLY", "OXIDE": "OXIDE", "KCTC": "KCTC", "HPA": "HPA"},
+            "areas": dict(PRODUCTION_AREA_LABELS)}
 
 
 def _date_picker(day=None, parent=None, *, height=38):
@@ -464,12 +474,12 @@ class SheetPanel(_Panel):
                                    | QAbstractItemView.EditTrigger.AnyKeyPressed)
         self.table.setItemDelegateForColumn(COLUMN["line"], _ChoiceDelegate(
             self.table, self._line_choices, editable=True, placeholder="라인 이름을 적습니다 (처음 보는 라인은 저장 때 등록)"))
-        self.table.setItemDelegateForColumn(COLUMN["category"], _ChoiceDelegate(self.table, lambda: CATEGORY_CHOICES))
+        self.table.setItemDelegateForColumn(COLUMN["category"], _ChoiceDelegate(self.table, lambda: self.page.category_choices()))
         self.table.setItemDelegateForColumn(COLUMN["group"], _ChoiceDelegate(
             self.table, lambda: [g[1] for g in self.data.groups] if self.data else (), editable=True))
         self.table.setItemDelegateForColumn(COLUMN["model_name"], _ChoiceDelegate(
             self.table, lambda: [self._group_name(r.group_id) for r in self._selected_rows_data()][:1]))
-        self.table.setItemDelegateForColumn(COLUMN["production_area"], _ChoiceDelegate(self.table, lambda: ("Memory", "Foundry", "")))
+        self.table.setItemDelegateForColumn(COLUMN["production_area"], _ChoiceDelegate(self.table, lambda: (*self.page.area_labels.values(), "")))
         self.table.itemChanged.connect(self._cell_changed)
         self.table.itemSelectionChanged.connect(self._sync)
         self.table.horizontalHeader().sectionClicked.connect(self._header_clicked)
@@ -480,7 +490,16 @@ class SheetPanel(_Panel):
     # 읽기 -----------------------------------------------------------------------------------
     def reload(self):
         self.say("현황표 목록을 읽고 있습니다…")
-        return self.run(lambda: self.page.gateway.data_admin("status_sheets"), self._sheets_loaded)
+        return self.run(lambda: (self.page.gateway.data_admin("status_sheets"), _hierarchy_options(self.page.gateway)),
+                        self._catalog_loaded)
+
+    def _catalog_loaded(self, value, error):
+        if error is None:
+            sheets, options = value
+            self.page.set_hierarchy_options(options)
+        else:
+            sheets = ()
+        self._sheets_loaded(sheets, error)
 
     def _sheets_loaded(self, sheets, error):
         if error is not None:
@@ -610,7 +629,7 @@ class SheetPanel(_Panel):
         if field in ("category", "model_name"):
             gid = self.edits.get(("group", row.snapshot_id), row.group_id) if edited else row.group_id
             if field == "category":
-                return self._group_category(gid)
+                return self.page.category_label(self._group_category(gid))
             if edited and (("group", row.snapshot_id) in self.edits or ("model", row.snapshot_id) in self.edits):
                 return self._group_name(gid)  # 모델명은 설비군을 따라간다
             return row.model_name or ""
@@ -619,7 +638,7 @@ class SheetPanel(_Panel):
         if field == "group":
             return value if isinstance(value, str) else self._group_name(value)
         if field == "production_area":
-            return AREA_LABELS.get(value, "")
+            return self.page.area_label(value)
         return value or ""
 
     def _mismatched(self, row):
@@ -686,7 +705,8 @@ class SheetPanel(_Panel):
                 value = known[2] if known else values.get("category", "")
             elif field == "model_name":
                 value = known[1] if known else values.get("group", "")
-            item.setText(AREA_LABELS.get(value, value) if field == "production_area" else value)
+            item.setText(self.page.area_label(value) if field == "production_area" else
+                         self.page.category_label(value) if field == "category" else value)
             fixed = field in ("pm", "model_name") or (field == "category" and (known is not None or not values.get("group")))
             needed = field in REQUIRED_NEW or (field == "category" and values.get("group") and known is None)
             if fixed:
@@ -728,7 +748,7 @@ class SheetPanel(_Panel):
             elif key is not None and key in self.edits:
                 item.setBackground(QBrush(SAVING))
                 before = self._original(row, field)
-                before = self._group_name(before) if field == "group" else AREA_LABELS.get(before, before) \
+                before = self._group_name(before) if field == "group" else self.page.area_label(before) \
                     if field == "production_area" else before
                 item.setToolTip(f"{before or '(빈칸)'} → {item.text() or '(빈칸)'} · 저장 전 · {origin}")
             else:
@@ -768,8 +788,8 @@ class SheetPanel(_Panel):
         kind, entry = self.view[r]
         field, value = SHEET_COLUMNS[c][0], item.text().strip()
         if kind == "new":
-            stored = production_area_value(value) if field == "production_area" else value
-            if field == "production_area" and stored not in PRODUCTION_AREA_LABELS:
+            stored = self.page.area_code(value) if field == "production_area" else self.page.category_code(value) if field == "category" else value
+            if field == "production_area" and stored not in self.page.area_labels:
                 stored = ""
             values = entry["values"]
             if stored != values.get(field, ""):
@@ -815,8 +835,8 @@ class SheetPanel(_Panel):
                 return
             value = name
         elif field == "production_area":
-            value = production_area_value(value)
-            value = value if value in PRODUCTION_AREA_LABELS else None
+            value = self.page.area_code(value)
+            value = value if value in self.page.area_labels else None
         elif field in ("equipment_code", "version_raw") and not value:
             self.say(f"{SHEET_COLUMNS[c][1]}은(는) 비울 수 없습니다.", error=True)
             self._paint(r, c)
@@ -969,23 +989,17 @@ class SheetPanel(_Panel):
                 for n in self.new_rows]
         deletes = tuple(self.deletes)
         batch_id, base_date, gateway = self.data.batch_id, self.data.base_date, self.page.gateway
-        save_edits = self.page.edit_work(self._edit_changes(edits)) if edits else None
+        changes, context = self._edit_changes(edits), deepcopy(self.page.context_provider())
 
-        site, registers = self.data.site, [(line, fab) for line, fab in new_lines.items() if fab]
+        registers = [(line, fab) for line, fab in new_lines.items() if fab]
 
         def work():
-            for line, fab in registers:  # 새 라인을 먼저 등록해야 새 행의 Memory/Foundry가 그 값으로 정해진다
-                gateway.data_admin("add_line", site, line, fab)
-            for name, category in creates:
-                gateway.data_admin("create_group", name, category, None)
-            saved = save_edits() if save_edits else None  # 검토 지문 충돌이 가장 잦으므로 칸 수정을 먼저 저장한다
-            result = gateway.data_admin("apply_rows", batch_id, adds, deletes, regroup, base_date=base_date) \
-                if (adds or deletes or regroup) \
-                else {"added": [], "journal": None, "regroup": []}
-            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None), rows=result)
+            return gateway.save_sheet(batch_id, changes=changes, context=context, registers=registers,
+                                      creates=creates, adds=adds, deletes=deletes, regroup=regroup, base_date=base_date)
 
         counts = (len(edits) + len(regroup), len(adds), len(deletes))
-        registered = creates + [(f"라인 {line}", AREA_LABELS[fab]) for line, fab in registers]  # 저장 안내용
+        registered = [(name, self.page.category_label(category)) for name, category in creates] \
+            + [(f"라인 {line}", self.page.area_label(fab)) for line, fab in registers]
         rows = {r.snapshot_id: r for r in self.data.rows}
         replay = {"batch": (batch_id, base_date), "edits": dict(live), "new_rows": deepcopy(self.new_rows),
                   "deletes": {rows[sid].equipment_id: code for sid, code in self.deletes.items() if sid in rows}}
@@ -1117,13 +1131,11 @@ class SheetPanel(_Panel):
             return False
         (info,) = rest
         batch_id, gateway = self.data.batch_id, self.page.gateway
-        save_back = self.page.edit_work(self._edit_changes(info["olds"])) if info["olds"] else None
+        changes, context = self._edit_changes(info["olds"]), deepcopy(self.page.context_provider())
 
         def work():
-            if info["added"] or info["journal"] is not None or info["regroup"]:
-                gateway.data_admin("undo_rows", batch_id, info["added"], info["journal"], info["regroup"])
-            saved = save_back() if save_back else None
-            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None))
+            return gateway.undo_sheet(batch_id, changes=changes, context=context,
+                                      added=info["added"], journal=info["journal"], regroup=info["regroup"])
 
         return self.page.change(work, self, message="마지막 저장을 되돌리고 있습니다…", done=lambda _: self._undone())
 
@@ -1336,7 +1348,7 @@ class SheetPanel(_Panel):
 class CreateSheetDialog(QDialog):
     """빈 현황표 만들기: Site · 기준일."""
 
-    def __init__(self, parent, sites, site=None):
+    def __init__(self, parent, sites, site=None, *, areas=None):
         super().__init__(parent)
         self.setWindowTitle("빈 현황표 만들기")
         form = QFormLayout(self)
@@ -1350,7 +1362,7 @@ class CreateSheetDialog(QDialog):
         self.base_date.setAccessibleName("기준일")
         self.error = label("", 12, color=DANGER, wrap=True)
         area_row, self.areas = QHBoxLayout(), QButtonGroup(self)
-        for key, text in (("MEMORY", "Memory"), ("FOUNDRY", "Foundry")):  # 필수: 새 행 · 새 라인의 기본값 (11-12)
+        for key, text in (areas if areas is not None else getattr(getattr(parent, "page", None), "area_labels", PRODUCTION_AREA_LABELS)).items():
             choice = QRadioButton(text)
             choice.setProperty("area", key)
             self.areas.addButton(choice)
@@ -1387,20 +1399,91 @@ class CreateSheetDialog(QDialog):
 
 
 # --- 설비현황 › 설비 ------------------------------------------------------------------------
+class RegistryDialog(QDialog):
+    """관리 분류의 표시 이름만 바꾼다. 내부 식별자와 업무 판정은 유지된다."""
+
+    def __init__(self, owner, kind):
+        super().__init__(owner)
+        self.owner, self.kind = owner, kind
+        area = kind == "area"
+        self.setWindowTitle("위치 분류 관리" if area else "설비 분류 관리")
+        self.setMinimumWidth(420)
+        form = QFormLayout(self)
+        self.choices, self.name = ComboBox(), QLineEdit()
+        values = owner.page.area_labels if area else owner.page.category_labels
+        for code, name in values.items():
+            self.choices.addItem(name, code)
+        self.choices.currentIndexChanged.connect(self._selected)
+        form.addRow("등록 분류", self.choices)
+        form.addRow("이름", self.name)
+        form.addRow(label("이 분류 이름은 모든 Site와 기준일에 공통으로 적용됩니다. 내부 식별자는 유지됩니다."
+                          if area else "이름을 바꿔도 설비·모델의 연결과 내부 식별자는 유지됩니다.",
+                          12, color=SECONDARY, wrap=True))
+        self.error = label("", 12, color=DANGER, wrap=True)
+        form.addRow(self.error)
+        actions = QHBoxLayout()
+        for text, action in (("＋ 추가", "add"), ("이름 변경", "rename"), ("삭제", "delete")):
+            control = button(text)
+            control.clicked.connect(lambda checked=False, action=action: self._apply(action))
+            actions.addWidget(control)
+        close = button("닫기")
+        close.clicked.connect(self.reject)
+        actions.addWidget(close)
+        form.addRow(actions)
+        self._selected()
+
+    def _selected(self, *_):
+        self.name.setText(self.choices.currentText())
+
+    def _apply(self, action):
+        code, name = self.choices.currentData(), self.name.text().strip()
+        if action != "delete" and not name:
+            self.error.setText("이름을 입력해 주세요.")
+            return False
+        if action != "add" and code is None:
+            self.error.setText("등록 분류를 먼저 골라 주세요.")
+            return False
+        if action == "delete" and QMessageBox.question(self, "분류 삭제",
+                f"'{self.choices.currentText()}' 분류를 지울까요?\n하위 항목이나 설비 현황에 쓰이는 분류는 지울 수 없습니다.") \
+                != QMessageBox.StandardButton.Yes:
+            return False
+        args = (name,) if action == "add" else (code, name) if action == "rename" else (code,)
+        self.error.setText("")
+        self.setEnabled(False)
+
+        def saved(_):
+            self.setEnabled(True)
+            self.accept()
+            self.owner.reload()
+
+        def failed(error):
+            self.setEnabled(True)
+            self.error.setText(str(error))
+
+        started = self.owner.page.change(
+            lambda: self.owner.page.gateway.data_admin(f"{action}_{self.kind}", *args), self.owner,
+            done=saved, failed=failed)
+        if not started:
+            self.setEnabled(True)
+        return started
+
+
 class AddGroupDialog(QDialog):
-    def __init__(self, parent, groups):
+    def __init__(self, parent, groups, *, categories=None):
         super().__init__(parent)
         self.setWindowTitle("설비군 추가")
         form = QFormLayout(self)
         self.name = QLineEdit()
         self.name.setPlaceholderText("C7")
         self.category = ComboBox()
-        for value in ("POLY", "OXIDE", "KCTC"):
-            self.category.addItem(value, value)
+        for code, name in (categories if categories is not None else
+                           getattr(getattr(parent, "page", None), "category_labels", {code: code for code in CATEGORY_CHOICES})).items():
+            if code != "HPA":
+                self.category.addItem(name, code)
         self.parent_combo = ComboBox()
         self.parent_combo.addItem("없음 (기본형)", None)
         for group in groups:
-            if group.parent_id is None and group.category in ("POLY", "OXIDE", "KCTC"):
+            if group.parent_id is None and group.category != "HPA":
                 self.parent_combo.addItem(f"{group.name} 의 개조형", group.group_id)
         self.error = label("", 12, color=DANGER, wrap=True)
         form.addRow("설비군 이름", self.name)
@@ -1446,8 +1529,8 @@ class _CategoryDelegate(_ChoiceDelegate):
 class EquipmentPanel(_Panel):
     """왼쪽: 설비군 (분류는 묶음 첫 줄에만, 개조형도 한 줄씩) · 오른쪽: 설비 (모델 · Site · Line).
 
-    11-12: 표에서 바로 고친다. 대분류 칸(기본형만, 개조형은 따라감)과 설비군 이름 칸(사용자가 추가한 설비군만)을 두 번
-    눌러 고치고 [저장]으로 한꺼번에 반영한다. '독립 설비군으로 보기'는 없앴다.
+    대분류 칸(기본형만, 개조형은 따라감)과 설비군 이름 칸을 두 번 눌러 고치고 [저장]으로 함께 반영한다.
+    분류의 표시 이름과 상위 설비군 연결은 관리 동작으로 변경한다.
     """
 
     CATEGORY_ORDER = {"POLY": 0, "OXIDE": 1, "KCTC": 2, "HPA": 3}
@@ -1468,24 +1551,30 @@ class EquipmentPanel(_Panel):
         head.addStretch()
         self.add_group_button = button("＋ 설비군 추가", primary=True)
         self.add_group_button.clicked.connect(self.add_group)
+        self.categories_button = button("분류 관리")
+        self.categories_button.clicked.connect(self.manage_categories)
+        head.addWidget(self.categories_button)
         head.addWidget(self.add_group_button)
         left.body.addLayout(head)
         actions = QHBoxLayout()
         self.delete_button = button("삭제")
         self.delete_button.clicked.connect(self.delete_group)
+        self.parent_button = button("상위 설비군 변경")
+        self.parent_button.clicked.connect(self.change_parent)
         self.undo_button, self.redo_button = _history_buttons(self, "저장 전 설비군 이름 · 대분류 수정")
         self.save_button = button("저장", primary=True)
         self.save_button.setMinimumWidth(96)
         self.save_button.clicked.connect(self.save)
         actions.addWidget(self.delete_button)
+        actions.addWidget(self.parent_button)
         actions.addStretch()
         for widget in (self.undo_button, self.redo_button, self.save_button):
             actions.addWidget(widget)
         left.body.addLayout(actions)
         left.body.addWidget(self.notice)
-        self.group_table = _table(("분류", "설비군", "상위 설비군", "설비"), "설비군 목록")
+        self.group_table = _table(("분류", "설비군", "설비"), "설비군 목록")
         self.group_table.setItemDelegate(_KeepColorsDelegate(self.group_table))
-        self.group_table.setItemDelegateForColumn(0, _CategoryDelegate(self.group_table, lambda: CATEGORY_CHOICES))
+        self.group_table.setItemDelegateForColumn(0, _CategoryDelegate(self.group_table, self.page.category_choices))
         self.group_table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
         self.group_table.setMinimumHeight(420)
         self.group_table.setShowGrid(False)
@@ -1516,14 +1605,16 @@ class EquipmentPanel(_Panel):
         self._sync()
 
     def reload(self):
-        return self.run(lambda: self.page.gateway.data_admin("equipment_overview"), self._loaded)
+        return self.run(lambda: (self.page.gateway.data_admin("equipment_overview"), _hierarchy_options(self.page.gateway)),
+                        self._loaded)
 
     def _loaded(self, value, error):
         if error is not None:
             self.say("설비 목록을 읽지 못했습니다.", error=True)
             return
         self.loaded = True
-        self.groups, self.equipment = value
+        (self.groups, self.equipment), options = value
+        self.page.set_hierarchy_options(options)
         known = {g.group_id for g in self.groups}
         self.pending = {gid: change for gid, change in self.pending.items() if gid in known}  # 저장 전 수정은 다시 읽어도 둔다
         self.say(self.saved_note)
@@ -1566,18 +1657,19 @@ class EquipmentPanel(_Panel):
         self.ordered = tuple(ordered)
         categories = [self._value(g, "category") for g in self.ordered]
         # 분류는 묶음의 첫 줄에만 쓴다 (11-11 요청)
-        shown = [c if i == 0 or categories[i - 1] != c else "" for i, c in enumerate(categories)]
+        shown = [self.page.category_label(c) if i == 0 or categories[i - 1] != c else ""
+                 for i, c in enumerate(categories)]
         self._rendering = True
         try:
             _fill(self.group_table, [(category, self._value(g, "name") if g.parent_id is None else f"   ↳ {self._value(g, 'name')}",
-                                      self._parent_name(g) if g.parent_id else "—", f"{g.equipment_count}대")
+                                      f"{g.equipment_count}대")
                                      for category, g in zip(shown, self.ordered)], [g.group_id for g in self.ordered])
             bold = QFont(self.group_table.font())
             bold.setBold(True)
             for r, g in enumerate(self.ordered):
                 change = self.pending.get(g.group_id, {})
                 kind = self.group_table.item(r, 0)
-                kind.setToolTip(categories[r])  # 고칠 때 시작 값 (_CategoryDelegate)
+                kind.setToolTip(self.page.category_label(categories[r]))  # 고칠 때 시작 값 (_CategoryDelegate)
                 if shown[r]:
                     kind.setFont(bold)
                 name = self.group_table.item(r, 1)
@@ -1588,15 +1680,12 @@ class EquipmentPanel(_Panel):
                     kind.setFlags(kind.flags() | Qt.ItemFlag.ItemIsEditable)
                 else:
                     kind.setToolTip(f"{categories[r]} · 개조형은 상위 설비군의 대분류를 따라갑니다")
-                if not g.builtin:
-                    name.setFlags(name.flags() | Qt.ItemFlag.ItemIsEditable)
-                    name.setToolTip(f"{self._value(g, 'name')} · 두 번 눌러 이름을 고칩니다")
-                else:
-                    name.setToolTip(f"{g.name} · 기본 설비군은 이름을 바꿀 수 없습니다")
+                name.setFlags(name.flags() | Qt.ItemFlag.ItemIsEditable)
+                name.setToolTip(f"{self._value(g, 'name')} · 두 번 눌러 이름을 고칩니다")
                 if "category" in change and g.parent_id is None:
                     kind.setBackground(QBrush(SAVING))
                     if not shown[r]:
-                        kind.setText(categories[r])  # 바꾼 줄은 대분류를 보이게 한다
+                        kind.setText(self.page.category_label(categories[r]))
                 if "name" in change:
                     name.setBackground(QBrush(SAVING))
         finally:
@@ -1608,25 +1697,20 @@ class EquipmentPanel(_Panel):
         self.page.columns.fit(self.group_table)
         self._sync()
 
-    def _parent_name(self, group):
-        parent = next((g for g in self.groups if g.group_id == group.parent_id), None)
-        return self._value(parent, "name") if parent is not None else (group.parent_name or "—")
-
     def _cell_changed(self, item):
         if self._rendering or not (0 <= item.row() < len(self.ordered)) or item.column() not in (0, 1):
             return
         group = self.ordered[item.row()]
         if item.column() == 0:
-            field, value = "category", item.text().strip()
-            if group.parent_id is not None or value not in CATEGORY_CHOICES:
+            field, value = "category", self.page.category_code(item.text().strip())
+            if group.parent_id is not None or value not in self.page.category_labels or value == "HPA":
                 self._render_groups()
                 return
             original = group.category
         else:
             field, value = "name", item.text().strip().removeprefix("↳").strip()
-            if group.builtin or not value:
-                self.say("설비군 이름을 적어 주세요." if not value else f"'{group.name}'은(는) 기본 설비군이라 이름을 바꿀 수 없습니다.",
-                         error=True)
+            if not value:
+                self.say("설비군 이름을 적어 주세요.", error=True)
                 self._render_groups()
                 return
             if any(self._value(g, "name").casefold() == value.casefold() for g in self.groups if g.group_id != group.group_id):
@@ -1729,11 +1813,41 @@ class EquipmentPanel(_Panel):
         return self.page.change(lambda: self.page.gateway.data_admin("delete_group", group.group_id), self,
                                 message="설비군을 지우고 있습니다…", done=lambda _: self.reload())
 
+    def manage_categories(self):
+        if self.page.gateway is None or self.page.saving or self.pending:
+            return False
+        dialog = RegistryDialog(self, "category")
+        return dialog.exec()
+
+    def change_parent(self):
+        group = self._selected()
+        if group is None or self.page.saving or self.pending:
+            return False
+        descendants = {group.group_id}
+        while True:
+            added = {g.group_id for g in self.groups if g.parent_id in descendants} - descendants
+            if not added:
+                break
+            descendants.update(added)
+        choices = [("없음 (기본형)", None), *((g.name, g.group_id) for g in self.groups
+                    if g.group_id not in descendants and g.category == group.category and g.parent_id is None)]
+        current = next((i for i, (_, gid) in enumerate(choices) if gid == group.parent_id), 0)
+        name, ok = QInputDialog.getItem(self, "상위 설비군 변경", f"{group.name}의 상위 설비군", [v[0] for v in choices], current, False)
+        if not ok:
+            return False
+        parent = dict(choices).get(name)
+        if parent == group.parent_id:
+            return False
+        return self.page.change(lambda: self.page.gateway.data_admin("set_group_parent", group.group_id, parent), self,
+                                message="상위 설비군을 변경하고 있습니다…", done=lambda _: self.reload())
+
     def _sync(self):
         busy = self.page.saving
         group = self._selected()
         # 저장 전 수정이 있으면 바로 저장하는 추가 · 삭제는 막는다 (먼저 저장하거나 되돌린다)
         self.add_group_button.setEnabled(not busy and not self.pending)
+        self.categories_button.setEnabled(not busy and not self.pending)
+        self.parent_button.setEnabled(group is not None and group.category != "HPA" and not busy and not self.pending)
         self.delete_button.setEnabled(group is not None and not busy and not self.pending)
         self.save_button.setEnabled(bool(self.pending) and not busy)
         self.save_button.setText(f"저장 ({len(self.pending)})" if self.pending else "저장")
@@ -1744,7 +1858,7 @@ class EquipmentPanel(_Panel):
 class AddLineDialog(QDialog):
     """라인 추가: Site · Memory/Foundry · 라인 이름."""
 
-    def __init__(self, parent, sites, site=None, fab=None):
+    def __init__(self, parent, sites, site=None, fab=None, *, areas=None):
         super().__init__(parent)
         self.setWindowTitle("라인 추가")
         form = QFormLayout(self)
@@ -1752,7 +1866,7 @@ class AddLineDialog(QDialog):
         for value in sites:
             self.site.addItem(value, value)
         self.site.setCurrentIndex(max(0, self.site.findData(site)))
-        for key, text in (("MEMORY", "Memory"), ("FOUNDRY", "Foundry")):
+        for key, text in (areas if areas is not None else getattr(getattr(parent, "page", None), "area_labels", PRODUCTION_AREA_LABELS)).items():
             self.fab.addItem(text, key)
         self.fab.setCurrentIndex(max(0, self.fab.findData(fab)))
         self.name.setPlaceholderText("P4H")
@@ -1778,6 +1892,61 @@ class AddLineDialog(QDialog):
 
     def values(self):
         return self.site.currentData(), self.name.text().strip(), self.fab.currentData()
+
+
+class MoveLineDialog(QDialog):
+    """Line 또는 세부라인의 소속을 바꾼다. 부모 후보는 같은 Site·분류의 상위 Line만 둔다."""
+
+    def __init__(self, parent, sites, areas, lines, *, site, line, fab):
+        super().__init__(parent)
+        self.setWindowTitle("라인 소속 변경")
+        self.lines, self.original_site, self.original_line = tuple(lines), site, line
+        self.site, self.fab, self.parent_line = ComboBox(), ComboBox(), ComboBox()
+        for name in sites:
+            self.site.addItem(name, name)
+        for code, name in areas.items():
+            self.fab.addItem(name, code)
+        self.site.setCurrentIndex(max(0, self.site.findData(site)))
+        self.fab.setCurrentIndex(max(0, self.fab.findData(fab)))
+        self.site.currentIndexChanged.connect(self._parents)
+        self.fab.currentIndexChanged.connect(self._parents)
+        form = QFormLayout(self)
+        form.addRow("라인", label(line, 14))
+        form.addRow("Site", self.site)
+        form.addRow("위치 분류", self.fab)
+        form.addRow("상위 Line", self.parent_line)
+        form.addRow(label("이 라인의 하위 항목과 모든 기준일의 설비 현황도 함께 이동합니다.",
+                          12, color=SECONDARY, wrap=True))
+        actions = QHBoxLayout()
+        cancel, save = button("취소"), button("소속 변경", primary=True)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.accept)
+        actions.addStretch()
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        form.addRow(actions)
+        self._parents()
+        current = next((getattr(row, "parent_line", None) for row in self.lines
+                        if row.site == site and row.line == line), None)
+        self.parent_line.setCurrentIndex(max(0, self.parent_line.findData(current)))
+
+    def _parents(self, *_):
+        current = self.parent_line.currentData()
+        self.parent_line.clear()
+        self.parent_line.addItem("없음 (상위 Line)", None)
+        if any(row.site == self.original_site and getattr(row, "parent_line", None) == self.original_line
+               for row in self.lines):
+            self.parent_line.setToolTip("세부라인이 있는 Line은 상위 Line으로 이동합니다.")
+            return
+        for row in self.lines:
+            if row.site == self.site.currentData() and row.fab == self.fab.currentData() \
+                    and getattr(row, "parent_line", None) is None \
+                    and (row.site, row.line) != (self.original_site, self.original_line):
+                self.parent_line.addItem(row.line, row.line)
+        self.parent_line.setCurrentIndex(max(0, self.parent_line.findData(current)))
+
+    def values(self):
+        return self.site.currentData(), self.fab.currentData(), self.parent_line.currentData()
 
 
 # --- 설비현황 › 위치 ------------------------------------------------------------------------
@@ -1806,34 +1975,51 @@ class LocationPanel(_Panel):
         body.addWidget(left, 2)
         body.addWidget(right, 3)
         head = QHBoxLayout()
+        head.setSpacing(8)
         head.addWidget(label("위치", 20, medium=True))
         head.addStretch()
-        self.add_site_button = button("＋ Site 추가", primary=True)
-        self.add_line_button = button("＋ 라인 추가")
-        self.add_site_button.clicked.connect(self.add_site)
-        self.add_line_button.clicked.connect(self.add_line)
-        head.addWidget(self.add_site_button)
-        head.addWidget(self.add_line_button)
+        self.areas_button = button("분류 관리")
+        self.areas_button.setAccessibleName("위치 분류 관리")
+        self.areas_button.setToolTip("모든 Site에서 공통으로 쓰는 위치 분류의 추가·이름 변경·삭제")
+        self.areas_button.clicked.connect(self.manage_areas)
+        self.add_button = button("＋ 추가", primary=True)
+        self.add_button.setAccessibleName("위치 추가 메뉴")
+        self.additions_menu = QMenu(self.add_button)
+        self.additions_menu.setToolTipsVisible(True)
+        self.add_site_button = self.additions_menu.addAction("Site 추가")
+        self.add_line_button = self.additions_menu.addAction("Line 추가")
+        self.add_subline_button = self.additions_menu.addAction("세부라인 추가")
+        self.add_site_button.triggered.connect(self.add_site)
+        self.add_line_button.triggered.connect(self.add_line)
+        self.add_subline_button.triggered.connect(self.add_subline)
+        self.add_button.setMenu(self.additions_menu)
+        for control in (self.areas_button, self.add_button):
+            control.setStyleSheet("QPushButton {padding:8px 12px;}")
+            head.addWidget(control)
         left.body.addLayout(head)
-        actions = QHBoxLayout()
-        self.fab_button, self.delete_button = button("Memory/Foundry 변경"), button("삭제")
-        self.fab_button.clicked.connect(self.change_fab)
+        self.location_hint = label("위치를 선택하면 해당 위치의 설비와 관리 작업을 볼 수 있습니다.",
+                                   12, color=SECONDARY, wrap=True)
+        self.location_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
+        left.body.addWidget(self.location_hint)
+        self.delete_button = button("삭제")
+        self.delete_button.setAccessibleName("선택 위치 삭제")
+        self.delete_button.setToolTip("선택한 Site 또는 Line 삭제 · 설비 현황이나 하위 항목이 있으면 삭제할 수 없습니다.")
+        self.delete_button.setStyleSheet(
+            f"QPushButton {{color:{DANGER};background:white;border-color:#ebd8dd;padding:8px 12px;}}"
+            "QPushButton:hover {background:#fff3f5;border-color:#ad344d;}"
+            "QPushButton:disabled {color:#8b95a8;border-color:#e9eef6;background:#f9fafb;}")
         self.delete_button.clicked.connect(self.delete)
         self.undo_button, self.redo_button = _history_buttons(self, "저장 전 이름 변경 · 합치기 · 설비 옮기기")
+        for control in (self.undo_button, self.redo_button):
+            control.setFixedWidth(36)
         self.save_button = button("저장", primary=True)
-        self.save_button.setMinimumWidth(96)
+        self.save_button.setMinimumWidth(88)
         self.save_button.clicked.connect(self.save)
-        for widget in (self.fab_button, self.delete_button):
-            actions.addWidget(widget)
-        actions.addStretch()
-        for widget in (self.undo_button, self.redo_button, self.save_button):
-            actions.addWidget(widget)
-        left.body.addLayout(actions)
         left.body.addWidget(self.notice)
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
         self.tree.setHeaderHidden(True)
-        self.tree.setAccessibleName("위치 트리 (Site → Memory/Foundry → 라인)")
+        self.tree.setAccessibleName("위치 트리 (Site → 위치 분류 → Line → 세부라인)")
         self.tree.setMinimumHeight(360)
         self.tree.setStyleSheet("QTreeWidget {font-size:14px;} QTreeWidget::item {min-height:30px;}")
         self.tree.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
@@ -1842,11 +2028,37 @@ class LocationPanel(_Panel):
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.itemSelectionChanged.connect(self._render_detail)
         self.tree.itemChanged.connect(self._tree_changed)
-        left.body.addWidget(self.tree)
-        self.detail_title = label("위치를 고르세요", 20, medium=True)
+        left.body.addWidget(self.tree, 1)
+        separator = QFrame()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background:{LINE};border:0;")
+        left.body.addWidget(separator)
+        footer = QHBoxLayout()
+        footer.setSpacing(6)
+        footer.addWidget(self.delete_button)
+        footer.addStretch()
+        for control in (self.undo_button, self.redo_button, self.save_button):
+            footer.addWidget(control)
+        left.body.addLayout(footer)
+        self.detail_title = label("위치를 고르세요", 20, medium=True, wrap=True)
         right.body.addWidget(self.detail_title)
         self.detail_info = label("", 13, color=SECONDARY, wrap=True)
         right.body.addWidget(self.detail_info)
+        self.context_actions = QWidget()
+        context = QHBoxLayout(self.context_actions)
+        context.setContentsMargins(0, 0, 0, 0)
+        context.setSpacing(8)
+        self.move_button = button("소속 변경")
+        self.move_button.setAccessibleName("선택 라인의 소속 변경")
+        self.move_button.setToolTip("선택한 Line·세부라인과 소속 설비를 다른 Site·분류·상위 Line으로 이동")
+        self.move_button.clicked.connect(self.move_line)
+        self.fab_button = button("분류 변경")
+        self.fab_button.setAccessibleName("선택 Line의 위치 분류 변경")
+        self.fab_button.clicked.connect(self.change_fab)
+        context.addWidget(self.move_button)
+        context.addWidget(self.fab_button)
+        context.addStretch()
+        right.body.addWidget(self.context_actions)
         right.body.addWidget(label("소속 설비", 16, medium=True))
         self.equipment_table = _table(("설비 ID", "설비군", "모델", "Line", "최근 기준일"), "위치 소속 설비")
         self.equipment_table.setItemDelegate(_KeepColorsDelegate(self.equipment_table))
@@ -1863,7 +2075,7 @@ class LocationPanel(_Panel):
     def reload(self):
         gateway = self.page.gateway
         return self.run(lambda: (gateway.data_admin("equipment_overview")[1], gateway.data_admin("sites"),
-                                 gateway.data_admin("lines")), self._loaded)
+                                 gateway.data_admin("lines"), _hierarchy_options(gateway)), self._loaded)
 
     def _loaded(self, value, error):
         if error is not None:
@@ -1871,6 +2083,7 @@ class LocationPanel(_Panel):
             return
         self.loaded = True
         self.equipment, self.registered, self.line_rows = value[0], tuple(value[1]), tuple(value[2])
+        self.page.set_hierarchy_options(value[3])
         self.say(self.saved_note)
         self.saved_note = ""
         select, self._pending_select = self._pending_select, None
@@ -1895,10 +2108,17 @@ class LocationPanel(_Panel):
                 moved = {(new if s == old else s, i) for s, i in moved}
             elif op["kind"] == "line":
                 site, old, new = op["site"], op["old"], op["new"]
+                target = lines.get((site, new))
+                descendants = self._descendants([r for r in lines.values() if r.site == site], old)
                 equipment = {i: replace(e, line=new) if (e.site, e.line) == (site, old) else e for i, e in equipment.items()}
                 row = lines.pop((site, old), None)
                 if (site, new) not in lines and row is not None:
                     lines[(site, new)] = replace(row, line=new)
+                lines = {key: replace(r, parent_line=new) if r.site == site and getattr(r, "parent_line", None) == old else r
+                         for key, r in lines.items()}
+                if target is not None:
+                    lines = {key: replace(r, fab=target.fab) if r.site == site and r.line in descendants else r
+                             for key, r in lines.items()}
                 renamed.add(("line", site, new))
             elif op["kind"] == "move":
                 for eid, _ in op["equipment"]:
@@ -1913,6 +2133,18 @@ class LocationPanel(_Panel):
     def site_names(self):
         equipment, line_rows, registered, *_ = self._view()
         return sorted({e.site for e in equipment if e.site and e.snapshot_count} | set(registered) | {r.site for r in line_rows})
+
+    def _area_label(self, code):
+        return self.page.area_label(code) if code is not None else "Memory/Foundry 모름"
+
+    @staticmethod
+    def _descendants(lines, line):
+        names = {line}
+        while True:
+            children = {r.line for r in lines if getattr(r, "parent_line", None) in names} - names
+            if not children:
+                return names
+            names.update(children)
 
     def _render_tree(self):
         selected = self.selection()
@@ -1930,27 +2162,39 @@ class LocationPanel(_Panel):
                 node.setToolTip(0, f"{site} · 두 번 눌러 이름을 고칩니다")
                 if ("site", site) in renamed:
                     node.setBackground(0, QBrush(SAVING))
-                for fab in ("MEMORY", "FOUNDRY", None):
+                areas = list(self.page.area_labels)
+                areas.extend(sorted({r.fab for r in lines if r.fab is not None} - set(areas)))
+                for fab in (*areas, None):
                     members = [r for r in lines if r.fab == fab]
                     if fab is None and not members:
                         continue
-                    fab_node = QTreeWidgetItem([FAB_LABELS[fab], ""])
+                    fab_node = QTreeWidgetItem([self._area_label(fab), ""])
                     fab_node.setData(0, Qt.ItemDataRole.UserRole, ("fab", site, fab))
+                    if fab is not None:
+                        fab_node.setFlags(fab_node.flags() | Qt.ItemFlag.ItemIsEditable)
+                        fab_node.setToolTip(0, "두 번 눌러 공통 분류 이름을 고칩니다 (모든 Site에 적용)")
+                    leaves = {}
                     for row in members:
-                        leaf = QTreeWidgetItem([row.line, f"{row.equipment_count}대" if row.equipment_count else
-                                                ("등록" if row.registered else "")])
+                        names = self._descendants(members, row.line)
+                        total = sum(r.equipment_count for r in members if r.line in names)
+                        leaf = QTreeWidgetItem([row.line, f"{total}대" if total else ("등록" if row.registered else "")])
                         leaf.setData(0, Qt.ItemDataRole.UserRole, ("line", site, row.line, fab))
                         leaf.setFlags(leaf.flags() | Qt.ItemFlag.ItemIsEditable)
                         leaf.setToolTip(0, f"{site} · {row.line} · 두 번 눌러 이름을 고칩니다 "
                                            "(같은 Site에 있는 라인 이름을 적으면 그 라인에 합칩니다)")
                         if ("line", site, row.line) in renamed:
                             leaf.setBackground(0, QBrush(SAVING))
-                        fab_node.addChild(leaf)
+                        leaves[row.line] = leaf
+                    for row in members:
+                        parent = leaves.get(getattr(row, "parent_line", None))
+                        (parent if parent is not None else fab_node).addChild(leaves[row.line])
                     node.addChild(fab_node)
                 self.tree.addTopLevelItem(node)
-                node.setExpanded(True)  # 트리에 붙인 뒤에 펼쳐야 적용된다
-                for i in range(node.childCount()):
-                    node.child(i).setExpanded(True)
+                stack = [node]
+                while stack:
+                    item = stack.pop()
+                    item.setExpanded(True)
+                    stack.extend(item.child(i) for i in range(item.childCount()))
         finally:
             self._rendering = False
         if selected is not None:
@@ -1991,11 +2235,12 @@ class LocationPanel(_Panel):
         line = data[2] if kind == "line" else None
         fab = data[2] if kind == "fab" else data[3] if kind == "line" else None
         fab_lines = {r.line for r in line_rows if r.site == site and r.fab == fab}
+        line_names = self._descendants([r for r in line_rows if r.site == site], line) if line is not None else set()
         rows = sorted((e for e in equipment if e.snapshot_count and e.site == site
-                       and (kind == "site" or (kind == "fab" and e.line in fab_lines) or (kind == "line" and e.line == line))),
+                       and (kind == "site" or (kind == "fab" and e.line in fab_lines) or (kind == "line" and e.line in line_names))),
                       key=lambda e: (_natural(e.line), e.code))
         self._shown = rows
-        self.detail_title.setText(" · ".join(v for v in (site, FAB_LABELS[fab] if kind != "site" else None, line) if v))
+        self.detail_title.setText(" · ".join(v for v in (site, self._area_label(fab) if kind != "site" else None, line) if v))
         self.detail_info.setText(f"설비 {len(rows)}대")
         self._rendering = True
         try:
@@ -2029,7 +2274,15 @@ class LocationPanel(_Panel):
         QTimer.singleShot(0, lambda: self._tree_edited(data, new) if isValid(self) else None)
 
     def _tree_edited(self, data, new):
-        if data is None or data[0] not in ("site", "line"):
+        if data is None or data[0] not in ("site", "line", "fab"):
+            return
+        if data[0] == "fab":
+            code = data[2]
+            if code is None or not new or new == self._area_label(code) or self.ops or self.page.saving:
+                self._render_tree()
+                return
+            self.page.change(lambda: self.page.gateway.data_admin("rename_area", code, new), self,
+                             done=lambda _: self.reload())
             return
         old = data[1] if data[0] == "site" else data[2]
         if not new or new == old:
@@ -2051,6 +2304,11 @@ class LocationPanel(_Panel):
         _, line_rows, *_ = self._view()
         target = next((r for r in line_rows if r.site == site and r.line.casefold() == new.casefold() and r.line != old), None)
         if target is not None:
+            names = self._descendants([r for r in line_rows if r.site == site], old)
+            if target.line in names or len(names) > 1 and getattr(target, "parent_line", None) is not None:
+                self.say("하위 세부라인이나 다른 세부라인으로 상위 Line을 합칠 수 없습니다.", error=True)
+                self._render_tree()
+                return
             count = next((r.equipment_count for r in line_rows if r.site == site and r.line == old), 0)
             if QMessageBox.question(self, "라인 합치기",
                                     f"{site}에 '{target.line}' 라인이 이미 있습니다.\n'{old}'의 설비 {count}대를 '{target.line}'에 "
@@ -2166,23 +2424,64 @@ class LocationPanel(_Panel):
         if data is None or data[0] != "line" or self.page.saving or self.ops:
             return False
         site, line, fab = data[1], data[2], data[3]
-        if fab is None:  # 모르는 라인은 어느 쪽인지 고른다
+        row = next((r for r in self.line_rows if r.site == site and r.line == line), None)
+        if row is not None and getattr(row, "parent_line", None) is not None:
+            self.say("세부라인의 위치 분류는 상위 Line에서 바꿔 주세요. 소속 이동은 [라인 소속 변경]에서 합니다.", error=True)
+            return False
+        if fab is None or set(self.page.area_labels) != {"MEMORY", "FOUNDRY"} or fab not in {"MEMORY", "FOUNDRY"}:
             choice, ok = QInputDialog.getItem(self, "Memory/Foundry 지정", f"{site} · {line}은(는) 어느 쪽 라인인가요?",
-                                              ["Memory", "Foundry"], 0, False)
+                                              list(self.page.area_labels.values()), 0, False)
             if not ok:
                 return False
-            target = "FOUNDRY" if choice == "Foundry" else "MEMORY"
+            target = self.page.area_code(choice)
         else:
             target = "FOUNDRY" if fab == "MEMORY" else "MEMORY"
-        count = next((r.equipment_count for r in self.line_rows if r.site == site and r.line == line), 0)
+        names = self._descendants([r for r in self.line_rows if r.site == site], line)
+        count = sum(r.equipment_count for r in self.line_rows if r.site == site and r.line in names)
         if QMessageBox.question(self, "Memory/Foundry 변경",
-                                f"{site} · {line}을(를) {FAB_LABELS[target]} 라인으로 바꿀까요?\n그 라인 설비 {count}대의 생산 영역도 "
-                                f"{FAB_LABELS[target]}(으)로 바뀝니다. 설비 SW 계열(Foundry용 릴리즈 노트)은 바뀌지 않으니, 필요하면 "
+                                f"{site} · {line}을(를) {self._area_label(target)} 라인으로 바꿀까요?\n그 라인과 하위 라인의 설비 {count}대의 생산 영역도 "
+                                f"{self._area_label(target)}(으)로 바뀝니다. 설비 SW 계열(Foundry용 릴리즈 노트)은 바뀌지 않으니, 필요하면 "
                                 "그 현황표를 다시 가져와 주세요.") != QMessageBox.StandardButton.Yes:
             return False
         return self.page.change(lambda: self.page.gateway.data_admin("set_line_fab", site, line, target), self,
                                 message="Memory/Foundry를 바꾸고 있습니다…",
                                 done=lambda _: self._changed("", ("line", site, line, target)))
+
+    def add_subline(self):
+        data = self.selection()
+        if data is None or data[0] != "line" or self.page.saving or self.ops:
+            return False
+        site, parent, fab = data[1:4]
+        row = next((r for r in self.line_rows if r.site == site and r.line == parent), None)
+        if row is None or getattr(row, "parent_line", None) is not None or fab is None:
+            return False
+        name, ok = QInputDialog.getText(self, "세부라인 추가", f"{site} · {parent} 하위의 세부라인 이름")
+        name = (name or "").strip()
+        if not ok or not name:
+            return False
+        return self.page.change(lambda: self.page.gateway.data_admin("add_line", site, name, fab, parent_line=parent), self,
+                                message="세부라인을 등록하고 있습니다…",
+                                done=lambda _: self._changed("", ("line", site, name, fab)))
+
+    def manage_areas(self):
+        if self.page.gateway is None or self.page.saving or self.ops:
+            return False
+        return RegistryDialog(self, "area").exec()
+
+    def move_line(self):
+        data = self.selection()
+        if data is None or data[0] != "line" or self.page.saving or self.ops:
+            return False
+        site, line, fab = data[1:4]
+        dialog = MoveLineDialog(self, self.site_names(), self.page.area_labels, self.line_rows,
+                                site=site, line=line, fab=fab)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        to_site, to_fab, parent_line = dialog.values()
+        return self.page.change(
+            lambda: self.page.gateway.data_admin("move_line", site, line, to_site, to_fab, parent_line=parent_line), self,
+            message="라인과 하위 설비의 소속을 변경하고 있습니다…",
+            done=lambda _: self._changed("", ("line", to_site, line, to_fab)))
 
     def delete(self):
         data = self.selection()
@@ -2208,17 +2507,59 @@ class LocationPanel(_Panel):
         busy = self.page.saving
         data = self.selection()
         pending = bool(self.ops)
-        # 저장 전 변경이 있으면 바로 저장하는 추가 · 삭제 · Memory/Foundry 변경은 막는다 (먼저 저장하거나 되돌린다)
+        blocked = "저장이 끝난 뒤 이용할 수 있습니다." if busy else "먼저 변경을 저장하거나 되돌려 주세요." if pending else ""
+        self.add_button.setEnabled(not busy and not pending)
+        self.add_button.setToolTip(blocked or "Site·Line·세부라인을 추가합니다.")
         self.add_site_button.setEnabled(not busy and not pending)
+        self.add_site_button.setToolTip(blocked or "새 사업장 Site를 등록합니다.")
         self.add_line_button.setEnabled(not busy and not pending and bool(self.site_names()))
-        self.delete_button.setEnabled(not busy and not pending and data is not None and data[0] in ("site", "line"))
-        self.fab_button.setEnabled(not busy and not pending and data is not None and data[0] == "line")
-        if data is not None and data[0] == "line":
-            self.fab_button.setText({"MEMORY": "Foundry로 변경", "FOUNDRY": "Memory로 변경"}.get(data[3], "Memory/Foundry 지정"))
+        self.add_line_button.setToolTip(blocked or ("새 상위 Line을 등록합니다." if self.site_names() else "Site를 먼저 추가해 주세요."))
+        self.areas_button.setEnabled(not busy and not pending)
+        self.areas_button.setToolTip(blocked or "모든 Site에서 공통으로 쓰는 위치 분류의 추가·이름 변경·삭제")
+        row = next((r for r in self.line_rows if data is not None and data[0] == "line"
+                    and r.site == data[1] and r.line == data[2]), None)
+        root_line = row is not None and getattr(row, "parent_line", None) is None
+        self.add_subline_button.setEnabled(not busy and not pending and row is not None
+                                          and root_line and row.fab is not None)
+        self.add_subline_button.setToolTip(blocked or ("선택한 Line 아래에 세부라인을 등록합니다." if root_line and row.fab is not None else
+                                                       "상위 Line의 위치 분류를 먼저 지정해 주세요." if root_line else
+                                                       "왼쪽 트리에서 상위 Line을 먼저 선택해 주세요."))
+        self.move_button.setEnabled(not busy and not pending and row is not None)
+        self.move_button.setToolTip(blocked or "선택한 Line·세부라인과 소속 설비를 다른 Site·분류·상위 Line으로 이동")
+        self.context_actions.setVisible(row is not None)
+        self.fab_button.setVisible(root_line)
+        self.fab_button.setEnabled(not busy and not pending and root_line)
+        self.fab_button.setToolTip(blocked or "선택한 Line과 하위 세부라인의 위치 분류를 함께 변경합니다.")
+        if root_line:
+            target = "FOUNDRY" if data[3] == "MEMORY" else "MEMORY" if data[3] == "FOUNDRY" else None
+            self.fab_button.setText(f"{self._area_label(target)}로 변경" if target is not None
+                                   and self.page.area_labels == PRODUCTION_AREA_LABELS else "분류 변경")
+            if data[3] is None:
+                self.fab_button.setText("Memory/Foundry 지정")
         else:
-            self.fab_button.setText("Memory/Foundry 변경")
+            self.fab_button.setText("분류 변경")
+        has_children = row is not None and any(r.site == row.site and getattr(r, "parent_line", None) == row.line
+                                               for r in self.line_rows)
+        has_equipment = bool(row.equipment_count) if row is not None else bool(
+            data is not None and data[0] == "site" and any(e.site == data[1] and e.snapshot_count for e in self.equipment))
+        deletable = data is not None and data[0] in ("site", "line") and not has_children and not has_equipment
+        self.delete_button.setEnabled(not busy and not pending and deletable)
+        self.delete_button.setToolTip(blocked or "하위 세부라인을 먼저 옮기거나 삭제해 주세요." if blocked or has_children else
+                                      "설비 현황이 있는 위치는 삭제할 수 없습니다." if has_equipment else
+                                      "선택한 위치를 삭제합니다. 모든 기준일에 설비 현황이 없어야 합니다." if deletable else
+                                      "삭제할 Site 또는 Line을 선택해 주세요.")
+        if blocked:
+            hint = f"저장 전 변경 {len(self.ops)}건 · 저장하거나 되돌린 후 다른 작업을 할 수 있습니다." if pending else blocked
+        elif root_line:
+            hint = "추가 메뉴에서 세부라인을 만들 수 있습니다. 소속·분류 변경은 오른쪽에서 합니다."
+        elif row is not None:
+            hint = "세부라인의 소속은 오른쪽에서 변경합니다. 위치 분류는 상위 Line을 따릅니다."
+        else:
+            hint = "Site·Line 이름은 두 번 눌러 수정합니다. 세부라인 추가는 상위 Line을 선택하세요."
+        self.location_hint.setText(hint)
         self.save_button.setEnabled(pending and not busy)
         self.save_button.setText(f"저장 ({len(self.ops)})" if pending else "저장")
+        self.save_button.setToolTip("저장 전 이름·설비 위치 변경을 DB에 반영합니다." if pending else "저장할 이름·설비 위치 변경이 없습니다.")
         self.undo_button.setEnabled(pending and not busy)
         self.redo_button.setEnabled(bool(self.redo_ops) and not busy)
 
@@ -2821,13 +3162,10 @@ class ReleasePanel(_Panel):
                  and not (k[0] == "l" and ("item", k[1], k[2]) in self.deleted)}
         olds = {k: self._original_of(k) for k in edits}
         family_id, gateway = self.family_id, self.page.gateway
-        save_edits = self.page.edit_work(self.changes(edits)) if edits else None
-        structural = any(plan[k] for k in plan)
+        changes, context = self.changes(edits), deepcopy(self.page.context_provider())
 
         def work():
-            saved = save_edits() if save_edits else None  # 검토 지문 충돌이 가장 잦으므로 칸 수정을 먼저 저장한다
-            undo = gateway.data_admin("apply_release", family_id, plan) if structural else None
-            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None), undo=undo)
+            return gateway.save_release(family_id, plan, changes=changes, context=context)
 
         counts = (len(edits), len(plan["add_versions"]) + len(plan["add_items"]), len(plan["orders"]),
                   len(plan["delete_versions"]) + len(plan["delete_items"]))
@@ -2902,13 +3240,10 @@ class ReleasePanel(_Panel):
             return False
         (info,) = rest
         gateway = self.page.gateway
-        save_back = self.page.edit_work(self.changes(info["olds"])) if info["olds"] else None
+        changes, context = self.changes(info["olds"]), deepcopy(self.page.context_provider())
 
         def work():
-            if info["undo"]:
-                gateway.data_admin("undo_release", info["undo"])
-            saved = save_back() if save_back else None
-            return SimpleNamespace(records=getattr(saved, "records", ()), refresh=getattr(saved, "refresh", None))
+            return gateway.undo_release_changes(info["undo"], changes=changes, context=context)
 
         return self.page.change(work, self, message="마지막 저장을 되돌리고 있습니다…", done=lambda _: self._undone())
 
@@ -3184,33 +3519,34 @@ class DataManagementPage(QWidget):
     save_started = Signal()
     saved = Signal(object)
     save_failed = Signal()
+    save_uncertain = Signal()
+    save_reconciled = Signal()
     group_added = Signal(object)
 
     def __init__(self, gateway, *, context_provider=lambda: None, column_store=None, drawer_parent=None):
         super().__init__()
         self.gateway, self.context_provider = gateway, context_provider
+        self.category_labels = {"POLY": "POLY", "OXIDE": "OXIDE", "KCTC": "KCTC", "HPA": "HPA"}
+        self.area_labels = dict(PRODUCTION_AREA_LABELS)
         self.columns = ColumnMemory(column_store if column_store is not None else QSettings("SETRON", "SETRON"))
         self.saving, self.deletion = False, None
+        self.uncertain, self._recovering, self._uncertain_owner = False, False, None
+        self._recovery_read_token = 0
         self.save_request = ReadRequest(self)
         self.save_request.completed.connect(self._saved)
         self._job = None
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
-        self.tabs = QTabBar()
+        self.tabs = ImportTabs()
         for name in ("설비현황", "릴리즈노트", "변경 이력"):
             self.tabs.addTab(name)
-        self.tabs.setExpanding(False)
         self.tabs.setAccessibleName("데이터 관리 화면 선택")
-        self.tabs.setStyleSheet("QTabBar::tab {background:transparent;border:0;padding:10px 24px;color:#5d6678;font-size:16px;}"
-                                f"QTabBar::tab:selected {{color:{PRIMARY};border-bottom:3px solid {PRIMARY};font-weight:bold;}}")
         # 탭 줄은 탭 폭만큼만 둔다: 화면 끝까지 늘이면 아래 회색 줄이 '변경 이력' 뒤로도 이어진다 (11-12)
         tab_row = QHBoxLayout()
         tab_row.setContentsMargins(0, 0, 0, 0)
-        # 고른 탭은 굵은 글씨라 크기 계산보다 넓다. 모자라면 Qt가 ◀ ▶ 스크롤 버튼을 붙여서, 버튼을 끄고 여유 폭을 둔다 (11-12)
         self.tabs.setUsesScrollButtons(False)
         self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
-        self.tabs.setMinimumWidth(self.tabs.sizeHint().width() + 48)
         self.tabs.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         tab_row.addWidget(self.tabs)
         tab_row.addStretch()
@@ -3261,6 +3597,38 @@ class DataManagementPage(QWidget):
         self.sheet_panel.attach_guide(drawer_parent if drawer_parent is not None else self)  # 현황표 [?] 가이드
         # 여러 줄 안내가 첫 줄만 보이지 않게, 줄바꿈 라벨은 폭을 무시하고 높이를 내용에 맞춘다 (다른 화면과 같은 방식).
         ignore_width(*(w for w in self.findChildren(QLabel) if w.wordWrap()))
+        self.recovery_banner = QWidget()
+        recovery = QHBoxLayout(self.recovery_banner)
+        recovery.setContentsMargins(0, 0, 0, 0)
+        self.recovery_notice = label("", 13, color=DANGER, wrap=True)
+        ignore_width(self.recovery_notice)
+        self.recovery_button = button("저장 결과 다시 읽기")
+        self.recovery_button.clicked.connect(self.reconcile_save)
+        recovery.addWidget(self.recovery_notice, 1)
+        recovery.addWidget(self.recovery_button)
+        body.insertWidget(1, self.recovery_banner)
+        self.recovery_banner.hide()
+        for panel in self.panels:
+            panel.request.completed.connect(lambda value, error, panel=panel: self._recovery_read_done(panel, error))
+
+    def set_hierarchy_options(self, options):
+        self.category_labels = dict(options["categories"])
+        self.area_labels = dict(options["areas"])
+
+    def category_choices(self):
+        return tuple(label for code, label in self.category_labels.items() if code != "HPA")
+
+    def category_label(self, code):
+        return self.category_labels.get(code, code or "")
+
+    def category_code(self, label):
+        return next((code for code, name in self.category_labels.items() if name == label), label)
+
+    def area_label(self, code):
+        return self.area_labels.get(code, code or "")
+
+    def area_code(self, label):
+        return next((code for code, name in self.area_labels.items() if name == label), production_area_value(label))
 
     @property
     def panels(self):
@@ -3295,7 +3663,7 @@ class DataManagementPage(QWidget):
         self.select_status(0)
 
     def _ensure_loaded(self):
-        if self.gateway is None:
+        if self.gateway is None or self.uncertain:
             return
         tab = self.stack.currentIndex()
         if tab == 0:
@@ -3361,7 +3729,7 @@ class DataManagementPage(QWidget):
 
     def change(self, work, owner, *, message="저장하고 있습니다…", done=None, failed=None):
         """DB를 바꾸는 작업 하나를 워커에서 실행한다. 한 번에 하나만 하고, 끝나면 saved로 다른 화면에 알린다."""
-        if self.gateway is None or self.saving:
+        if self.gateway is None or self.saving or self.uncertain:
             return False
         self.saving, self._job = True, (owner, done, failed)
         owner.say(message)
@@ -3378,6 +3746,21 @@ class DataManagementPage(QWidget):
         self.saving, self._job = False, None
         self._sync_saving()
         if error is not None:
+            if isinstance(error, DatabaseCommitUnknownError):
+                self.uncertain, self._uncertain_owner = True, owner
+                message = ("저장 결과를 확인할 수 없습니다. 중복 저장을 막기 위해 편집을 잠갔습니다. "
+                           "다시 읽으면 이 작업의 초안을 DB의 현재 저장값으로 바꿉니다.")
+                owner.say(message, error=True)
+                self.recovery_notice.setText(message)
+                self.recovery_banner.show()
+                if failed is not None:
+                    failed(error)
+                for dialog in self.findChildren(QDialog):
+                    if dialog.isVisible() and dialog.isModal():
+                        dialog.reject()
+                self._sync_saving()
+                self.save_uncertain.emit()
+                return
             message = str(error) if isinstance(error, (ValueError, LookupError)) else "DB 저장에 실패했습니다. 연결을 확인해 주세요."
             owner.say(f"저장하지 못했습니다: {message}", error=True)
             if failed is not None:
@@ -3398,3 +3781,60 @@ class DataManagementPage(QWidget):
     def _sync_saving(self):
         for panel in self.panels:
             panel._sync()
+            panel.setEnabled(not self.uncertain)
+        self.delete_host.setEnabled(not self.uncertain)
+
+    def reconcile_save(self):
+        """사용자가 확인을 요청했을 때 실제 저장 화면을 새로 읽는다. 실패하면 잠금을 유지한다."""
+        owner = self._uncertain_owner
+        if not self.uncertain or self._recovering or owner is None or owner.request.busy:
+            return False
+        self._recovering = True
+        self._recovery_read_token += 1
+        self.recovery_button.setEnabled(False)
+        self.recovery_notice.setText("DB의 현재 저장 결과를 읽고 있습니다…")
+        if not owner.reload():
+            self._recovering = False
+            self.recovery_button.setEnabled(True)
+            self.recovery_notice.setText("저장 결과를 읽지 못했습니다. 연결을 확인하고 다시 시도해 주세요.")
+            return False
+        return True
+
+    def _recovery_read_done(self, panel, error):
+        if self._recovering and panel is self._uncertain_owner:
+            self._recovery_read_token += 1
+            token = self._recovery_read_token
+            QTimer.singleShot(0, lambda: self._finish_recovery_read(panel, error, token) if isValid(self) else None)
+
+    def _finish_recovery_read(self, panel, error, token):
+        if not self._recovering or panel is not self._uncertain_owner or token != self._recovery_read_token:
+            return
+        if error is not None:
+            self._recovering = False
+            self.recovery_button.setEnabled(True)
+            self.recovery_notice.setText("저장 결과를 읽지 못했습니다. 편집 잠금을 유지합니다. DB 연결을 확인한 뒤 다시 시도해 주세요.")
+            return
+        if panel.request.busy:
+            return  # 현황표·릴리즈는 목록 다음 실제 행 읽기가 이어진다.
+        if isinstance(panel, SheetPanel):
+            panel.edits, panel.new_rows, panel.deletes, panel.steps, panel.redo_steps = {}, [], {}, [], []
+            panel._render()
+        elif isinstance(panel, ReleasePanel):
+            panel.edits, panel.deleted, panel.orders, panel.new_versions, panel.new_items = {}, set(), {}, [], []
+            panel.steps, panel.redo_steps = [], []
+            panel._render()
+        elif isinstance(panel, LocationPanel):
+            panel.ops, panel.redo_ops = [], []
+            panel._render_tree()
+        elif isinstance(panel, EquipmentPanel):
+            panel.pending, panel.steps, panel.redo_steps = {}, [], []
+            panel._render_groups()
+        self.uncertain, self._recovering, self._uncertain_owner = False, False, None
+        for other in self.panels:
+            if other is not panel:
+                other.loaded = False
+        panel.say("DB의 현재 저장값을 다시 읽었습니다.")
+        self.recovery_banner.hide()
+        self.recovery_button.setEnabled(True)
+        self._sync_saving()
+        self.save_reconciled.emit()

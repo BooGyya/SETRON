@@ -406,6 +406,7 @@ class DatabaseImportSaver:
                         if value.family_id in own:
                             receipt_batches[request.request_id] = tuple(dict.fromkeys((*receipt_batches.get(request.request_id, ()), *batch_ids)))
             metadata_anchors = _metadata_anchors(tuple(snapshots for _, _, snapshots in prepared))
+            prepared = _with_process_metadata(prepared, metadata_anchors)
             _check_release_links(tuple(snapshots for _, _, snapshots in prepared))
             equipment_batches, equipment_metadata_keys = [], []
             for request, batch, snapshots in prepared:
@@ -496,12 +497,15 @@ class DatabaseImportSaver:
         metadata = {}
         for name in SNAPSHOT_METADATA_FIELDS:
             values = {row.values.get(name) for row in rows} - {None}
+            if name == "production_area":
+                from setron.features.hierarchy import area_labels
+                labels = area_labels(tx)
+                values = {next((code for code, label in labels.items() if isinstance(value, str)
+                                and label.casefold() == value.casefold()), value) for value in values}
             _require(len(values) <= 1, f"{code}: 같은 날짜 현황의 {name} 값이 상충합니다.")
             metadata[name] = next(iter(values), None)
         # 공정(11/13 멘토): 설비 하나에 하나이고 복합공정도 한 칸에 적는다. PM 줄마다 다르면 막지 않고 잇는다.
-        processes = list(dict.fromkeys(str(row.values["process_name"]).strip() for row in rows
-                                       if str(row.values.get("process_name") or "").strip()))
-        metadata["process_name"] = " / ".join(processes)[:100] if processes else None
+        metadata["process_name"] = _process_name((row.values.get("process_name") for row in rows), code)
         models: dict[str, dict] = {}
         software: dict[tuple[int, str], dict[str, Any]] = {}
         for row in rows:
@@ -518,9 +522,17 @@ class DatabaseImportSaver:
                      f"{_where(row)}: 같은 적용 SW의 릴리즈 연결이 상충합니다.")
             entry["sources"] = merge_sources(entry["sources"], _sources(row, SOFTWARE_FIELDS))
             if values.get("pm_name"):
-                entry["pms"].append(PmInput(pm_name=values["pm_name"], group_id=model["group_id"],
-                                            model_name_raw=values.get("model_name"),
-                                            source_reference=_sources(row, (*PM_FIELDS, *SOFTWARE_FIELDS))))
+                pm = PmInput(pm_name=values["pm_name"], group_id=model["group_id"],
+                             model_name_raw=values.get("model_name"),
+                             source_reference=_sources(row, (*PM_FIELDS, *SOFTWARE_FIELDS)))
+                existing = next((index for index, previous in enumerate(entry["pms"])
+                                 if (previous.group_id, previous.pm_name) == (pm.group_id, pm.pm_name)), None)
+                if existing is None:
+                    entry["pms"].append(pm)
+                else:
+                    previous = entry["pms"][existing]
+                    entry["pms"][existing] = replace(previous, source_reference=merge_sources(
+                        previous.source_reference, pm.source_reference))
         representative = next(iter(models.values()))["group_id"] if len(models) == 1 else None
         return SnapshotInput(
             equipment_code=code,
@@ -641,15 +653,27 @@ class DatabaseImportSaver:
         self._row_raw_data = {id(row): request.raw_data for request in requests for row in request.rows}
 
     def _model(self, tx, values: Mapping[str, Any], row: SaveRow) -> dict:
+        from setron.features.hierarchy import category_labels, model_aliases
         raw = (values.get("model_name") or "").strip()
         name = MODEL_ALIASES.get(raw, raw)
         alias = resolve_model_text(raw, values.get("version_raw"))
         if alias is not None:
             name = alias[0]          # 번역표(멘토 확정 분류표)의 표기는 등록 모델명으로 푼다
         _require(bool(name), f"{_where(row)}: 모델명이 필요합니다.")
-        category = _category(values.get("group_name"), name, row)
-        matches = [g for g in self.repository.rows(tx, "equipment_group", category=category) if g["group_name"] == name]
-        _require(len(matches) == 1, f"{_where(row)}: 모델 '{raw}'({category})에 대응하는 등록 모델이 없거나 여러 개입니다.")
+        groups = self.repository.rows(tx, "equipment_group")
+        matches = [group for group in groups if group["group_name"].casefold() == raw.casefold()]
+        if not matches:
+            aliases = {alias.casefold(): group_id for alias, group_id in model_aliases(tx).items()}
+            alias_id = aliases.get(raw.casefold(), aliases.get(name.casefold()))
+            matches = [group for group in groups if group["group_id"] == alias_id] if alias_id else [
+                group for group in groups if group["group_name"].casefold() == name.casefold()]
+        category_raw = (values.get("group_name") or "").strip()
+        labels = category_labels(tx)
+        category = next((code for code, label in labels.items() if label.casefold() == category_raw.casefold()),
+                        CATEGORIES.get(category_raw.casefold(), category_raw))
+        if category_raw:
+            matches = [group for group in matches if group["category"] == category]
+        _require(len(matches) == 1, f"{_where(row)}: 모델 '{raw}'({category_raw})에 대응하는 등록 모델이 없거나 여러 개입니다.")
         return matches[0]
 
     def _family(self, tx, model: dict, values: Mapping[str, Any], row: SaveRow, *, equipment: bool = False) -> dict:
@@ -672,26 +696,42 @@ class DatabaseImportSaver:
         ui_raw = values.get("ui_type")
         ui = UI_TYPES.get((ui_raw or "").replace(" ", "").casefold())
         _require(not ui_raw or ui is not None, f"{_where(row)}: UI 구분 '{ui_raw}'을(를) 확인해 주세요.")
-        if not ui_raw and model["group_name"] == "M-C3" and equipment:
+        from setron.features.hierarchy import model_aliases
+        owners = {model["group_id"]} | ({model["parent_group_id"]} if model.get("parent_group_id") else set())
+        model_names = {group["group_name"] for group in self.repository.rows(tx, "equipment_group")
+                       if group["group_id"] in owners}
+        aliases = model_aliases(tx)
+        if not ui_raw and equipment and (model_names & {"M-C3", "C3"} or
+                                         any(aliases.get(name) in owners for name in ("M-C3", "C3"))):
             # 멘토 확정(2026-10-28): UI 표기가 없는 M-C3는 통합UI. 저장 전 검증(normalization)과 같은 기본값.
             ui = "INTEGRATED"
-        owners = {model["group_id"]} | ({model["parent_group_id"]} if model.get("parent_group_id") else set())
         families = [f for owner in sorted(owners) for f in self.repository.rows(tx, "version_family", group_id=owner)]
         # 정확한 계열명이 다른 UI의 후보를 가리켜도 올바른 UI의 접두 이름 후보를 버리지 않는다.
         if ui:
             families = [family for family in families if family["ui_type"] == ui]
         # 메모리/파운드리: 파운드리 라인의 O2·C3·C4는 ' (파운드리)' 계열(별도 릴리즈노트, 10/27).
         # 값이 없으면 사이트·라인·시트명으로 기본값을 정한다(장소표). 그래도 모르면 메모리 계열.
-        area = area_of(values, _sheet_of(row), getattr(self, "_row_workbooks", {}).get(id(row)))
-        base_model = model["group_name"] if not model.get("parent_group_id") else next(
-            (g["group_name"] for g in self.repository.rows(tx, "equipment_group") if g["group_id"] == model["parent_group_id"]),
-            model["group_name"])
-        is_foundry = area == "FOUNDRY" and base_model in FOUNDRY_FAMILY_MODELS
+        from setron.features.hierarchy import area_labels
+        labels = area_labels(tx)
+        supplied = values.get("production_area")
+        area_code = next((code for code, label in labels.items() if isinstance(supplied, str)
+                          and label.casefold() == supplied.casefold()), supplied)
+        area = area_of({**values, "production_area": area_code}, _sheet_of(row),
+                       getattr(self, "_row_workbooks", {}).get(id(row)))
+        is_foundry = area == "FOUNDRY" and any(strip_foundry(f["family_name"])[1] for f in families)
         families = [f for f in families if strip_foundry(f["family_name"])[1] == is_foundry]
         plain = strip_foundry(name)[0]
         target = plain + FOUNDRY_SUFFIX if is_foundry else plain
         candidates = [f for f in families if f["family_name"] == target] or [
             f for f in families if f["family_name"].startswith(plain + " ")]
+        if not candidates:
+            # 모델과 이름이 같았던 계열만 update_groups에서 함께 변경된다. 소유 ID까지 확인한 이전 이름만 복원한다.
+            aliases = {alias.casefold(): group_id for alias, group_id in model_aliases(tx).items()}
+            owner_id = aliases.get(plain.casefold())
+            if owner_id in owners:
+                owner = tx.get("equipment_group", {"group_id": owner_id})
+                current_name = owner["group_name"] + (FOUNDRY_SUFFIX if is_foundry else "")
+                candidates = [f for f in families if f["group_id"] == owner_id and f["family_name"] == current_name]
         _require(len(candidates) == 1,
                  f"{_where(row)}: 모델 '{model['group_name']}'의 SW 계열 '{name}'"
                  + (f"({ui_raw})" if ui_raw else "") + "을(를) 하나로 정할 수 없습니다.")
@@ -840,6 +880,54 @@ def _metadata_anchors(groups: tuple[tuple[SnapshotInput, ...], ...]) -> dict[tup
                  "라인·생산 영역·구조·형상·개조 정보를 한 시트에서 함께 확인한 뒤 다시 저장해 주세요.")
         anchors[key] = candidates[-1]
     return anchors
+
+
+def _process_name(values, code):
+    processes = list(dict.fromkeys(str(value).strip() for value in values
+                                  if str(value or "").strip()))
+    process = " / ".join(processes) if processes else None
+    _require(process is None or len(process) <= 100,
+             f"{code}: 합친 공정이 100자를 넘습니다. 공정 값을 확인한 뒤 다시 저장해 주세요. 이번 저장 묶음 전체를 보류합니다.")
+    return process
+
+
+def _with_process_metadata(prepared, anchors):
+    """여러 시트의 공정과 실제 입력 작업별 출처를 공통정보 소유 현황에 보존한다."""
+    values, references = {}, {}
+    for request, _, snapshots in prepared:
+        if ExtractKind(request.kind) is not ExtractKind.EQUIPMENT_STATUS:
+            continue
+        for row in request.rows:
+            key = row.values["equipment_code"], date.fromisoformat(row.values["base_date"])
+            values.setdefault(key, []).append(row.values.get("process_name"))
+        for snapshot in snapshots:
+            key = snapshot.equipment_code, snapshot.base_date
+            reference = (snapshot.source_reference or {}).get("process_name")
+            if reference is not None:
+                references.setdefault(key, []).append((snapshot.batch_id, reference))
+    processes = {key: _process_name(items, key[0]) for key, items in values.items()}
+    result = []
+    for index, (request, batch, snapshots) in enumerate(prepared):
+        updated = []
+        for snapshot in snapshots:
+            key = snapshot.equipment_code, snapshot.base_date
+            if anchors[key] != index:
+                updated.append(snapshot)
+                continue
+            process_sources = []
+            for batch_id, reference in references.get(key, ()):
+                for location in reference if isinstance(reference, list) else [reference]:
+                    location = dict(location)
+                    source_batch = location.pop("batch_id", batch_id)
+                    if source_batch != snapshot.batch_id:
+                        location["batch_id"] = source_batch
+                    process_sources.append({"process_name": location})
+            sources = {name: value for name, value in (snapshot.source_reference or {}).items()
+                       if name != "process_name"}
+            updated.append(replace(snapshot, process_name=processes[key],
+                source_reference=merge_sources(sources or None, *process_sources, allow_batch=True)))
+        result.append((request, batch, tuple(updated)))
+    return result
 
 
 def _validation_draft(request: SaveRequest) -> ImportDraft:

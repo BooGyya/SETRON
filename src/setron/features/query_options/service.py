@@ -42,7 +42,9 @@ class QueryOptionsService:
                 if equipment_id not in equipment:
                     equipment[equipment_id] = tx.get("equipment", {"equipment_id": equipment_id})
                 snapshots.append(self.repository.load(tx, equipment[equipment_id], row))
-        return build_query_options(snapshots, groups, families, scope, available_dates=dates)
+        from setron.features.data_admin.service import registered_lines
+        return build_query_options(snapshots, groups, families, scope, available_dates=dates,
+                                   line_entries=registered_lines(tx))
 
 
 def build_query_options(
@@ -52,6 +54,7 @@ def build_query_options(
     scope: QueryScope,
     *,
     available_dates: Iterable[date] | None = None,
+    line_entries=(),
 ) -> QueryOptions:
     """저장 조회 결과에서 목록을 만드는 순수 함수. 입력 자료를 변경하지 않는다.
 
@@ -74,6 +77,7 @@ def build_query_options(
     require(len(group_map) == len(group_rows), "등록 모델 ID가 중복되었습니다.")
     require(len(family_map) == len(family_rows), "등록 계열 ID가 중복되었습니다.")
     result, seen, selected_models, selected_pairs = [], set(), set(), set()
+    from setron.features.hierarchy import line_parts
     for snapshot in sorted(snapshots, key=lambda row: (row.base_date, row.equipment_id, row.snapshot_id)):
         require(type(snapshot.base_date) is date, "저장된 기준일 형식이 잘못됐습니다.")
         if snapshot.base_date != scope.base_date:
@@ -83,9 +87,11 @@ def build_query_options(
         seen.add(identity)
         if scope.sites and snapshot.site not in scope.sites:
             continue
-        if scope.lines and snapshot.line not in scope.lines:
+        parent, subline = line_parts(snapshot.site, snapshot.line, line_entries)
+        line_names = {snapshot.line} | ({parent, subline} if subline is not None else set())
+        if scope.lines and not line_names.intersection(scope.lines):
             continue
-        if scope.site_lines and LineOption(snapshot.site, snapshot.line) not in scope.site_lines:
+        if scope.site_lines and not any(LineOption(snapshot.site, name) in scope.site_lines for name in line_names):
             continue
         pms = read_pm_versions(snapshot)
         pairs = {(pm.group_id, pm.family_id) for pm in pms}
