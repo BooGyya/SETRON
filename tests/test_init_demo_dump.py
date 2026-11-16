@@ -47,6 +47,7 @@ class FakeConnection:
         self.foreign_key_checks = 1
         self.engines = dict.fromkeys(TABLE_NAMES, "InnoDB")
         self.columns = dict(DUMP_COLUMNS)
+        self.grants = ("GRANT ALL PRIVILEGES ON *.* TO 'demo'@'localhost'",)
         self.transaction_rows = None
         self.backup_guard = None
         self._cursor = FakeCursor(self)
@@ -99,6 +100,8 @@ class FakeCursor:
         self.result = []
         if sql == "SELECT @@version_compile_os":
             self.result = [(db.platform,)]
+        elif sql == "SHOW GRANTS FOR CURRENT_USER":
+            self.result = [(grant,) for grant in db.grants]
         elif sql.startswith("SELECT GET_LOCK"):
             self.result = [(db.lock,)]
         elif sql == "SHOW FULL TABLES":
