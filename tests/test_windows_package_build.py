@@ -35,8 +35,8 @@ class BuildFixture {
         string self = Assembly.GetExecutingAssembly().Location;
         File.AppendAllText(Environment.GetEnvironmentVariable("PACKAGE_TRACE"),
             Path.GetFileName(self) + "\0" + String.Join("\0", args) + "\n", new UTF8Encoding(false));
-        if (Path.GetFileName(self) == "SETRON_DB_INIT.exe") {
-            if (args.Length != 1 || args[0] != "--validate-dump") return 91;
+        if (Path.GetFileName(self) == "SETRON_DB_SETUP.exe") {
+            if (args.Length != 1 || args[0] != "--validate-schema") return 91;
             if (Environment.GetEnvironmentVariable("PACKAGE_FAIL") == "validate") {
                 Console.WriteLine("FIXTURE_FAIL_validate"); return 24;
             }
@@ -53,16 +53,17 @@ class BuildFixture {
             File.WriteAllText(Path.Combine(output, "_internal", "runtime.dll"), "new-runtime");
             return 0;
         }
-        if (Has(args, "python") && Has(args, "--dump") && Has(args, "--output-dir")) {
+        if (Has(args, "python") && Has(args, "--output-dir")) {
             string output = Value(args, "--output-dir");
             Directory.CreateDirectory(output);
-            File.Copy(self, Path.Combine(output, "SETRON_DB_INIT.exe"));
+            File.Copy(self, Path.Combine(output, "SETRON_DB_SETUP.exe"));
             if (Environment.GetEnvironmentVariable("PACKAGE_FAIL") == "helper") {
                 Console.WriteLine("FIXTURE_FAIL_helper"); return 23;
             }
-            File.Copy(Value(args, "--dump"), Path.Combine(output, "SETRON_DB.sql"));
-            File.Copy(Path.Combine(Environment.CurrentDirectory, "prepare_demo_db.bat"),
-                Path.Combine(output, "prepare_demo_db.bat"));
+            Directory.CreateDirectory(Path.Combine(output, "_internal", "database"));
+            File.WriteAllText(Path.Combine(output, "_internal", "database", "schema_mysql5619.sql"), "CREATE TABLE fixture (id INT);");
+            File.Copy(Path.Combine(Environment.CurrentDirectory, "prepare_schema.bat"),
+                Path.Combine(output, "prepare_schema.bat"));
             return 0;
         }
         return 92;
@@ -81,7 +82,7 @@ def package(tmp_path, fake_uv):
     (root / "packaging").mkdir(parents=True)
     shutil.copyfile(ROOT / "packaging/build_windows.ps1", root / "packaging/build_windows.ps1")
     (root / "setron.env.example").write_bytes(b"new-example")
-    (root / "prepare_demo_db.bat").write_bytes((ROOT / "prepare_demo_db.bat").read_bytes())
+    (root / "prepare_schema.bat").write_bytes((ROOT / "prepare_schema.bat").read_bytes())
     tools = tmp_path / "tools"
     tools.mkdir()
     shutil.copyfile(fake_uv, tools / "uv.exe")
@@ -92,7 +93,8 @@ def package(tmp_path, fake_uv):
         "prepare_demo_db.bat": b"old-bat", "setron.env.example": b"old-example",
         "setron.env": b"fixture-only-local-config", "SETRON_DB.sql": b"approved-snapshot\n",
         "_internal/old.dll": b"old-runtime", "backups/nested/original.sql": b"saved-db-backup",
-        "database/preserved.sql": b"user-sql", "user notes.txt": b"user-data",
+        "database/preserved.sql": b"user-sql", "database/SETRON_DB.sql": b"legacy-duplicate",
+        "user notes.txt": b"user-data",
     }.items():
         path = output / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,17 +109,17 @@ def tree_bytes(folder):
     return {str(path.relative_to(folder)): path.read_bytes() for path in folder.rglob("*") if path.is_file()}
 
 
-def build(package, *, failure=None, rename_failures=(), output=None, omit_output=False):
+def build(package, *, failure=None, rename_failures=(), output=None, omit_output=False, reuse=False):
     output = output or package.output
     runner = package.temp / "RunBuild.ps1"
     # 실행 중인 사용자 앱에는 관여하지 않도록 프로세스 조회를 대역으로 바꾼다.
-    script = '''param($BuildScript, $RepositoryRoot, $DumpPath, $OutputDir)
+    script = '''param($BuildScript, $RepositoryRoot, $OutputDir, $ReuseGuiFrom)
 $ErrorActionPreference = "Stop"
 function Get-Process { @() }
 '''
     if rename_failures:
         failures = ",".join(str(value) for value in rename_failures)
-        script += '''. $BuildScript -DumpPath $DumpPath -OutputDir $OutputDir
+        script += '''. $BuildScript -OutputDir $OutputDir
 $script:ActualMove = ${function:Move-PackageDirectory}
 $script:MoveCount = 0
 function Move-PackageDirectory($source, $destination) {
@@ -125,11 +127,11 @@ function Move-PackageDirectory($source, $destination) {
     if ($script:MoveCount -in @(''' + failures + ''')) { throw "injected publish rename failure" }
     & $script:ActualMove $source $destination
 }
-Invoke-WindowsPackageBuild -RepositoryRoot $RepositoryRoot -DumpPath $DumpPath -OutputDir $OutputDir
+Invoke-WindowsPackageBuild -RepositoryRoot $RepositoryRoot -OutputDir $OutputDir
 '''
     else:
-        script += ('& $BuildScript -DumpPath $DumpPath\n' if omit_output else
-                   '& $BuildScript -DumpPath $DumpPath -OutputDir $OutputDir\n')
+        script += ('& $BuildScript\n' if omit_output else
+                   '& $BuildScript -OutputDir $OutputDir -ReuseGuiFrom $ReuseGuiFrom\n')
     runner.write_text(script, encoding="utf-8-sig")
     env = os.environ.copy()
     for name in tuple(env):
@@ -142,7 +144,8 @@ Invoke-WindowsPackageBuild -RepositoryRoot $RepositoryRoot -DumpPath $DumpPath -
     return subprocess.run([
         "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(runner),
         "-BuildScript", str(package.root / "packaging/build_windows.ps1"),
-        "-RepositoryRoot", str(package.root), "-DumpPath", str(package.dump), "-OutputDir", str(output),
+        "-RepositoryRoot", str(package.root), "-OutputDir", str(output),
+        "-ReuseGuiFrom", str(package.output) if reuse else "",
     ], cwd=package.temp, env=env, capture_output=True, timeout=40)
 
 
@@ -150,19 +153,22 @@ def test_full_build_preserves_user_data_and_replaces_runtime_without_merging(pac
     previous = tree_bytes(package.output)
     result = build(package)
     assert result.returncode == 0, result.stdout + result.stderr
-    for name in ("setron.env", "SETRON_DB.sql", "backups\\nested\\original.sql", "database\\preserved.sql", "user notes.txt"):
+    for name in ("setron.env", "backups\\nested\\original.sql", "database\\preserved.sql", "user notes.txt"):
         assert (package.output / name).read_bytes() == previous[name]
     assert (package.output / "backups/empty").is_dir()
     assert (package.output / "SETRON.exe").read_bytes() == b"new-gui"
-    assert (package.output / "SETRON_DB_INIT.exe").read_bytes() == (package.tools / "uv.exe").read_bytes()
-    assert (package.output / "prepare_demo_db.bat").read_bytes() == (ROOT / "prepare_demo_db.bat").read_bytes()
+    assert (package.output / "SETRON_DB_SETUP.exe").read_bytes() == (package.tools / "uv.exe").read_bytes()
+    assert (package.output / "prepare_schema.bat").read_bytes() == (ROOT / "prepare_schema.bat").read_bytes()
+    archive = package.output.parent / "SETRON-demo-archive"
+    for name in ("SETRON_DB_INIT.exe", "prepare_demo_db.bat", "SETRON_DB.sql", "database\\SETRON_DB.sql"):
+        assert not (package.output / name).exists()
+        assert (archive / name).read_bytes() == previous[name]
     assert (package.output / "_internal/runtime.dll").read_bytes() == b"new-runtime"
     assert not (package.output / "_internal/old.dll").exists()
     trace = (package.temp / "build_trace.txt").read_text(encoding="utf-8").splitlines()
-    assert len(trace) == 4 and trace[-1] == "SETRON_DB_INIT.exe\0--validate-dump"
+    assert len(trace) == 4 and trace[-1] == "SETRON_DB_SETUP.exe\0--validate-schema"
     helper_args = trace[2].split("\0")
-    assert "packaging\\build_demo_db.py" in helper_args
-    assert helper_args[helper_args.index("--dump") + 1] != str(package.dump)
+    assert "packaging\\build_schema_db.py" in helper_args and "--dump" not in helper_args
     assert not list(package.output.parent.glob("setron-stage-*"))
 
 
@@ -195,8 +201,10 @@ def test_failed_rollback_retains_original_bundle_in_recovery_stage(package):
     assert tree_bytes(stages[0] / "previous-SETRON") == previous
 
 
-def test_different_existing_external_dump_aborts_before_any_rename(package):
-    (package.output / "SETRON_DB.sql").write_bytes(b"different-user-snapshot")
+def test_different_existing_archive_aborts_before_any_rename(package):
+    archive = package.output.parent / "SETRON-demo-archive"
+    archive.mkdir()
+    (archive / "SETRON_DB.sql").write_bytes(b"different-user-snapshot")
     previous = tree_bytes(package.output)
     result = build(package)
     assert result.returncode != 0
@@ -206,13 +214,27 @@ def test_different_existing_external_dump_aborts_before_any_rename(package):
     assert not list(package.output.parent.glob("setron-stage-*"))
 
 
-def test_default_output_is_repository_dist_and_uses_only_explicit_dump(package):
+def test_default_output_is_repository_dist_without_demo_data(package):
     result = build(package, omit_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
     output = package.root / "dist/SETRON"
-    assert (output / "SETRON_DB.sql").read_bytes() == package.dump.read_bytes()
+    assert not (output / "SETRON_DB.sql").exists()
+    assert (output / "SETRON_DB_SETUP.exe").exists()
     assert (output / "SETRON.exe").read_bytes() == b"new-gui"
     assert not (output / "setron.env").exists()
+
+
+def test_explicit_gui_reuse_preserves_gui_and_excludes_demo_files(package):
+    result = build(package, reuse=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (package.output / "SETRON.exe").read_bytes() == b"old-gui"
+    assert (package.output / "_internal/old.dll").read_bytes() == b"old-runtime"
+    assert (package.output / "setron.env").read_bytes() == b"fixture-only-local-config"
+    assert (package.output / "SETRON_DB_SETUP.exe").exists()
+    assert not (package.output / "SETRON_DB_INIT.exe").exists()
+    assert not (package.output / "database/SETRON_DB.sql").exists()
+    trace = (package.temp / "build_trace.txt").read_text(encoding="utf-8")
+    assert "pyinstaller" not in trace
 
 
 @pytest.mark.parametrize("relative", ["src/target", ".git/target", "packaging/target"])
