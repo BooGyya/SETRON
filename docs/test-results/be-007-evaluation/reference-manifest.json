@@ -1,0 +1,36 @@
+{
+  "created_at": "2026-11-02T13:42:16.562416+09:00",
+  "source_sha256": "1347d7b6d1eb3871a01210718e48563f19831b4f275f3106f9532376be46e595",
+  "reference_sha256": "e73599f83fe8839cd99eaa305b1894860db7afd814fcfc5864df4e79d20be578",
+  "policy_sha256": "bf345e0ae35713ce059eba9da1e85bd505ed52c1c5f4e46458a85979d0b819c5",
+  "records_by_sheet": {
+    "Memory": 85,
+    "Foundry": 50
+  },
+  "total_field_positions": 2160,
+  "states": {
+    "raw": {
+      "source_missing": 1358,
+      "explicit": 802
+    },
+    "normalized": {
+      "source_missing": 1204,
+      "explicit": 450,
+      "derived": 375,
+      "unresolved": 131
+    }
+  },
+  "code_version": "14abe054e7d64fc5056ffe730b72de742d5e0dc0",
+  "product_file_sha256": {
+    "src/setron/infrastructure/ai_client.py": "ae0e5ea85eaaa9dcae55fd18364bcf0d47ef78a1fe0d4541c4e8cc578d5e65ba",
+    "src/setron/infrastructure/excel_reader.py": "bc0892f2a62e7ed56215a317d05bb000457ce103e5776d434556441cdb44ed9b",
+    "src/setron/features/ai/service.py": "c2f57fcf23462a57e354f55b866d681d3d725d0d6f0011f592cec7ea09549d9f",
+    "src/setron/features/ai/schemas.py": "84b2ac1ce1556e85f632075d1cb374f50d857a10e9567f5f7febd7b54c4dff6f",
+    "src/setron/features/extraction/service.py": "6a3db289cfd68bf44347577834bcb52d04c468a4642865918e6f2c0ff20b8052",
+    "src/setron/features/extraction/normalization.py": "248cc9a27287cda73d541949db7c6eccf8726f3529bbe9cf11cbab1f131577a2",
+    "src/setron/features/extraction/schemas.py": "d15bb0f67dbf2fa9778aa6cf47b8858c53bf4cf76816b9cefcfffdd9f92506ce",
+    "pyproject.toml": "f13f71589e4429fafa2f0416239154dba5b097548251ef081a21cffb8c5ad18f",
+    "uv.lock": "4724f9dfedaecde7e22352167516e1127fd1494528d37afcbdb6c2a1858da23f"
+  },
+  "benchmark_sha256_at_reference": "2d7e6971904d268e43edf370d1a11b31c8ec8f3f429e10411c21954bae002031"
+}

@@ -1,0 +1,116 @@
+"""대시보드 차트의 실제 집계 범위와 설비 툴팁이 일치하는지 확인한다."""
+
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCharts import QLineSeries, QScatterSeries
+from PySide6.QtCore import QPointF
+from PySide6.QtTest import QTest
+import pytest
+
+from setron.ui import dashboard_charts
+from setron.ui.dashboard_charts import DashboardChart, bar_plot, equipment_count_tooltip, equipment_tooltip
+from setron.ui.query_state import QuerySelection
+from test_ui_dashboard import DAY1, DAY2, app, applied, source
+
+
+@pytest.fixture
+def chart_tooltip(app, monkeypatch):
+    class Tooltip:
+        value = ""
+
+        def showText(self, _position, text, _widget):
+            self.value = text
+
+        def text(self):
+            return self.value
+
+        def hideText(self):
+            self.value = ""
+
+    tooltip = Tooltip()
+    monkeypatch.setattr(dashboard_charts, "QToolTip", tooltip)
+    view = DashboardChart()
+    view.resize(850, 380)
+    view.show()
+    yield view, tooltip
+    view.close()
+    view.deleteLater()
+    app.processEvents()
+
+
+def test_equipment_tooltip_deduplicates_and_bounds_names_and_escapes_plain_text():
+    text = equipment_tooltip("A < B\n1 & 2", (1, 1, *range(2, 15)), {i: f"<TEST-{i}>" for i in range(1, 15)})
+    assert "A &lt; B<br>1 &amp; 2<br>설비 14대" in text
+    assert text.count("&lt;TEST-1&gt;") == 1
+    assert "&lt;TEST-12&gt;<br>외 2대" in text
+    assert "TEST-13" not in text
+
+
+def test_chart_tooltip_counts_unique_equipment_without_listing_names():
+    assert equipment_count_tooltip("A < B\n3건 (60.0%)", (1, 1, 2)) == "<qt>A &lt; B<br>3건 (60.0%)<br>설비 2대</qt>"
+
+
+def test_composition_and_bar_show_aggregates(chart_tooltip, source):
+    view, tooltip = chart_tooltip
+    data = source.snapshot(applied(source))
+    view.composition(data)
+    compliant, below, unknown = view.chart().series()[0].slices()
+    compliant.hovered.emit(True)
+    assert tooltip.value == "<qt>N 이상 3건 (60.0%)<br>설비 3대</qt>"
+    below.hovered.emit(True)
+    compliant.hovered.emit(False)
+    assert tooltip.value == "<qt>N 미만 1건 (20.0%)<br>설비 1대</qt>"
+    unknown.hovered.emit(True)
+    assert tooltip.value == "<qt>판단 불가 1건 (20.0%)<br>설비 1대</qt>"
+
+    areas, groups = plot = bar_plot(data)
+    view.bars(plot, {"o2"})
+    assert tooltip.value == ""
+    series = view.chart().series()[0]
+    bar = series.barSets()[0]
+    label, points = groups["o2"]
+    index = next(i for i, point in enumerate(points) if point.equipment_ids == (1, 2))
+    empty_index = next(i for i, point in enumerate(points) if not point.equipment_ids)
+    series.hovered.emit(True, empty_index, bar)
+    assert tooltip.value == ""
+    series.hovered.emit(True, index, bar)
+    unknown.hovered.emit(False)
+    assert tooltip.value == f"<qt>{areas[index]} / {label}<br>목표 N 이상 1/2건 (50.0%)<br>설비 2대</qt>"
+    series.hovered.emit(False, index, bar)
+    assert tooltip.value == ""
+
+
+def test_native_line_segment_hover_uses_nearest_days_summary(chart_tooltip, source):
+    view, tooltip = chart_tooltip
+    data = source.snapshot(applied(source))
+    view.trend(data, {"o2"})
+    QTest.qWait(30)
+    chart = view.chart()
+    series = chart.series()[0]
+    assert isinstance(series, QLineSeries)
+    assert [(point.x(), point.y()) for point in series.points()] == [(0, 0), (1, 50)]
+
+    def move(value):
+        position = chart.mapToScene(chart.mapToPosition(value, series))
+        QTest.mouseMove(view.viewport(), view.mapFromScene(position))
+        QTest.qWait(10)
+
+    move(QPointF(0.25, 12.5))
+    assert tooltip.value == f"<qt>{DAY1:%Y.%m.%d} · O2<br>목표 달성 0 / 1건 (0.0%)<br>미관측 1대<br>설비 1대</qt>"
+    move(QPointF(0.75, 37.5))
+    assert tooltip.value == f"<qt>{DAY2:%Y.%m.%d} · O2<br>목표 달성 1 / 2건 (50.0%)<br>설비 2대</qt>"
+    move(QPointF(0.75, 90))
+    assert tooltip.value == ""
+
+
+def test_scatter_hover_counts_only_the_determined_equipment(chart_tooltip, source):
+    view, tooltip = chart_tooltip
+    data = source.snapshot(applied(source, QuerySelection(as_of=DAY1)))
+    view.trend(data, {"o2"})
+    series, = view.chart().series()
+    assert isinstance(series, QScatterSeries)
+    assert len(series.points()) == 1
+    series.hovered.emit(series.points()[0], True)
+    assert tooltip.value == f"<qt>{DAY1:%Y.%m.%d} · O2<br>목표 달성 0 / 1건 (0.0%)<br>설비 1대</qt>"

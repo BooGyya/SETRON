@@ -1,0 +1,65 @@
+name: setron
+
+services:
+  mysql-dev:
+    image: setron/mysql:5.6.19
+    platform: linux/amd64
+    build: ./docker/mysql5619
+    environment:
+      MYSQL_DATABASE: ${SETRON_DB_NAME:?개발용 DB 이름을 설정하세요.}
+      MYSQL_USER: ${SETRON_DB_USER:?개발용 DB 계정을 설정하세요.}
+      MYSQL_PASSWORD: ${SETRON_DB_PASSWORD:?개발용 DB 비밀번호를 설정하세요.}
+      MYSQL_ROOT_PASSWORD: ${SETRON_DB_ROOT_PASSWORD:?개발용 root 비밀번호를 설정하세요.}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-storage-engine=InnoDB
+    ports:
+      - "127.0.0.1:${SETRON_DB_PORT:-13306}:3306"
+    volumes:
+      - mysql5619_dev_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}"
+          mysql --no-defaults --socket=/run/mysqld/mysqld.sock --user=root
+          --execute="SELECT 1" >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  mysql-test:
+    image: setron/mysql:5.6.19
+    platform: linux/amd64
+    build: ./docker/mysql5619
+    profiles: [test]
+    environment:
+      MYSQL_DATABASE: ${SETRON_TEST_DB_NAME:?테스트용 DB 이름을 설정하세요.}
+      MYSQL_USER: ${SETRON_TEST_DB_USER:?테스트용 DB 계정을 설정하세요.}
+      MYSQL_PASSWORD: ${SETRON_TEST_DB_PASSWORD:?테스트용 DB 비밀번호를 설정하세요.}
+      MYSQL_ROOT_PASSWORD: ${SETRON_TEST_DB_ROOT_PASSWORD:?테스트용 root 비밀번호를 설정하세요.}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-storage-engine=InnoDB
+    ports:
+      - "127.0.0.1:${SETRON_TEST_DB_PORT:-13307}:3306"
+    volumes:
+      - mysql5619_test_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}"
+          mysql --no-defaults --socket=/run/mysqld/mysqld.sock --user=root
+          --execute="SELECT 1" >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  mysql5619_dev_data:
+  mysql5619_test_data:

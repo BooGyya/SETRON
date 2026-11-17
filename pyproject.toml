@@ -1,0 +1,42 @@
+[project]
+name = "setron"
+version = "0.1.0"
+description = "설비 소프트웨어 버전 및 Release Item 관리 프로그램"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "PySide6",
+    "SQLAlchemy",
+    "PyMySQL[rsa]",
+    "pandas",
+    "openpyxl",
+    "lxml",
+    "xlwings",
+    "openai>=3.42.1,<4",
+    "python-docx",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+setron = ["ui/assets/*.png", "ui/assets/*.svg", "ui/assets/*.ico", "ui/assets/*.txt", "ui/assets/fonts/*.ttf", "ui/assets/fonts/*.txt",
+          "ui/assets/ai-ver5/*.svg",
+          "ui/assets/import-ver5/*.svg",
+          "ui/assets/replay-ver5/*.svg",
+          "ui/assets/reports-ver5/*.svg",
+          "ui/assets/settings-ver5/*.svg",
+          "features/export/chartex/*.xml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

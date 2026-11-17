@@ -1,0 +1,558 @@
+"""6번 목록/상세: 정확한 전달 범위·검색/페이지·원문·전체 판정·복귀·무효화."""
+
+from dataclasses import replace
+from datetime import date, timedelta
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtTest import QSignalSpy, QTest
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
+
+from setron.features.aggregation.schemas import EquipmentRecord, PmVersion
+from setron.features.risk.schemas import RiskStatus
+from setron.features.version.schemas import ReleaseVersion
+from setron.features.version.service import FamilyReleases
+from setron.ui.app import create_window
+from setron.ui.dashboard_data import DashboardDrilldown, DashboardSource, EquipmentLocation, GroupBinding
+from setron.ui.equipment_data import equipment_data, filtered_tiles, validate_scope
+from setron.ui.heatmap_data import EquipmentSelection, GoalState
+from setron.ui.main_window import MainWindow
+from setron.ui.query_state import UNASSIGNED, FabOption, GroupOption, LineOption, QueryCatalog, QuerySelection, QueryState, SiteOption
+from setron.ui.theme import install_theme, svg_size
+
+
+DAY = date(2026, 10, 21)
+
+
+@pytest.fixture
+def source():
+    catalog = QueryCatalog(sites=(SiteOption("s1", "테스트 A"), SiteOption("s2", "테스트 B")),
+                           fabs=(FabOption("f1", "Fab A", "s1"), FabOption("empty", "빈 Fab", "s2")),
+                           lines=(LineOption("l1", "Line A", "s1", "f1"), LineOption("l2", "Fab 미지정 Line", "s1", None)),
+                           groups=(GroupOption("o2", "O2", "OXIDE"), GroupOption("o3", "O3", "OXIDE")))
+    families = {fid: FamilyReleases(fid, (ReleaseVersion(fid * 10 + 1, fid, "v99", 1),
+                                        ReleaseVersion(fid * 10 + 2, fid, "v2", 2))) for fid in (1001, 1002)}
+    records, locations = [], {}
+    for eid in range(1, 19):
+        pms = ((PmVersion("PM1", 101, 1001, "v99"), PmVersion("PM2", 101, 1001, "v2"),
+                PmVersion("PM3", 102, 1002, "v2")) if eid == 1 else
+               () if eid in (4, 5) else (PmVersion(None, 101, 1001, None if eid == 3 else "v2"),))
+        records.append(EquipmentRecord(eid, f"TEST-{eid:03}", DAY, "정규 위치가 아닌 원본 Site", "원본 Line", "TEST", pms, is_hpa=eid == 5))
+        locations[eid] = EquipmentLocation("s1", "P1", "f1", "l1") if eid == 1 else (
+            EquipmentLocation("s1", "P1", None, "l2") if eid == 2 else EquipmentLocation("s1" if eid < 10 else "s2"))
+    return DashboardSource(catalog=catalog, bindings=(GroupBinding("o2", (101,)), GroupBinding("o3", (102,))),
+                           records=tuple(records), locations=locations, families=families,
+                           targets={(101, 1001): 10012, (102, 1002): 10022},
+                           risks={eid: RiskStatus.RISK if eid in (1, 2) else RiskStatus.UNKNOWN if eid == 3 else RiskStatus.NO_RISK
+                                  for eid in range(1, 19)}, source_label="합성 예시 · 테스트 전용")
+
+
+@pytest.fixture(scope="module")
+def app():
+    result = QApplication.instance() or QApplication([])
+    install_theme(result)
+    yield result
+
+
+@pytest.fixture
+def window(app, source):
+    result = create_window(source)
+    result.show()
+    QTest.qWait(20)
+    yield result
+    result.close()
+    result.deleteLater()
+    app.processEvents()
+
+
+def open_list(window):
+    query = window.query_panel.apply_draft()
+    window.header.actions["equipment_list"].click()
+    return window.pages["equipment"], query
+
+
+def test_read_data_keeps_selected_and_whole_equipment_separate(source):
+    state = QueryState(source.catalog)
+    state.set_draft(QuerySelection(group_key="o3"))
+    snapshot = source.snapshot(state.apply())
+    data = equipment_data(snapshot, source)
+    assert data.snapshot is snapshot and len(data.details) == 1
+    detail = data.details[0]
+    assert detail.selected.goal is GoalState.MET
+    assert detail.whole.goal is GoalState.BELOW
+    assert len(detail.record.pms) == 3 and len(detail.status.families) == 2
+    assert snapshot.summary.compliant == 1 and snapshot.summary.below == 0
+    assert detail.whole.risk is RiskStatus.RISK
+
+
+def test_filters_are_literal_case_insensitive_and_never_expand_ids(source):
+    state = QueryState(source.catalog)
+    data = equipment_data(source.snapshot(state.apply()), source)
+    assert [t.equipment_id for t in filtered_tiles(data, (1, 2, 3), text="test-002")] == [2]
+    assert [t.equipment_id for t in filtered_tiles(data, (1, 2, 3), text="v99")] == [1]
+    assert filtered_tiles(data, (1, 2), text=".*") == ()
+    assert [t.equipment_id for t in filtered_tiles(data, (1, 2, 3), risk_only=True)] == [1, 2]
+    assert [t.equipment_id for t in filtered_tiles(data, (1, 2, 3), goal=GoalState.UNKNOWN)] == [3]
+    assert [t.equipment_id for t in filtered_tiles(data, (1, 2, 3), sort="code-desc")] == [3, 2, 1]
+    assert not validate_scope(data, (1, 1)) and not validate_scope(data, (999,))
+    with pytest.raises(ValueError):
+        filtered_tiles(data, (999,))
+
+
+def test_missing_same_day_record_uses_last_earlier_observation(source):
+    """QA Q-01 (11-09 결정): 기준일에 관측되지 않은 설비는 기준일 이전 마지막 관측으로 보여 준다."""
+    state = QueryState(source.catalog)
+    snapshot = source.snapshot(state.apply())
+    earlier = date(2026, 9, 21)
+    source.records = tuple(replace(record, base_date=earlier) if record.equipment_id == 1 else record
+                           for record in source.records)
+    data = equipment_data(snapshot, source)
+    detail = next(d for d in data.details if d.record.equipment_id == 1)
+    assert detail.record.base_date == earlier
+
+
+def test_observation_after_base_date_is_never_used(source):
+    state = QueryState(source.catalog)
+    snapshot = source.snapshot(state.apply())
+    source.records = tuple(replace(record, base_date=snapshot.base_date + timedelta(days=1))
+                           if record.equipment_id == 1 else record for record in source.records)
+    with pytest.raises(ValueError, match="기준일까지"):
+        equipment_data(snapshot, source)
+
+
+def test_initial_state_disables_list_and_does_not_auto_apply(window):
+    page = window.pages["equipment"]
+    assert window.query_state.applied is None and page.snapshot is None
+    assert not window.header.actions["equipment_list"].isEnabled()
+    assert not page.search.isEnabled() and page.model.rowCount() == 0
+
+
+def test_header_opens_applied_cohort_without_new_query_or_menu(window, monkeypatch):
+    source = window.pages["equipment"].source
+    calls, original = [], source.snapshot
+    def counted(query):
+        calls.append(query)
+        return original(query)
+    monkeypatch.setattr(source, "snapshot", counted)
+    menus = tuple(window.nav)
+    page, query = open_list(window)
+    assert calls == [query]
+    assert page.snapshot is window.pages["dashboard"].snapshot is window.pages["heatmap"].snapshot
+    assert page.scope_ids == tuple(range(1, 19))
+    assert window.route == "equipment" and window.header.title.text() == "설비 목록"
+    assert window.nav["heatmap"].isChecked() and tuple(window.nav) == menus and "equipment" not in menus
+    assert page.model.rowCount() == 12 and page.metrics["total"].value.text() == "18대"
+
+
+@pytest.mark.parametrize("risk_only,ids", [(False, (1, 2, 3, 4, 5, 6, 7, 8, 9)), (True, (1, 2))])
+def test_dashboard_cell_and_candidate_deliver_different_exact_cohorts(window, source, risk_only, ids):
+    source.model_names = {101: "M-O2", 102: "M-O3"}
+    source.family_names = {1001: "O2 구UI", 1002: "O3 통합UI"}
+    window.resize(960, 600)
+    window.query_panel.apply_draft()
+    dashboard = window.pages["dashboard"]
+    row = next(index for index, row in enumerate(dashboard.snapshot.rows, 1) if row.position == ("s1", None))
+    # 원본 구역 전체 행이 아니라 Site 전체에 해당하는 정확한 목록을 명시적으로 전달
+    request = DashboardDrilldown(dashboard.snapshot.query, DAY, "테스트 A", ids, risk_only)
+    dashboard.drilldown_requested.emit(request)
+    page = window.pages["equipment"]
+    drawer = window.equipment_list_drawer
+    assert window.route == "dashboard" and drawer.is_open and page.scope_ids == ids
+    assert drawer.panel.isAncestorOf(page.table)
+    assert drawer.panel.width() == window.equipment_drawer.panel_width
+    assert not hasattr(drawer, "expand_button") and drawer.close_button.isVisible()
+    QTest.qWait(20)
+    assert drawer.title.y() > drawer.close_button.geometry().bottom()
+    assert page.goal_filter.itemText(0) == "전체"
+    search_top = page.search.mapTo(page.list_card, QPoint()).y()
+    table_top = page.table.mapTo(page.list_card, QPoint()).y()
+    assert 0 <= table_top - search_top - page.search.height() <= 16
+    viewport = drawer.list_scroll.viewport()
+    table_x = page.table.mapTo(viewport, QPoint()).x()
+    assert 0 <= table_x and table_x + page.table.width() <= viewport.width()
+    assert page.table.horizontalScrollBar().maximum() == drawer.list_scroll.horizontalScrollBar().maximum() == 0
+    model = page.table.model()
+    assert model is page.model
+    columns = range(model.columnCount())
+    # 위험 후보 배지에서 연 목록은 판정 기준 분류(적용/미적용 위험) 열을 더한다. 근거가 없으면 만들지 않고 '근거 미연결'.
+    risk_column = ("위험 기준",) if risk_only else ()
+    risk_cell = ("근거 미연결",) if risk_only else ()
+    assert tuple(model.headerData(column, Qt.Orientation.Horizontal) for column in columns) == (
+        "설비명", "모델", "계열", "적용현황", "위험버전", *risk_column,
+    )
+    assert all(not page.table.isColumnHidden(column) for column in columns)
+    assert sum(page.table.columnWidth(column) for column in columns) <= page.table.viewport().width()
+    assert page.table.horizontalHeader().defaultAlignment() == Qt.AlignmentFlag.AlignCenter
+    assert all(model.index(row, column).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+               for row in range(model.rowCount()) for column in columns)
+    assert model.rows[:2] == (
+        ("TEST-001", "M-O2\nM-O3", "O2 구UI\nO3 통합UI", "목표 미달\n복수 SW\nPM 불일치", "위험 후보", *risk_cell),
+        ("TEST-002", "M-O2", "O2 구UI", "목표 달성", "위험 후보", *risk_cell),
+    )
+    if not risk_only:
+        assert model.rows[2][4] == "미확인"
+        assert model.rows[3] == ("TEST-004", "TEST", "—", "정보 부족", "후보 아님")
+        assert model.rows[4] == ("TEST-005", "TEST", "—", "HPA · 분석 제외", "분석 제외")
+    assert model.index(1, 3).data(Qt.ItemDataRole.ForegroundRole) != model.index(1, 4).data(Qt.ItemDataRole.ForegroundRole)
+    assert model.index(1, 4).data(Qt.ItemDataRole.ToolTipRole).startswith("위험 후보")
+    if risk_only:
+        assert model.index(1, 5).data(Qt.ItemDataRole.ToolTipRole) == "세부 근거 미연결"
+    assert tuple(t.equipment_id for t in page.visible_tiles) == ids
+    assert page.metrics["total"].value.text() == f"{len(ids)}대"
+    assert page.goal_filter.size() == page.sort.size()
+    assert page.search.width() > page.goal_filter.width()
+    page.search.setText(f"TEST-{ids[-1]:03}")
+    hidden = QSignalSpy(drawer.panel_hidden)
+    drawer.close_button.click()
+    assert hidden.count() or hidden.wait(600)
+    assert window.route == "dashboard" and drawer.isHidden()
+    assert page.isAncestorOf(page.table)
+    assert page.model.ids == (ids[-1],) and page.snapshot is dashboard.snapshot
+    assert page.table.model().headings == (
+        "설비명", "Site / 원본 구역\nFab · Line", "모델 · 계열", "설치 버전", "선택 SW N 판정", "설비 위험 판정 / 근거",
+    )
+    assert page.table.model().index(0, 0).data(Qt.ItemDataRole.TextAlignmentRole) != Qt.AlignmentFlag.AlignCenter
+    assert not drawer.is_open and not window.header.back.isEnabled()
+    assert row > 0
+
+
+def test_actual_dashboard_general_cell_is_not_replaced_by_risk_only(window):
+    window.query_panel.apply_draft()
+    dashboard = window.pages["dashboard"]
+    row = next(index for index, row in enumerate(dashboard.snapshot.rows, 1) if row.position == ("s1", "P1"))
+    column = len(dashboard.snapshot.rows[row - 1].cells)
+    dashboard.matrix_buttons[row, column].click()
+    page = window.pages["equipment"]
+    assert page.scope_ids == (1, 2)
+    window.header.back.click()
+    assert window.route == "dashboard"
+    dashboard.risk_buttons[row, column].click()
+    assert page.scope_ids == (1, 2)
+
+
+def test_dashboard_panel_row_detail_and_back_preserve_the_same_filtered_list(window):
+    query = window.query_panel.apply_draft()
+    dashboard = window.pages["dashboard"]
+    request = DashboardDrilldown(query, DAY, "테스트 A", (1, 2), False)
+    dashboard.drilldown_requested.emit(request)
+    drawer = window.equipment_list_drawer
+    page = window.pages["equipment"]
+    page.search.setText("TEST-002")
+    table = page.table
+    table.setCurrentIndex(table.model().index(0, 0))
+    table.setFocus()
+    QTest.keyClick(table, Qt.Key.Key_Return)
+    QApplication.processEvents()
+    assert window.route == "dashboard" and drawer.is_open and drawer.request.equipment_id == 2
+    assert page.mode == "list" and page.selected_id == 2 and page.detail_card.isHidden()
+    assert drawer.panel.isAncestorOf(drawer.info_card)
+    assert drawer.risk_card.isVisibleTo(drawer.body_widget)
+    assert drawer.list_scroll.isHidden() and not drawer.scroll.isHidden()
+    assert not drawer.back_button.text() and not drawer.back_button.icon().isNull()
+
+    drawer.back_button.click()
+    assert window.route == "dashboard" and drawer.is_open
+    assert page.mode == "list" and page.model.ids == (2,) and page.search.text() == "TEST-002"
+    assert not drawer.list_scroll.isHidden() and drawer.scroll.isHidden()
+    assert drawer.panel.isAncestorOf(page.table)
+
+    page.open_row(0)
+    window.header.back.click()
+    assert window.route == "dashboard" and drawer.is_open
+    assert page.mode == "list" and page.model.ids == (2,) and page.search.text() == "TEST-002"
+    window.header.back.click()
+    assert not drawer.is_open and not window.header.back.isEnabled()
+
+
+def test_dashboard_risk_column_and_card_include_risky_sw_outside_selected_group(window, source):
+    source.risk_evaluator = lambda record: (RiskStatus.RISK if any(pm.group_id == 101 for pm in record.pms)
+                                            else RiskStatus.NO_RISK)
+    window.query_panel.set_draft(QuerySelection(group_key="o3"))
+    query = window.query_panel.apply_draft()
+    window.pages["dashboard"].drilldown_requested.emit(DashboardDrilldown(query, DAY, "O3", (1,), False))
+    page = window.pages["equipment"]
+    detail = page.data.details[0]
+    assert detail.selected.risk is RiskStatus.NO_RISK and detail.whole.risk is RiskStatus.RISK
+    assert page.model.rows[0][4] == "위험 후보"
+    assert page.open_row(0)
+    assert window.equipment_list_drawer.risk_status_badge.text() == "위험"
+
+
+def test_pagination_search_goal_and_sort_only_change_display(window):
+    page, query = open_list(window)
+    snapshot = page.snapshot
+    assert page.model.ids == tuple(range(1, 13))
+    page.next.click()
+    assert page.page_index == 1 and page.model.ids == tuple(range(13, 19))
+    assert page.page_caption.text() == "2 / 2" and not page.next.isEnabled()
+    page.search.setText("test-003")
+    assert page.page_index == 0 and page.model.ids == (3,)
+    page.search.clear()
+    page.goal_filter.setCurrentIndex(page.goal_filter.findData(GoalState.UNKNOWN))
+    assert page.model.ids == (3, 4)
+    page.goal_filter.setCurrentIndex(0)
+    page.sort.setCurrentIndex(1)
+    assert page.model.ids[0] == 18
+    assert len(page.visible_tiles) == 18
+    assert page.snapshot is snapshot and window.query_state.applied is query
+    assert page.metrics["total"].value.text() == "18대"
+
+
+def test_scope_cannot_be_silently_widened_by_search(window):
+    page, query = open_list(window)
+    request = DashboardDrilldown(query, DAY, "한 호기 범위", (2,), True)
+    assert page.open_scope(request)
+    page.search.setText("TEST-001")
+    assert page.model.ids == () and page.scope_ids == (2,)
+    page.search.clear()
+    assert page.model.ids == (2,) and page.scope_ids == (2,)
+
+
+def test_keyboard_row_opens_detail_and_back_keeps_filters_page_and_ids(window):
+    page, _ = open_list(window)
+    page.sort.setCurrentIndex(1)
+    page.next.click()
+    previous = page.model.ids
+    index = page.model.index(2, 0)
+    page.table.setCurrentIndex(index)
+    page.table.setFocus()
+    QTest.keyClick(page.table, Qt.Key.Key_Return)
+    drawer = window.equipment_drawer
+    assert page.mode == "list" and page.selected_id == previous[2]
+    assert drawer.is_open and drawer.request.equipment_id == previous[2]
+    assert not window.query_panel.isHidden() and window.header.title.text() == "설비 목록"
+    drawer.close_button.click()
+    assert page.mode == "list" and not window.query_panel.isHidden()
+    assert page.page_index == 1 and page.model.ids == previous and page.sort.currentIndex() == 1
+
+
+def test_heatmap_direct_detail_and_back_preserve_view_and_selection(window):
+    window.query_panel.apply_draft()
+    window.navigate("heatmap")
+    heatmap = window.pages["heatmap"]
+    heatmap.view_toggle.setChecked(True)
+    heatmap.tile_buttons[1].click()
+    page = window.pages["equipment"]
+    drawer = window.equipment_drawer
+    assert window.route == "heatmap" and page.mode == "list" and page.selected_id == 1
+    assert drawer.isVisible()
+    assert page.detail_model.rowCount() == 3
+    assert drawer.goal_badge.text() == GoalState.BELOW.value and "위험 후보" in drawer.risk_badge.text()
+    drawer.close_button.click()
+    assert window.route == "heatmap" and heatmap.view_toggle.isChecked()
+    assert heatmap.selected_id == 1 and heatmap.tile_buttons[1].isChecked()
+
+
+def test_detail_does_not_call_subset_goal_whole_equipment_success(window):
+    window.query_panel.set_draft(QuerySelection(group_key="o3"))
+    page, query = open_list(window)
+    page.open_detail(EquipmentSelection(query, DAY, 1), origin="list")
+    detail = next(item for item in page.data.details if item.record.equipment_id == 1)
+    assert detail.selected.goal is GoalState.MET and detail.whole.goal is GoalState.BELOW
+    assert GoalState.BELOW.value in page.detail_goal_badge.text()
+    assert page.detail_model.rowCount() == 3 and page.detail_table.isVisibleTo(page.detail_card)
+    assert page.observation_date.text() == f"관측일 {DAY}" and page.back_button.isVisibleTo(page.detail_card)
+    assert window.notice.isHidden() and page.result_status.isHidden() and page.context.isHidden()
+    assert page.detail_location.isHidden() and page.scope_note.isHidden() and page.evidence.isHidden()
+    assert not page.detail_summary.isVisibleTo(page.detail_card)
+    visible = [label.text() for label in page.detail_card.findChildren(QLabel) if label.isVisibleTo(page.detail_card)]
+    removed = (" · 실제 관측일", "물리 설비 1대 · 전체 SW 관측", "PM 배치 메모", "위험 근거:", "관측 출처:",
+               "관측된 SW 카드와 원문 표는", "현재 설비군 밖의 SW도 표시", "모듈 수·필수 SW 목록은 미확정")
+    assert not any(fragment in text for fragment in removed for text in visible)
+    assert page.metrics["rate"].value.text() == "100.0%"  # 선택 SW 지표는 그대로
+    assert page.snapshot.query is query and page.scope_ids == (1,)
+
+
+@pytest.mark.parametrize("eid,goal", [(1, GoalState.BELOW), (2, GoalState.MET), (3, GoalState.UNKNOWN),
+                                      (4, GoalState.UNKNOWN), (5, GoalState.EXCLUDED)])
+def test_representative_states_use_one_reusable_detail(window, eid, goal):
+    page, query = open_list(window)
+    assert page.open_detail(EquipmentSelection(query, DAY, eid))
+    assert goal.value in page.detail_goal_badge.text()
+    assert window.pages.keys() == {"dashboard", "heatmap", "equipment", "versions", "data", "items", "import", "ai",
+                                   "replay", "reports", "settings", "export"}
+    if eid == 3:
+        assert page.detail_model.rows[0][2] == "미입력" and "버전 값이 비어" in page.detail_model.rows[0][5]
+    if eid in (4, 5):
+        assert not page.detail_model.rows and page.detail_table.isHidden()
+    if eid == 4:
+        assert page.evidence.isVisibleTo(page.detail_card) and page.evidence.text() == "SW 관측이 없습니다."
+    if eid == 5:
+        assert page.evidence.isHidden() and page.judgement["goal"][0].text() == "분석 제외"
+
+
+def test_draft_changes_do_not_change_detail_but_reapply_does(window):
+    page, query = open_list(window)
+    page.open_detail(EquipmentSelection(query, DAY, 1))
+    snapshot = page.snapshot
+    window.query_panel.select("site_key", "s2")
+    assert page.snapshot is snapshot and page.selected_id == 1 and page.mode == "detail"
+    window.query_panel.apply_draft()
+    assert page.snapshot is not snapshot and page.selected_id is None and page.mode == "list"
+    assert page.detail_model.rows == () and page.detail_card.isHidden()
+    assert not page.open_detail(EquipmentSelection(query, DAY, 1))
+
+
+def test_invalid_scope_date_ids_and_old_query_are_rejected(window):
+    page, query = open_list(window)
+    assert not page.open_scope(DashboardDrilldown(query, DAY, "잘못된 범위", (999,)))
+    assert not page.open_scope(DashboardDrilldown(query, DAY, "중복", (1, 1)))
+    assert not page.open_scope(DashboardDrilldown(query, DAY, "잘못된 위험", (3,), True))
+    assert not page.open_detail(EquipmentSelection(query, date(2026, 9, 21), 1))
+    assert not page.open_detail(EquipmentSelection(query, DAY, 999))
+    old = page.snapshot
+    window.query_panel.apply_draft()
+    assert not page.accept_result(query, old)
+    assert not page.open_scope(DashboardDrilldown(query, DAY, "이전 요청", (1,)))
+
+
+@pytest.mark.parametrize("selection,ids", [(QuerySelection(fab_key="f1"), (1,)), (QuerySelection(line_key="l2"), (2,)),
+                                        (QuerySelection(fab_key=UNASSIGNED, line_key="l2"), (2,)),
+                                        (QuerySelection(fab_key="empty"), ())])
+def test_canonical_fab_line_are_not_inferred_from_raw_area(window, selection, ids):
+    window.query_panel.set_draft(selection)
+    page, _ = open_list(window)
+    assert page.scope_ids == ids
+    assert page.metrics["total"].value.text() == f"{len(ids)}대"
+    if ids == (1,):
+        assert "Fab Fab A" in page.model.rows[0][1] and "Line Line A" in page.model.rows[0][1]
+    if not ids:
+        assert page.model.rowCount() == 0 and page.metrics["rate"].value.text() == "계산 불가"
+
+
+def test_catalog_replacement_clears_list_detail_and_header_action(window):
+    page, query = open_list(window)
+    old = page.snapshot
+    page.open_detail(EquipmentSelection(query, DAY, 1))
+    window.set_query_catalog(page.source.catalog)
+    assert page.snapshot is None and page.data is None and page.selected_id is None
+    assert page.model.rowCount() == page.detail_model.rowCount() == 0
+    assert not page.accept_result(query, old) and not window.header.actions["equipment_list"].isEnabled()
+
+
+def test_provider_failure_clears_and_retry_rebuilds_list(window, monkeypatch):
+    page, _ = open_list(window)
+    original = page.source.snapshot
+    def fail(query):
+        raise RuntimeError("실패 예시")
+    monkeypatch.setattr(page.source, "snapshot", fail)
+    window.query_panel.apply_draft()
+    assert page.snapshot is None and page.model.rowCount() == 0 and "실패" in page.result_status.text()
+    assert not window.header.actions["equipment_list"].isEnabled()
+    monkeypatch.setattr(page.source, "snapshot", original)
+    window.query_panel.apply_draft()
+    assert page.model.rowCount() == 12 and window.header.actions["equipment_list"].isEnabled()
+
+
+def test_search_empty_and_candidate_empty_do_not_change_shared_totals(window):
+    page, query = open_list(window)
+    page.search.setText("없는 호기")
+    assert page.model.rowCount() == 0 and "맞는 설비가 없습니다" in page.message.text()
+    assert page.metrics["total"].value.text() == "18대"
+    assert page.open_scope(DashboardDrilldown(query, DAY, "후보", (1, 2), True))
+    page.goal_filter.setCurrentIndex(page.goal_filter.findData(GoalState.EXCLUDED))
+    assert page.model.rowCount() == 0 and not page.next.isEnabled()
+
+
+def test_raw_version_plain_text_not_replaced_and_all_pm_rows_remain(window, source, monkeypatch):
+    raw = "v90.1.0.41(H) + Hotfix <검토 중> " * 8
+    monkeypatch.setattr(source, "records", tuple(replace(r, pms=tuple(replace(pm, version_raw=raw) if pm.pm_name == "PM1" else pm
+                                                                   for pm in r.pms)) for r in source.records))
+    page, query = open_list(window)
+    page.open_detail(EquipmentSelection(query, DAY, 1))
+    assert page.detail_model.rows[0][2] == raw and page.detail_model.rowCount() == 3
+    index = page.detail_model.index(0, 2)
+    assert page.detail_model.data(index, Qt.ItemDataRole.ToolTipRole) == raw
+    assert "릴리즈 노트에 없는" in page.detail_model.rows[0][5]
+
+
+def test_auxiliary_route_keeps_parent_navigation_and_rejects_invalid_registration(app):
+    window = MainWindow()
+    window.register_page("heatmap", QWidget())
+    window.register_auxiliary_page("sub", QWidget(), parent_key="heatmap", title="하위 화면")
+    assert window.navigate("sub") and window.header.title.text() == "하위 화면"
+    assert window.nav["heatmap"].isChecked() and sum(n.isChecked() for n in window.nav.values()) == 1
+    with pytest.raises(ValueError):
+        window.register_auxiliary_page("sub", QWidget(), parent_key="heatmap", title="중복")
+    with pytest.raises(ValueError):
+        window.register_auxiliary_page("other", QWidget(), parent_key="unknown", title="미등록")
+    window.close()
+    window.deleteLater()
+
+
+def test_return_to_heatmap_restores_origin_scroll_after_layout(window):
+    window.resize(960, 600)
+    window.query_panel.apply_draft()
+    window.navigate("heatmap")
+    heatmap = window.pages["heatmap"]
+    heatmap.view_toggle.setChecked(True)
+    QTest.qWait(100)
+    window.scroll.verticalScrollBar().setValue(350)
+    before = window.scroll.verticalScrollBar().value()
+    assert before == 350
+    heatmap.tile_buttons[1].click()
+    window.equipment_drawer.close_button.click()
+    QTest.qWait(100)
+    assert window.route == "heatmap" and window.scroll.verticalScrollBar().value() == before
+
+
+def test_hpa_raw_observation_is_visible_without_comparison(window, source, monkeypatch):
+    records = tuple(replace(r, pms=(PmVersion(None, 101, 1001, "HPA 원문"),)) if r.is_hpa else r for r in source.records)
+    monkeypatch.setattr(source, "records", records)
+    page, query = open_list(window)
+    page.open_detail(EquipmentSelection(query, DAY, 5))
+    assert page.detail_model.rows[0][2:5] == ("HPA 원문", "—", "분석 제외")
+    assert "HPA는 N 비교에서 제외" in page.detail_model.rows[0][5]
+
+
+@pytest.mark.parametrize("size", [(1600, 960), (1100, 800), (960, 600)])
+@pytest.mark.parametrize("mode", ["list", "detail"])
+def test_responsive_layout_scrolls_tables_not_main_content(window, size, mode):
+    window.navigate("heatmap")
+    page, query = open_list(window)
+    if mode == "detail":
+        page.open_detail(EquipmentSelection(query, DAY, 1), origin="list")
+    window.resize(*size)
+    QTest.qWait(100)
+    assert window.scroll.horizontalScrollBar().maximum() == 0
+    current = page.detail_card if mode == "detail" else page.list_card
+    point = current.mapTo(page, QPoint(0, 0))
+    assert point.x() + current.width() <= page.width()
+    table = page.detail_table if mode == "detail" else page.table
+    if size[0] == 960:
+        assert table.horizontalScrollBar().maximum() > 0
+    if mode == "list":
+        controls = (page.search, page.goal_filter, page.sort)
+        bounds = tuple(QRect(control.mapTo(page.list_card, QPoint()), control.size()) for control in controls)
+        assert all(control.isVisibleTo(page.list_card) and page.list_card.rect().contains(rect)
+                   for control, rect in zip(controls, bounds))
+        assert len({rect.top() for rect in bounds}) == len({rect.height() for rect in bounds}) == 1
+        assert all(left.right() < right.left() for left, right in zip(bounds, bounds[1:]))
+        assert page.goal_filter.size() == page.sort.size()
+        for combo in (page.goal_filter, page.sort):
+            style = combo.property("setronOriginalStyle") or combo.styleSheet()
+            assert "caret-down.svg" in style
+        visible_labels = [label for label in page.list_card.findChildren(QLabel) if label.isVisibleTo(page.list_card)]
+        assert not any(label.text().startswith(("결과 ", "좁은 창에서는 표를", "12대씩")) for label in visible_labels)
+        heading = next(label for label in visible_labels if label.text() == "설비 전체 목록")
+        title_rect = QRect(heading.mapTo(page.list_card, QPoint()), heading.size())
+        return_rect = QRect(page.return_button.mapTo(page.list_card, QPoint()), page.return_button.size())
+        assert page.list_card.rect().contains(return_rect) and title_rect.right() < return_rect.left()
+        assert max(title_rect.top(), return_rect.top()) <= min(title_rect.bottom(), return_rect.bottom())
+        assert return_rect.bottom() < min(rect.top() for rect in bounds)
+        assert tuple(page.metrics) == ("rate", "total", "upgrade", "risk")
+        assert page.metrics["rate"].property("appearanceRate") == "background"
+        assert not any(label.text() == "목록 전달 범위 전체 요약" for label in page.list_view.findChildren(QLabel))
+        positions = [(card, card.mapTo(page, QPoint(0, 0))) for card in page.metrics.values()]
+        assert all(pos.y() + card.height() <= point.y() and pos.x() + card.width() <= page.width()
+                   for card, pos in positions)
+        if size[0] == 1600:
+            assert len({pos.y() for _, pos in positions}) == 1
+        elif size[0] == 960:
+            assert len({pos.y() for _, pos in positions}) > 1
+    for card in page.metrics.values():
+        assert card.picture.isHidden()
+        assert card.picture.pixmap().deviceIndependentSize().toSize() == svg_size(card.picture.property("assetFile"))
