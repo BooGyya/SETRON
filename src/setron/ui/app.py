@@ -48,7 +48,7 @@ from setron.ui.chat_page import ChatPage
 from setron.ui.import_delete_gateway import ImportDeleteGateway
 from setron.ui.import_extraction import rule_extractor
 from setron.ui.import_page import ImportPage, saver_from_env
-from setron.ui.read_worker import BackgroundRead, ReadRequest
+from setron.ui.read_worker import BackgroundRead, ReadRequest, collect_garbage_when_idle
 from setron.ui.release_refresh import capture_release_context, is_database_import_saver
 from setron.ui.replay_page import ReplayPage
 from setron.ui.reports_page import ReportsPage
@@ -1643,4 +1643,8 @@ def main(argv: list[str] | None = None) -> int:
     startup.request.completed.connect(finish_startup)
     # SETRON_DB_* 설정 확인과 첫 DB 읽기는 창을 표시한 뒤 워커에서 시작한다.
     QTimer.singleShot(0, startup, lambda: startup.request.start(BackgroundRead(dashboard_source_from_env)) if startup.accepting else None)
-    return app.exec()
+    restore_gc = collect_garbage_when_idle(app)
+    try:
+        return app.exec()
+    finally:
+        restore_gc()
