@@ -222,6 +222,27 @@ def _plain(row):
                 if isinstance(v, bytes) else v) for k, v in row.items()}
 
 
+def _restore_reference(tx, table, field, value):
+    message = "삭제 당시 연결 자료를 찾을 수 없어 복원할 수 없습니다. 자료를 다시 확인해 주세요."
+    require(type(value) is int, message)
+    try:
+        tx.get(table, {field: value})
+    except LookupError:
+        require(False, message)
+
+
+def _restore_values(tx, table, row, *, omit=()):
+    """새 ID로 만드는 삭제 행의 활성 참조만 확인한다. 보존한 원본 ID를 현재 행으로 쓰지 않는다."""
+    values = {key: value for key, value in row.items() if key not in omit}
+    for reference in tx.repository.table(table).foreign_keys:
+        value = values.get(reference.parent.name)
+        if value is not None:
+            _restore_reference(tx, reference.column.table.name, reference.column.name, value)
+    for group_id in values.get("target_group_ids") or ():
+        _restore_reference(tx, "equipment_group", "group_id", group_id)
+    return values
+
+
 @dataclass(frozen=True)
 class StatusSheet:
     batch_id: int
@@ -593,9 +614,8 @@ class DataAdminService:
         count = 0
         for row in removed.get("rows") or ():
             data = row.get("data") or {}
-            snapshot = dict(data.get("snapshot") or {})
-            require(bool(snapshot), "이 삭제 기록에는 되살릴 자료가 없습니다.")
-            snapshot.pop("snapshot_id", None)
+            require(bool(data.get("snapshot")), "이 삭제 기록에는 되살릴 자료가 없습니다.")
+            snapshot = _restore_values(tx, "equipment_snapshot", data["snapshot"], omit=("snapshot_id",))
             snapshot["base_date"] = date.fromisoformat(snapshot["base_date"])
             require(not self.rows.rows(tx, "equipment_snapshot", equipment_id=snapshot["equipment_id"],
                                        base_date=snapshot["base_date"]),
@@ -603,12 +623,14 @@ class DataAdminService:
             created = tx.insert("equipment_snapshot", snapshot)
             version_ids = {}
             for version in data.get("versions") or ():
-                values = {k: v for k, v in version.items() if k != "equipment_version_id"}
+                values = _restore_values(tx, "equipment_version", version, omit=("equipment_version_id", "snapshot_id"))
                 values["snapshot_id"] = created["snapshot_id"]
                 version_ids[version["equipment_version_id"]] = tx.insert("equipment_version", values)["equipment_version_id"]
             for pm in data.get("pms") or ():
-                values = {k: v for k, v in pm.items() if k != "pm_id"}
+                values = _restore_values(tx, "equipment_pm", pm, omit=("pm_id", "snapshot_id", "equipment_version_id"))
                 values["snapshot_id"] = created["snapshot_id"]
+                require(pm.get("equipment_version_id") is None or pm["equipment_version_id"] in version_ids,
+                        "삭제 당시 연결 자료를 찾을 수 없어 복원할 수 없습니다. 자료를 다시 확인해 주세요.")
                 values["equipment_version_id"] = version_ids.get(pm.get("equipment_version_id"))
                 tx.insert("equipment_pm", values)
             count += 1
@@ -1257,7 +1279,7 @@ class DataAdminService:
                 "이미 되살린 삭제입니다.")
         release_id = removed["release_version_id"]
         if removed.get("release"):
-            values = {k: v for k, v in removed["release"].items() if k != "release_version_id"}
+            values = _restore_values(tx, "release_version", removed["release"], omit=("release_version_id",))
             if values.get("released_at"):
                 values["released_at"] = date.fromisoformat(values["released_at"][:10])
             require(all(_text(r["version_raw"]) != values["version_raw"]
@@ -1265,12 +1287,16 @@ class DataAdminService:
                     f"'{values['version_raw']}' 버전이 다시 생겨 되살릴 수 없습니다.")
             release_id = tx.insert("release_version", values)["release_version_id"]
             self._relink(tx, values["family_id"], values["version_raw"], release_id)
+        else:
+            _restore_reference(tx, "release_version", "release_version_id", release_id)
         for entry in removed.get("items") or ():
             item_id = entry["item_id"]
             if not entry.get("kept"):
-                values = {k: v for k, v in entry["item"].items() if k != "item_id"}
+                values = _restore_values(tx, "item", entry["item"], omit=("item_id",))
                 item_id = tx.insert("item", values)["item_id"]
-            link = {k: v for k, v in entry["link"].items() if k not in ("release_version_id", "item_id")}
+            else:
+                _restore_reference(tx, "item", "item_id", item_id)
+            link = _restore_values(tx, "release_version_item", entry["link"], omit=("release_version_id", "item_id"))
             tx.insert("release_version_item", {"release_version_id": release_id, "item_id": item_id, **link})
         tx.insert("import_batch", {"source_type": "MANUAL", "raw_data": {"schema": 1, "management_restore_release": {
             "batch_id": journal_id, "label": removed.get("label"), "release_version_id": release_id}}})

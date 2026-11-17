@@ -19,6 +19,8 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
 from setron.features.export.schemas import ExportResult, ExportStatus
+from setron.features.peer_sync import PeerSyncError, reconcile
+from setron.features.storage.repository import StorageRepository
 from setron.features.storage.validation import TABLE_NAMES
 from setron.infrastructure.database import Database, DatabaseConnectionError, DatabaseError
 
@@ -27,7 +29,8 @@ MAX_INSERT_BYTES = 1024 * 1024
 SQL_MODE = "NO_AUTO_VALUE_ON_ZERO"
 
 
-def export_database(database: Database, path: str | Path, *, now: Callable[[], datetime] = datetime.now) -> ExportResult:
+def export_database(database: Database, path: str | Path, *, now: Callable[[], datetime] = datetime.now,
+                    peer_id: str | None = None) -> ExportResult:
     """관리 테이블 전체를 ``path``(.sql)에 저장하고 성공 또는 실패 원인을 돌려준다.
 
     고유한 임시파일을 같은 폴더에 작성한 뒤 교체하므로, 실패하면 기존 SQL 파일을
@@ -41,10 +44,10 @@ def export_database(database: Database, path: str | Path, *, now: Callable[[], d
         with NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent,
                                 prefix=f".{path.name}.", suffix=".part", delete=False) as file:
             temp = Path(file.name)
-            with _snapshot(database) as connection:
+            with _snapshot(database, peer_id=peer_id) as connection:
                 version = connection.exec_driver_sql("SELECT VERSION()").scalar()
                 name = connection.exec_driver_sql("SELECT DATABASE()").scalar()
-                counts = {table: connection.exec_driver_sql(f"SELECT COUNT(*) FROM `{table}`").scalar()
+                counts = {table: connection.exec_driver_sql(f"SELECT COUNT(*) FROM `{table}` FOR UPDATE").scalar()
                           for table in TABLE_NAMES}
                 total = sum(counts.values())
                 file.write(_header(now(), version, name, len(counts), total))
@@ -63,9 +66,9 @@ def export_database(database: Database, path: str | Path, *, now: Callable[[], d
     except PermissionError:
         return ExportResult(ExportStatus.FAILED, path,
                             "파일을 저장할 수 없습니다. 같은 이름의 파일이 열려 있는지, 폴더 쓰기 권한이 있는지 확인해 주세요.")
-    except (DatabaseError, SQLAlchemyError) as error:
+    except (DatabaseError, SQLAlchemyError, PeerSyncError) as error:
         # SQLAlchemy의 원래 예외에는 쿼리와 연결 정보가 들어갈 수 있어 직접 표시하지 않는다.
-        detail = str(error) if isinstance(error, DatabaseError) else "MySQL 연결 상태와 테이블 조회 권한을 확인해 주세요."
+        detail = str(error) if isinstance(error, (DatabaseError, PeerSyncError)) else "MySQL 연결 상태와 테이블 조회 권한을 확인해 주세요."
         return ExportResult(ExportStatus.FAILED, path, f"DB 자료를 읽지 못했습니다: {detail}")
     except OSError as error:
         return ExportResult(ExportStatus.FAILED, path, f"파일을 저장하지 못했습니다: {error.strerror or error}")
@@ -76,7 +79,7 @@ def export_database(database: Database, path: str | Path, *, now: Callable[[], d
 
 
 @contextmanager
-def _snapshot(database: Database) -> Iterator[Connection]:
+def _snapshot(database: Database, *, peer_id=None) -> Iterator[Connection]:
     """서버 기본 격리 수준과 무관한 동일 시점의 자료를 읽고 연결 설정을 복구한다."""
     try:
         connection = database.engine.connect()
@@ -92,6 +95,10 @@ def _snapshot(database: Database) -> Iterator[Connection]:
                 # SHOW CREATE TABLE의 따옴표·주석도 파일의 SQL 모드와 같은 규칙으로 생성한다.
                 connection.exec_driver_sql(f"SET SESSION sql_mode = '{SQL_MODE}'")
                 connection.exec_driver_sql("START TRANSACTION WITH CONSISTENT SNAPSHOT")
+                # 같은 트랜잭션에서 업무 행을 잠그고 교환 이력과 함께 내보낸다.
+                # export의 SELECT도 locking read여야 앞선 consistent snapshot과 섞이지 않는다.
+                repository = StorageRepository(connection)
+                reconcile(connection, repository, peer_id=peer_id)
                 yield connection
         finally:
             if mode is not None and not connection.invalidated:
@@ -100,7 +107,7 @@ def _snapshot(database: Database) -> Iterator[Connection]:
 
 def _write_rows(connection: Connection, file: TextIO, table: str) -> None:
     """서버 커서와 크기를 제한한 INSERT로 누적 자료의 메모리 사용을 제한한다."""
-    result = connection.exec_driver_sql(f"SELECT * FROM `{table}` ORDER BY 1",
+    result = connection.exec_driver_sql(f"SELECT * FROM `{table}` ORDER BY 1 FOR UPDATE",
                                         execution_options={"stream_results": True})
     try:
         columns = ", ".join(f"`{column}`" for column in result.keys())

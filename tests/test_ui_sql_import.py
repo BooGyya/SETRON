@@ -58,12 +58,12 @@ def test_sql_requires_fresh_review_for_mode_and_confirmation_before_apply(own, t
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), "SQL 파일 (*.sql)"))
     sql.select_button.click()
     assert path.name in sql.file_label.text() and not sql.apply_button.isEnabled()
-    assert sql.mode_combo.currentData() == "add" and not calls
+    assert sql.mode_combo.currentData() == "review" and not calls
     sql.preview_button.click()
     assert sql.busy and not page.tabs.isEnabled() and not sql.mode_combo.isEnabled()
     preview_gate.set()
     until(lambda: not sql.busy)
-    assert [call[:2] for call in calls] == [(path, "add")]
+    assert [call[:2] for call in calls] == [(path, "review")]
     assert calls[0][2] != ui_thread
     assert sql.apply_button.isEnabled()
 
@@ -71,7 +71,7 @@ def test_sql_requires_fresh_review_for_mode_and_confirmation_before_apply(own, t
     assert not sql.apply_button.isEnabled() and not sql.details.text()
     sql.preview_button.click()
     until(lambda: not sql.busy)
-    assert [call[:2] for call in calls] == [(path, "add"), (path, "overwrite")]
+    assert [call[:2] for call in calls] == [(path, "review"), (path, "overwrite")]
     assert sql.apply_button.isEnabled()
     confirmed = False
 

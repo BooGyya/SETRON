@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from threading import Event, Thread
 from datetime import date, datetime
 
 import pymysql
@@ -12,6 +13,8 @@ from sqlalchemy import event
 
 from setron.features.ai.schemas import ExtractKind
 from setron.features.db_export.service import export_database
+from setron.features.db_import.dump import read_dump
+from setron.features.peer_sync import is_sync_key, read_state
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.storage.validation import TABLE_NAMES
 from setron.infrastructure.database import Database, DatabaseConfig
@@ -52,14 +55,15 @@ def run_sql(text, *, sql_mode=None):
 
 
 def contents():
-    """모든 관리 테이블의 행과 AUTO_INCREMENT 값."""
+    """업무 행과 AUTO_INCREMENT. 교환 경계에서 추가되는 예약 이력은 별도로 검사한다."""
     connection = connect()
     try:
         with connection.cursor() as cursor:
             result = {}
             for table in TABLE_NAMES:
                 cursor.execute(f"SELECT * FROM `{table}` ORDER BY 1")
-                result[table] = cursor.fetchall()
+                records = cursor.fetchall()
+                result[table] = tuple(row for row in records if table != "app_setting" or not is_sync_key(row[0]))
                 cursor.execute("SELECT AUTO_INCREMENT FROM information_schema.TABLES "
                                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s", (table,))
                 result[table, "auto_increment"] = cursor.fetchone()[0]
@@ -125,6 +129,8 @@ def test_export_restores_identical_data_into_empty_db(filled, tmp_path):
     text = path.read_text(encoding="utf-8")
     assert text.startswith("-- SETRON DB 내보내기\n-- 생성 2026-11-03 10:00:00")
     assert "DROP TABLE `" not in text
+    state = read_state(read_dump(path))
+    assert state.entities and state.events
     assert not list(tmp_path.glob("*.part"))
 
     _drop_all(filled)
@@ -184,22 +190,38 @@ def test_export_ignores_source_sql_mode_and_restores_it(filled, tmp_path):
 
 
 def test_concurrent_save_does_not_mix_export_snapshots(filled, tmp_path):
-    """첫 테이블을 읽은 뒤 다른 연결이 저장해도 뒤 테이블에는 기존 시점의 값이 출력된다."""
+    """교환 이력과 업무 자료를 잠근 동안 다른 연결은 기다리고 출력은 기존값을 유지한다."""
     before = contents()
     changed = False
+    started, finished, committed = Event(), Event(), Event()
+    errors, writers = [], []
+
+    def save():
+        writer = None
+        try:
+            writer = connect()
+            with writer.cursor() as control:
+                started.set()
+                control.execute("UPDATE app_setting SET setting_value = %s WHERE setting_key = %s",
+                                ('{"warning":3,"danger":5,"unit":"YEAR"}', b"version_age_thresholds"))
+            writer.commit()
+            committed.set()
+        except Exception as error:
+            errors.append(error)
+        finally:
+            if writer is not None:
+                writer.close()
+            finished.set()
 
     def save_during_export(connection, cursor, statement, parameters, context, executemany):
         nonlocal changed
-        if statement == "SELECT * FROM `import_batch` ORDER BY 1" and not changed:
+        if statement.startswith("SELECT * FROM `import_batch` ORDER BY 1") and not changed:
             changed = True
-            writer = connect()
-            try:
-                with writer.cursor() as control:
-                    control.execute("UPDATE app_setting SET setting_value = %s WHERE setting_key = %s",
-                                    ('{"warning":3,"danger":5,"unit":"YEAR"}', b"version_age_thresholds"))
-                writer.commit()
-            finally:
-                writer.close()
+            writer = Thread(target=save, daemon=True)
+            writers.append(writer)
+            writer.start()
+            assert started.wait(3)
+            assert not finished.wait(.2), "다른 연결이 내보내기 잠금을 기다려야 합니다."
 
     # 연결 기본값이 READ COMMITTED인 경우에도 하나의 스냅샷을 사용한다.
     database = Database(filled.engine.execution_options(isolation_level="READ COMMITTED"))
@@ -209,7 +231,10 @@ def test_concurrent_save_does_not_mix_export_snapshots(filled, tmp_path):
         result = export_database(database, path)
     finally:
         event.remove(filled.engine, "before_cursor_execute", save_during_export)
+        for writer in writers:
+            writer.join(10)
     assert result.saved and changed
+    assert finished.is_set() and committed.is_set() and not errors
     assert contents() != before
     _drop_all(filled)
     run_sql(path.read_text(encoding="utf-8"))
