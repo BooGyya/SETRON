@@ -786,12 +786,14 @@ def _release_issues(rows: tuple[ReviewRow, ...], reference=None) -> list[Issue]:
     return issues
 
 
-def _reference_issues(draft: ImportDraft, reference: ReferenceData | None) -> list[Issue]:
+def _reference_issues(draft: ImportDraft, reference: ReferenceData | None,
+                      *, batch_drafts: tuple[ImportDraft, ...] | None = None) -> list[Issue]:
     """현재 관리값·릴리즈 등록·확인된 순서를 검토값과 비교한다.
 
     param
     - draft: 수정 후의 가져오기 초안.
     - reference: 같은 조회에서 확보한 저장 자료. None이면 미연결로 안내.
+    - batch_drafts: 공정을 함께 저장할 전체 초안. 생략하면 현재 시트만 비교.
 
     return
     - 신규·변경·미등록 안내와 N 비교 결과. 미등록·순서 미확인만으로 차단하지 않음.
@@ -801,6 +803,7 @@ def _reference_issues(draft: ImportDraft, reference: ReferenceData | None) -> li
         issues.append(Issue(IssueLevel.INFO, "기준 자료 미연결 · 기존값과 릴리즈 등록 여부를 확인하지 않았으며 버전 비교는 판단 불가입니다.",
                             code="REFERENCE_NOT_CONNECTED"))
         return issues
+    processes = _incoming_processes(batch_drafts if batch_drafts is not None else (draft,))
     for row in draft.active_rows:
         code, family, version = (_safe(row, n) for n in ("equipment_code", "family_name", "version_raw"))
         if draft.kind is ExtractKind.EQUIPMENT_STATUS and code is not None:
@@ -846,7 +849,7 @@ def _reference_issues(draft: ImportDraft, reference: ReferenceData | None) -> li
                     issues.append(Issue(IssueLevel.INFO,
                         f"N 비교: {comparison.label}" + (f" · {comparison.message}" if comparison.message else ""),
                         row.row_id, "version_raw", row.sources.get("version_raw"), code="VERSION_COMPARISON", comparison=comparison))
-                issues.extend(_stored_equipment_issues(draft, row, resolved.releases.family_id, reference))
+                issues.extend(_stored_equipment_issues(draft, row, resolved.releases.family_id, reference, processes))
             else:
                 issues.extend(_stored_release_issues(row, resolved.releases.family_id, reference))
             continue
@@ -882,13 +885,28 @@ def _change(row, field, previous, current) -> Issue:
                  previous_value=previous, current_value=current)
 
 
-def _stored_equipment_issues(draft, row, family_id, reference) -> list[Issue]:
+def _incoming_processes(drafts):
+    """저장할 날짜별 공정: 제외한 행을 빼고 입력 순서대로 중복 없이 합친다."""
+    values = defaultdict(dict)
+    for draft in drafts:
+        if draft.kind is not ExtractKind.EQUIPMENT_STATUS:
+            continue
+        for row in draft.active_rows:
+            process = _safe(row, "process_name")
+            if process is not None:
+                key = _safe(row, "equipment_code"), _safe(row, "base_date")
+                values[key].setdefault(process.strip(), None)
+    return {key: " / ".join(processes) for key, processes in values.items()}
+
+
+def _stored_equipment_issues(draft, row, family_id, reference, processes) -> list[Issue]:
     """같은 호기·정확한 날짜·고정 PM 위치의 저장값을 비교한다.
 
     param
     - draft, row: 설비 초안과 현재 행.
     - family_id: 확인된 계열 ID.
     - reference: 날짜를 임의로 채우지 않은 기존 저장 자료.
+    - processes: 전체 저장 묶음에서 합친 호기·기준일별 공정.
 
     return
     - 동일값 유지 안내 또는 기존값·새 값·해당 PM의 변경 확인 목록.
@@ -908,6 +926,10 @@ def _stored_equipment_issues(draft, row, family_id, reference) -> list[Issue]:
     for name in ("line", "production_area", "structure_type", "geometry_type", "modification_type"):
         if getattr(old, name) != _safe(row, name):
             issues.append(_change(row, name, getattr(old, name), _safe(row, name)))
+    # 공정은 한 설비의 여러 PM·시트를 합쳐 저장하고, 모두 공란이면 기존값을 유지한다.
+    process = processes.get((old.equipment_code, old.base_date.isoformat()), old.process_name)
+    if process != old.process_name:
+        issues.append(_change(row, "process_name", old.process_name, process))
     software = [sw for sw in old.software if (
         any(p.pm_name == pm for p in sw.pms) if pm else not sw.pms and sw.family_id == family_id
     )]
@@ -998,7 +1020,7 @@ def validate(draft: ImportDraft, reference: ReferenceData | None = None,
     param
     - draft: 원본과 사용자 수정값을 보존한 가져오기 초안.
     - reference: 기존 현황·릴리즈와 확인된 순서. 미연결이면 None.
-    - batch_drafts: 같은 묶음의 날짜별 분류를 함께 검사할 전체 초안. 단일 검증이면 생략.
+    - batch_drafts: 같은 묶음의 공정과 날짜별 분류를 함께 검사할 전체 초안. 단일 검증이면 생략.
 
     return
     - 오류·확인·안내 순으로 정렬한 결과. ERROR가 하나라도 있으면 전체 묶음을 보류.
@@ -1042,7 +1064,7 @@ def validate(draft: ImportDraft, reference: ReferenceData | None = None,
         issues.extend(_equipment_issues(rows, reference))
     else:
         issues.extend(_release_issues(rows, reference))
-    issues.extend(_reference_issues(draft, reference))
+    issues.extend(_reference_issues(draft, reference, batch_drafts=batch_drafts))
     issues.extend(_hpa_history_issues(batch_drafts if batch_drafts is not None else (draft,), reference, draft))
     order = {IssueLevel.ERROR: 0, IssueLevel.REVIEW: 1, IssueLevel.INFO: 2}
     return tuple(replace(issue, workbook_name=draft.workbook_name, sheet_name=draft.sheet.sheet_name,

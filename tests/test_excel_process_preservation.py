@@ -1,11 +1,12 @@
 """공정의 복합 값과 입력 작업별 원본 위치가 Excel 저장에서 사라지지 않는다."""
 
 import os
+from dataclasses import replace
 
 import pytest
 from sqlalchemy import Column, String
 
-from setron.features.excel_import.schemas import DuplicateSaveError
+from setron.features.excel_import.schemas import DuplicateSaveError, IssueLevel
 from setron.features.excel_import.service import ImportValidationService
 from setron.features.import_save.service import DatabaseImportSaver
 from setron.features.storage.validation import StorageValidationError
@@ -47,6 +48,76 @@ def process_originals(storage, stored):
             result.extend((location["sheet"], batch_id, raw[location["sheet"]][cell])
                           for cell in location["cells"])
     return result
+
+
+@pytest.mark.parametrize("previous,incoming,expected", [
+    (None, "NEW", "NEW"),
+    ("OLD", "NEW", "NEW"),
+    ("OLD", "  NEW  ", "NEW"),
+    ("OLD", None, "OLD"),
+    ("OLD", "  ", "OLD"),
+    ("OLD", "OLD", "OLD"),
+    ("AAAA/BBBB", "AAAA/BBBB", "AAAA/BBBB"),
+    ("AAAA & BBBB", "AAAA & BBBB", "AAAA & BBBB"),
+])
+def test_process_review_compares_the_value_that_reimport_will_save(storage, previous, incoming, expected):
+    """공정만 바뀌어도 기존값·새 값을 표시하고, 공란 보존을 변경으로 안내하지 않는다."""
+    save_sources(storage, (draft(row(process_name=previous)),), "initial-process")
+    before = snapshot(storage)
+    original_sources = process_originals(storage, before)
+    sources = (draft(row(process_name=incoming)),)
+    validator = ImportValidationService(storage)
+
+    issues = validator.validate(sources)
+    changes = [issue for issue in issues if issue.code == "STORED_VALUE_CHANGED"
+               and issue.field == "process_name"]
+    if previous != expected:
+        assert len(changes) == 1
+        assert (changes[0].previous_value, changes[0].current_value) == (previous, expected)
+        assert changes[0].level is IssueLevel.REVIEW
+        assert not any(issue.code == "STORED_VALUE_IDENTICAL" for issue in issues)
+    else:
+        assert not changes
+        assert any(issue.code == "STORED_VALUE_IDENTICAL" for issue in issues)
+    assert not any(issue.blocks_save for issue in issues)
+
+    requests = validator.prepare(sources, "reviewed-process")
+    assert snapshot(storage) == before
+    DatabaseImportSaver(storage).save_many(requests)
+    after = snapshot(storage)
+    assert after.process_name == expected and after.snapshot_id == before.snapshot_id
+    assert process_originals(storage, before) == original_sources
+
+
+@pytest.mark.parametrize("separate_sheets", [False, True])
+@pytest.mark.parametrize("previous", ["OLD", "A / B"])
+def test_process_review_uses_combined_pm_and_sheet_values(storage, separate_sheets, previous):
+    """여러 PM·시트의 최종 복합공정을 비교하며 중복·공란·제외한 행은 합산하지 않는다."""
+    initial = tuple(row(i, pm_name=f"PM{i}", process_name=previous) for i in range(1, 5))
+    save_sources(storage, (draft(*initial),), "initial-processes")
+    members = tuple(row(i, pm_name=f"PM{i}", process_name=value)
+                    for i, value in enumerate(("A", "B", " A ", None), 1))
+    excluded = replace(row(5, pm_name="PM5", process_name="IGNORED"), excluded=True)
+    sources = ((draft(members[0], members[2], excluded, sheet="first"),
+                draft(members[1], members[3], sheet="second")) if separate_sheets
+               else (draft(*members, excluded),))
+    validator = ImportValidationService(storage)
+
+    issues = validator.validate(sources)
+    changes = [issue for issue in issues if issue.code == "STORED_VALUE_CHANGED"
+               and issue.field == "process_name"]
+    if previous == "OLD":
+        assert len(changes) == len(members)
+        assert {(issue.previous_value, issue.current_value) for issue in changes} == {("OLD", "A / B")}
+        assert not any(issue.code == "STORED_VALUE_IDENTICAL" for issue in issues)
+    else:
+        assert not changes
+        assert sum(issue.code == "STORED_VALUE_IDENTICAL" for issue in issues) == len(members)
+    assert not any(issue.blocks_save for issue in issues)
+
+    requests = validator.prepare(sources, "combined-processes")
+    DatabaseImportSaver(storage).save_many(requests)
+    assert snapshot(storage).process_name == "A / B"
 
 
 @pytest.mark.parametrize("multiple_sheets", [False, True])

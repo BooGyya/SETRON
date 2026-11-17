@@ -13,6 +13,7 @@ from setron.ui.components import Card, StatusBadge, button, label
 from setron.ui.import_dialogs import ImportConfirmDialog
 from setron.ui.import_widgets import import_combo_style
 from setron.ui.read_worker import BackgroundRead, ReadRequest
+from setron.ui.sql_import_review import SqlComparisonWidget
 from setron.ui.theme import SECONDARY
 
 
@@ -26,8 +27,10 @@ class SqlImportPage(QWidget):
         self.setObjectName("canvas")
         self.importer = importer
         self.path = self.plan = None
-        self.preview_request, self.apply_request = ReadRequest(self), ReadRequest(self)
+        self._review_dirty = False
+        self.preview_request, self.resolve_request, self.apply_request = (ReadRequest(self) for _ in range(3))
         self.preview_request.completed.connect(self._preview_completed)
+        self.resolve_request.completed.connect(self._resolve_completed)
         self.apply_request.completed.connect(self._apply_completed)
 
         layout = QVBoxLayout(self)
@@ -59,6 +62,7 @@ class SqlImportPage(QWidget):
         self.mode_combo.setProperty("queryField", True)
         self.mode_combo.setStyleSheet(import_combo_style())
         self.mode_combo.setMinimumHeight(40)
+        self.mode_combo.addItem("비교하고 선택", "review")
         self.mode_combo.addItem("신규 항목만 추가", "add")
         self.mode_combo.addItem("같은 항목 덮어쓰기", "overwrite")
         self.mode_combo.currentIndexChanged.connect(self._selection_changed)
@@ -70,6 +74,11 @@ class SqlImportPage(QWidget):
         self.details = label("" if importer is not None else "DB 접속 설정을 확인해 주세요.", wrap=True)
         self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         card.body.addWidget(self.details)
+        self.comparison = SqlComparisonWidget()
+        self.comparison.setVisible(False)
+        self.comparison.choices_changed.connect(self._choices_changed)
+        self.comparison.review_requested.connect(self._resolve_choices)
+        card.body.addWidget(self.comparison)
         actions = QHBoxLayout()
         self.preview_button = button("변경 사항 검토")
         self.preview_button.clicked.connect(self._preview)
@@ -83,14 +92,21 @@ class SqlImportPage(QWidget):
 
     @property
     def busy(self):
-        return self.preview_request.busy or self.apply_request.busy
+        return self.preview_request.busy or self.resolve_request.busy or self.apply_request.busy
+
+    def _can_apply(self):
+        return (not self.busy and self.plan is not None and self.plan.changes > 0
+                and not getattr(self.plan, "unresolved", 0) and not self._review_dirty)
 
     def _render(self):
         enabled = self.importer is not None and not self.busy
         self.select_button.setEnabled(enabled)
         self.mode_combo.setEnabled(enabled)
         self.preview_button.setEnabled(enabled and self.path is not None)
-        self.apply_button.setEnabled(not self.busy and self.plan is not None and self.plan.changes > 0)
+        self.apply_button.setEnabled(self._can_apply())
+        self.comparison.setEnabled(enabled and self.plan is not None)
+        self.comparison.review_button.setEnabled(enabled and self.plan is not None and self._review_dirty
+                                                  and not self.comparison.unresolved)
         self.file_label.setVisible(bool(self.file_label.text()))
         self.details.setVisible(bool(self.details.text()))
         self._reflow()
@@ -115,6 +131,8 @@ class SqlImportPage(QWidget):
         self._render()
 
     def _choose_file(self):
+        if self.busy:
+            return
         start = str(self.path.parent) if self.path is not None else ""
         selected, _ = QFileDialog.getOpenFileName(self, "SETRON SQL 파일 선택", start, "SQL 파일 (*.sql)")
         if not selected:
@@ -124,11 +142,22 @@ class SqlImportPage(QWidget):
         self._selection_changed()
 
     def _selection_changed(self):
+        if self.apply_request.busy:
+            return
+        self.preview_request.cancel()
+        self.resolve_request.cancel()
         self.plan = None
+        self._review_dirty = False
+        self.comparison.set_differences(())
         self._show_status("검토 대기" if self.path is not None else "파일 선택 대기", "neutral")
+        self.busy_changed.emit()
 
     def _preview(self):
+        if self.busy or self.importer is None or self.path is None:
+            return
         self.plan = None
+        self._review_dirty = False
+        self.comparison.set_differences(())
         preview, path, mode = self.importer.preview, self.path, self.mode_combo.currentData()
         self.preview_request.start(BackgroundRead(lambda: preview(path, mode)))
         self._show_status("비교 중", "info", "SQL 파일을 읽고 대상 DB와 비교하고 있습니다.")
@@ -141,17 +170,63 @@ class SqlImportPage(QWidget):
             self._show_status("검토 실패", "danger", detail)
         else:
             self.plan = plan
-            self._show_status("검토 완료" if plan.changes else "가져올 변경분 없음", "info", plan.summary)
+            self._review_dirty = False
+            self.comparison.set_differences(getattr(plan, "differences", ()))
+            status = ("적용할 값 선택 필요" if getattr(plan, "unresolved", 0) else
+                      "검토 완료" if plan.changes else "가져올 변경분 없음")
+            self._show_status(status, "info", plan.summary)
+        self.busy_changed.emit()
+
+    def _choices_changed(self):
+        if self.plan is None or self.busy:
+            return
+        reviewed = {item.id: item.choice for item in getattr(self.plan, "differences", ())
+                    if item.choice in {"CURRENT", "INCOMING"}}
+        self._review_dirty = reviewed != self.comparison.choices
+        if self._review_dirty:
+            self._show_status("적용할 값 선택 필요" if self.comparison.unresolved else "선택 내용 검토 필요",
+                              "info", self.plan.summary)
+        else:
+            status = ("적용할 값 선택 필요" if getattr(self.plan, "unresolved", 0) else
+                      "검토 완료" if self.plan.changes else "가져올 변경분 없음")
+            self._show_status(status, "info", self.plan.summary)
+
+    def _resolve_choices(self):
+        plan = self.plan
+        if self.busy or plan is None or not self._review_dirty or self.comparison.unresolved:
+            return
+        choices = self.comparison.choices
+        resolve = self.importer.resolve
+        self.resolve_request.start(BackgroundRead(lambda: resolve(plan, choices)))
+        self._show_status("선택 내용 검토 중", "info", "선택한 값과 연결 자료를 확인하고 있습니다.")
+        self.busy_changed.emit()
+
+    def _resolve_completed(self, plan, error):
+        if error is not None:
+            known = isinstance(error, (SqlImportError, DatabaseError))
+            self._show_status("선택 검토 실패", "danger", str(error) if known else "선택한 값을 검토하지 못했습니다.")
+        elif plan is None or not isinstance(getattr(plan, "summary", None), str):
+            self._show_status("선택 검토 실패", "danger", "선택한 값을 검토하지 못했습니다. 변경 사항을 다시 확인해 주세요.")
+        else:
+            self.plan = plan
+            self._review_dirty = False
+            self.comparison.set_differences(getattr(plan, "differences", ()))
+            status = ("적용할 값 선택 필요" if getattr(plan, "unresolved", 0) else
+                      "검토 완료" if plan.changes else "가져올 변경분 없음")
+            self._show_status(status, "info", plan.summary)
         self.busy_changed.emit()
 
     def _confirm_apply(self):
         plan = self.plan
-        if self.busy or plan is None or not plan.changes:
+        if not self._can_apply():
             return
         action, question = ("병합", "병합할까요?") if plan.target_rows else ("가져오기", "가져올까요?")
+        choices = self.comparison.choices
+        selected = (f"\n선택 · 현재값 유지 {sum(value == 'CURRENT' for value in choices.values()):,}건 · "
+                    f"가져온값 사용 {sum(value == 'INCOMING' for value in choices.values()):,}건" if choices else "")
         dialog = ImportConfirmDialog(
             f"{self.path.name}\n가져오기 방식 · {self.mode_combo.currentText()}\n\n"
-            f"{plan.summary}\n\n검토한 변경 사항을 대상 DB에 {question}",
+            f"{plan.summary}{selected}\n\n검토한 변경 사항을 대상 DB에 {question}",
             self, title=f"SQL 데이터 {action} 확인", action_text=action,
         )
         try:
@@ -160,6 +235,7 @@ class SqlImportPage(QWidget):
         finally:
             dialog.deleteLater()
         self.plan = None
+        self._review_dirty = False
         apply = self.importer.apply
         self.apply_request.start(BackgroundRead(lambda: apply(plan)))
         self._show_status(f"{action} 중", "info", "처리가 끝날 때까지 기다려 주세요.")
@@ -167,6 +243,7 @@ class SqlImportPage(QWidget):
 
     def _apply_completed(self, result, error):
         self.plan = None
+        self._review_dirty = False
         known_error = isinstance(error, (SqlImportError, DatabaseError))
         if (isinstance(error, DatabaseCommitUnknownError)
                 or error is not None and not known_error

@@ -143,6 +143,35 @@ def _journal(value, resolve):
     created = value.get("management_create")
     if created is not None:
         _history_ids(created["values"], resolve)
+    deleted = value.get("management_delete")
+    if deleted is not None:
+        _history_ids(deleted, resolve)
+        for row in deleted.get("rows", []):
+            _history_ids(row, resolve)
+            data = row.get("data") or {}
+            if data.get("snapshot") is not None:
+                _history_ids(data["snapshot"], resolve)
+            for record in (*data.get("versions", []), *data.get("pms", [])):
+                _history_ids(record, resolve)
+    release = value.get("management_delete_release")
+    if release is not None:
+        _history_ids(release, resolve)
+        if release.get("release") is not None:
+            _history_ids(release["release"], resolve)
+        for entry in release.get("items", []):
+            _history_ids(entry, resolve)
+            _history_ids(entry["item"], resolve)
+            _history_ids(entry["link"], resolve)
+    for name in ("management_restore", "management_restore_release", "management_reorder"):
+        restored = value.get(name)
+        if restored is not None:
+            _history_ids(restored, resolve)
+            if name == "management_restore" and restored.get("source") is not None:
+                restored["source"] = _history_id(restored["source"], "import_batch", resolve)
+    risk = value.get("management_delete_risk")
+    if risk is not None:
+        _history_ids(risk["key"], resolve)
+        _history_ids(risk["before"]["current"], resolve)
     return value
 
 

@@ -48,7 +48,7 @@ def target(tmp_path, request):
             statement = re.sub(r" COMMENT '[^\n]*'(?=,?$)", "", statement, flags=re.M)
             statement = re.sub(r" COLLATE utf8mb4_\w+| UNSIGNED| AUTO_INCREMENT", "", statement)
             statement = re.sub(r"UNIQUE KEY \w+", "UNIQUE", statement)
-            statement = statement.replace("VARBINARY", "BLOB").replace("LONGTEXT", "TEXT")
+            statement = statement.replace("VARBINARY", "BLOB").replace("LONGTEXT", "TEXT").replace(" INT ", " INTEGER ")
             connection.exec_driver_sql(statement)
 
     metadata = MetaData()
@@ -239,6 +239,13 @@ def test_apply_rolls_back_entire_merge_when_a_later_write_fails(target, tmp_path
 
 @pytest.mark.skipif(not os.environ.get("SETRON_TEST_DB_NAME"), reason="MySQL 전용 테스트 DB 접속 설정이 필요합니다.")
 def test_mysql_export_and_merge_round_trip(schema_database, tmp_path):  # noqa: F811
+    from setron.features.peer_sync import is_sync_key, read_state
+
+    def business(rows):
+        # 새 교환 이력은 보존하되 기존 add/overwrite의 업무 값 동작을 비교한다.
+        return {name: [row for row in records if name != "app_setting" or not is_sync_key(row["setting_key"])]
+                for name, records in rows.items()}
+
     engine = schema_database.engine
     metadata = MetaData()
     metadata.reflect(engine, only=TABLE_NAMES)
@@ -253,10 +260,12 @@ def test_mysql_export_and_merge_round_trip(schema_database, tmp_path):  # noqa: 
     modified = current(target)
 
     service.apply(service.preview(path, "add"))
-    assert current(target) == modified
+    assert business(current(target)) == business(modified)
+    assert read_state(current(target)).events
 
     service.apply(service.preview(path, "overwrite"))
-    assert current(target) == original
+    assert business(current(target)) == business(original)
+    assert read_state(current(target)).events
 
 
 def test_item_jira_code_merges_from_new_exports_and_old_exports_leave_it_empty(target, tmp_path):
