@@ -3,7 +3,7 @@
 - 표에서 여러 칸을 고른 뒤 값을 입력하면 고른 칸이 모두 바뀐다 (Excel처럼 드래그 · Shift · Ctrl로 고른다).
 - Ctrl+V: Excel에서 복사한 열 · 표를 고른 칸부터 붙여 넣는다. 값 하나를 여러 칸에 붙이면 고른 칸 모두에 같은 값.
 - Ctrl+C: 고른 칸을 복사한다. Delete: 고른 칸을 비운다.
-- [찾아 바꾸기]: 한 항목에서 찾을 글자를 바꿀 글자로 바꾼다 (예: 설비 호기 'ESPG' → 'ESPH').
+- [일괄 변경] (11-17 이름 변경: 찾아 바꾸기 → 일괄 변경): 한 항목에서 찾을 글자를 바꿀 글자로 바꾼다 (예: 설비 호기 'ESPG' → 'ESPH').
 
 계산(변경 목록)은 ``features.excel_import.bulk_edit``가 하고, 이 파일은 키 입력 · 창만 맡는다.
 """
@@ -50,9 +50,10 @@ def set_clipboard_text(text):
 class FindReplaceDialog(ImportDialog):
     """한 항목에서 찾을 글자를 바꿀 글자로 바꾼다. [바꾸기]를 누르면 ``values()``로 입력값을 돌려준다."""
 
-    def __init__(self, fields, parent=None, *, selected_rows=0):
-        super().__init__("찾아 바꾸기", parent)
-        self.body.addWidget(label("고른 항목에서 찾을 글자를 바꿀 글자로 한 번에 바꿉니다. 원본 값은 그대로 두고 "
+    def __init__(self, fields, parent=None, *, selected_rows=0, note=None):
+        super().__init__("일괄 변경", parent)
+        # 데이터 관리 현황표도 같은 창을 쓴다 (11-17). 화면마다 안내 문구만 다르다.
+        self.body.addWidget(label(note or "고른 항목에서 찾을 글자를 바꿀 글자로 한 번에 바꿉니다. 원본 값은 그대로 두고 "
                                   "수정값으로 기록되며, 제외한 행은 바꾸지 않습니다.", 13, color=SECONDARY, wrap=True))
         form = QFormLayout()
         form.setSpacing(10)

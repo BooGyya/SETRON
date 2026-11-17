@@ -35,6 +35,8 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "bay": ("bay",),
     "note": ("비고", "note", "remark", "메모"),
     "process": ("공정", "공정명", "process", "공정구분"),     # 11/11 멘토링: 공정별 버전 분포 · 파편화 분석용
+    # Memory/Foundry 열이 있으면 읽는다 (11-17). 없으면 지금처럼 저장 때 사업장 · 라인(장소표 · 등록 라인)으로 정한다.
+    "area": ("memory/foundry", "memoryfoundry", "생산영역", "메모리/파운드리", "m/f"),
 }
 SUBHEADER_WORDS = {"sw", "engine", "flow", "bay", "version", "ip", "vtr개조", "wdt"}
 EQUIPMENT_CODE_RE = re.compile(r"^(?P<code>[A-Za-z][A-Za-z0-9\-]{2,})\s*(?P<tail>\(.*\))?\s*$")
@@ -93,7 +95,7 @@ def _alias_of(name: str) -> str | None:
     n = _norm(name)
     if not n:
         return None
-    for logical in ("equipment", "group", "line", "no", "pm", "bay", "note", "process", "version"):
+    for logical in ("equipment", "group", "line", "no", "pm", "bay", "note", "process", "area", "version"):
         if any(n == _norm(a) for a in ALIASES[logical]):
             return logical
     if n.startswith("공정") and len(n) <= 16:                  # '공정(Process)' · '공정 구분' 같은 표기
@@ -180,7 +182,7 @@ def _segments(names: dict[int, str], title_row: list[Any] | None, title_index: i
         candidates = [(c, _version_score(n)) for c, n in seg_names.items() if _version_score(n) > -100]
         if candidates:
             cols["version"] = max(candidates, key=lambda x: (x[1], -x[0]))[0]
-        for logical in ("equipment", "line", "no", "pm", "bay", "note", "process"):
+        for logical in ("equipment", "line", "no", "pm", "bay", "note", "process", "area"):
             for c, n in sorted(seg_names.items()):
                 if _alias_of(n) == logical and logical not in cols:
                     cols[logical] = c
@@ -315,7 +317,8 @@ def parse_status(rows: list[list[Any]], merged: list[tuple[int, int, int, int]] 
                     values["group_name"], positions["group_name"] = _text(carried[0]).strip(), carried[1]
                 elif seg.title is not None:
                     values["group_name"], positions["group_name"] = seg.title[0].strip(), seg.title[1]
-                for key, name in (("engine", "engine_version"), ("epd", "epd_version"), ("process", "process_name")):
+                for key, name in (("engine", "engine_version"), ("epd", "epd_version"), ("process", "process_name"),
+                                  ("area", "production_area")):
                     value, pos = at(key)
                     if _text(value).strip():
                         values[name], positions[name] = _text(value), pos
