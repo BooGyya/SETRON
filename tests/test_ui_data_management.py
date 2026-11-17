@@ -189,9 +189,10 @@ def test_sheet_shows_db_values_in_import_columns_sorted_by_line_group_code(own):
     assert "화성 · 기준일 2026-11-01" in sheet.source.text() and "마스터.xlsx" in sheet.source.text()
     assert sheet.sheet_combo.currentText() == "2026-11-01 · 화성 · 3대 · 마스터.xlsx"  # Site · 날짜를 두 번 쓰지 않는다
     # 11-16: 가져오기 검토 표(AI 추출 결과)와 같은 열 · 같은 순서 (Engine · EPD 버전은 DB에 칸이 없어 없음)
+    # 11-17: 자동으로 정해지는 열은 제목에 '(자동)'을 붙인다
     assert [sheet.table.horizontalHeaderItem(c).text() for c in range(sheet.table.columnCount())] == [
-        "기준일", "Site", "Line", "대분류", "설비군", "모델명", "Memory/Foundry", "설비 호기", "PM", "공정", "SW 계열", "SW 버전",
-        "UI 구분", "형상", "개조 정보"]
+        "기준일 (자동)", "Site (자동)", "Line", "대분류 (자동)", "설비군", "모델명 (자동)", "Memory/Foundry", "설비 호기", "PM",
+        "공정", "SW 계열", "SW 버전", "UI 구분 (자동)", "형상", "개조 정보"]
     assert codes(sheet) == ["EC1", "EC2", "EC4"]  # Line → 설비군 → 호기 (DB 순서와 다름)
     assert [cell(sheet, 0, c).text() for c in range(sheet.table.columnCount())] == [
         "2026-11-01", "화성", "13L", "POLY", "M-C4", "M-C4", "Memory", "EC1", "", "", "C4", "v1.2", "", "", ""]
@@ -443,13 +444,19 @@ def test_create_sheet_dialog_checks_the_date(own):
 def test_sort_follows_header_clicks(own):
     page, sheet = sheet_page(own)
     assert "Line → 설비군 → 설비 호기" in sheet.sort_label.text() and not sheet.sort_reset.isVisibleTo(sheet)
-    sheet._header_clicked(C["version_raw"])   # SW 버전 오름차순
+    sheet.table.selectColumn(C["version_raw"])
+    sheet._header_clicked(C["version_raw"])   # 11-17: 첫 클릭은 열 전체 선택만 (정렬하지 않음)
+    assert codes(sheet) == ["EC1", "EC2", "EC4"] and sheet.sort is None
+    sheet._header_clicked(C["version_raw"])   # 한 번 더 누르면 SW 버전 오름차순
     assert codes(sheet) == ["EC4", "EC1", "EC2"] and "SW 버전 오름차순" in sheet.sort_label.text()
     assert sheet.table.horizontalHeaderItem(C["version_raw"]).text() == "SW 버전 ▲"
     sheet._header_clicked(C["version_raw"])   # 내림차순
     assert codes(sheet) == ["EC2", "EC1", "EC4"] and sheet.sort_reset.isVisibleTo(sheet)
     sheet._header_clicked(C["version_raw"])   # 기본 정렬로
     assert codes(sheet) == ["EC1", "EC2", "EC4"] and sheet.sort is None
+    sheet.table.setCurrentCell(0, C["line"])  # 다른 칸을 고른 뒤 제목을 누르면 다시 선택부터
+    sheet._header_clicked(C["version_raw"])
+    assert sheet.sort is None
 
 
 def test_failed_save_keeps_changes_and_reports_reason(own):

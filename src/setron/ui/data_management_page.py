@@ -34,12 +34,14 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from setron.infrastructure.database import DatabaseCommitUnknownError
+from setron.features.excel_import.bulk_edit import parse_clipboard, paste_plan
 from setron.features.management.schemas import RecordEdit
 from setron.features.production_area import PRODUCTION_AREA_LABELS, production_area_text, production_area_value
 from setron.ui.combo_box import ComboBox
 from setron.ui.components import Card, button, label
 from setron.ui.theme import font, set_widget_font
 from setron.ui.equipment import ignore_width
+from setron.ui.import_bulk_edit import BulkEditKeys, FindReplaceDialog, clipboard_text, set_clipboard_text
 from setron.ui.import_widgets import ImportTabs
 from setron.ui.read_worker import BackgroundRead, ReadRequest
 from setron.ui.theme import ASSETS, LINE, PRIMARY, SECONDARY
@@ -49,6 +51,8 @@ SAVED = QColor("#e3f4e8")      # 이번에 저장한 칸
 NEW_ROW = QColor("#fdecef")    # 새 행의 아직 비어 있는 필수 칸
 MUTED = QColor("#5d6678")      # DB와 연결되지 않은 원본 값
 DELETE_ROW = QColor("#f8d7da")  # 저장하면 지울 행 (삭제 예정)
+FIXED_CELL = QColor("#eceef2")  # 직접 고치지 않고 자동으로 정해지는 칸 (11-17: 고치는 칸과 구분이 안 됐다)
+FIXED_TEXT = QColor("#6b7385")
 DANGER = "#ad344d"
 TABLE_STYLE = "QTableWidget {font-size:14px;} QHeaderView::section {font-size:13px;padding:4px 6px;}"
 COLUMN_KEY = "data_management/columns/"
@@ -285,6 +289,9 @@ AREA_LABELS = {**PRODUCTION_AREA_LABELS, None: ""}
 UI_LABELS = {"LEGACY": "구UI", "INTEGRATED": "통합UI", "SMART": "스마트UI", None: ""}
 REQUIRED_NEW = ("equipment_code", "group", "production_area", "version_raw")  # Memory/Foundry도 필수 (11-12: 비우면 임의로 정해졌다)
 SHEET_FIXED = ("base_date", "site", "category", "ui_type")  # 표에서 직접 고르지 않는 칸 (현황표 · 설비군 · SW 계열이 정함)
+AUTO_COLUMNS = {"base_date": "고른 현황표의 기준일입니다", "site": "고른 현황표의 Site입니다",
+                "category": "설비군에서 자동으로 정해집니다 (설비 탭에서 관리)", "model_name": "설비군을 따라 자동으로 정해집니다",
+                "ui_type": "SW 계열에서 자동으로 정해집니다"}  # 제목에 '(자동)'을 붙이는 열 (11-17)
 SNAPSHOT_FIELDS = {"line": "line", "model": "model_name", "area": "production_area", "process": "process_name",
                    "geometry": "geometry_type", "modification": "modification_type"}  # 설비 현황에 저장하는 칸 (수정 키 → DB 칸)
 CATEGORY_CHOICES = ("POLY", "OXIDE", "KCTC")
@@ -308,7 +315,70 @@ class _KeepColorsDelegate(QStyledItemDelegate):
     """고른 줄도 칸 색(분홍 필수 · 노랑 수정 · 빨강 삭제 예정)을 그대로 보이고, 그 위에 옅은 막과 위아래 선만 얹는다 (11-12).
 
     기본 선택 색은 칸 배경을 덮어서, 입력 중인 새 행에서 어느 칸을 채워야 하는지 보이지 않았다.
+    칸 단위로 고르는 표(현황표)는 고른 칸마다 파란 테두리를 그린다.
+
+    표에 ``bulk_owner``가 있으면 같은 열에서 여러 칸을 고르고 입력할 때 고른 칸 모두에 같은 값을 넣는다 (11-17 요청:
+    데이터 가져오기처럼 한 번에 바꾸기). 입력하는 동안 다른 칸에도 입력 중인 글자가 보인다.
     """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.closeEditor.connect(self._editor_closed)
+
+    def _bulk_owner(self):
+        return getattr(self.parent(), "bulk_owner", None)
+
+    def _peers(self, index):
+        """입력하는 칸과 같은 열에서 함께 고른, 고칠 수 있는 다른 칸 (줄, 열)."""
+        view, owner = self.parent(), self._bulk_owner()
+        selection = view.selectionModel() if owner is not None else None
+        if selection is None:
+            return []
+        model = view.model()
+        return sorted({(i.row(), i.column()) for i in selection.selectedIndexes()
+                       if i.column() == index.column() and i.row() != index.row()
+                       and model.flags(i) & Qt.ItemFlag.ItemIsEditable})
+
+    def _watch(self, editor, index):
+        peers = self._peers(index)
+        owner = self._bulk_owner()
+        if not peers or editor is None:
+            return editor
+        editor.setToolTip(f"입력한 값이 이 열에서 고른 {len(peers) + 1}칸 모두에 들어갑니다. Esc로 취소합니다.")
+        if isinstance(editor, QLineEdit):
+            editor.setPlaceholderText(f"고른 {len(peers) + 1}칸에 함께 입력")
+            editor.setStyleSheet(f"QLineEdit {{border:2px solid {PRIMARY};background:white;}}")
+            editor.textEdited.connect(lambda text: owner.bulk_preview(peers, text))
+        elif hasattr(editor, "currentTextChanged"):
+            editor.currentTextChanged.connect(lambda text: owner.bulk_preview(peers, text))
+        elif hasattr(editor, "dateChanged"):
+            editor.dateChanged.connect(lambda day: owner.bulk_preview(peers, day.toString("yyyy-MM-dd")))
+        return editor
+
+    def _editor_closed(self, *_):
+        owner = self._bulk_owner()
+        if owner is not None:
+            QTimer.singleShot(0, owner.bulk_preview_end)
+
+    def createEditor(self, parent, option, index):
+        return self._watch(super().createEditor(parent, option, index), index)
+
+    def editor_text(self, editor):
+        """편집기에 입력된 글자. 모르는 편집기면 None (기본 저장 방식을 쓴다)."""
+        return editor.text() if isinstance(editor, QLineEdit) else None
+
+    def setModelData(self, editor, model, index):
+        text = self.editor_text(editor)
+        owner = self._bulk_owner()
+        peers = self._peers(index) if text is not None and owner is not None else []
+        if peers:
+            cells = [(index.row(), index.column()), *peers]
+            QTimer.singleShot(0, lambda: owner.bulk_edit(cells, text))
+            return
+        if text is None:
+            super().setModelData(editor, model, index)
+        else:
+            model.setData(index, text, Qt.ItemDataRole.EditRole)
 
     def paint(self, painter, option, index):
         if not option.state & QStyle.StateFlag.State_Selected:
@@ -320,9 +390,13 @@ class _KeepColorsDelegate(QStyledItemDelegate):
         painter.save()
         painter.fillRect(option.rect, SELECTION_TINT)
         painter.setPen(QPen(SELECTION_EDGE, 2))
-        rect = option.rect.adjusted(0, 1, 0, -1)
-        painter.drawLine(rect.topLeft(), rect.topRight())
-        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        view = self.parent()
+        if isinstance(view, QAbstractItemView) and view.selectionBehavior() == QAbstractItemView.SelectionBehavior.SelectItems:
+            painter.drawRect(option.rect.adjusted(1, 1, -1, -1))  # 칸 단위로 고르는 표: 고른 칸마다 테두리
+        else:
+            rect = option.rect.adjusted(0, 1, 0, -1)
+            painter.drawLine(rect.topLeft(), rect.topRight())
+            painter.drawLine(rect.bottomLeft(), rect.bottomRight())
         painter.restore()
 
 
@@ -339,7 +413,7 @@ class _ChoiceDelegate(_KeepColorsDelegate):
         editor.addItems(list(self.options()))
         if self.editable and self.placeholder:  # 고를 것이 없으면 새 이름을 적으라고 알린다
             editor.lineEdit().setPlaceholderText(self.placeholder)
-        return editor
+        return self._watch(editor, index)
 
     def setEditorData(self, editor, index):
         text = index.data(Qt.ItemDataRole.EditRole) or ""
@@ -349,8 +423,8 @@ class _ChoiceDelegate(_KeepColorsDelegate):
         elif self.editable:
             editor.setEditText(text)
 
-    def setModelData(self, editor, model, index):
-        model.setData(index, editor.currentText(), Qt.ItemDataRole.EditRole)
+    def editor_text(self, editor):
+        return editor.currentText()
 
 
 class _DateDelegate(_KeepColorsDelegate):
@@ -368,7 +442,7 @@ class _DateDelegate(_KeepColorsDelegate):
                 QTimer.singleShot(20, lambda: open_when_shown(tries - 1))
 
         QTimer.singleShot(0, open_when_shown)
-        return editor
+        return self._watch(editor, index)
 
     def setEditorData(self, editor, index):
         text = (index.data(Qt.ItemDataRole.EditRole) or "").strip()
@@ -378,8 +452,8 @@ class _DateDelegate(_KeepColorsDelegate):
             day = date.today()
         editor.setDate(QDate(day.year, day.month, day.day))
 
-    def setModelData(self, editor, model, index):
-        model.setData(index, editor.date().toPython().isoformat(), Qt.ItemDataRole.EditRole)
+    def editor_text(self, editor):
+        return editor.date().toPython().isoformat()
 
 
 # [?] 가이드: (제목, 언제, 설명, 버튼 동작, 버튼 글자)
@@ -415,6 +489,23 @@ GUIDE_NOTE = ("위치 탭에서는 Site · 라인 이름을 표에서 바로 고
               "설비 탭에서는 설비군 대분류 · (직접 추가한 설비군의) 이름을 표에서 고칩니다.")
 
 
+def _cell_legend():
+    """현황표 칸 색 안내 한 줄 (11-17: 고치는 칸과 자동으로 정해지는 칸을 구분하기 어려웠다)."""
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    for color, text in (("#ffffff", "수정 가능"),
+                        (FIXED_CELL.name(), "자동으로 정해지는 칸"), (SAVING.name(), "저장 전 수정"),
+                        (NEW_ROW.name(), "새 행 필수 칸"), (DELETE_ROW.name(), "삭제 예정")):
+        chip = QLabel()
+        chip.setFixedSize(24, 12)  # 넓은 색 견본 (네모 체크 칸처럼 보이지 않게)
+        chip.setStyleSheet(f"background:{color};border:1px solid #c3c8d2;border-radius:2px;")
+        row.addWidget(chip)
+        row.addWidget(label(text, 12, color=SECONDARY))
+        row.addSpacing(10)
+    row.addStretch()
+    return row
+
+
 class SheetPanel(_Panel):
     """현황표를 DB에 들어간 값 기준으로 보이고 고친다 (11-11 6차). 11-16부터 가져오기 검토 표와 같은 열 · 같은 단위
     (PM 한 줄, PM이 없으면 SW 한 줄)이고, DB에 있는 값(공정 · SW 계열 · 형상 · 개조 · PM 포함)을 모두 고친다.
@@ -429,6 +520,8 @@ class SheetPanel(_Panel):
         self.edits, self.new_rows, self.deletes, self.steps, self.sort = {}, [], {}, [], None
         self.redo_steps = []  # 되돌린 단계 (다시 실행용). 새로 고치면 쓸 수 없게 된다
         self.pending_batch, self._current, self._temp = None, None, 0
+        self._bulk, self._previewed = False, []  # 여러 칸 한 번에 바꾸는 중 · 입력 중 미리 보이는 칸
+        self._selection_round, self._header_armed = 0, None  # 열 제목: 첫 클릭은 열 선택, 그대로 다시 누르면 정렬 (11-17)
         body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         card = Card(padding=20)
@@ -447,6 +540,10 @@ class SheetPanel(_Panel):
         self.delete_button.setToolTip("고른 줄의 설비를 '삭제 예정'으로 표시합니다. [저장]을 누르면 지워집니다.")
         self.save_button = button("저장", primary=True)
         self.save_button.setMinimumWidth(120)
+        self.replace_button = button("일괄 변경")
+        self.replace_button.setToolTip("한 항목에서 찾을 글자를 바꿀 글자로 한 번에 바꿉니다 (예: 설비 호기 · Line · SW 버전). "
+                                       "여러 칸을 골라 값을 입력하거나 Ctrl+V로 붙여 넣어도 한 번에 바뀝니다.")
+        self.replace_button.clicked.connect(self.open_find_replace)
         self.add_button.clicked.connect(self.add_row)
         self.delete_button.clicked.connect(self.delete_selected)
         self.save_button.clicked.connect(self.save)
@@ -459,9 +556,11 @@ class SheetPanel(_Panel):
         row.addWidget(self.sheet_combo)
         row.addWidget(self.create_button)
         row.addStretch()
-        for widget in (self.undo_button, self.redo_button, self.add_button, self.delete_button, self.save_button):
+        for widget in (self.undo_button, self.redo_button, self.replace_button, self.add_button, self.delete_button,
+                       self.save_button):
             row.addWidget(widget)
         card.body.addLayout(row)
+        card.body.addLayout(_cell_legend())
         # 출처 줄 · 정렬 안내 문구는 화면에 두지 않는다 (11-12 요청: 설명 삭제). 값은 접근성 이름 · 툴팁에만 쓴다.
         self.source.setParent(self)
         self.source.hide()
@@ -483,10 +582,14 @@ class SheetPanel(_Panel):
         self.table.setStyleSheet(TABLE_STYLE)
         self.table.setMinimumHeight(560)
         self.table.verticalHeader().setDefaultSectionSize(36)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        # 여러 칸을 골라 한 번에 바꾼다 (11-17): 드래그 · Shift · Ctrl로 칸을 고르고 값 입력 · Ctrl+V · Delete.
+        # 줄 전체는 왼쪽 줄 번호를 눌러 고른다 ([선택 행 삭제]는 고른 칸이 있는 줄을 지운다).
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed
                                    | QAbstractItemView.EditTrigger.AnyKeyPressed)
+        self.table.bulk_owner = self
+        self.bulk_keys = BulkEditKeys(self.table, paste=self.paste_cells, copy=self.copy_cells, clear=self.clear_cells)
         self.table.setItemDelegateForColumn(COLUMN["line"], _ChoiceDelegate(
             self.table, self._line_choices, editable=True, placeholder="라인 이름을 적습니다 (처음 보는 라인은 저장 때 등록)"))
         self.table.setItemDelegateForColumn(COLUMN["category"], _ChoiceDelegate(self.table, lambda: self.page.category_choices()))
@@ -499,6 +602,7 @@ class SheetPanel(_Panel):
             self.table, lambda: [name for _, name, _ in self._family_choices(self.table.currentRow())]))
         self.table.itemChanged.connect(self._cell_changed)
         self.table.itemSelectionChanged.connect(self._sync)
+        self.table.itemSelectionChanged.connect(self._selection_moved)
         self.table.horizontalHeader().sectionClicked.connect(self._header_clicked)
         self.page.columns.attach(self.table, "sheet.v2")  # 11-16 열이 바뀌어 예전에 기억한 폭은 쓰지 않는다
         card.body.addWidget(self.table)
@@ -739,9 +843,16 @@ class SheetPanel(_Panel):
         self.view = [("row", r) for r in rows] + [("new", n) for n in self.new_rows]
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.view))
-        labels = [name + ((" ▼" if self.sort[1] else " ▲") if self.sort is not None and self.sort[0] == c else "")
-                  for c, (_, name) in enumerate(SHEET_COLUMNS)]
+        labels = [name + (" (자동)" if field in AUTO_COLUMNS else "")
+                  + ((" ▼" if self.sort[1] else " ▲") if self.sort is not None and self.sort[0] == c else "")
+                  for c, (field, name) in enumerate(SHEET_COLUMNS)]
         self.table.setHorizontalHeaderLabels(labels)
+        for c, (field, name) in enumerate(SHEET_COLUMNS):
+            header = self.table.horizontalHeaderItem(c)
+            if header is not None:
+                header.setToolTip(f"{name} · 자동 · {AUTO_COLUMNS[field]} (회색 칸은 직접 고치지 않습니다)"
+                                  if field in AUTO_COLUMNS else f"{name} · 칸을 두 번 누르거나 여러 칸을 골라 입력해 수정합니다")
+                header.setToolTip(header.toolTip() + " · 제목을 한 번 누르면 열 전체 선택, 한 번 더 누르면 정렬")
         self.table.setVerticalHeaderLabels([str(i) for i in range(1, len(rows) + 1)] + ["＋"] * len(self.new_rows))
         for r, (kind, entry) in enumerate(self.view):
             for c, (field, _) in enumerate(SHEET_COLUMNS):
@@ -784,6 +895,8 @@ class SheetPanel(_Panel):
             needed = field in REQUIRED_NEW or (field == "category" and values.get("group") and known is None)
             if fixed:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setBackground(QBrush(FIXED_CELL))
+                item.setForeground(QBrush(FIXED_TEXT))
                 item.setToolTip({"category": "대분류는 설비군에서 자동으로 정해집니다", "model_name": "모델명은 설비군과 같습니다",
                                  "base_date": "기준일은 현황표에서 정해집니다", "site": "Site는 현황표에서 정해집니다",
                                  "ui_type": "UI 구분은 SW 계열에서 정해집니다",
@@ -842,12 +955,23 @@ class SheetPanel(_Panel):
                 note += " · PM 이름은 날짜 간 같은 PM을 잇는 고정 위치라 고치지 않습니다" if field == "pm" and row.pm_id else ""
                 note += " · 설비군에 등록된 SW 계열이 없습니다" if field == "family" and not editable else ""
                 item.setToolTip(origin + note)
+            if not editable and row.snapshot_id not in self.deletes and item.background().style() == Qt.BrushStyle.NoBrush:
+                item.setBackground(QBrush(FIXED_CELL))  # 자동으로 정해지는 칸은 회색 (11-17)
+                if item.foreground().style() == Qt.BrushStyle.NoBrush:
+                    item.setForeground(QBrush(FIXED_TEXT))
         self.table.blockSignals(blocked)
 
     # 정렬 ------------------------------------------------------------------------------------
+    def _selection_moved(self):
+        self._selection_round += 1
+
     def _header_clicked(self, column):
-        """열 제목을 누르면 그 열로 오름차순 → 내림차순 → 기본 정렬 순으로 바뀐다."""
+        """열 제목을 처음 누르면 그 열 전체를 고르기만 한다 (일괄 변경용). 고른 채로 다시 누르면 그 열로
+        오름차순 → 내림차순 → 기본 정렬 순으로 바뀐다 (11-17: 한 번 누르면 선택과 정렬이 함께 됐다)."""
         if self.data is None:
+            return
+        if self._header_armed != (column, self._selection_round):
+            self._header_armed = (column, self._selection_round)
             return
         if self.sort is None or self.sort[0] != column:
             self.sort_by((column, False))
@@ -855,6 +979,7 @@ class SheetPanel(_Panel):
             self.sort_by((column, True))
         else:
             self.sort_by(None)
+        self._header_armed = (column, self._selection_round)  # 이어서 누르면 다음 정렬로
 
     def sort_by(self, sort):
         self.sort = sort
@@ -862,7 +987,7 @@ class SheetPanel(_Panel):
 
     def _sync_sort(self):
         if self.sort is None:
-            self.sort_label.setText("정렬: Line → 설비군 → 설비 호기 (기본) · 열 제목을 누르면 그 열로 정렬합니다")
+            self.sort_label.setText("정렬: Line → 설비군 → 설비 호기 (기본) · 열 제목을 한 번 누르면 열 선택, 한 번 더 누르면 그 열로 정렬합니다")
         else:
             column, descending = self.sort
             self.sort_label.setText(f"정렬: {SHEET_COLUMNS[column][1]} {'내림차순' if descending else '오름차순'} · 한 번 더 누르면 바뀝니다")
@@ -1000,11 +1125,164 @@ class SheetPanel(_Panel):
             self.edits[key] = value
 
     def _repaint_all(self):
+        if self._bulk:
+            return  # 여러 칸을 바꾸는 동안에는 끝난 뒤 한 번만 다시 칠한다
         for r in range(min(self.table.rowCount(), len(self.view))):
             for c in range(len(SHEET_COLUMNS)):
                 if self.table.item(r, c) is not None:
                     self._paint(r, c)
         self._sync()
+
+    # 여러 칸 한 번에 바꾸기 (11-17) ------------------------------------------------------------------
+    def _selected_cells(self):
+        """고른 칸 (줄, 열). 표 순서대로."""
+        return sorted({(i.row(), i.column()) for i in self.table.selectedIndexes()})
+
+    def bulk_preview(self, cells, text):
+        """같은 열에서 여러 칸을 고르고 입력하는 동안 다른 칸에도 입력 중인 글자를 보인다 (저장 전 값은 바꾸지 않는다)."""
+        blocked = self.table.blockSignals(True)
+        for r, c in cells:
+            item = self.table.item(r, c)
+            if item is not None:
+                item.setText(text)
+                item.setForeground(QBrush(QColor(PRIMARY)))
+        self.table.blockSignals(blocked)
+        self._previewed = list(cells)
+
+    def bulk_preview_end(self):
+        cells, self._previewed = self._previewed, []
+        for r, c in cells:
+            if r < len(self.view) and self.table.item(r, c) is not None:
+                self._paint(r, c)
+
+    def bulk_edit(self, cells, text):
+        """고른 칸 모두에 같은 값을 넣는다."""
+        return self.apply_cells([(r, c, text) for r, c in cells], f"고른 {len(cells)}칸")
+
+    def apply_cells(self, changes, what="여러 칸"):
+        """(줄, 열, 글자) 목록을 한 칸씩 고칠 때와 같은 규칙으로 한 번에 반영한다. 되돌리기는 한 단계다.
+
+        return
+        - 값이 바뀐 칸 수. 수정할 수 없는 칸(회색 · 삭제 예정)은 건너뛴다.
+        """
+        if self.data is None or self.page.saving or not changes:
+            return 0
+        before, mark = self._state(), len(self.steps)
+        errors, changed, skipped = [], 0, 0
+        self._bulk = True
+        self.say = lambda text, *, error=False: errors.append(text) if error else None  # 칸마다의 안내는 모아서 한 번에
+        try:
+            for r, c, text in changes:
+                item = self.table.item(r, c) if 0 <= r < len(self.view) and 0 <= c < len(SHEET_COLUMNS) else None
+                if item is None or not item.flags() & Qt.ItemFlag.ItemIsEditable:
+                    skipped += 1
+                    continue
+                state = self._state()
+                blocked = self.table.blockSignals(True)
+                item.setText(text)
+                self.table.blockSignals(blocked)
+                self._cell_changed(item)
+                if self._state() != state:
+                    changed += 1
+                for other in range(len(SHEET_COLUMNS)):  # 같은 줄의 대분류 · 모델명 · 고칠 수 있는지가 따라 바뀐다
+                    self._paint(r, other)
+        finally:
+            del self.say
+            self._bulk = False
+        del self.steps[mark:]
+        if self._state() != before:
+            self.steps.append(("state", before))
+        self._previewed = []
+        self._repaint_all()
+        if errors or skipped:
+            parts = [f"{what} 중 {changed}칸을 바꿨습니다"]
+            if skipped:
+                parts.append(f"수정할 수 없는 칸(회색 · 삭제 예정) {skipped}칸은 건너뛰었습니다")
+            if errors:
+                parts.append(f"{len(errors)}칸은 그대로 두었습니다: {errors[0]}")
+            self.say(" · ".join(parts) + ".", error=bool(errors))
+        else:
+            self.say(f"{what} 중 {changed}칸을 바꿨습니다 · [저장]을 누르면 반영됩니다.")
+        return changed
+
+    def _visible_columns(self):
+        header = self.table.horizontalHeader()
+        return [header.logicalIndex(v) for v in range(header.count()) if not header.isSectionHidden(header.logicalIndex(v))]
+
+    def paste_cells(self, text=None):
+        """Excel에서 복사한 열 · 표를 고른 칸부터 붙여 넣는다. 값 하나면 고른 칸 모두에 같은 값."""
+        if self.data is None or self.page.saving:
+            return False
+        grid = parse_clipboard(clipboard_text() if text is None else text)
+        cells = self._selected_cells()
+        current = self.table.currentIndex()
+        if not cells and current.isValid():
+            cells = [(current.row(), current.column())]
+        columns = self._visible_columns()
+        cells = [(r, c) for r, c in cells if c in columns]
+        if not grid or not cells:
+            return False
+        start_row = min(r for r, _ in cells)
+        start_position = min(columns.index(c) for _, c in cells)
+        plan = paste_plan(grid, start_row, start_position, list(range(len(self.view))), columns,
+                          [(r, columns.index(c)) for r, c in cells])
+        return bool(self.apply_cells(plan, "붙여 넣은 칸"))
+
+    def copy_cells(self):
+        """고른 칸을 Excel에 붙여 넣을 수 있는 글자(줄 바꿈 · 탭)로 복사한다."""
+        cells = self._selected_cells()
+        if not cells:
+            return False
+        lines = {}
+        for r, c in cells:
+            item = self.table.item(r, c)
+            lines.setdefault(r, []).append(item.text() if item is not None else "")
+        set_clipboard_text("\n".join("\t".join(values) for _, values in sorted(lines.items())))
+        return True
+
+    def clear_cells(self):
+        """고른 칸을 비운다 (비울 수 없는 칸 · 회색 칸은 그대로)."""
+        cells = self._selected_cells()
+        return bool(cells) and bool(self.apply_cells([(r, c, "") for r, c in cells], "비운 칸"))
+
+    @staticmethod
+    def replace_fields():
+        """일괄 변경에서 고를 수 있는 항목: 직접 고치는 열."""
+        return [(field, name) for field, name in SHEET_COLUMNS if field not in AUTO_COLUMNS]
+
+    def open_find_replace(self):
+        """[일괄 변경] 창으로 한 항목의 글자를 한 번에 바꾼다 (예: 설비 호기 · Line)."""
+        if self.data is None or self.page.saving:
+            return False
+        rows = sorted({r for r, _ in self._selected_cells()})
+        dialog = FindReplaceDialog(self.replace_fields(), self, selected_rows=len(rows),
+                                   note="고른 항목에서 찾을 글자를 바꿀 글자로 한 번에 바꿉니다. 바꾼 칸은 노란색으로 보이고 "
+                                        "[저장]을 눌러야 DB에 들어갑니다. 회색 칸 · 삭제 예정 줄은 바꾸지 않습니다.")
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        return bool(self.find_replace(*dialog.values(), rows=rows))
+
+    def find_replace(self, field, find, replacement, whole_cell=False, only_selected=False, *, rows=None):
+        """한 항목에서 찾을 글자를 바꿀 글자로 바꾼다. 바꾼 칸 수를 돌려준다."""
+        if self.data is None or field not in COLUMN:
+            return 0
+        column, wanted = COLUMN[field], (set(rows or ()) if only_selected else None)
+        plan = []
+        for r in range(len(self.view)):
+            item = self.table.item(r, column)
+            if item is None or (wanted is not None and r not in wanted) or not item.flags() & Qt.ItemFlag.ItemIsEditable:
+                continue
+            text = item.text()
+            if whole_cell:
+                if text.strip() == find.strip():
+                    plan.append((r, column, replacement))
+            elif find and find in text:
+                plan.append((r, column, text.replace(find, replacement)))
+        name = dict(SHEET_COLUMNS)[field]
+        if not plan:
+            self.say(f"{name}에서 '{find}'을(를) 찾지 못했습니다.", error=True)
+            return 0
+        return self.apply_cells(plan, f"{name} 일괄 변경")
 
     # 행 추가 · 삭제 표시 --------------------------------------------------------------------------
     def add_row(self):
@@ -1357,6 +1635,7 @@ class SheetPanel(_Panel):
                                       and not busy)
         self.sheet_combo.setEnabled(not busy)
         self.create_button.setEnabled(self.page.gateway is not None and not busy)
+        self.replace_button.setEnabled(self.data is not None and bool(self.view) and not busy)
 
     # 가이드 --------------------------------------------------------------------------------
     def attach_guide(self, parent):

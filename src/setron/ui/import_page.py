@@ -702,7 +702,7 @@ class ImportPage(QWidget):
         self.suggestion_button.hide()
         self.revert_button.clicked.connect(self.revert_selected)
         self.exclude_button.clicked.connect(self.toggle_excluded)
-        self.replace_button = button("찾아 바꾸기")
+        self.replace_button = button("일괄 변경")
         self.replace_button.setToolTip("한 항목에서 찾을 글자를 바꿀 글자로 한 번에 바꿉니다 (예: 설비 호기 · 모델명). "
                                        "여러 칸을 골라 값을 입력하거나 Ctrl+V로 붙여 넣어도 한 번에 바뀝니다.")
         self.replace_button.clicked.connect(self.open_find_replace)
@@ -2024,7 +2024,7 @@ class ImportPage(QWidget):
         return self.edit_cells([(self.row_model.ids[r], fields[c - 2], "") for r, c in cells], "비운 칸")
 
     def open_find_replace(self):
-        """[찾아 바꾸기] 창으로 한 항목의 글자를 한 번에 바꾼다 (예: 설비 호기 · 모델명)."""
+        """[일괄 변경] 창으로 한 항목의 글자를 한 번에 바꾼다 (예: 설비 호기 · 모델명)."""
         if self.draft is None or self.busy or self.locked:
             return False
         rows = self._selected_row_ids()
@@ -2044,7 +2044,7 @@ class ImportPage(QWidget):
             self._set_status("바꿀 칸 없음", "info", f"{FIELD_LABELS.get(field, field)}에서 '{find}'을(를) 찾지 못했습니다.")
             self.show_toast("바꿀 칸이 없습니다.", "warning")
             return False
-        return self.edit_cells(plan, f"{FIELD_LABELS.get(field, field)} 찾아 바꾸기")
+        return self.edit_cells(plan, f"{FIELD_LABELS.get(field, field)} 일괄 변경")
 
     def _restore_cells(self, ids):
         """여러 칸을 바꾼 뒤 다시 그려도 그 칸들을 고른 상태로 둔다 (바뀐 결과를 바로 확인)."""

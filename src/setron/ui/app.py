@@ -1353,6 +1353,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         """
         if not is_database_import_saver(importer.saver):
             return
+        remember_query_for_requery()
         cancel_query()
         cancel_management_refresh()
         dashboard.invalidate()
@@ -1361,6 +1362,7 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
         replay.if_loaded(lambda page: page.invalidate())
         equipment.if_loaded(lambda page: page.clear("저장 자료 변경 · 조회 조건을 다시 선택해 주세요."))
         list_action.setEnabled(False)
+        window.notice.setText(f"DB 저장 완료 · 입력 작업 {receipt.batch_id} · {receipt.row_count}행")
         read_saved_catalog(finish_import_catalog, background=importer.progress_dialog.isVisible())
         judgments = getattr(receipt, "refresh", None)
         invalid = tuple(target for target in judgments.targets if not target.valid) if judgments else ()
@@ -1375,7 +1377,6 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             importer.show_toast(
                 f"수동 위험 지정 {len(unresolved)}건이 미확인으로 유지되었습니다 (지정 번호: {identifiers}). "
                 "대상 버전·Item과 적용 범위를 확인해 주세요. 위험이 해제된 상태가 아닙니다.", "warning", 10000)
-        window.notice.setText(f"DB 저장 완료 · 입력 작업 {receipt.batch_id} · {receipt.row_count}행")
 
     importer.connect("saved", invalidate_saved_results)
     importer.connect("saved", lambda receipt: versions.record_import(
@@ -1385,14 +1386,56 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
             configure_import_choices()
 
     importer.connect("saved", update_import_choices_for_memory)
+    requery_after_change = None  # 확정된 저장 · 삭제 직전에 적용돼 있던 조회 (적용 조회, 그때의 최신 기준일)
+
+    def latest_saved_date():
+        dates = tuple(getattr(source, "analysis_dates", None) or getattr(source, "dates", None) or ())
+        return max(dates) if dates else None
+
+    def remember_query_for_requery():
+        """저장 · 삭제가 확정되면 선택지를 다시 읽은 뒤 같은 조회 조건으로 바로 다시 조회하려고 기억한다 (11-17 요청:
+        데이터를 넣거나 지운 뒤 대시보드 · 히트맵 · 리플레이에 가면 [조회]를 누르지 않아도 바뀐 현황이 보이게)."""
+        nonlocal requery_after_change
+        state, applied = window.query_state, window.query_state.applied
+        same = (applied is not None and state.applied_is_current and state.draft == applied.selection
+                and state.target_draft == applied.targets)
+        requery_after_change = (applied, latest_saved_date()) if same else None
+
+    def requery_after_data_change(catalog):
+        """기억한 조회 조건이 새 선택지에서도 그대로 유효하면 다시 적용한다. 사용자가 바꾼 선택 · 지워진 선택 ·
+        맞지 않게 된 목표 N은 건드리지 않고 지금처럼 [조회]를 기다린다."""
+        nonlocal requery_after_change
+        remembered, requery_after_change = requery_after_change, None
+        if (catalog is None or remembered is None or window.management_saving or window.management_uncertain
+                or risk_save.locked):
+            return False
+        applied, latest = remembered
+        state = window.query_state
+        if state.draft != applied.selection or state.target_draft != applied.targets or state.invalid_selections:
+            return False
+        if applied.targets is not None:
+            try:
+                validate_targets(source, applied.targets)
+            except ValueError:
+                return False
+        newest = latest_saved_date()
+        if latest is not None and newest is not None and applied.selection.as_of == latest and newest > latest:
+            window.query_panel.set_as_of(newest)  # 최신 기준일을 보던 중이면 새로 저장된 최신 기준일로 옮긴다
+        return window.query_panel.apply_draft() is not None
+
     def finish_import_catalog(catalog):
         apply_saved_catalog(catalog)
         versions.if_loaded(lambda page: page.refresh_after_save())
         items.if_loaded(lambda page: page.refresh_after_save())
         configure_import_choices()
         window.management_progress.set_operation(None)
+        if requery_after_data_change(catalog):
+            text = window.notice.text().replace(" · 조회 조건을 다시 선택해 주세요.", "")
+            window.notice.setText(text + " · 같은 조회 조건으로 다시 조회했습니다.")
 
-    def refresh_after_data_change(message, *, background):
+    def refresh_after_data_change(message, *, background, requery=False):
+        if requery:
+            remember_query_for_requery()
         cancel_management_refresh()
         dashboard.invalidate()
         cancel_query()
@@ -1409,10 +1452,10 @@ def create_window(source: DashboardSource | None = None, *, version_loader=None,
 
     def after_import_delete(_result):
         refresh_after_data_change("저장 자료 삭제 · 조회 조건을 다시 선택해 주세요.",
-                                  background=importer.progress_dialog.isVisible())
+                                  background=importer.progress_dialog.isVisible(), requery=True)
 
     def after_sql_import(_result):
-        refresh_after_data_change("SQL 자료 저장 완료 · 조회 조건을 다시 선택해 주세요.", background=True)
+        refresh_after_data_change("SQL 자료 저장 완료 · 조회 조건을 다시 선택해 주세요.", background=True, requery=True)
 
     def after_uncertain_sql_import():
         # 카탈로그 재조회가 느리거나 실패해도 기존 상세와 대기 중 응답을 사용하지 않는다.
