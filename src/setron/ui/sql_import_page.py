@@ -62,7 +62,7 @@ class SqlImportPage(QWidget):
         self.mode_combo.setProperty("queryField", True)
         self.mode_combo.setStyleSheet(import_combo_style())
         self.mode_combo.setMinimumHeight(40)
-        self.mode_combo.addItem("비교하고 선택", "review")
+        self.mode_combo.addItem("자동 병합·충돌 검토", "review")
         self.mode_combo.addItem("신규 항목만 추가", "add")
         self.mode_combo.addItem("같은 항목 덮어쓰기", "overwrite")
         self.mode_combo.currentIndexChanged.connect(self._selection_changed)
@@ -96,7 +96,7 @@ class SqlImportPage(QWidget):
 
     def _can_apply(self):
         return (not self.busy and self.plan is not None and self.plan.changes > 0
-                and not getattr(self.plan, "unresolved", 0) and not self._review_dirty)
+                and not getattr(self.plan, "unresolved", 0) and not self.comparison.unresolved and not self._review_dirty)
 
     def _render(self):
         enabled = self.importer is not None and not self.busy
@@ -182,7 +182,9 @@ class SqlImportPage(QWidget):
             return
         reviewed = {item.id: item.choice for item in getattr(self.plan, "differences", ())
                     if item.choice in {"CURRENT", "INCOMING"}}
-        self._review_dirty = reviewed != self.comparison.choices
+        explicit = {item.id: item.choice for item in getattr(self.plan, "differences", ())
+                    if item.choice in {"CURRENT", "INCOMING"} and not getattr(item, "automatic", False)}
+        self._review_dirty = reviewed != self.comparison.choices or explicit != self.comparison.manual_choices
         if self._review_dirty:
             self._show_status("적용할 값 선택 필요" if self.comparison.unresolved else "선택 내용 검토 필요",
                               "info", self.plan.summary)
@@ -195,7 +197,7 @@ class SqlImportPage(QWidget):
         plan = self.plan
         if self.busy or plan is None or not self._review_dirty or self.comparison.unresolved:
             return
-        choices = self.comparison.choices
+        choices = self.comparison.manual_choices
         resolve = self.importer.resolve
         self.resolve_request.start(BackgroundRead(lambda: resolve(plan, choices)))
         self._show_status("선택 내용 검토 중", "info", "선택한 값과 연결 자료를 확인하고 있습니다.")
@@ -224,6 +226,9 @@ class SqlImportPage(QWidget):
         choices = self.comparison.choices
         selected = (f"\n선택 · 현재값 유지 {sum(value == 'CURRENT' for value in choices.values()):,}건 · "
                     f"가져온값 사용 {sum(value == 'INCOMING' for value in choices.values()):,}건" if choices else "")
+        if getattr(plan, "differences", ()):
+            selected += (f"\n처리 · 자동 {self.comparison.automatic_count:,}건 · "
+                         f"수동 선택 {self.comparison.manual_count:,}건")
         dialog = ImportConfirmDialog(
             f"{self.path.name}\n가져오기 방식 · {self.mode_combo.currentText()}\n\n"
             f"{plan.summary}{selected}\n\n검토한 변경 사항을 대상 DB에 {question}",

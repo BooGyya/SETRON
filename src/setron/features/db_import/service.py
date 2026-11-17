@@ -42,7 +42,7 @@ class SqlImportService:
         """파일을 다시 읽지 않고 검토한 원본과 최신 대상 지문으로 선택을 재검증한다."""
         if plan.mode != "review" or plan._source is None:
             raise SqlImportError("값 비교를 먼저 실행해 주세요.")
-        if not isinstance(choices, dict) or any(value not in {"CURRENT", "INCOMING"} for value in choices.values()):
+        if not isinstance(choices, dict) or any(value not in {"CURRENT", "INCOMING", "AUTO"} for value in choices.values()):
             raise SqlImportError("비교 항목의 적용 값을 선택해 주세요.")
         database = self._database_factory()
         try:
@@ -53,8 +53,17 @@ class SqlImportService:
                 if plan.revision != fingerprint(target, next_ids):
                     raise SqlImportError("대상 DB가 미리보기 이후 바뀌었습니다. 변경 사항을 다시 확인해 주세요.")
                 name = database.engine.url.database if database.engine.dialect.name == "mysql" else None
+                selected = dict(plan.choices)
+                known = {difference.id for difference in plan.differences}
+                if set(choices) - known:
+                    raise SqlImportError("검토 목록에 없는 적용 선택입니다. 변경 사항을 다시 검토해 주세요.")
+                for identifier, choice in choices.items():
+                    if choice == "AUTO":
+                        selected.pop(identifier, None)
+                    else:
+                        selected[identifier] = choice
                 return build_plan(plan._source, target, next_ids, repository, "review", _destination(database), name,
-                                  choices={**plan.choices, **choices})
+                                  choices=selected)
         except (StorageValidationError, UnicodeError, PeerSyncError) as error:
             raise SqlImportError(str(error)) from None
         finally:

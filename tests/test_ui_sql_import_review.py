@@ -12,7 +12,7 @@ from setron.features.db_import.service import SqlImportError
 from setron.ui.import_dialogs import ImportConfirmDialog
 from setron.ui.combo_box import ComboBox
 from setron.ui.sql_import_page import SqlImportPage
-from setron.ui.sql_import_review import SqlComparisonWidget, value_text
+from setron.ui.sql_import_review import CHOICE_COLUMN, CURRENT_COLUMN, SqlComparisonWidget, value_text
 from test_ui_import_ver5 import own, until  # noqa: F401
 
 
@@ -68,7 +68,7 @@ def page(own, tmp_path, monkeypatch, gateway=None):  # noqa: F811
 
 
 def choose(widget, row, value):
-    assert widget.comparison.model.setData(widget.comparison.model.index(row, 4), value, Qt.ItemDataRole.EditRole)
+    assert widget.comparison.model.setData(widget.comparison.model.index(row, CHOICE_COLUMN), value, Qt.ItemDataRole.EditRole)
 
 
 def test_review_is_default_and_unresolved_choices_cannot_apply(own, tmp_path, monkeypatch):
@@ -89,7 +89,7 @@ def test_review_is_default_and_unresolved_choices_cannot_apply(own, tmp_path, mo
 def test_individual_selection_requires_background_validation_before_confirmed_apply(own, tmp_path, monkeypatch):
     gate = Event()
     widget, gateway = page(own, tmp_path, monkeypatch, Gateway(gate=gate))
-    index = widget.comparison.proxy.index(0, 4)
+    index = widget.comparison.proxy.index(0, CHOICE_COLUMN)
     widget.comparison.table.setCurrentIndex(index)
     widget.comparison.table.edit(index)
     editor = widget.comparison.table.findChild(ComboBox)
@@ -179,7 +179,7 @@ def test_group_values_search_and_plain_text_detail_preserve_the_full_source(own)
     assert widget.current_detail.toPlainText() == "<b>원문</b>\n둘째 줄"
     assert widget.incoming_detail.toPlainText() == "가져온 값"
     assert "(묶음)" in widget.model.data(widget.model.index(1, 1))
-    assert "SW 계열: O2" in widget.model.data(widget.model.index(1, 2))
+    assert "SW 계열: O2" in widget.model.data(widget.model.index(1, CURRENT_COLUMN))
     widget.search.setText("PM1")
     assert widget.proxy.rowCount() == 1
     widget.keep_button.click()
