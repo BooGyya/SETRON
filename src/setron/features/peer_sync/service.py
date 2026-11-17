@@ -397,7 +397,63 @@ def _mapped_key(entity, id_maps, repository):
         return None
 
 
-def reconcile(session, repository, *, rows=None, peer_id=None, incoming_rows=None, id_maps=None, choices=None):
+def restore_hints(session, repository):
+    """삭제 기록에 보존할 UUID를 읽는다. 숫자 ID만으로 복원 대상을 추정하지 않는다."""
+    table = repository.table("app_setting")
+    rows = tuple(dict(row) for row in session.execute(select(table).order_by(table.c.setting_key)).mappings())
+    return identity_index({"app_setting": rows})
+
+
+def _restore_bindings(state, current, index, restorations, repository):
+    """명시적으로 보존한 삭제 UUID만 새 로컬 주소에 잇는다. 살아 있는 다른 주소는 빼앗지 않는다."""
+    if not restorations:
+        return set()
+    aliases = canonical_ids(state)
+    by_identity = {}
+    def priority(entity):
+        address = (entity["table"], _json(entity["key"])) if entity["key"] is not None else None
+        return address in current, entity["key"] is not None
+    for entity in state.entities.values():
+        identity = aliases.get(entity["uuid"], entity["uuid"])
+        previous = by_identity.get(identity)
+        if previous is None or priority(entity) > priority(previous):
+            by_identity[identity] = entity
+    restored = set()
+    claimed = {}
+    for binding in restorations:
+        name, key, hint = binding["table"], binding["key"], binding.get("uuid")
+        if hint is None:
+            continue  # 옛 기록에 UUID가 없으면 별개의 새 항목으로 보존한다.
+        _uuid(hint)
+        address = name, key_token(key)
+        _require(address in current, "되살릴 교환 항목의 현재 자료가 없습니다.")
+        entity = by_identity.get(aliases.get(hint, hint))
+        if entity is None:
+            continue  # 이 DB에서 확인할 수 없는 다른 파일의 식별자는 추측하지 않는다.
+        _require(entity["table"] == name, "복원 기록의 UUID가 다른 종류의 자료를 가리킵니다.")
+        original = (name, _json(entity["key"])) if entity["key"] is not None else None
+        if original is not None and original != address and original in current:
+            continue  # 같은 UUID의 다른 현재 행이 있으면 그 연결을 그대로 둔다.
+        _require(entity["uuid"] not in claimed or claimed[entity["uuid"]] == address,
+                 "같은 교환 UUID를 여러 복원 항목에 연결할 수 없습니다.")
+        existing = index.get(address)
+        _require(existing is None or existing["deleted"] or
+                 aliases.get(existing["uuid"], existing["uuid"]) == aliases.get(entity["uuid"], entity["uuid"]),
+                 "복원할 교환 항목의 주소에 다른 현재 UUID가 연결되어 있습니다.")
+        # 새 주소의 PK 형식은 실제 테이블 정의와 일치해야 한다.
+        _require(set(key) == set(repository.table(name).primary_key.columns.keys()),
+                 "복원할 교환 항목의 기본키가 올바르지 않습니다.")
+        if original != address and index.get(original) is entity:
+            del index[original]
+        entity["key"] = _pack(key)
+        index[address] = entity
+        claimed[entity["uuid"]] = address
+        restored.add(entity["uuid"])
+    return restored
+
+
+def reconcile(session, repository, *, rows=None, peer_id=None, incoming_rows=None, id_maps=None, choices=None,
+              restorations=None):
     """잠근 현재 자료와 교환 이력을 합친 뒤 예약 설정을 같은 트랜잭션에 저장한다.
 
     incoming_rows의 실제 자료 적용은 호출자가 먼저 수행한다. 여기서는 원본 이벤트를
@@ -408,8 +464,16 @@ def reconcile(session, repository, *, rows=None, peer_id=None, incoming_rows=Non
     peer = _uuid(peer_id) if peer_id is not None else local_peer_id()
     business = _business_rows(rows)
     current = {_address(name, row, repository): row for name, records in business.items() for row in records}
-    index = {(entity["table"], _json(entity["key"])): entity for entity in state.entities.values()
-             if entity["key"] is not None}
+    index = {}
+    for entity in state.entities.values():
+        if entity["key"] is None:
+            continue
+        address = entity["table"], _json(entity["key"])
+        previous = index.get(address)
+        _require(previous is None or previous["deleted"] or entity["deleted"],
+                 "동등 교환 UUID가 같은 로컬 항목을 중복 참조합니다.")
+        if previous is None or (previous["deleted"] and not entity["deleted"]):
+            index[address] = entity
     incoming_heads = {}
     if incoming_rows is not None:
         incoming = read_state(incoming_rows)
@@ -454,10 +518,12 @@ def reconcile(session, repository, *, rows=None, peer_id=None, incoming_rows=Non
                 target["aliases"] = sorted((set(target["aliases"]) | set(source["aliases"]) | {source["uuid"]}) - {target["uuid"]})
                 incoming_heads.setdefault(target["uuid"], set()).add(source["head"])
                 by_identity[known.get(source["uuid"], source["uuid"])] = target
+    restored_ids = _restore_bindings(state, current, index, restorations, repository)
     # 새 항목 모두에 UUID를 먼저 배정해야 같은 스냅샷의 FK도 UUID로 정규화된다.
     for address, row in current.items():
         entity = index.get(address)
-        if entity is None or (entity["deleted"] and entity["uuid"] not in incoming_heads):
+        if entity is None or (entity["deleted"] and entity["uuid"] not in incoming_heads and
+                              entity["uuid"] not in restored_ids):
             identifier = str(uuid4())
             entity = {"schema": 1, "uuid": identifier, "table": address[0], "key": json.loads(address[1]),
                       "aliases": [], "head": None, "deleted": False}

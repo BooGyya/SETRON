@@ -43,6 +43,11 @@ class Difference:
     incoming: object
     choice: str | None = None
     grouped: bool = False
+    baseline: object = None
+    has_baseline: bool = False
+    automatic: bool = False
+    reason: str = ""
+    requires_confirmation: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,14 @@ class MergePlan:
     @property
     def unresolved(self):
         return sum(value.choice is None for value in self.differences)
+
+    @property
+    def automatic_count(self):
+        return sum(value.automatic for value in self.differences)
+
+    @property
+    def conflict_count(self):
+        return self.unresolved
 
 
 # 자동 증가 ID는 DB별 값이다. 업무 키가 없는 이력·문서 등은 내용과 연결이 같은 행만 재사용한다.
@@ -197,7 +210,9 @@ class _Planner:
         self.differences = []
         self.receipts = defaultdict(dict)
         self.chosen_settings = set()
+        self.reviewed_setting_keys = set()
         self.restoring_snapshots = set()
+        self.review_originals = {}
         self.tables = {name: repository.table(name) for name in TABLE_NAMES}
         if any(tuple(table.columns.keys()) not in allowed_columns(name)
                for name, table in self.tables.items()):
@@ -271,6 +286,9 @@ class _Planner:
                 self.target_entities[identifier] = entity
         for row in target["equipment_snapshot"]:
             self.sites.setdefault(row["equipment_id"], set()).add(row["site"].strip().casefold())
+        from .automatic import ReviewAutomation
+        self.automation = ReviewAutomation(self.raw_source, target, repository, self.source_state,
+                                           self.target_state, self.source_identity, self.target_identity)
 
     def _validate_source(self):
         for name, rows in self.source.items():
@@ -434,16 +452,27 @@ class _Planner:
             previous = targets.get(group)
             if not previous:
                 continue
+            self.reviewed_setting_keys.update(previous)
+            self.reviewed_setting_keys.update(row["setting_key"] for row in rows.values())
             current = {key.decode("utf-8"): json.loads(row["setting_value"]) for key, row in previous.items()}
             new = {row["setting_key"].decode("utf-8"): json.loads(row["setting_value"]) for row in rows.values()}
             if current == new:
                 self.chosen_settings.update(row["setting_key"] for row in rows.values())
                 continue
+            from setron.features.peer_sync import key_token
+            identifier = self.target_identity.get(("app_setting", key_token({"setting_key": group})))
+            target = self.target_entities.get(self.canonical_identity.get(identifier, identifier)) if identifier else None
+            if target is not None and self._has_group_receipt(target["head"], self.exchange_digest):
+                suppressed.update(row["setting_key"] for row in rows.values())
+                continue  # 같은 파일에 대해 이미 검토한 N 묶음 선택을 다시 기록하지 않는다.
             display = lambda values: {"현재 기준" if key == group.decode("utf-8") else
                                       "저장 이력 " + str(int(key.rpartition(":")[2])): value for key, value in values.items()}
             row = previous.get(group) or {"setting_key": group}
-            if self._choose("app_setting", row, "N 그룹·저장 이력", display(current), display(new), grouped=True):
-                incoming_keys = {row["setting_key"] for row in rows.values()}
+            comparison = self.automation.settings(previous, rows, group)
+            incoming_keys = {row["setting_key"] for row in rows.values()}
+            if self._choose("app_setting", row, "N 그룹·저장 이력", display(current), display(new),
+                            grouped=True, comparison=comparison,
+                            requires_confirmation=bool(set(previous) - incoming_keys)):
                 self.chosen_settings.update(incoming_keys)
                 deleted.update(set(previous) - incoming_keys)
             else:
@@ -478,7 +507,7 @@ class _Planner:
         if known and name == "equipment_snapshot" and not target["deleted"]:
             matched = self.uuid_targets[name].get(self.canonical_identity.get(uid, uid))
             if matched is None:
-                return True
+                return not self.automation.incoming_group_changed(uid)
             group = self.resolve("equipment_group", original["group_id"]) if original["group_id"] is not None else None
             same = matched is not None and matched["group_id"] == group and self._children(
                 matched["snapshot_id"]) == self._children(original["snapshot_id"], source=True)
@@ -543,20 +572,98 @@ class _Planner:
                 pending.extend(self.peer_events[head]["parents"])
         return False
 
-    def _choose(self, name, row, field_name, current, incoming, *, grouped=False):
+    def _choose(self, name, row, field_name, current, incoming, *, grouped=False,
+                comparison=None, allow_automatic=True, requires_confirmation=False):
         pk = {c: row[c] for c in self.primary[name]}
         token = _serialized((name, pk, field_name))
         identifier = hashlib.sha256(token.encode("utf-8")).hexdigest()
         choice = self.choices.get(identifier)
+        if comparison is None:
+            from setron.features.peer_sync import key_token
+            original = self.review_originals.get((name, key_token(pk)))
+            if original is not None:
+                comparison = (self.automation.row(name, row, original) if grouped else
+                              self.automation.field(name, row, original, field_name))
+        automatic = False
+        has_baseline = bool(comparison and comparison.found)
+        reason = comparison.reason if comparison else "공통 기준을 확인할 수 없어 직접 선택해야 합니다."
+        reason = {"no_common_ancestor": "공통 변경 이력이 없어 직접 선택해야 합니다.",
+                  "ambiguous_common_ancestors": "공통 기준이 여러 갈래로 달라 직접 선택해야 합니다.",
+                  "identity_unavailable": "항목의 공통 식별 이력이 없어 직접 선택해야 합니다.",
+                  "identity_mismatch": "같은 항목의 이력인지 확인할 수 없어 직접 선택해야 합니다.",
+                  "common": "공통 변경 이력을 확인했습니다.",
+                  "equivalent_common_ancestors": "같은 값을 가진 공통 변경 이력을 확인했습니다."}.get(reason, reason)
+        if has_baseline:
+            from setron.features.peer_sync import MISSING
+            if comparison.current is not MISSING and comparison.incoming is not MISSING:
+                decision = comparison.decision
+                reasons = {"current_only": "현재 PC에서만 변경되어 현재값을 유지합니다.",
+                           "incoming_only": "다른 PC에서만 변경되어 가져온값을 적용합니다.",
+                           "same_change": "양쪽이 같은 값으로 변경했습니다.",
+                           "unchanged": "공통 기준과 같은 값입니다.",
+                           "conflict": "양쪽에서 다르게 변경되어 적용 값을 선택해야 합니다."}
+                reason = reasons.get(decision.kind, reason)
+                if (choice is None and allow_automatic and decision.choice is not None and
+                        not (requires_confirmation and decision.choice == "INCOMING")):
+                    choice, automatic = decision.choice, True
+        if identifier in self.choices:
+            reason = "사용자가 선택한 적용 값입니다."
+        elif not allow_automatic or requires_confirmation and choice != "CURRENT":
+            reason = "삭제 항목은 개별 확인 후 반영합니다."
         self.differences.append(Difference(identifier, name, self._label(name, row), pk, field_name,
                                            self._public_value(current, field_name),
-                                           self._public_value(incoming, field_name), choice, grouped))
+                                           self._public_value(incoming, field_name), choice, grouped,
+                                           self._baseline_public(comparison.base) if has_baseline else None,
+                                           has_baseline, automatic, reason, requires_confirmation))
         if choice is not None:
             from setron.features.peer_sync import key_token
             receipt = self.receipts[name].setdefault(key_token(pk), {
                 "source_group_digest": self.exchange_digest, "choice": choice, "fields": {}})
             receipt.setdefault("fields", {})[field_name] = choice
+            receipt.setdefault("decisions", {})[field_name] = {
+                "choice": choice, "automatic": automatic, "reason": reason,
+                "baseline_revisions": list(comparison.revisions) if comparison and comparison.found else [],
+            }
         return choice == "INCOMING"
+
+    def _baseline_public(self, value):
+        from setron.features.peer_sync import MISSING
+        if value is MISSING:
+            return "해당 항목 없음"
+        if isinstance(value, dict):
+            if set(value) == {"$ref"}:
+                identity = self.canonical_identity.get(value["$ref"], value["$ref"])
+                for table, rows in self.uuid_targets.items():
+                    row = rows.get(identity)
+                    if row is not None:
+                        return self._reference_name(table, next(iter({key: row[key] for key in self.primary[table]}.values())))
+                return "과거 연결 자료"
+            if set(value) == {"$binary"}:
+                return bytes.fromhex(value["$binary"]).decode("utf-8", errors="replace")
+            if set(value) in ({"$date"}, {"$datetime"}):
+                return next(iter(value.values()))
+            if "members" in value and "group_id" in value:
+                return {"대표 모델": self._baseline_public(value["group_id"]),
+                        "PM·SW 구성": [self._baseline_public(item) for item in value["members"].values()]}
+            if value and all(isinstance(item, dict) and isinstance(item.get("setting_key"), dict)
+                             for item in value.values()):
+                settings = {}
+                for item in value.values():
+                    key = item["setting_key"]
+                    suffix = key.get("suffix") or []
+                    caption = "저장 이력 " + str(int(suffix[0])) if key.get("prefix") == "version_groups.history.v2" and suffix else "현재 기준"
+                    settings[caption] = self._baseline_public(item.get("setting_value"))
+                return settings
+            labels = {"group_id": "모델", "parent_group_id": "상위 모델", "family_id": "계열",
+                      "model_id": "모델",
+                      "release_version_id": "릴리즈", "equipment_version_id": "연결 SW",
+                      "version_raw": "버전", "pm_name": "PM", "model_name_raw": "모델 원문",
+                      "setting_value": "설정값", "line": "라인", "process_name": "공정"}
+            return {labels.get(key, key): self._baseline_public(item) for key, item in value.items()
+                    if key not in {"snapshot_id", "batch_id", "source_reference", "edited_fields"}}
+        if isinstance(value, (list, tuple)):
+            return [self._baseline_public(item) for item in value]
+        return value
 
     def _reference_name(self, table, identifier):
         if identifier is None:
@@ -640,6 +747,8 @@ class _Planner:
     def _review_row(self, name, match, incoming, original):
         """사용자 선택을 값과 원본 위치에 함께 적용한다. 미선택은 임시로 기존값이다."""
         pk = self.primary[name]
+        from setron.features.peer_sync import key_token
+        self.review_originals[name, key_token({column: match[column] for column in pk})] = original
         if name in {"release_version_item", "risk_rule", "app_setting", "version_family"}:
             old = {key: value for key, value in match.items() if key not in pk}
             new = {key: value for key, value in incoming.items() if key not in pk}
@@ -661,11 +770,14 @@ class _Planner:
             target = self.target_entities.get(self.canonical_identity.get(uid, uid)) if uid else None
             if changed and target is not None and self._has_group_receipt(target["head"], self._group_digest(original)):
                 changed = False
-            replace_children = changed and self._choose(name, match, "PM·SW 구성", old_children, new_children, grouped=True)
+            comparison = self.automation.snapshot(match, original)
+            replace_children = changed and self._choose(name, match, "PM·SW 구성", old_children, new_children,
+                                                       grouped=True, comparison=comparison,
+                                                       requires_confirmation=self.automation.snapshot_removes_current(match, original))
             if changed and self.differences[-1].choice is not None:
                 from setron.features.peer_sync import key_token
-                self.receipts[name][key_token({"snapshot_id": match["snapshot_id"]})] = {
-                    "source_group_digest": self._group_digest(original), "choice": self.differences[-1].choice}
+                self.receipts[name][key_token({"snapshot_id": match["snapshot_id"]})].update({
+                    "source_group_digest": self._group_digest(original), "choice": self.differences[-1].choice})
             (self.replaced_snapshots if replace_children else self.closed_snapshots).add(match["snapshot_id"])
             if replace_children:
                 selected["group_id"] = incoming["group_id"]
@@ -743,7 +855,8 @@ class _Planner:
                         match = identified
                 elif self.mode == "review" and self.canonical_identity.get(uid, uid) in self.target_entities and not restoring_child:
                     if not self._choose(name, row, "삭제된 항목 복원", "현재 PC에서 삭제됨",
-                                        _decoded_values(name, row), grouped=True):
+                                        _decoded_values(name, row), grouped=True,
+                                        comparison=self.automation.restoration(name, original)):
                         self._count("skip", name)
                         continue
                     if name == "equipment_snapshot":
@@ -769,7 +882,8 @@ class _Planner:
                 mapped_key = _key(match, pk)
                 used.add(mapped_key)
                 self._link(name, original_key, mapped_key)
-                if self.mode == "review" and self._known_source(name, original):
+                if self.mode == "review" and self._known_source(name, original) and not (
+                        name in SNAPSHOT_CHILDREN and row["snapshot_id"] in self.replaced_snapshots):
                     if name == "equipment_snapshot":
                         self.closed_snapshots.add(mapped_key[0])
                     self._count("same", name)
@@ -850,6 +964,28 @@ class _Planner:
         if self.mode != "review":
             return
         candidates = []
+        # 이전 버전은 삭제 후 복원을 새 UUID로 기록했다. 같은 파일의 현재 살아 있는
+        # 업무 행이 이미 이 로컬 행으로 매칭됐다면 과거 incarnation의 tombstone으로
+        # 그 복원 결과를 다시 삭제하지 않는다.
+        active_targets = set()
+        active_business = defaultdict(set)
+        for table, rows in self.source.items():
+            for value in rows:
+                if table in BUSINESS_KEYS:
+                    try:
+                        mapped = self._remap_row(table, value)
+                        active_business[table].add(_business_key(mapped, BUSINESS_KEYS[table]))
+                    except (KeyError, ReferenceConflict):
+                        pass
+                try:
+                    key = []
+                    for column in self.primary[table]:
+                        remote = next((parent for field, parent, remote in self.foreign[table]
+                                       if field == column and self.primary[parent] == (remote,)), table)
+                        key.append(self.ids[remote][value[column]])
+                    active_targets.add((table, tuple(key)))
+                except KeyError:
+                    continue
         for source in self.source_state.entities.values():
             if not source["deleted"]:
                 continue
@@ -858,13 +994,24 @@ class _Planner:
             row = self.uuid_targets[source["table"]].get(identifier)
             if target is None or row is None or self._known_head(source["head"], target["head"]):
                 continue
+            if source["table"] == "app_setting" and row["setting_key"] in self.reviewed_setting_keys:
+                continue  # N 기준과 저장 이력의 삭제는 검토한 묶음 선택을 따른다.
+            if (source["table"], _key(row, self.primary[source["table"]])) in active_targets:
+                continue
+            if source["table"] in BUSINESS_KEYS and _business_key(row, BUSINESS_KEYS[source["table"]]) in active_business[source["table"]]:
+                continue
             candidates.append((source["table"], row))
         snapshots = {row["snapshot_id"] for name, row in candidates if name == "equipment_snapshot"}
         for name, row in candidates:
             if name in SNAPSHOT_CHILDREN and (row["snapshot_id"] in snapshots or
                     row["snapshot_id"] in self.closed_snapshots or row["snapshot_id"] in self.replaced_snapshots):
                 continue
-            if not self._choose(name, row, "삭제", _decoded_values(name, row), "삭제", grouped=True):
+            source = next(entity for entity in self.source_state.entities.values()
+                          if entity["deleted"] and entity["table"] == name and
+                          self.uuid_targets[name].get(self.canonical_identity.get(entity["uuid"], entity["uuid"])) is row)
+            if not self._choose(name, row, "삭제", _decoded_values(name, row), "삭제", grouped=True,
+                                comparison=self.automation.deletion(name, row, source), allow_automatic=False,
+                                requires_confirmation=True):
                 continue
             if name == "equipment_snapshot":
                 for child in reversed(SNAPSHOT_CHILDREN):
@@ -967,8 +1114,8 @@ class _Planner:
             summary.append("가져온 목표 N·공유 Item 적용 근거는 다시 확인이 필요합니다.")
         if self.mode == "review":
             pending = sum(value.choice is None for value in self.differences)
-            summary.append(f"값 비교 {len(self.differences):,}건 · 선택 필요 {pending:,}건")
-        sync_changes = int(self.mode == "review" and (bool(self.choices) or
+            summary.append(f"값 비교 {len(self.differences):,}건 · 자동 판단 {sum(value.automatic for value in self.differences):,}건 · 선택 필요 {pending:,}건")
+        sync_changes = int(self.mode == "review" and (any(value.choice is not None for value in self.differences) or
             bool(set(self.source_state.events) - set(self.target_state.events))))
         return MergePlan(self.mode, destination, fingerprint(self.target, self.next_ids), target_rows,
                          tuple(self.writes), "\n".join(summary), tuple(self.differences), dict(self.choices),

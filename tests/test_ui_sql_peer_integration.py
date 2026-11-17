@@ -12,6 +12,7 @@ from setron.features.peer_sync import read_state
 from setron.infrastructure.database import Database
 from setron.ui.import_dialogs import ImportConfirmDialog
 from setron.ui.sql_import_page import SqlImportPage
+from setron.ui.sql_import_review import CHOICE_COLUMN
 from test_sql_import_selection import with_process
 from test_sql_import_service import backup, bundle, current, seed, target  # noqa: F401
 from test_ui_import_ver5 import own  # noqa: F401
@@ -46,7 +47,7 @@ def _page(own, target, tmp_path, monkeypatch):
 
 def _choose(page, choices):
     for index, difference in enumerate(page.comparison.model.differences):
-        assert page.comparison.model.setData(page.comparison.model.index(index, 4), choices[difference.field],
+        assert page.comparison.model.setData(page.comparison.model.index(index, CHOICE_COLUMN), choices[difference.field],
                                             Qt.ItemDataRole.EditRole)
     assert page.comparison.review_button.isEnabled() and not page.apply_button.isEnabled()
 
