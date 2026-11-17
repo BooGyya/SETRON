@@ -36,5 +36,5 @@ exe = EXE(
     console=False,
     icon=str(spec_dir.parent / "src" / "setron" / "ui" / "assets" / "setron-window-icon.ico"),
 )
-# DB 도구는 build_windows.ps1이 명시한 dump로 build_demo_db.py에서 별도 생성한다.
+# 빈 DB 스키마 설치 도구는 build_schema_db.py에서 별도 생성한다.
 coll = COLLECT(exe, analysis.binaries, analysis.datas, name="SETRON")

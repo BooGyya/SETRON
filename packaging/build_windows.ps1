@@ -1,12 +1,10 @@
-﻿# Windows 전체 배포본: GUI와 동일한 시연 DB 메뉴 EXE/BAT를 함께 만든다.
-# powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -DumpPath dist\SETRON\SETRON_DB.sql
+﻿# Windows 배포본: GUI와 빈 DB 스키마 설치 EXE/BAT를 함께 만든다.
+# powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$DumpPath,
-    [ValidateNotNullOrEmpty()]
-    [string]$OutputDir = ""
+    [string]$OutputDir = "",
+    [string]$ReuseGuiFrom = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,19 +69,30 @@ function Move-PackageDirectory($source, $destination) {
     }
 }
 
+function Copy-PackageUserEntry($source, $destination, $relative, $excluded) {
+    if ($relative -in $excluded) { return }
+    $entry = Get-Item -LiteralPath $source -Force
+    if (Test-Path -LiteralPath $destination) {
+        throw "새 배포본과 보존할 사용자 파일의 이름이 겹칩니다: $relative"
+    }
+    if ($entry.PSIsContainer) {
+        [IO.Directory]::CreateDirectory($destination) | Out-Null
+        foreach ($child in Get-ChildItem -LiteralPath $source -Force) {
+            Copy-PackageUserEntry $child.FullName (Join-Path $destination $child.Name) (Join-Path $relative $child.Name) $excluded
+        }
+    } else {
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+    }
+}
+
 function Invoke-WindowsPackageBuild {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
-        [Parameter(Mandatory = $true)][string]$DumpPath,
-        [string]$OutputDir = ""
+        [string]$OutputDir = "",
+        [string]$ReuseGuiFrom = ""
     )
     $root = (Resolve-Path -LiteralPath $RepositoryRoot).ProviderPath
-    $dump = (Resolve-Path -LiteralPath $DumpPath).ProviderPath
-    if (-not (Test-Path -LiteralPath $dump -PathType Leaf)) {
-        throw "-DumpPath에는 배포할 완전한 SETRON SQL 파일을 지정해 주세요."
-    }
-    Assert-RegularPackagePath $dump
     $bundle = if ($OutputDir) {
         $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
     } else {
@@ -102,13 +111,28 @@ function Invoke-WindowsPackageBuild {
         throw "저장소 내부의 배포 대상은 dist 하위 폴더만 사용할 수 있습니다."
     }
     Assert-RegularPackagePath $bundle
+    $reuse = $null
+    if ($ReuseGuiFrom) {
+        $reuse = (Resolve-Path -LiteralPath $ReuseGuiFrom).ProviderPath
+        foreach ($name in @("SETRON.exe", "_internal")) {
+            $entry = Join-Path $reuse $name
+            if (-not (Test-Path -LiteralPath $entry)) { throw "재사용할 GUI 파일이 없습니다: $entry" }
+            Assert-RegularPackageTree $entry
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $reuse "SETRON.exe") -PathType Leaf) -or
+                -not (Test-Path -LiteralPath (Join-Path $reuse "_internal") -PathType Container)) {
+            throw "재사용 대상에는 SETRON.exe와 _internal 폴더가 있어야 합니다."
+        }
+        $demoRuntime = Get-ChildItem -LiteralPath (Join-Path $reuse "_internal") -Recurse -File -Force |
+            Where-Object { $_.Name -in @("SETRON_DB.sql", "dataset.dump", "SETRON_DB_INIT.exe", "prepare_demo_db.bat") }
+        if ($demoRuntime) { throw "시연 자료가 포함된 런타임은 재사용할 수 없습니다. 전체 빌드를 실행해 주세요." }
+    }
     $uv = @(Get-Command uv -CommandType Application)[0].Source
     $stage = [IO.Path]::GetFullPath((Join-Path $parent ("setron-stage-" + [guid]::NewGuid().ToString("N"))))
     $stagedBundle = Join-Path $stage "SETRON"
     $previousBundle = Join-Path $stage "previous-SETRON"
-    $snapshot = Join-Path $stage "requested.dataset.dump"
     $lockPath = Join-Path $parent ".setron-publish.lock"
-    $executables = @((Join-Path $bundle "SETRON.exe"), (Join-Path $bundle "SETRON_DB_INIT.exe"))
+    $executables = @((Join-Path $bundle "SETRON.exe"), (Join-Path $bundle "SETRON_DB_SETUP.exe"), (Join-Path $bundle "SETRON_DB_INIT.exe"))
     $originalPath = $env:Path
     $stageCreated = $false
     $keepStage = $false
@@ -121,31 +145,31 @@ function Invoke-WindowsPackageBuild {
         Assert-RegularPackagePath $parent
         New-Item -ItemType Directory -Path $stage | Out-Null
         $stageCreated = $true
-        Copy-Item -LiteralPath $dump -Destination $snapshot
-        $requestedHash = Get-PackageFileHash $snapshot
-
         & $uv sync --locked
         if ($LASTEXITCODE -ne 0) { throw "uv sync 실패 (종료 코드: $LASTEXITCODE)" }
         $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
-        & $uv run --locked --no-sync pyinstaller packaging\setron.spec --noconfirm --distpath $stage --workpath (Join-Path $stage "work")
-        if ($LASTEXITCODE -ne 0) { throw "GUI 빌드 실패 (종료 코드: $LASTEXITCODE)" }
-        & $uv run --locked --no-sync python packaging\build_demo_db.py --dump $snapshot --output-dir $stagedBundle
-        if ($LASTEXITCODE -ne 0) { throw "시연 DB 도구 빌드 실패 (종료 코드: $LASTEXITCODE)" }
+        if ($reuse) {
+            [IO.Directory]::CreateDirectory($stagedBundle) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $reuse "SETRON.exe") -Destination $stagedBundle
+            Copy-Item -LiteralPath (Join-Path $reuse "_internal") -Destination $stagedBundle -Recurse
+        } else {
+            & $uv run --locked --no-sync pyinstaller packaging\setron.spec --noconfirm --distpath $stage --workpath (Join-Path $stage "work")
+            if ($LASTEXITCODE -ne 0) { throw "GUI 빌드 실패 (종료 코드: $LASTEXITCODE)" }
+        }
+        & $uv run --locked --no-sync python packaging\build_schema_db.py --output-dir $stagedBundle
+        if ($LASTEXITCODE -ne 0) { throw "DB 스키마 설치 도구 빌드 실패 (종료 코드: $LASTEXITCODE)" }
         Copy-Item -LiteralPath (Join-Path $root "setron.env.example") -Destination $stagedBundle
-        foreach ($name in @("SETRON.exe", "SETRON_DB_INIT.exe", "prepare_demo_db.bat", "SETRON_DB.sql", "setron.env.example")) {
+        foreach ($name in @("SETRON.exe", "SETRON_DB_SETUP.exe", "prepare_schema.bat", "setron.env.example", "_internal\database\schema_mysql5619.sql")) {
             if (-not (Test-Path -LiteralPath (Join-Path $stagedBundle $name) -PathType Leaf)) {
                 throw "새 배포본에 필요한 파일이 없습니다: $name"
             }
-        }
-        if ((Get-PackageFileHash (Join-Path $stagedBundle "SETRON_DB.sql")) -ne $requestedHash) {
-            throw "새 배포본의 SQL이 지정한 dump와 다릅니다. 기존 배포본은 변경하지 않았습니다."
         }
 
         Assert-RegularPackagePath $lockPath
         $publishLock = [IO.FileStream]::new($lockPath,
             [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 4096,
             [IO.FileOptions]::DeleteOnClose)
-        $running = Get-Process -Name SETRON, SETRON_DB_INIT -ErrorAction SilentlyContinue | Where-Object {
+        $running = Get-Process -Name SETRON, SETRON_DB_SETUP, SETRON_DB_INIT -ErrorAction SilentlyContinue | Where-Object {
             -not $_.Path -or $_.Path -in $executables
         }
         if ($running) { throw "실행 중인 SETRON을 닫은 후 다시 빌드해 주세요." }
@@ -158,30 +182,42 @@ function Invoke-WindowsPackageBuild {
                 -not (Test-Path -LiteralPath (Join-Path $bundle "SETRON.exe") -PathType Leaf)) {
             throw "비어 있지 않은 배포 대상은 SETRON.exe가 있는 Windows 배포 폴더여야 합니다."
         }
+        $legacy = @("SETRON_DB_INIT.exe", "prepare_demo_db.bat", "SETRON_DB.sql", "database\SETRON_DB.sql")
+        $archive = Join-Path $parent "SETRON-demo-archive"
+        $retired = @()
         if ($existingBundle) {
-            $external = Join-Path $bundle "SETRON_DB.sql"
-            if (Test-Path -LiteralPath $external) {
-                Assert-RegularPackageTree $external
-                if (-not (Test-Path -LiteralPath $external -PathType Leaf) -or
-                        (Get-PackageFileHash $external) -ne $requestedHash) {
-                    throw "기존 외부 SETRON_DB.sql과 -DumpPath가 다릅니다. 기존 파일을 보존하기 위해 배포를 중단했습니다."
+            foreach ($relative in $legacy) {
+                $source = Join-Path $bundle $relative
+                if (-not (Test-Path -LiteralPath $source)) { continue }
+                Assert-RegularPackageTree $source
+                if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "기존 시연 자료는 일반 파일이어야 합니다: $source" }
+                $destination = Join-Path $archive $relative
+                Assert-RegularPackagePath $destination
+                if ((Test-Path -LiteralPath $destination) -and
+                        (-not (Test-Path -LiteralPath $destination -PathType Leaf) -or
+                         (Get-PackageFileHash $source) -ne (Get-PackageFileHash $destination))) {
+                    throw "보관 폴더에 다른 파일이 있어 덮어쓰지 않았습니다: $destination"
                 }
-                Copy-Item -LiteralPath $external -Destination (Join-Path $stagedBundle "SETRON_DB.sql") -Force
+                $retired += @{ Source = $source; Destination = $destination }
             }
-            $managed = @("SETRON.exe", "SETRON_DB_INIT.exe", "prepare_demo_db.bat", "setron.env.example", "_internal", "SETRON_DB.sql")
+            $managed = @("SETRON.exe", "SETRON_DB_SETUP.exe", "prepare_schema.bat", "setron.env.example", "_internal") + $legacy
             foreach ($entry in Get-ChildItem -LiteralPath $bundle -Force) {
                 if ($entry.Name -in $managed) { continue }
                 Assert-RegularPackageTree $entry.FullName
                 $destination = Join-Path $stagedBundle $entry.Name
-                if (Test-Path -LiteralPath $destination) {
-                    throw "새 배포본과 보존할 사용자 파일의 이름이 겹칩니다: $($entry.Name)"
-                }
-                Copy-Item -LiteralPath $entry.FullName -Destination $destination -Recurse -Force
+                Copy-PackageUserEntry $entry.FullName $destination $entry.Name $legacy
             }
         }
-        & (Join-Path $stagedBundle "SETRON_DB_INIT.exe") --validate-dump
-        if ($LASTEXITCODE -ne 0) { throw "새 시연 DB 도구의 SQL 검증 실패 (종료 코드: $LASTEXITCODE)" }
+        & (Join-Path $stagedBundle "SETRON_DB_SETUP.exe") --validate-schema
+        if ($LASTEXITCODE -ne 0) { throw "새 DB 설치 도구의 스키마 검증 실패 (종료 코드: $LASTEXITCODE)" }
         Assert-RegularPackageTree $stagedBundle
+        foreach ($file in $retired) {
+            if (-not (Test-Path -LiteralPath $file.Destination)) {
+                [IO.Directory]::CreateDirectory((Split-Path -Parent $file.Destination)) | Out-Null
+                Assert-RegularPackagePath $file.Destination
+                Copy-Item -LiteralPath $file.Source -Destination $file.Destination
+            }
+        }
         try {
             if ($existingBundle) {
                 Move-PackageDirectory $bundle $previousBundle
